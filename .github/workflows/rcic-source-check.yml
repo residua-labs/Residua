@@ -1,0 +1,20 @@
+name: rcic-source-check
+on:
+  push:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  rcic-source-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: No sorry, admit, axiom, native_decide or implemented_by
+        run: |
+          # source check, ignoring line comments and /- ... -/ block comments
+          for f in $(find lean/rcic lean/Residua/SHA256.lean -name '*.lean'); do
+            perl -0777 -pe 's{/-.*?-/}{}gs; s{--[^\n]*}{}g' "$f" \
+              | grep -nP '\bsorry\b|(^\s*|\bby\s+|[;<]\s*)admit\b(?!\s*:)|^\s*axiom\b|native_decide|implemented_by' \
+              && { echo "forbidden construct in $f"; exit 1; }
+          done
+          echo ok

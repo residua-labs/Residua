@@ -1,0 +1,410 @@
+import Lean
+import rcic.RcicNativeTypedModelCovNormApp
+import rcic.RcicNativeTypedModelCovNormAppCases
+import rcic.RcicNativeTypedModelCovNormBoundary
+import rcic.RcicNativeTypedModelCovNormConstCases
+import rcic.RcicNativeTypedModelCovNormConvCases
+import rcic.RcicNativeTypedModelCovNormCov2
+import rcic.RcicNativeTypedModelCovNormEscape
+import rcic.RcicNativeTypedModelCovNormLetCases
+import rcic.RcicNativeTypedModelCovNormReadback
+import rcic.RcicNativeTypedModelCovNormSaturatedControl
+import rcic.RcicNativeTypedModelCovNormSubst
+import rcic.RcicNativeTypedModelCovNormTyCases
+
+/-!
+# Bounded seal: normalized covariant escape and native case adapters
+
+Type readback invariance and the imported CTyCov2 instance are proved.
+The normal-Pi alias example refutes normalized escape even with both native
+endpoint typings, actual non-bottom term/type observations, and coherent
+model environments. The separate Nat.succ eta example refutes the unchanged
+conversion fundamental motive and therefore the full FundCovCases package.
+
+The constructor leaves distinguish proved fragments from exact semantic
+ports. Their native recursive calls use only genuine constructor children;
+no generated endpoint typing or reduct derivation is used as a smaller IH.
+The ordinary-iota and saturated application supplies remain separately
+measured. Eq constructor arity is owned by the independent lane.
+
+All authored public roots of these leaves are checked below for existence
+and transitive axiom dependencies. Only this bounded seal is built.
+`closure_claim = 0`.
+-/
+
+private def covNormRoots : List Lean.Name := [
+  ``Rcic.Declarative.NativeValleys.TypedModelCovNormAppAudit.CovSpineAppNativeAt,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovNormAppAudit.normalR_rigidSpineCK2,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovNormAppAudit.normalR_spine_of_C2_pi,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovNormAppAudit.lrSCoreCov_spine_snoc_of_native,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovNormAppAudit.covAppSpine_of_native_port,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovNormAppAudit.covSpineAppNativeAt_natSucc_zero,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovNormAppAudit.lrSCoreCov_natZero_spine,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovNormAppAudit.fundTyAtCov_natSucc,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovNormAppAudit.fundTyAtCov_natZero,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovNormAppAudit.lrSCoreCov_natSucc_zero_spine,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovNormAppAudit.natSucc_zero_C2_spine_control,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovNormTyCasesAudit.cov_no_saturated_app_lam,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovNormTyCasesAudit.covAppResiduals_lam,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovNormTyCasesAudit.fundCov_appLam_step_approxTK,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovNormTyCasesAudit.fundCov_identitySortApp,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovNormTyCasesAudit.covApp_native_control,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovNormBoundaryAudit.not_normalizedTyping_of_pi_bot_observations,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovNormBoundaryAudit.approxTK_normalizedTyping_observation_boundary,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovNormBoundaryAudit.covNormAlias_identity_demand_control,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovNormTyCasesAudit.CovConstSpineInput,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovNormTyCasesAudit.fundCov_const_of_spineInput,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovNormTyCasesAudit.fundCov_const_step_of_spineInput,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovNormTyCasesAudit.covConstSpineInput_ctor,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovNormTyCasesAudit.covConst_native_control,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovNormConvCasesAudit.CovModelContractAt,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovNormConvCasesAudit.CovConvObservedTypeFor,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovNormConvCasesAudit.CovTypeDiagonalsFor,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovNormConvCasesAudit.CovMiddleObservationFor,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovNormConvCasesAudit.CovBetaFactorFor,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovNormConvCasesAudit.CovDomainDemandTransportFor,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovNormConvCasesAudit.CovInstObservation,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovNormConvCasesAudit.CovProofCollapseFor,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovNormConvCasesAudit.relSubstAtCov_symm_native,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovNormConvCasesAudit.fundCov_symm_step_of_inputs,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovNormConvCasesAudit.fundCov_trans_step_of_inputs,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovNormConvCasesAudit.fundCov_tyConv_step_of_observedType,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovNormConvCasesAudit.fundCov_irr_step_of_collapse,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovNormConvCasesAudit.fundCov_beta_step_of_factor,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovNormConvCasesAudit.fundCov_zeta_step_of_inputs,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovNormConvCasesAudit.covInstObservation_approxT,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovNormConvCasesAudit.covInstObservation_approxTK_of_no_indexed,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovNormConvCasesAudit.covInstObservation_bvar0_approxTK,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovNormConvCasesAudit.covBetaFactorFor_sortIdentity,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovNormConvCasesAudit.beta_zeta_semantic_ports_control,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovNormConvCasesAudit.covConvObservedTypeFor_sort,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovNormConvCasesAudit.covTypeDiagonalsFor_sort,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovNormConvCasesAudit.covMiddleObservationFor_refl,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovNormConvCasesAudit.covDomainDemandTransportFor_refl,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovNormConvCasesAudit.covProofCollapseFor_polyIdProof,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovNormConvCasesAudit.covSort_semantic_ports_control,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovNormConvCasesAudit.covModelContractAt_delta_approxTK,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovNormConvCasesAudit.covModelContractAt_lit_approxTK,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovNormConvCasesAudit.covModelContractAt_iota_approxTK_of_modelIota,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovNormConvCasesAudit.fundCov_delta_step_of_contract,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovNormConvCasesAudit.fundCov_delta_step_approxTK_of_kFree,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovNormConvCasesAudit.fundCov_iota_step_of_contract,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovNormConvCasesAudit.fundCov_litConv_step_of_contract,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovNormConvCasesAudit.fundCov_litConv_step_approxTK_of_kFree,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovNormConvCasesAudit.literal_zero_contract_control,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovNormConvCasesAudit.covModelContractAt_eqRec_sort,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovNormConvCasesAudit.ordinary_iota_eq_sort_contract_control,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovNormConvCasesAudit.relSubstAtCov_nativeConvInstances,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovNormConvCasesAudit.covTypePair_from_common_right,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovNormConvCasesAudit.fundCov_lamConv_step_of_inputs,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovNormConvCasesAudit.fundCov_piConv_step_of_inputs,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovNormConvCasesAudit.CovLetConvInput,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovNormConvCasesAudit.fundCov_letEConv_step_of_input,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovNormConvCasesAudit.covLetConvInput_of_same_value,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovNormConvCasesAudit.letConv_semantic_port_control,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovNormConvCasesAudit.delta_sort_contract_control,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovNormConvCasesAudit.proof_collapse_semantic_port_control,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovNormConvCasesAudit.CovSaturatedReductAt,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovNormConvCasesAudit.CovAppConvInputs,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovNormConvCasesAudit.fundCov_appConv_step_of_inputs,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovNormConvCasesAudit.fundCov_consts_step_of_spineInputs,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovNormConvCasesAudit.fundCov_consts_step_of_body_pair,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovNormConvCasesAudit.consts_spine_semantic_port_control,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovNormConvCasesAudit.consts_sort_body_semantic_control,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovNormConvCasesAudit.saturated_reduct_semantic_port_control,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovNormConvCasesAudit.not_lrSCoreCov_lam_spineCK2,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovNormConvCasesAudit.natSucc_eta_C2_counterexample,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovNormConvCasesAudit.not_fundConvAtCov_eta_natSucc,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovNormConvCasesAudit.not_fundamentalCovAt_natSucc_eta,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovNormConvCasesAudit.not_fundCovCases_natSucc_eta,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovNormConvCasesAudit.C2_conversion_fundamental_refuted,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovNormCov2Audit.covTypingCTyCov2,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovNormCov2Audit.covTypingCTyCov2_includesS,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovNormCov2Audit.C2,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovNormCov2Audit.C2_includesS,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovNormCov2Audit.elTCovP_C2_iff,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovNormCov2Audit.envTypedCovAtP_C2_iff,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovNormCov2Audit.approxTK_natNat_covCode,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovNormCov2Audit.elTCovP_C2_natSucc,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovNormCov2Audit.normalizedCovRealization_C2_natSucc,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovNormCov2Audit.natSucc_C2_normalized_control,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovNormCov2Audit.alias_raw_and_normalized_realization_C2,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovNormEscapeAudit.covNormAliasIdentity,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovNormEscapeAudit.covNormAliasIdentityCpt,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovNormEscapeAudit.covNormAliasPi,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovNormEscapeAudit.not_covNormAliasIdentityCpt_pi_bot,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovNormEscapeAudit.covNormAliasIdentity_approxTK,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovNormEscapeAudit.covNormAliasPi_normal,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovNormEscapeAudit.covNormAliasIdentity_core,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovNormEscapeAudit.covNormAliasPi_observation_shape,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovNormEscapeAudit.not_elTCovP_covNormAliasPi,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovNormEscapeAudit.not_normalizedCovRealization_covNormAliasPi,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovNormEscapeAudit.covNormAliasIdentity_native,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovNormEscapeAudit.covNormAliasPi_escape_counterexample,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovNormEscapeAudit.not_normalizedCovEscape_covNormAliasPi,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovNormEscapeAudit.C2_normalized_escape_refuted,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovNormEscapeAudit.alias_normalization_boundary,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovNormEscapeAudit.LocalNormalizedTyAtCov,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovNormEscapeAudit.NormalizedFundTyAtCov,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovNormEscapeAudit.NormalizedFundamentalCovAt,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovNormEscapeAudit.GuardedNormalizedCovTyping,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovNormEscapeAudit.not_localNormalizedTyAtCov_covNormAliasPi,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovNormEscapeAudit.not_normalizedFundTyAtCov_covNormAliasPi,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovNormEscapeAudit.not_guardedNormalizedCovTyping_eq,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovNormEscapeAudit.not_normalizedFundamentalCovAt_eq,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovNormEscapeAudit.C2_normalized_typing_and_fundamental_refuted,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovNormTyCasesAudit.CovLetInput,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovNormTyCasesAudit.cov_let_subst_read,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovNormTyCasesAudit.fundCov_letE_of_input,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovNormTyCasesAudit.fundCov_letE_step_of_input,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovNormTyCasesAudit.cov_let_body_approxT,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovNormTyCasesAudit.relSubstAtCov_sortLet,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovNormTyCasesAudit.covLetInput_sort_approxT,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovNormTyCasesAudit.covLetInput_sort_approxTK_of_no_indexed,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovNormTyCasesAudit.fundCov_sortLet,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovNormTyCasesAudit.covLet_native_control,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovNormReadbackAudit.lrSCoreCov_type_heads_iff,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovNormReadbackAudit.lrSCoreCov_type_readback_iff,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovNormReadbackAudit.lrSCoreCov_type_readback_iff_ck2,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovNormSaturatedControlAudit.approxTK_natRec_good_rhs,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovNormSaturatedControlAudit.saturatedComputationTK_natRec_good_call,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovNormSaturatedControlAudit.approxTK_natRec_good_call_saturated,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovNormSaturatedControlAudit.redR_natRec_good_rhs,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovNormSaturatedControlAudit.lrSCoreCov_natRec_good_rhs,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovNormSaturatedControlAudit.lrSCoreCov_natRec_good_iota,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovNormSaturatedControlAudit.convT_natRec_good_iota,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovNormSaturatedControlAudit.natRec_good_saturated_C2_control,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovNormSubstAudit.relSubstAtCov_nil,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovNormSubstAudit.CovLiftModelLaws,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovNormSubstAudit.covLiftModelLaws_approxT,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovNormSubstAudit.cov_typedSubst_cons,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovNormSubstAudit.cov_convSubst_cons,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovNormSubstAudit.envTypedCovAtP_cons_assumption,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovNormSubstAudit.relSubstAtCov_cons_realized,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovNormTyCasesAudit.relSubstAtCov_envs,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovNormTyCasesAudit.fundTyAtCov_of_contract,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovNormTyCasesAudit.CovPiModelFor,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovNormTyCasesAudit.CovLamModelFor,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovNormTyCasesAudit.covPiModelFor_approxT,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovNormTyCasesAudit.covLamModelFor_approxT,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovNormTyCasesAudit.fundCov_lam_realized,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovNormTyCasesAudit.fundCov_pi_realized,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovNormTyCasesAudit.fundCov_pi_step_realized,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovNormTyCasesAudit.fundCov_lam_step_realized,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovNormTyCasesAudit.cov_kFreeValues_assumption,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovNormTyCasesAudit.cov_kFreeTypes_assumption,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovNormTyCasesAudit.fundCov_pi_step_approxTK_of_kFree,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovNormTyCasesAudit.fundCov_lam_step_approxTK_of_kFree,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovNormTyCasesAudit.covPiModelFor_approxTK_of_no_indexed,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovNormTyCasesAudit.covLamModelFor_approxTK_of_no_indexed,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovNormTyCasesAudit.CovLiteralContract,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovNormTyCasesAudit.covLiteralContract_approxTK_of_kFree,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovNormTyCasesAudit.cov_literal_subst_read,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovNormTyCasesAudit.fundCov_lit_of_contract,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovNormTyCasesAudit.fundCov_lit_step_approxTK,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovNormTyCasesAudit.fundCov_lit_step_approxTK_of_kFree,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovNormTyCasesAudit.CovObservedTypeFor,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovNormTyCasesAudit.fundCov_conv_of_observedType,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovNormTyCasesAudit.fundCov_conv_step_of_observedType,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovNormTyCasesAudit.covObservedTypeFor_sort_approxTK,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovNormTyCasesAudit.covObservedTypeFor_alias_control,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovNormTyCasesAudit.fundCov_natZero,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovNormTyCasesAudit.fundCov_litZero,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovNormTyCasesAudit.covLiteral_native_control,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovNormTyCasesAudit.covBinder_native_control
+]
+
+open Lean Elab Command in
+run_cmd do
+  let env ← getEnv
+  let allowed : List Name := [``propext, ``Quot.sound]
+  for root in covNormRoots do
+    unless env.contains root do
+      throwError "Normalized covariant relation seal: missing root {root}"
+    let (_, state) := ((CollectAxioms.collect root).run env).run {}
+    for ax in state.axioms do
+      unless allowed.contains ax do
+        throwError "Normalized covariant relation seal: {root} uses disallowed axiom {ax}"
+  logInfo m!"Normalized covariant relation seal: {covNormRoots.length} roots checked; allowed axioms = {allowed}"
+
+-- BEGIN RCIC_NATIVE_TYPED_MODEL_COV_NORM_SEAL_ROOTS
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovNormAppAudit.CovSpineAppNativeAt
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovNormAppAudit.normalR_rigidSpineCK2
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovNormAppAudit.normalR_spine_of_C2_pi
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovNormAppAudit.lrSCoreCov_spine_snoc_of_native
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovNormAppAudit.covAppSpine_of_native_port
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovNormAppAudit.covSpineAppNativeAt_natSucc_zero
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovNormAppAudit.lrSCoreCov_natZero_spine
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovNormAppAudit.fundTyAtCov_natSucc
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovNormAppAudit.fundTyAtCov_natZero
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovNormAppAudit.lrSCoreCov_natSucc_zero_spine
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovNormAppAudit.natSucc_zero_C2_spine_control
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovNormTyCasesAudit.cov_no_saturated_app_lam
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovNormTyCasesAudit.covAppResiduals_lam
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovNormTyCasesAudit.fundCov_appLam_step_approxTK
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovNormTyCasesAudit.fundCov_identitySortApp
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovNormTyCasesAudit.covApp_native_control
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovNormBoundaryAudit.not_normalizedTyping_of_pi_bot_observations
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovNormBoundaryAudit.approxTK_normalizedTyping_observation_boundary
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovNormBoundaryAudit.covNormAlias_identity_demand_control
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovNormTyCasesAudit.CovConstSpineInput
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovNormTyCasesAudit.fundCov_const_of_spineInput
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovNormTyCasesAudit.fundCov_const_step_of_spineInput
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovNormTyCasesAudit.covConstSpineInput_ctor
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovNormTyCasesAudit.covConst_native_control
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovNormConvCasesAudit.CovModelContractAt
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovNormConvCasesAudit.CovConvObservedTypeFor
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovNormConvCasesAudit.CovTypeDiagonalsFor
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovNormConvCasesAudit.CovMiddleObservationFor
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovNormConvCasesAudit.CovBetaFactorFor
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovNormConvCasesAudit.CovDomainDemandTransportFor
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovNormConvCasesAudit.CovInstObservation
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovNormConvCasesAudit.CovProofCollapseFor
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovNormConvCasesAudit.relSubstAtCov_symm_native
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovNormConvCasesAudit.fundCov_symm_step_of_inputs
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovNormConvCasesAudit.fundCov_trans_step_of_inputs
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovNormConvCasesAudit.fundCov_tyConv_step_of_observedType
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovNormConvCasesAudit.fundCov_irr_step_of_collapse
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovNormConvCasesAudit.fundCov_beta_step_of_factor
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovNormConvCasesAudit.fundCov_zeta_step_of_inputs
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovNormConvCasesAudit.covInstObservation_approxT
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovNormConvCasesAudit.covInstObservation_approxTK_of_no_indexed
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovNormConvCasesAudit.covInstObservation_bvar0_approxTK
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovNormConvCasesAudit.covBetaFactorFor_sortIdentity
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovNormConvCasesAudit.beta_zeta_semantic_ports_control
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovNormConvCasesAudit.covConvObservedTypeFor_sort
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovNormConvCasesAudit.covTypeDiagonalsFor_sort
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovNormConvCasesAudit.covMiddleObservationFor_refl
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovNormConvCasesAudit.covDomainDemandTransportFor_refl
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovNormConvCasesAudit.covProofCollapseFor_polyIdProof
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovNormConvCasesAudit.covSort_semantic_ports_control
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovNormConvCasesAudit.covModelContractAt_delta_approxTK
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovNormConvCasesAudit.covModelContractAt_lit_approxTK
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovNormConvCasesAudit.covModelContractAt_iota_approxTK_of_modelIota
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovNormConvCasesAudit.fundCov_delta_step_of_contract
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovNormConvCasesAudit.fundCov_delta_step_approxTK_of_kFree
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovNormConvCasesAudit.fundCov_iota_step_of_contract
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovNormConvCasesAudit.fundCov_litConv_step_of_contract
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovNormConvCasesAudit.fundCov_litConv_step_approxTK_of_kFree
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovNormConvCasesAudit.literal_zero_contract_control
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovNormConvCasesAudit.covModelContractAt_eqRec_sort
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovNormConvCasesAudit.ordinary_iota_eq_sort_contract_control
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovNormConvCasesAudit.relSubstAtCov_nativeConvInstances
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovNormConvCasesAudit.covTypePair_from_common_right
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovNormConvCasesAudit.fundCov_lamConv_step_of_inputs
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovNormConvCasesAudit.fundCov_piConv_step_of_inputs
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovNormConvCasesAudit.CovLetConvInput
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovNormConvCasesAudit.fundCov_letEConv_step_of_input
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovNormConvCasesAudit.covLetConvInput_of_same_value
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovNormConvCasesAudit.letConv_semantic_port_control
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovNormConvCasesAudit.delta_sort_contract_control
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovNormConvCasesAudit.proof_collapse_semantic_port_control
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovNormConvCasesAudit.CovSaturatedReductAt
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovNormConvCasesAudit.CovAppConvInputs
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovNormConvCasesAudit.fundCov_appConv_step_of_inputs
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovNormConvCasesAudit.fundCov_consts_step_of_spineInputs
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovNormConvCasesAudit.fundCov_consts_step_of_body_pair
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovNormConvCasesAudit.consts_spine_semantic_port_control
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovNormConvCasesAudit.consts_sort_body_semantic_control
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovNormConvCasesAudit.saturated_reduct_semantic_port_control
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovNormConvCasesAudit.not_lrSCoreCov_lam_spineCK2
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovNormConvCasesAudit.natSucc_eta_C2_counterexample
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovNormConvCasesAudit.not_fundConvAtCov_eta_natSucc
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovNormConvCasesAudit.not_fundamentalCovAt_natSucc_eta
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovNormConvCasesAudit.not_fundCovCases_natSucc_eta
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovNormConvCasesAudit.C2_conversion_fundamental_refuted
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovNormCov2Audit.covTypingCTyCov2
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovNormCov2Audit.covTypingCTyCov2_includesS
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovNormCov2Audit.C2
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovNormCov2Audit.C2_includesS
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovNormCov2Audit.elTCovP_C2_iff
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovNormCov2Audit.envTypedCovAtP_C2_iff
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovNormCov2Audit.approxTK_natNat_covCode
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovNormCov2Audit.elTCovP_C2_natSucc
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovNormCov2Audit.normalizedCovRealization_C2_natSucc
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovNormCov2Audit.natSucc_C2_normalized_control
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovNormCov2Audit.alias_raw_and_normalized_realization_C2
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovNormEscapeAudit.covNormAliasIdentity
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovNormEscapeAudit.covNormAliasIdentityCpt
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovNormEscapeAudit.covNormAliasPi
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovNormEscapeAudit.not_covNormAliasIdentityCpt_pi_bot
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovNormEscapeAudit.covNormAliasIdentity_approxTK
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovNormEscapeAudit.covNormAliasPi_normal
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovNormEscapeAudit.covNormAliasIdentity_core
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovNormEscapeAudit.covNormAliasPi_observation_shape
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovNormEscapeAudit.not_elTCovP_covNormAliasPi
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovNormEscapeAudit.not_normalizedCovRealization_covNormAliasPi
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovNormEscapeAudit.covNormAliasIdentity_native
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovNormEscapeAudit.covNormAliasPi_escape_counterexample
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovNormEscapeAudit.not_normalizedCovEscape_covNormAliasPi
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovNormEscapeAudit.C2_normalized_escape_refuted
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovNormEscapeAudit.alias_normalization_boundary
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovNormEscapeAudit.LocalNormalizedTyAtCov
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovNormEscapeAudit.NormalizedFundTyAtCov
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovNormEscapeAudit.NormalizedFundamentalCovAt
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovNormEscapeAudit.GuardedNormalizedCovTyping
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovNormEscapeAudit.not_localNormalizedTyAtCov_covNormAliasPi
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovNormEscapeAudit.not_normalizedFundTyAtCov_covNormAliasPi
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovNormEscapeAudit.not_guardedNormalizedCovTyping_eq
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovNormEscapeAudit.not_normalizedFundamentalCovAt_eq
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovNormEscapeAudit.C2_normalized_typing_and_fundamental_refuted
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovNormTyCasesAudit.CovLetInput
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovNormTyCasesAudit.cov_let_subst_read
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovNormTyCasesAudit.fundCov_letE_of_input
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovNormTyCasesAudit.fundCov_letE_step_of_input
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovNormTyCasesAudit.cov_let_body_approxT
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovNormTyCasesAudit.relSubstAtCov_sortLet
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovNormTyCasesAudit.covLetInput_sort_approxT
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovNormTyCasesAudit.covLetInput_sort_approxTK_of_no_indexed
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovNormTyCasesAudit.fundCov_sortLet
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovNormTyCasesAudit.covLet_native_control
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovNormReadbackAudit.lrSCoreCov_type_heads_iff
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovNormReadbackAudit.lrSCoreCov_type_readback_iff
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovNormReadbackAudit.lrSCoreCov_type_readback_iff_ck2
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovNormSaturatedControlAudit.approxTK_natRec_good_rhs
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovNormSaturatedControlAudit.saturatedComputationTK_natRec_good_call
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovNormSaturatedControlAudit.approxTK_natRec_good_call_saturated
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovNormSaturatedControlAudit.redR_natRec_good_rhs
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovNormSaturatedControlAudit.lrSCoreCov_natRec_good_rhs
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovNormSaturatedControlAudit.lrSCoreCov_natRec_good_iota
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovNormSaturatedControlAudit.convT_natRec_good_iota
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovNormSaturatedControlAudit.natRec_good_saturated_C2_control
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovNormSubstAudit.relSubstAtCov_nil
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovNormSubstAudit.CovLiftModelLaws
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovNormSubstAudit.covLiftModelLaws_approxT
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovNormSubstAudit.cov_typedSubst_cons
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovNormSubstAudit.cov_convSubst_cons
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovNormSubstAudit.envTypedCovAtP_cons_assumption
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovNormSubstAudit.relSubstAtCov_cons_realized
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovNormTyCasesAudit.relSubstAtCov_envs
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovNormTyCasesAudit.fundTyAtCov_of_contract
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovNormTyCasesAudit.CovPiModelFor
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovNormTyCasesAudit.CovLamModelFor
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovNormTyCasesAudit.covPiModelFor_approxT
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovNormTyCasesAudit.covLamModelFor_approxT
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovNormTyCasesAudit.fundCov_lam_realized
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovNormTyCasesAudit.fundCov_pi_realized
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovNormTyCasesAudit.fundCov_pi_step_realized
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovNormTyCasesAudit.fundCov_lam_step_realized
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovNormTyCasesAudit.cov_kFreeValues_assumption
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovNormTyCasesAudit.cov_kFreeTypes_assumption
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovNormTyCasesAudit.fundCov_pi_step_approxTK_of_kFree
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovNormTyCasesAudit.fundCov_lam_step_approxTK_of_kFree
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovNormTyCasesAudit.covPiModelFor_approxTK_of_no_indexed
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovNormTyCasesAudit.covLamModelFor_approxTK_of_no_indexed
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovNormTyCasesAudit.CovLiteralContract
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovNormTyCasesAudit.covLiteralContract_approxTK_of_kFree
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovNormTyCasesAudit.cov_literal_subst_read
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovNormTyCasesAudit.fundCov_lit_of_contract
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovNormTyCasesAudit.fundCov_lit_step_approxTK
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovNormTyCasesAudit.fundCov_lit_step_approxTK_of_kFree
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovNormTyCasesAudit.CovObservedTypeFor
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovNormTyCasesAudit.fundCov_conv_of_observedType
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovNormTyCasesAudit.fundCov_conv_step_of_observedType
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovNormTyCasesAudit.covObservedTypeFor_sort_approxTK
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovNormTyCasesAudit.covObservedTypeFor_alias_control
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovNormTyCasesAudit.fundCov_natZero
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovNormTyCasesAudit.fundCov_litZero
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovNormTyCasesAudit.covLiteral_native_control
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovNormTyCasesAudit.covBinder_native_control
+-- END RCIC_NATIVE_TYPED_MODEL_COV_NORM_SEAL_ROOTS

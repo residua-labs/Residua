@@ -1,0 +1,116 @@
+import rcic.RcicNativePiProbeRelBridge
+import rcic.RcicNativePiProbeRelApp
+import rcic.RcicNativePiProbeRelIota
+import rcic.RcicNativePiProbeRelSubst
+import rcic.RcicNativePiProbeRelAssembly
+
+/-!
+# Bounded typed relation / Pi probe adapter seal
+
+All 100 explicit public roots are queried below.
+This leaf imports only the adapter leaves and their pinned dependencies.
+No aggregate Foundation target is built. `closure_claim = 0`.
+-/
+
+-- BEGIN RCIC_PI_PROBE_REL_ADAPTER_ROOTS
+#print axioms Rcic.Declarative.NativeValleys.PiProbeRelBridgeAudit.lrSCoreS_sortCode_iffT
+#print axioms Rcic.Declarative.NativeValleys.PiProbeRelBridgeAudit.piRead_of_lrSCoreS_leftT
+#print axioms Rcic.Declarative.NativeValleys.PiProbeRelBridgeAudit.probeTransport_of_lrSCoreS_probesT
+#print axioms Rcic.Declarative.NativeValleys.PiProbeRelBridgeAudit.probeEquiv_of_lrSCoreS_probesT
+#print axioms Rcic.Declarative.NativeValleys.PiProbeRelBridgeAudit.ModelProbeAtSubstT
+#print axioms Rcic.Declarative.NativeValleys.PiProbeRelBridgeAudit.probeEquiv_of_fundRelationT
+#print axioms Rcic.Declarative.NativeValleys.PiProbeRelBridgeAudit.modelProbeAtSubst_id_of_realizedT
+#print axioms Rcic.Declarative.NativeValleys.PiProbeRelBridgeAudit.probeEquiv_of_fundConvAtT
+#print axioms Rcic.Declarative.NativeValleys.PiProbeRelAppAudit.lrSCoreS_app_of_lambda_demand
+#print axioms Rcic.Declarative.NativeValleys.PiProbeRelAppAudit.lrSCoreS_app_of_model_demand
+#print axioms Rcic.Declarative.NativeValleys.PiProbeRelAppAudit.probeEquiv_app_of_approx_relationsT
+#print axioms Rcic.Declarative.NativeValleys.PiProbeRelAppAudit.appHeadAction_of_fundAtT
+#print axioms Rcic.Declarative.NativeValleys.PiProbeRelAppAudit.appArgAction_of_fundAtT
+#print axioms Rcic.Declarative.NativeValleys.PiProbeRelAppAudit.appHeadAction_of_fundamentalSAtT_whStepCK
+#print axioms Rcic.Declarative.NativeValleys.PiProbeRelAppAudit.appArgAction_of_fundamentalSAtT_whStepCK
+#print axioms Rcic.Declarative.NativeValleys.PiProbeRelAppAudit.relSubstIdT_nil_probe
+#print axioms Rcic.Declarative.NativeValleys.PiProbeRelAppAudit.approxT_app_empty_demand
+#print axioms Rcic.Declarative.NativeValleys.PiProbeRelAppAudit.probeRealizedAt_constantSortAppT
+#print axioms Rcic.Declarative.NativeValleys.PiProbeRelAppAudit.probeRealizedAt_piBodyAppT
+#print axioms Rcic.Declarative.NativeValleys.PiProbeRelAppAudit.appSortDemandGraph
+#print axioms Rcic.Declarative.NativeValleys.PiProbeRelAppAudit.appPiDemandGraph
+#print axioms Rcic.Declarative.NativeValleys.PiProbeRelAppAudit.app_argument_demand_witness
+#print axioms Rcic.Declarative.NativeValleys.PiProbeRelAppAudit.app_sort_function_demand_witness
+#print axioms Rcic.Declarative.NativeValleys.PiProbeRelAppAudit.app_pi_function_demand_witness
+#print axioms Rcic.Declarative.NativeValleys.PiProbeRelAppAudit.app_argument_relation_witness
+#print axioms Rcic.Declarative.NativeValleys.PiProbeRelAppAudit.app_sort_function_relation_witness
+#print axioms Rcic.Declarative.NativeValleys.PiProbeRelAppAudit.app_pi_function_relation_witness
+#print axioms Rcic.Declarative.NativeValleys.PiProbeRelAppAudit.app_sort_typed_demand_control
+#print axioms Rcic.Declarative.NativeValleys.PiProbeRelAppAudit.app_pi_typed_demand_control
+#print axioms Rcic.Declarative.NativeValleys.PiProbeRelIotaAudit.NativeIotaForwardCKAtT
+#print axioms Rcic.Declarative.NativeValleys.PiProbeRelIotaAudit.whStepCK_of_native_iota
+#print axioms Rcic.Declarative.NativeValleys.PiProbeRelIotaAudit.redR_ctx_whStepCK_iff
+#print axioms Rcic.Declarative.NativeValleys.PiProbeRelIotaAudit.probeEquiv_ctx_whStepCK
+#print axioms Rcic.Declarative.NativeValleys.PiProbeRelIotaAudit.native_iota_forwardCK
+#print axioms Rcic.Declarative.NativeValleys.PiProbeRelIotaAudit.native_iota_reverseCK
+#print axioms Rcic.Declarative.NativeValleys.PiProbeRelIotaAudit.native_iota_motive_iff_forwardCK
+#print axioms Rcic.Declarative.NativeValleys.PiProbeRelIotaAudit.native_iota_forwardCK_of_lrSCoreS
+#print axioms Rcic.Declarative.NativeValleys.PiProbeRelIotaAudit.native_iota_forwardCK_of_fundConvAt
+#print axioms Rcic.Declarative.NativeValleys.PiProbeRelIotaAudit.truePiIota_readbackCK
+#print axioms Rcic.Declarative.NativeValleys.PiProbeRelIotaAudit.truePiIota_endpointS
+#print axioms Rcic.Declarative.NativeValleys.PiProbeRelIotaAudit.truePiIota_no_sort_readbackCK
+#print axioms Rcic.Declarative.NativeValleys.PiProbeRelIotaAudit.truePiIota_forwardCK_of_relS
+#print axioms Rcic.Declarative.NativeValleys.PiProbeRelIotaAudit.truePiIota_rel_adapter_nonvacuity
+#print axioms Rcic.Declarative.NativeValleys.PiProbeRelIotaAudit.trueSortIota_readbackCK
+#print axioms Rcic.Declarative.NativeValleys.PiProbeRelIotaAudit.trueSortIota_endpointS
+#print axioms Rcic.Declarative.NativeValleys.PiProbeRelIotaAudit.trueSortIota_forwardCK_of_relS
+#print axioms Rcic.Declarative.NativeValleys.PiProbeRelIotaAudit.trueSortIota_rel_adapter_nonvacuity
+#print axioms Rcic.Declarative.NativeValleys.PiProbeRelIotaAudit.not_lrSCoreS_whStepCK_eqGap_sort
+#print axioms Rcic.Declarative.NativeValleys.PiProbeRelIotaAudit.not_lrSCoreS_whStepCK_eqGap_prop
+#print axioms Rcic.Declarative.NativeValleys.PiProbeRelIotaAudit.lookupValue_eqGapCtx_none
+#print axioms Rcic.Declarative.NativeValleys.PiProbeRelIotaAudit.relSubstIdT_eqGap_bot
+#print axioms Rcic.Declarative.NativeValleys.PiProbeRelIotaAudit.not_fundConvAt_approxT_whStepCK_eqGap
+#print axioms Rcic.Declarative.NativeValleys.PiProbeRelIotaAudit.not_fundamentalSAtT_approxT_whStepCK_eqEnvT
+#print axioms Rcic.Declarative.NativeValleys.PiProbeRelIotaAudit.relSubstTypedAtT_eqGap_bot
+#print axioms Rcic.Declarative.NativeValleys.PiProbeRelIotaAudit.eqGap_typed_supplier_counterexample
+#print axioms Rcic.Declarative.NativeValleys.PiProbeRelSubstAudit.bodyAtValue_of_fundConvAtT
+#print axioms Rcic.Declarative.NativeValleys.PiProbeRelSubstAudit.valueInBody_of_fundTyAtT
+#print axioms Rcic.Declarative.NativeValleys.PiProbeRelSubstAudit.mixedSubstEdges_of_fundAtT
+#print axioms Rcic.Declarative.NativeValleys.PiProbeRelSubstAudit.mixedSubstEdges_letE_of_fundamentalSAtT
+#print axioms Rcic.Declarative.NativeValleys.PiProbeRelSubstAudit.relSubstAtT_empty
+#print axioms Rcic.Declarative.NativeValleys.PiProbeRelSubstAudit.relSubstAtT_singletonLet
+#print axioms Rcic.Declarative.NativeValleys.PiProbeRelSubstAudit.convProbe_letE_of_mixedSubst_whStepCK
+#print axioms Rcic.Declarative.NativeValleys.PiProbeRelSubstAudit.convProbe_letE_of_fundAt_whStepCK
+#print axioms Rcic.Declarative.NativeValleys.PiProbeRelSubstAudit.letProbeValueWrap
+#print axioms Rcic.Declarative.NativeValleys.PiProbeRelSubstAudit.letProbe_inst_lift
+#print axioms Rcic.Declarative.NativeValleys.PiProbeRelSubstAudit.letProbeValueWrapTyping
+#print axioms Rcic.Declarative.NativeValleys.PiProbeRelSubstAudit.letProbeValueWrapZeta
+#print axioms Rcic.Declarative.NativeValleys.PiProbeRelSubstAudit.letProbeSourceEnv
+#print axioms Rcic.Declarative.NativeValleys.PiProbeRelSubstAudit.lrSCoreS_self_of_fundTyAt_empty
+#print axioms Rcic.Declarative.NativeValleys.PiProbeRelSubstAudit.letProbe_zeta_relatedSubsts
+#print axioms Rcic.Declarative.NativeValleys.PiProbeRelSubstAudit.modelProbe_bvar_at_value
+#print axioms Rcic.Declarative.NativeValleys.PiProbeRelSubstAudit.modelProbe_bvar_at_zeta_value
+#print axioms Rcic.Declarative.NativeValleys.PiProbeRelSubstAudit.mixedSubstEdges_bvar_zeta_value
+#print axioms Rcic.Declarative.NativeValleys.PiProbeRelSubstAudit.letProbe_model_sort_id
+#print axioms Rcic.Declarative.NativeValleys.PiProbeRelSubstAudit.letProbe_model_pi_id
+#print axioms Rcic.Declarative.NativeValleys.PiProbeRelSubstAudit.letProbeNativeLetConv
+#print axioms Rcic.Declarative.NativeValleys.PiProbeRelSubstAudit.letProbeNativeLetConv_motive
+#print axioms Rcic.Declarative.NativeValleys.PiProbeRelSubstAudit.letProbeSortType
+#print axioms Rcic.Declarative.NativeValleys.PiProbeRelSubstAudit.letProbePiValue
+#print axioms Rcic.Declarative.NativeValleys.PiProbeRelSubstAudit.letProbePiType
+#print axioms Rcic.Declarative.NativeValleys.PiProbeRelSubstAudit.letProbe_sort_mixedSubstEdges
+#print axioms Rcic.Declarative.NativeValleys.PiProbeRelSubstAudit.letProbe_iotaSubstT_empty
+#print axioms Rcic.Declarative.NativeValleys.PiProbeRelSubstAudit.letProbe_pi_fundTyAt
+#print axioms Rcic.Declarative.NativeValleys.PiProbeRelSubstAudit.letProbePiTyping
+#print axioms Rcic.Declarative.NativeValleys.PiProbeRelSubstAudit.letProbe_pi_mixedSubstEdges
+#print axioms Rcic.Declarative.NativeValleys.PiProbeRelSubstAudit.letProbe_sort_typed_nonvacuity
+#print axioms Rcic.Declarative.NativeValleys.PiProbeRelSubstAudit.letProbe_pi_typed_nonvacuity
+#print axioms Rcic.Declarative.NativeValleys.PiProbeRelAssemblyAudit.functionNoTypeProbeAt_lamCK
+#print axioms Rcic.Declarative.NativeValleys.PiProbeRelAssemblyAudit.headExclusions_typed_nonvacuityCK
+#print axioms Rcic.Declarative.NativeValleys.PiProbeRelAssemblyAudit.normalR_const_opaqueCK
+#print axioms Rcic.Declarative.NativeValleys.PiProbeRelAssemblyAudit.probeEquiv_constsCK
+#print axioms Rcic.Declarative.NativeValleys.PiProbeRelAssemblyAudit.ProbeAdapterInputsCKT
+#print axioms Rcic.Declarative.NativeValleys.PiProbeRelAssemblyAudit.convProbe_of_adapterInputsCKT
+#print axioms Rcic.Declarative.NativeValleys.PiProbeRelAssemblyAudit.probeConvLinks_of_adapterInputsCKT
+#print axioms Rcic.Declarative.NativeValleys.PiProbeRelAssemblyAudit.piRowField_of_adapterInputsCKT
+#print axioms Rcic.Declarative.NativeValleys.PiProbeRelAssemblyAudit.ProbeAdapterModelInputsCKT
+#print axioms Rcic.Declarative.NativeValleys.PiProbeRelAssemblyAudit.probeAdapterInputs_of_fundamentalSAtT
+#print axioms Rcic.Declarative.NativeValleys.PiProbeRelAssemblyAudit.probeConvLinks_of_fundamentalSAtT_adapters
+#print axioms Rcic.Declarative.NativeValleys.PiProbeRelAssemblyAudit.piRowField_of_fundamentalSAtT_adapters
+#print axioms Rcic.Declarative.NativeValleys.PiProbeRelAssemblyAudit.not_probeAdapterInputsCKT_eqEnv
+-- END RCIC_PI_PROBE_REL_ADAPTER_ROOTS
