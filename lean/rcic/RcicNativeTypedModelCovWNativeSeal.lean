@@ -1,0 +1,473 @@
+import Lean
+import rcic.RcicNativeTypedModelCovWMatrixSeal
+import rcic.RcicNativeTypedModelCovWNativeAliasControl
+import rcic.RcicNativeTypedModelCovWNativeApartGap
+import rcic.RcicNativeTypedModelCovWNativeCompleteness
+import rcic.RcicNativeTypedModelCovWNativeComputations
+import rcic.RcicNativeTypedModelCovWNativeContext
+import rcic.RcicNativeTypedModelCovWNativeControls
+import rcic.RcicNativeTypedModelCovWNativeCore
+import rcic.RcicNativeTypedModelCovWNativeDeclarativeHead
+import rcic.RcicNativeTypedModelCovWNativeFields
+import rcic.RcicNativeTypedModelCovWNativeFixtures
+import rcic.RcicNativeTypedModelCovWNativeFunctionControls
+import rcic.RcicNativeTypedModelCovWNativeHeadClosure
+import rcic.RcicNativeTypedModelCovWNativeHoControl
+import rcic.RcicNativeTypedModelCovWNativeKControls
+import rcic.RcicNativeTypedModelCovWNativeNat
+import rcic.RcicNativeTypedModelCovWNativeProofControls
+import rcic.RcicNativeTypedModelCovWNativeRecControl
+import rcic.RcicNativeTypedModelCovWNativeUniverse
+
+/-!
+# Bounded seal: native-aligned computation and guarded invariance
+
+The guarded grammar uses exact native K gates and unfiltered actual-constructor
+iota. Actual-occurrence native typing disciplines rigid fields. Every native
+boundary has inhabited premises. Raw observations are unchanged. General
+invariance and adequacy claims are kept distinct from local controls.
+
+The prior bounded seals and the exact #7776 replay are checked separately.
+Neither full Foundation root is imported. closure_claim = 0.
+-/
+
+private def covWNativeRoots : Array Lean.Name := #[
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_empty_app,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_empty_lam,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_eta_empty_row,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_type_sort_row,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_empty_graph_typed_sort_pi,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_beta_apply_alias,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_beta_apply_alias_not_only_bot,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_sort_observed,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.CovWNativeApartIndexSeparation,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.CovWNativeApartRetention,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_apart_direct_K_blocked,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_apart_inhabited,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_empty_sort_shape,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_empty_sort_transport,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNativeUniverse_to_B,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNativeUniverse_to_A,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNativeUniverse_all_tagged,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNativeUniverse_all_observations,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNativeUniverseCode,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNativeUniverse_code,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNativeUniverse_code_typed,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.CovWNativeCodesDetermineTypes,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_codes_do_not_determine_types,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_codes_boundary_inhabited,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_etaIndex_prop,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_etaIndex_observed,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_etaIndex_native_not_DI,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_K_realized,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_iota_rhs_prop,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_iota_source_prop,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_iota_native_not_filter,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNativeTrueWitness,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_true_witness_lhs,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_true_witness_rhs,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_true_iota_prop,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_true_raw_guarded_comparison,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_major_ctor_prop,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_major_shared_prop,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_no_blanket_old_forgetting,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.CovWNativeTypedEqAt,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.CovWNativeTypedInvariant,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.CovWNativeContext,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNativeFill,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_positive_code_demands,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_rigid_const_shape,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNativeHoPrefix,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNativeHoContext,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNativeHo_fill_neutral,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNativeHo_fill_constructor,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNativeHo_prefix_ty,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNativeHo_major_irrel,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNativeHo_context_conv,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNativeHo_occurrences,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNativeHo_family_rigid,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNativeHo_family_not_propCtor,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNativeHo_code_prop,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNativeHo_type_code,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNativeHo_majors_equal_at_code,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNativeHo_type_demands,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNativeHo_majors_typed_equal,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNativeHo_major_pair,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNativeHo_context_pair,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNativeHo_context_prop_absent,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNativeHo_context_not_typed_equal,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.CovWNativeAppArgumentCongruence,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_app_argument_congruence_false,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNativeHo_context_failure_inhabited,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_identity_tower_observed,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_identity_uniform_control,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_proof_total_control,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_trueIntro_supply,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_abelCoquand_supply,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.ApproxTKWNative,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_iota_expand,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_K_expand,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_guarded_appSpine_bot,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_KNativeHead_expand,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.ApproxTKWNativeStage,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.ApproxTKWNativeStage.mono,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.CovWNativeRealized,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_realized_nil,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.CovWNativeObservation,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_observation_of,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.CovWNativePropHeadDeclarativeAdequacy,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.CovWNativeHoCtorHeadConversion,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.CovWNativeHoDivergentHeadConversion,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_prop_head_requires_Ho_ctor,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_Ho_head_conversion_iff,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_prop_head_requires_Ho_divergent,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_Ho_no_legacy_iota_generator,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_prop_transport_readback_impossible,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_prop_transport_matching_head_impossible,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_prop_target_failure_inhabited,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.CovWNativeOccurrence,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.CovWNativeFunctionDomain,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.CovWNativeFunctionCompact,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.CovWNativeField,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_field_bot,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_field_mk,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_function_compact_no_spine,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_syntactic_function,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.CovWNativeFieldAt,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_field_iff_at,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_fieldAt_proof,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_fieldAt_function,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_fieldAt_other,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_fieldAt_no_function_atom,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_rigid_observed,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_neutral_observed,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_pi_nil,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_nat_observed,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_succ_observed,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNativeNatArrowCode,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_natArrow_observed,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_natEta_empty,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_aliasIdentity_observed,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNativePolyPropCode,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_poly_type_observed,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_poly_value_observed,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_eq_realized,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.CovWNativeFixtureAt,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_fixture_pack,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_fixture_natSucc_eta,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_fixture_alias_in_pi,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_fixture_polyPropLam,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_fixture_alias_extension,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_fixture_nat_coverage,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_fixture_nat_shape,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_fixture_eq_anchor,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_fixture_nat_anchor,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNativeFunctionResult,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNativeFunction_nat_observed,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNativeFunction_succ_observed,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNativeFunction_arrow_observed,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNativeFunction_succ_graph,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNativeFunction_eta_graph,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNativeFunction_graph_field,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNativeFunction_apply_graph,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNativeFunction_target_graph,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNativeFunction_eta_target_graph,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNativeFunction_beta_graph,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNativeFunction_let_graph,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNativeFunction_result_typed,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNativeFunction_old_atom_rejected,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNativeFunction_four_graph_controls,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_legacy_iota_expand,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_DerivedIotaU_expand,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNativeHo_type_only_bot,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNativeHo_type_observation_iff,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNativeHo_repaired_instance,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_K_eqGap_observed,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_trueK_observed,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_andK_rhs_observed,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_andK_observed,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_K_positive_controls,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNativeNatGraph,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNativeNatGraphType,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNativeNatResult,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNativeNat_type_observed,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNativeNat_fn_graph,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNativeNat_expand_graph,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNativeNat_graph_typed,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNativeNat_shared_graph,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNativeNat_beta_source,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNativeNat_let_source,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNativeNat_beta_let_repaired,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNativeNat_same_stage,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_guarded_head_shape,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_proof_field_shape,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_family_new,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_left_new,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_right_new,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_family_shape_of_native,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_family_applied_all_shape_of_native,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_family_all_observations_equal_of_native,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_family_all_public_observations_equal_of_native,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_family_applied_all_shape,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_family_all_observations_equal,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_family_all_public_observations_equal,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_family_closed_observations_equal,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_family_closed_public_observations_equal,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_proofDemand_head,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_proofDemand_left,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_proofDemand_right,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_proofDemand_typed_equal,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_proofDemand_erased_equal,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_proofDemand_control,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_inv_family,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_inv_body,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_inv_source,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_inv_let,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_inv_target,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_inv_typed_sources,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_inv_erased_sources,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_inv_control,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNativeRec_minor,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNativeRec_schema,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNativeRec_const,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNativeRec_call,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNativeRec_type,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNativeRec_major_observed,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNativeRec_env_realized,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNativeRec_instance_observed,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_nat_rec_instance_control,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNativeUniverseA,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNativeUniverseB,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNativeUniverseLevel,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNativeUniverseA_ty,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNativeUniverseB_ty,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNativeUniverse_not_tyConv,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNativeUniverse_not_conv,
+  ``Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNativeUniverse_native_inhabited
+]
+
+open Lean Elab Command in
+run_cmd do
+  let env ← getEnv
+  let allowed := #[``propext, ``Quot.sound]
+  for root in covWNativeRoots do
+    if !env.contains root then
+      throwError "CovWNative seal: missing declaration {root}"
+    let axioms ← collectAxioms root
+    let forbidden := axioms.filter (fun ax => !allowed.contains ax)
+    if !forbidden.isEmpty then
+      throwError "CovWNative seal: {root} has forbidden axioms {forbidden}"
+  logInfo m!"CovWNative seal: {covWNativeRoots.size} public roots checked; allowed axioms = {allowed}"
+
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_empty_app
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_empty_lam
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_eta_empty_row
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_type_sort_row
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_empty_graph_typed_sort_pi
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_beta_apply_alias
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_beta_apply_alias_not_only_bot
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_sort_observed
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.CovWNativeApartIndexSeparation
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.CovWNativeApartRetention
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_apart_direct_K_blocked
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_apart_inhabited
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_empty_sort_shape
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_empty_sort_transport
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNativeUniverse_to_B
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNativeUniverse_to_A
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNativeUniverse_all_tagged
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNativeUniverse_all_observations
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNativeUniverseCode
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNativeUniverse_code
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNativeUniverse_code_typed
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.CovWNativeCodesDetermineTypes
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_codes_do_not_determine_types
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_codes_boundary_inhabited
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_etaIndex_prop
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_etaIndex_observed
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_etaIndex_native_not_DI
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_K_realized
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_iota_rhs_prop
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_iota_source_prop
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_iota_native_not_filter
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNativeTrueWitness
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_true_witness_lhs
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_true_witness_rhs
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_true_iota_prop
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_true_raw_guarded_comparison
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_major_ctor_prop
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_major_shared_prop
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_no_blanket_old_forgetting
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.CovWNativeTypedEqAt
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.CovWNativeTypedInvariant
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.CovWNativeContext
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNativeFill
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_positive_code_demands
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_rigid_const_shape
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNativeHoPrefix
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNativeHoContext
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNativeHo_fill_neutral
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNativeHo_fill_constructor
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNativeHo_prefix_ty
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNativeHo_major_irrel
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNativeHo_context_conv
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNativeHo_occurrences
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNativeHo_family_rigid
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNativeHo_family_not_propCtor
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNativeHo_code_prop
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNativeHo_type_code
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNativeHo_majors_equal_at_code
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNativeHo_type_demands
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNativeHo_majors_typed_equal
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNativeHo_major_pair
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNativeHo_context_pair
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNativeHo_context_prop_absent
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNativeHo_context_not_typed_equal
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.CovWNativeAppArgumentCongruence
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_app_argument_congruence_false
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNativeHo_context_failure_inhabited
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_identity_tower_observed
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_identity_uniform_control
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_proof_total_control
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_trueIntro_supply
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_abelCoquand_supply
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.ApproxTKWNative
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_iota_expand
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_K_expand
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_guarded_appSpine_bot
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_KNativeHead_expand
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.ApproxTKWNativeStage
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.ApproxTKWNativeStage.mono
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.CovWNativeRealized
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_realized_nil
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.CovWNativeObservation
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_observation_of
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.CovWNativePropHeadDeclarativeAdequacy
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.CovWNativeHoCtorHeadConversion
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.CovWNativeHoDivergentHeadConversion
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_prop_head_requires_Ho_ctor
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_Ho_head_conversion_iff
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_prop_head_requires_Ho_divergent
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_Ho_no_legacy_iota_generator
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_prop_transport_readback_impossible
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_prop_transport_matching_head_impossible
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_prop_target_failure_inhabited
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.CovWNativeOccurrence
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.CovWNativeFunctionDomain
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.CovWNativeFunctionCompact
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.CovWNativeField
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_field_bot
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_field_mk
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_function_compact_no_spine
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_syntactic_function
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.CovWNativeFieldAt
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_field_iff_at
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_fieldAt_proof
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_fieldAt_function
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_fieldAt_other
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_fieldAt_no_function_atom
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_rigid_observed
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_neutral_observed
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_pi_nil
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_nat_observed
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_succ_observed
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNativeNatArrowCode
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_natArrow_observed
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_natEta_empty
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_aliasIdentity_observed
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNativePolyPropCode
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_poly_type_observed
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_poly_value_observed
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_eq_realized
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.CovWNativeFixtureAt
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_fixture_pack
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_fixture_natSucc_eta
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_fixture_alias_in_pi
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_fixture_polyPropLam
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_fixture_alias_extension
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_fixture_nat_coverage
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_fixture_nat_shape
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_fixture_eq_anchor
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_fixture_nat_anchor
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNativeFunctionResult
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNativeFunction_nat_observed
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNativeFunction_succ_observed
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNativeFunction_arrow_observed
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNativeFunction_succ_graph
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNativeFunction_eta_graph
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNativeFunction_graph_field
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNativeFunction_apply_graph
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNativeFunction_target_graph
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNativeFunction_eta_target_graph
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNativeFunction_beta_graph
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNativeFunction_let_graph
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNativeFunction_result_typed
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNativeFunction_old_atom_rejected
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNativeFunction_four_graph_controls
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_legacy_iota_expand
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_DerivedIotaU_expand
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNativeHo_type_only_bot
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNativeHo_type_observation_iff
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNativeHo_repaired_instance
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_K_eqGap_observed
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_trueK_observed
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_andK_rhs_observed
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_andK_observed
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_K_positive_controls
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNativeNatGraph
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNativeNatGraphType
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNativeNatResult
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNativeNat_type_observed
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNativeNat_fn_graph
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNativeNat_expand_graph
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNativeNat_graph_typed
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNativeNat_shared_graph
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNativeNat_beta_source
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNativeNat_let_source
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNativeNat_beta_let_repaired
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNativeNat_same_stage
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_guarded_head_shape
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_proof_field_shape
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_family_new
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_left_new
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_right_new
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_family_shape_of_native
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_family_applied_all_shape_of_native
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_family_all_observations_equal_of_native
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_family_all_public_observations_equal_of_native
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_family_applied_all_shape
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_family_all_observations_equal
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_family_all_public_observations_equal
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_family_closed_observations_equal
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_family_closed_public_observations_equal
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_proofDemand_head
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_proofDemand_left
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_proofDemand_right
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_proofDemand_typed_equal
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_proofDemand_erased_equal
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_proofDemand_control
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_inv_family
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_inv_body
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_inv_source
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_inv_let
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_inv_target
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_inv_typed_sources
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_inv_erased_sources
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_inv_control
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNativeRec_minor
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNativeRec_schema
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNativeRec_const
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNativeRec_call
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNativeRec_type
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNativeRec_major_observed
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNativeRec_env_realized
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNativeRec_instance_observed
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNative_nat_rec_instance_control
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNativeUniverseA
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNativeUniverseB
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNativeUniverseLevel
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNativeUniverseA_ty
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNativeUniverseB_ty
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNativeUniverse_not_tyConv
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNativeUniverse_not_conv
+#print axioms Rcic.Declarative.NativeValleys.TypedModelCovWNativeAudit.covWNativeUniverse_native_inhabited

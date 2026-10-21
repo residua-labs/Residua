@@ -156,6 +156,17 @@ A cold build compiles about 1,360 modules and needs a large-memory machine. The 
 
 ## Where to start reading
 
+`RcicCore` imports exactly the core results: the in-scope rows, subject reduction, type uniqueness and machine soundness, about 190 modules. It is grouped by layer: `RcicCoreSyntax`, `RcicCoreEnv`, `RcicCoreJudgments`, `RcicCoreRelation`, `RcicCoreRows`, `RcicCoreMetatheory`, `RcicCoreMachine`. To build only the core, run `lake build RCICCore`.
+
+`lean/rcic/MODULES.md` classifies every module:
+
+- core;
+- active: live routes outside the core;
+- measurement: refutations, boundaries and superseded routes, kept on purpose;
+- support.
+
+Most of the tree is measurement and support. The core is the place to start.
+
 | module | contents |
 |---|---|
 | `RcicDeclarative` | syntax, levels, environments, `HasTyT`, `ConvT`, `TyConvT` |
@@ -169,7 +180,7 @@ A cold build compiles about 1,360 modules and needs a large-memory machine. The 
 
 ## Provenance
 
-This directory mirrors `lean/rcic` of the Residua development tree at commit `0335be80845919c06dc48276e8e96ddbfe33c483`. It is regenerated from there after each landing.
+This directory mirrors `lean/rcic` of the Residua development tree at commit `1b62a97c32c011a9d959332c44d47ac35715b9e8`. It is regenerated from there after each landing.
 
 Every Lean file except the seal is byte-identical to the development tree.
 

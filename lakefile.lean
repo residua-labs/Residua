@@ -17,4 +17,11 @@ lean_lib «RCIC» where
   globs := #[.submodules `rcic]
   weakLeanArgs := #["--tstack=65536"]
   moreLeanArgs := #["--tstack=65536"]
+
+-- RCICCore: only the core results (in-scope rows, subject reduction, type
+-- uniqueness, machine soundness) and their import closure.
+lean_lib «RCICCore» where
+  srcDir := "lean"
+  roots := #[`rcic.RcicCore]
+  moreLeanArgs := #["--tstack=65536"]
 -- END RCIC

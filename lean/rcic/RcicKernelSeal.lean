@@ -895,10 +895,6 @@ import rcic.RcicHostPropTransfer
 import rcic.RcicNativeValleyDecoBook
 import rcic.RcicNativeValleyDecoRows
 import rcic.RcicNativeValleyDecoTransfer
-import rcic.RcicSynMixedLsubScope
-import rcic.RcicHostPropSite
-import rcic.RcicHostPropScoped
-import rcic.RcicHostPropTransfer
 import rcic.RcicSynMixedPiFactor
 import rcic.RcicSynMixedBridgeEUT
 import rcic.RcicSynMixedLetConst
@@ -944,12 +940,6 @@ import rcic.RcicEtakMovingMinorPeak
 import rcic.RcicEtakMovingMinorSuccessor
 import rcic.RcicNativeAsymmetricStrip
 import rcic.RcicNativeAsymmetricObstruction
-import rcic.RcicNativeDecoIdentity
-import rcic.RcicNativeDecoLeaf
-import rcic.RcicNativeDecoLeafIface
-import rcic.RcicNativeDecoReindex
-import rcic.RcicNativeDecoRows
-import rcic.RcicNativeDecoStrip
 import rcic.RcicSynPbBvarFrame
 import rcic.RcicSynSameRankDep
 import rcic.RcicNativeWallProofSource
@@ -1025,15 +1015,8 @@ import rcic.RcicNativePiModelDeltaIotaCtx
 import rcic.RcicNativePiModelDeltaIotaCongr
 -- END AGY MODEL-DELTAIOTA-CONGR IMPORT
 -- BEGIN DEVIN-DESKTOP FUNDAMENTAL-TERMD IMPORT
-import rcic.RcicNativePiModelTermDFund
 -- END DEVIN-DESKTOP FUNDAMENTAL-TERMD IMPORT
 -- BEGIN DEVIN-DESKTOP FUNDAMENTAL-CTX IMPORT
-import rcic.RcicNativeFamModelLRS
-import rcic.RcicNativeFamModelLRSPER
-import rcic.RcicNativeTypedModel
-import rcic.RcicNativeTypedModelRel
-import rcic.RcicNativeTypedModelIota
-import rcic.RcicNativeTypedModelTyping
 import rcic.RcicSubstTTyped
 import rcic.RcicNativeTypedModelRelS
 import rcic.RcicNativeTypedModelFund
@@ -1068,18 +1051,11 @@ import rcic.RcicNativePiProbeSeal
 import rcic.RcicSynSRFsub
 -- END SR-FSUB-TABLEOFI IMPORT
 -- BEGIN DEVIN-DESKTOP FUNDAMENTAL-TERMD IMPORT
-import rcic.RcicNativePiModelTermDFund
 -- END DEVIN-DESKTOP FUNDAMENTAL-TERMD IMPORT
 -- BEGIN DEVIN-DESKTOP FUNDAMENTAL-CTX IMPORT (seg 7-10, not yet landed)
 -- BEGIN GLM-PBITREGTOTAL IMPORT (sortRow staged-PBit uniform coherence)
 import rcic.RcicSynPBitRegTotal
 -- END GLM-PBITREGTOTAL IMPORT
-import rcic.RcicSubstTTyped
-import rcic.RcicNativeTypedModelRelS
-import rcic.RcicNativeTypedModelFund
-import rcic.RcicNativeTypedModelFamSpine
-import rcic.RcicNativeTypedModelFundStrong
-import rcic.RcicNativeTypedModelProbe
 -- END DEVIN-DESKTOP FUNDAMENTAL-CTX IMPORT
 -- BEGIN DEVIN FUND-SWE-FSUB IMPORT
 import rcic.RcicNativeTypedModelFundLit
@@ -1126,7 +1102,6 @@ import rcic.RcicSynSRAppOcc
 -- BEGIN RCIC_NATIVE_TYPED_MODEL_K_IMPORT
 import rcic.RcicNativeTypedModelKSeal
 -- END RCIC_NATIVE_TYPED_MODEL_K_IMPORT
-import rcic.RcicNativeTypedModelKGSeal
 import rcic.RcicNativeTypedModelKG2Seal
 -- BEGIN GLM-SR2 LITPI IMPORT (sortRow rows 7/10 es_lit+es_pi surfaceCL refuted)
 import rcic.RcicSynSRLitPiLit
@@ -1139,10 +1114,12 @@ import rcic.RcicSynSRLitPiTHSALhom
 -- BEGIN SR-DELTA-TABLEI IMPORT (sortRow row 5 es_delta wall, swe-delta lane)
 import rcic.RcicSynSRDelta
 -- END SR-DELTA-TABLEI IMPORT
+-- BEGIN SR-DELTA-ADMW IMPORT (row 5 es_delta: hag discharged at Aw := admW)
+import rcic.RcicSynSRDeltaAdmW
+-- END SR-DELTA-ADMW IMPORT
 
 -- BEGIN SR-DELTA-TABLEI IMPORT (sortRow row 5 es_delta wall, swe-delta lane)
 -- END SR-DELTA-TABLEI IMPORT
-import rcic.RcicNativeTypedModelEqArity
 import rcic.RcicSynSRBetaZetaEpsW
 import rcic.RcicSynSRBetaZetaInlineClass
 import rcic.RcicSynSRClEutLhomStep
@@ -1150,6 +1127,10 @@ import rcic.RcicSynSRClEutLhomEut
 import rcic.RcicSynSRClEutLhomCl
 import rcic.RcicSynSRClEutLhomPb
 import rcic.RcicSynSRClEutLhomTooth
+-- END GLM-SR2 LITPI IMPORT
+-- BEGIN GLM-SR1 INLINE IMPORT (sortRow inline wedge: classification + epsW repair; closure_claim = 0)
+-- END GLM-SR1 INLINE IMPORT
+-- BEGIN GLM-SR1 EPSW2 IMPORT (epsW blast radius: transfers + commutation + transports + wedge + zl tooth; closure_claim = 0)
 import rcic.RcicSynSRBetaZetaEpsWNoWk
 import rcic.RcicSynSRBetaZetaEpsWDisp
 import rcic.RcicSynSRBetaZetaEpsWLvl
@@ -1182,6 +1163,16 @@ import rcic.RcicNativeTypedModelCovURecInstance
 import rcic.RcicNativeTypedModelCovUSeal
 import rcic.RcicNativeTypedModelCovUSoundness
 import rcic.RcicNativeTypedModelCovUSoundnessEnv
+-- END GLM-SR1 EPSW2 IMPORT
+-- BEGIN GLM-SR1 STEPW IMPORT (StepSuppliersW: the closer on epsW, boundary, rows 2/3/4; closure_claim = 0)
+import rcic.RcicSynSRBetaZetaStepWCore
+import rcic.RcicSynSRBetaZetaStepW
+import rcic.RcicSynSRBetaZetaStepWNoInline
+import rcic.RcicSynSRBetaZetaStepWClosedWf
+import rcic.RcicSynSRBetaZetaStepWBoundary
+import rcic.RcicSynSRBetaZetaStepWRows
+import rcic.RcicSynSRBetaZetaStepWLetCW
+-- END GLM-SR1 STEPW IMPORT
 import rcic.RcicSynSREqnClW
 import rcic.RcicSynSREqnIssue
 import rcic.RcicNativeTypedModelCovWTypedActions
@@ -1257,7 +1248,133 @@ import rcic.RcicSynSRClEutConvb
 import rcic.RcicSynSRClEutApp
 import rcic.RcicSynSRClEutOther
 import rcic.RcicSynSRClEutTransport
+import rcic.RcicNativeTypedModelCovWNativeExpansionBoundary
+import rcic.RcicNativeTypedModelCovWNativeEtaFunctionBoundary
+import rcic.RcicNativeTypedModelCovWNativeFollowupSeal
+import rcic.RcicNativeTypedModelCovWNativeAliasControl
+import rcic.RcicNativeTypedModelCovWNativeApartGap
+import rcic.RcicNativeTypedModelCovWNativeCompleteness
+import rcic.RcicNativeTypedModelCovWNativeComputations
+import rcic.RcicNativeTypedModelCovWNativeContext
+import rcic.RcicNativeTypedModelCovWNativeControls
+import rcic.RcicNativeTypedModelCovWNativeCore
+import rcic.RcicNativeTypedModelCovWNativeDeclarativeHead
+import rcic.RcicNativeTypedModelCovWNativeFields
+import rcic.RcicNativeTypedModelCovWNativeFixtures
+import rcic.RcicNativeTypedModelCovWNativeFunctionControls
+import rcic.RcicNativeTypedModelCovWNativeHeadClosure
+import rcic.RcicNativeTypedModelCovWNativeHoControl
+import rcic.RcicNativeTypedModelCovWNativeKControls
+import rcic.RcicNativeTypedModelCovWNativeNat
+import rcic.RcicNativeTypedModelCovWNativeProofControls
+import rcic.RcicNativeTypedModelCovWNativeRecControl
+import rcic.RcicNativeTypedModelCovWNativeSeal
+import rcic.RcicNativeTypedModelCovWNativeUniverse
+import rcic.RcicNativeTypedModelCovWConvAndK
+import rcic.RcicNativeTypedModelCovWConvBohm
+import rcic.RcicNativeTypedModelCovWConvCompact
+import rcic.RcicNativeTypedModelCovWConvControls
+import rcic.RcicNativeTypedModelCovWConvCore
+import rcic.RcicNativeTypedModelCovWConvForget
+import rcic.RcicNativeTypedModelCovWConvHo
+import rcic.RcicNativeTypedModelCovWConvK
+import rcic.RcicNativeTypedModelCovWConvLevels
+import rcic.RcicNativeTypedModelCovWConvLocal
+import rcic.RcicNativeTypedModelCovWConvLocalRealized
+import rcic.RcicNativeTypedModelCovWConvPositive
+import rcic.RcicNativeTypedModelCovWConvQuotientRows
+import rcic.RcicNativeTypedModelCovWConvReduction
+import rcic.RcicNativeTypedModelCovWConvUniverse
+import rcic.RcicNativeTypedModelCovWConvUniverseFragment
+import rcic.RcicNativeTypedModelCovWConvValley
+import rcic.RcicNativeTypedModelCovWConvSeal
+import rcic.RcicSynSREqnAppCell
+import rcic.RcicTypedScopeResidue
+import rcic.RcicTypedScopeAdmission
+import rcic.RcicTypedScopeResidueSeal
+import rcic.RcicNativeTypedModelCovWRigidCore
+import rcic.RcicNativeTypedModelCovWRigidLocal
+import rcic.RcicNativeTypedModelCovWRigidSpines
+import rcic.RcicNativeTypedModelCovWRigidTransport
+import rcic.RcicNativeTypedModelCovWRigidLegacy
+import rcic.RcicNativeTypedModelCovWRigidTypingBoundary
+import rcic.RcicNativeTypedModelCovWRigidPiTrans
+import rcic.RcicNativeTypedModelCovWRigidMShape
+import rcic.RcicNativeTypedModelCovWRigidSeal
+import rcic.RcicRouteCEqGuard
+import rcic.RcicAnnEqLargeFixture
+import rcic.RcicRouteCGuardedCycle
+import rcic.RcicRouteCLargeIndexBoundary
+import rcic.RcicRouteCRelationBoundarySeal
+-- BEGIN GLM-SR2 ESW IMPORT (sortRow rows re-measured under epsW + LevelHom; closure_claim = 0)
+import rcic.RcicSynSRLitPiEswW
+import rcic.RcicSynSRLitPiEswLit
+import rcic.RcicSynSRLitPiEswPi
+import rcic.RcicSynSRLitPiEswLegs
+-- END GLM-SR2 ESW IMPORT
+-- BEGIN GLM-SR2 CLW IMPORT (THE common wall: typing-erasure coherence; closure_claim = 0)
+import rcic.RcicSynSRLitPiCLW
+import rcic.RcicSynSRLitPiAlign
+-- END GLM-SR2 CLW IMPORT
+-- BEGIN GLM-SR2 ISSUESSR IMPORT (issuance rows for the reduction-arm walls; closure_claim = 0)
+import rcic.RcicSynSRLitPiIssuesSR
+-- END GLM-SR2 ISSUESSR IMPORT
+-- BEGIN GLM-SR2 MEAS IMPORT (cc 00:40Z measure lemmas + ConvModPiCongrW + W-assemblers; closure_claim = 0)
+import rcic.RcicSynSRLitPiMeas
+-- END GLM-SR2 MEAS IMPORT
+-- BEGIN GLM-SR2 REDEXAP IMPORT (readRedex preserves AssumpPref; closure_claim = 0)
+import rcic.RcicSynSRLitPiRedexAP
+import rcic.RcicSynSRClEutBvar
+import rcic.RcicSynSREqnCellIH
+import rcic.RcicSynSREqnPiCl
+import rcic.RcicSynSRLitPiEswLit
+import rcic.RcicSynSRLitPiIssuesSR
+import rcic.RcicSynSREqnCellIH
+import rcic.RcicSynSRLitPiEswW
+import rcic.RcicSynSRLitPiMeas
+import rcic.RcicSynSREqnPiCl
+import rcic.RcicSynSRLitPiRedexAP
+import rcic.RcicSynSRLitPiEswPi
+import rcic.RcicSynSRClEutBvar
+import rcic.RcicSynSRLitPiEswLegs
+import rcic.RcicSynSRLitPiCLW
+import rcic.RcicSynSRLitPiAlign
+import rcic.RcicIotaFunRecCorr
+import rcic.RcicRouteCRetypeHeader
+import rcic.RcicAnnIotaCorrN
+import rcic.RcicTypedJD
+import rcic.RcicAnnAnnotateD
+import rcic.RcicTypedRowsWfD
+import rcic.RcicAnnRowsSupplyD
+import rcic.RcicTypedGroupD
+import rcic.RcicAnnDeltaPinD
+import rcic.RcicRouteCKContextBoundary
+import rcic.RcicAnnKIndexLaws
+import rcic.RcicAnnKStage
+import rcic.RcicAnnKTransport
+import rcic.RcicAnnKEqPositive
+import rcic.RcicAnnKOldLRBoundary
+import rcic.RcicRouteCIndexSyntactic
+import rcic.RcicRouteCIndexTransport
+import rcic.RcicRouteCIndexFamilyFragment
+import rcic.RcicRouteCIndexFamilyPer
+import rcic.RcicRouteCKIndexSeal
+import rcic.RcicSynSRBetaZetaStarIff
+import rcic.RcicSynSRBetaZetaStarEntry
+import rcic.RcicSynSRBetaZetaIssueCT
+import rcic.RcicSynSRBetaZetaStepWCorner
+import rcic.RcicSynSRBetaZetaDeltaRhs
+import rcic.RcicSynSRBetaZetaReductRead
+import rcic.RcicCore
+import rcic.RcicCoreSyntax
+import rcic.RcicCoreEnv
+import rcic.RcicCoreJudgments
+import rcic.RcicCoreMetatheory
+import rcic.RcicCoreRelation
+import rcic.RcicCoreRows
+import rcic.RcicCoreMachine
 open Lean
+-- END GLM-SR2 REDEXAP IMPORT
 
 namespace Rcic.FoundationSeal
 
@@ -16353,67 +16470,6 @@ def sealedTheorems : List Name := [
   ``Rcic.Declarative.IA021T_hT_of_envWfT_ext,
   ``Rcic.Declarative.IA021T_minorType_typed_of_envWfT,
   -- J1 dependency #7077: original literal bases, kept once.
-  ``Rcic.Declarative.F8Measure.J1.DirectTiles,
-  ``Rcic.Declarative.F8Measure.J1.Result,
-  ``Rcic.Declarative.F8Measure.J1.reflEndpoint,
-  ``Rcic.Declarative.F8Measure.J1.reflValley,
-  ``Rcic.Declarative.F8Measure.J1.reflValley_leaves,
-  ``Rcic.Declarative.F8Measure.J1.reflValley_strict,
-  ``Rcic.Declarative.F8Measure.J1.reflValley_left_exact,
-  ``Rcic.Declarative.F8Measure.J1.reflResult,
-  ``Rcic.Declarative.F8Measure.J1.irrPayload,
-  ``Rcic.Declarative.F8Measure.J1.irrStep,
-  ``Rcic.Declarative.F8Measure.J1.irrStep_leaves,
-  ``Rcic.Declarative.F8Measure.J1.irrStep_exact,
-  ``Rcic.Declarative.F8Measure.J1.irrValley,
-  ``Rcic.Declarative.F8Measure.J1.irrValley_leaves,
-  ``Rcic.Declarative.F8Measure.J1.irrValley_strict,
-  ``Rcic.Declarative.F8Measure.J1.irrTile,
-  ``Rcic.Declarative.F8Measure.J1.irrTile_exact,
-  ``Rcic.Declarative.F8Measure.J1.irrValley_left_exact,
-  ``Rcic.Declarative.F8Measure.J1.irrValley_right_exact,
-  ``Rcic.Declarative.F8Measure.J1.irrAnswer_refl,
-  ``Rcic.Declarative.F8Measure.J1.irrResult,
-  ``Rcic.Declarative.F8Measure.J1.isBase,
-  ``Rcic.Declarative.F8Measure.J1.dispatchWf,
-  ``Rcic.Declarative.F8Measure.J1.dispatchWf_coverage,
-  ``Rcic.Declarative.F8Measure.J1.result_edge,
-  ``Rcic.Declarative.F8Measure.J1.Pins.cl,
-  ``Rcic.Declarative.F8Measure.J1.Pins.ss,
-  ``Rcic.Declarative.F8Measure.J1.Pins.reflTyping,
-  ``Rcic.Declarative.F8Measure.J1.Pins.reflLiteral,
-  ``Rcic.Declarative.F8Measure.J1.Pins.reflRoots,
-  ``Rcic.Declarative.F8Measure.J1.Pins.reflCert,
-  ``Rcic.Declarative.F8Measure.J1.Pins.reflOut,
-  ``Rcic.Declarative.F8Measure.J1.Pins.refl_exact,
-  ``Rcic.Declarative.F8Measure.J1.Pins.refl_inventory,
-  ``Rcic.Declarative.F8Measure.J1.Pins.refl_dispatch,
-  ``Rcic.Declarative.F8Measure.J1.Pins.wrapper,
-  ``Rcic.Declarative.F8Measure.J1.Pins.roots,
-  ``Rcic.Declarative.F8Measure.J1.Pins.source_child,
-  ``Rcic.Declarative.F8Measure.J1.Pins.sourceCert,
-  ``Rcic.Declarative.F8Measure.J1.Pins.source_not_member,
-  ``Rcic.Declarative.F8Measure.J1.Pins.out,
-  ``Rcic.Declarative.F8Measure.J1.Pins.tile,
-  ``Rcic.Declarative.F8Measure.J1.Pins.emitted_exact,
-  ``Rcic.Declarative.F8Measure.J1.Pins.removed_original,
-  ``Rcic.Declarative.F8Measure.J1.Pins.removed_not_ambient,
-  ``Rcic.Declarative.F8Measure.J1.Pins.complete_inventory,
-  ``Rcic.Declarative.F8Measure.J1.Pins.inventory_not_just_step,
-  ``Rcic.Declarative.F8Measure.J1.Pins.left_exact,
-  ``Rcic.Declarative.F8Measure.J1.Pins.right_exact,
-  ``Rcic.Declarative.F8Measure.J1.Pins.left_typing_exact,
-  ``Rcic.Declarative.F8Measure.J1.Pins.right_typing_exact,
-  ``Rcic.Declarative.F8Measure.J1.Pins.shared_fixture_exact,
-  ``Rcic.Declarative.F8Measure.J1.Pins.live_occurrence,
-  ``Rcic.Declarative.F8Measure.J1.Pins.answered_both,
-  ``Rcic.Declarative.F8Measure.J1.Pins.strict_all,
-  ``Rcic.Declarative.F8Measure.J1.Pins.edge_with_frame,
-  ``Rcic.Declarative.F8Measure.J1.Pins.dispatched,
-  ``Rcic.Declarative.F8Measure.J1.Pins.wrapperCert,
-  ``Rcic.Declarative.F8Measure.J1.Pins.unimplemented_symm,
-  ``Rcic.Declarative.F8Measure.J1.Pins.widened_inventory,
-  ``Rcic.Declarative.F8Measure.J1.Pins.no_generated_literal,
 
   -- J3: original symm/tyConv Valley closure; partial, no D supplier.
   ``Rcic.Declarative.F8Measure.J3.StepCertificate,
@@ -17595,18 +17651,6 @@ def sealedTheorems : List Name := [
   -- (`CtxMorph`: sub/subLet/ins, apply/under, shape laws, the three transports). No carrier
   -- change. Premises NONE beyond the statements' own; axioms ⊆ [propext, Quot.sound].
   -- closure_claim 0.
-  ``Rcic.Declarative.parRedT_substSame',
-  ``Rcic.Declarative.parRedT_substSame'_uncond,
-  ``Rcic.Declarative.SubstSamePins.stepT,
-  ``Rcic.Declarative.SubstSamePins.pin_parRedT_substSame'_beta,
-  ``Rcic.Declarative.CtxMorph.apply_sort,
-  ``Rcic.Declarative.CtxMorph.under,
-  ``Rcic.Declarative.CtxMorph.apply_pi,
-  ``Rcic.Declarative.CtxMorph.hasTyT,
-  ``Rcic.Declarative.CtxMorph.convT,
-  ``Rcic.Declarative.CtxMorph.tyConvT,
-  ``Rcic.Declarative.pinMorph_apply,
-  ``Rcic.Declarative.pinMorph_hasTyT,
   -- X tile S4 (#7026 S0 §9; cc 2026-10-14; audit 13:36Z): the tile = XProcWf's shape on the admissible
   -- fragment xAdm, Option-valued (a supplier may decline); xAdm_of_piSpined: S1's Stratum-A fragment is
   -- inside; Stratum A consults no supplier (xTile?_isSome_of_piSpined), so the real ηK pin is answered
@@ -18218,1443 +18262,6 @@ def sealedTheorems : List Name := [
   ``Rcic.Declarative.F8Measure.pin_subst0_beta_edges,
 
   -- BEGIN codex-w12: retain stacked cursor/syn-step3 sealed names (0 lost)
-  ``Rcic.Syn.CvP.atoms_ne_nil,
-  ``Rcic.Syn.cvp_strip_cctx,
-  ``Rcic.Syn.typ_strip_cctx,
-  ``Rcic.Syn.fsub_child_below,
-  ``Rcic.Syn.rStep_inst,
-  ``Rcic.Syn.rStep_lift,
-  ``Rcic.Syn.eStep_inst,
-  ``Rcic.Syn.eStep_lift,
-  ``Rcic.Syn.ConvMod.symm',
-  ``Rcic.Syn.convMod_appL,
-  ``Rcic.Syn.convMod_appR,
-  ``Rcic.Syn.convMod_lam,
-  ``Rcic.Syn.convMod_piL,
-  ``Rcic.Syn.convMod_piR,
-  ``Rcic.Syn.convMod_app,
-  ``Rcic.Syn.convMod_pi,
-  ``Rcic.Syn.convMod_of_estep_inst_repl,
-  ``Rcic.Syn.convMod_inst_repl,
-  ``Rcic.Syn.convMod_inst_body,
-  ``Rcic.Syn.convMod_inst,
-  ``Rcic.Syn.resolve_nil,
-  ``Rcic.Syn.resolve_keep_zero,
-  ``Rcic.Syn.resolve_keep_succ,
-  ``Rcic.Syn.resolve_drop_zero,
-  ``Rcic.Syn.resolve_drop_succ,
-  ``Rcic.Syn.resolve_inline_zero,
-  ``Rcic.Syn.resolve_inline_succ,
-  ``Rcic.Syn.resolve_insertDisp_drop,
-  ``Rcic.Syn.resolve_insertDisp_keep,
-  ``Rcic.Syn.inst_bvar_hit,
-  ``Rcic.Syn.insertDisp_zero,
-  ``Rcic.Syn.removeAt_zero,
-  ``Rcic.Syn.eps_sort,
-  ``Rcic.Syn.eps_bvar_proof,
-  ``Rcic.Syn.eps_bvar_rel,
-  ``Rcic.Syn.eps_const_proof,
-  ``Rcic.Syn.eps_const_rel,
-  ``Rcic.Syn.eps_pi_drop,
-  ``Rcic.Syn.eps_pi_keep,
-  ``Rcic.Syn.eps_lam_drop,
-  ``Rcic.Syn.eps_conv,
-  ``Rcic.Syn.eps_lit,
-  ``Rcic.Syn.eps_ewk,
-  ``Rcic.Syn.eps_cctx,
-  ``Rcic.Syn.eps_linst,
-  ``Rcic.Syn.eps_esub_keep,
-  ``Rcic.Syn.eps_esub_drop,
-  ``Rcic.Syn.eps_wk_keep,
-  ``Rcic.Syn.eps_wk_not_keep,
-  ``Rcic.Syn.disp_nil,
-  ``Rcic.Syn.disp_assumption_drop,
-  ``Rcic.Syn.disp_assumption_keep,
-  ``Rcic.Syn.pinBetaP_lhs_eps,
-  ``Rcic.Syn.pinBetaP_rhs_eps,
-  ``Rcic.Syn.pinBetaP_eps_beta,
-  ``Rcic.Syn.pinProofId_eps,
-  ``Rcic.Syn.convMod_lift,
-  ``Rcic.Syn.eqNList_map_congr,
-  ``Rcic.Syn.es_cctx,
-  ``Rcic.Syn.es_ewk,
-  ``Rcic.Syn.es_linst,
-  ``Rcic.Syn.es_esub_drop,
-  ``Rcic.Syn.es_esub_keep,
-  ``Rcic.Syn.es_wk_not_keep,
-  ``Rcic.Syn.es_wk_keep,
-  ``Rcic.Syn.cvp_strip_ewk,
-  ``Rcic.Syn.es_transports,
-  ``Rcic.Syn.es_refl,
-  ``Rcic.Syn.es_symm,
-  ``Rcic.Syn.es_trans,
-  ``Rcic.Syn.es_tyConv,
-  ``Rcic.Syn.es_irr_star,
-  ``Rcic.Syn.es_sorts,
-  ``Rcic.Syn.es_consts,
-  ``Rcic.Syn.es_consts_star,
-  ``Rcic.Syn.es_beta_drop,
-  ``Rcic.Syn.es_beta_rel,
-  ``Rcic.Syn.es_eta,
-  ``Rcic.Syn.es_lit,
-  ``Rcic.Syn.es_fsub_drop,
-  ``Rcic.Syn.es_fsub_keep,
-  ``Rcic.Syn.es_app,
-  ``Rcic.Syn.es_app_star,
-  ``Rcic.Syn.es_lam_drop,
-  ``Rcic.Syn.es_lam_keep,
-  ``Rcic.Syn.es_lam_star,
-  ``Rcic.Syn.es_pi,
-  ``Rcic.Syn.es_letE,
-  ``Rcic.Syn.es_zeta,
-  ``Rcic.Syn.es_zetaLocal,
-  ``Rcic.Syn.es_delta,
-  ``Rcic.Syn.es_iota,
-  ``Rcic.Syn.CvP.atoms_rule,
-  ``Rcic.Syn.dmStep_ty_below,
-  ``Rcic.Syn.dmStep_cv_below,
-  ``Rcic.Syn.dmStep_pair_below,
-  ``Rcic.Syn.lex_of_dm,
-  ``Rcic.Syn.dmStep_under_rule,
-  ``Rcic.Syn.below_refl,
-  ``Rcic.Syn.below_symm,
-  ``Rcic.Syn.below_trans,
-  ``Rcic.Syn.below_tyConv,
-  ``Rcic.Syn.below_irr,
-  ``Rcic.Syn.below_sorts,
-  ``Rcic.Syn.below_consts,
-  ``Rcic.Syn.below_beta,
-  ``Rcic.Syn.below_zeta,
-  ``Rcic.Syn.below_zetaLocal,
-  ``Rcic.Syn.below_delta,
-  ``Rcic.Syn.below_iota,
-  ``Rcic.Syn.below_lit,
-  ``Rcic.Syn.below_eta,
-  ``Rcic.Syn.below_app,
-  ``Rcic.Syn.below_lam,
-  ``Rcic.Syn.below_pi,
-  ``Rcic.Syn.below_letE,
-  ``Rcic.Syn.below_fsub,
-  ``Rcic.Syn.lift_eq_sort,
-  ``Rcic.Syn.instantiate_eq_sort,
-  ``Rcic.Syn.instantiateLevels_eq_sort,
-  ``Rcic.Syn.sortHead,
-  ``Rcic.Syn.lift_eq_app,
-  ``Rcic.Syn.instantiate_eq_app,
-  ``Rcic.Syn.instantiateLevels_eq_app,
-  ``Rcic.Syn.appHead,
-  ``Rcic.Syn.lift_eq_lam,
-  ``Rcic.Syn.instantiate_eq_lam,
-  ``Rcic.Syn.instantiateLevels_eq_lam,
-  ``Rcic.Syn.lamHead,
-  ``Rcic.Syn.lift_eq_pi,
-  ``Rcic.Syn.instantiate_eq_pi,
-  ``Rcic.Syn.instantiateLevels_eq_pi,
-  ``Rcic.Syn.piHead,
-  ``Rcic.Syn.instantiate_eq_const,
-  ``Rcic.Syn.instantiateLevels_eq_const,
-  ``Rcic.Syn.constHead,
-  ``Rcic.Syn.lift_eq_let,
-  ``Rcic.Syn.instantiate_eq_let,
-  ``Rcic.Syn.instantiateLevels_eq_let,
-  ``Rcic.Syn.letHead,
-  ``Rcic.Syn.lift_eq_lit,
-  ``Rcic.Syn.instantiate_eq_lit,
-  ``Rcic.Syn.instantiateLevels_eq_lit,
-  ``Rcic.Syn.litHead,
-  ``Rcic.Syn.lift_eq_bvar,
-  ``Rcic.Syn.instantiate_eq_bvar,
-  ``Rcic.Syn.instantiateLevels_eq_bvar,
-  ``Rcic.Syn.lift_zero_eq_bvar,
-  ``Rcic.Syn.bvarHead,
-  ``Rcic.Syn.setAssump_zero,
-  ``Rcic.Syn.setAssump_succ,
-  ``Rcic.Syn.setAssump_nil,
-  ``Rcic.Syn.length_setAssump,
-  ``Rcic.Syn.drop_setAssump,
-  ``Rcic.Syn.get?_setAssump_ne,
-  ``Rcic.Syn.lt_length_of_get?,
-  ``Rcic.Syn.lookupType_setAssump_ne,
-  ``Rcic.Syn.lookupType_of_assumption,
-  ``Rcic.Syn.lookupType_setAssump_hit,
-  ``Rcic.Syn.setAssump_insertAt_gt,
-  ``Rcic.Syn.setAssump_insertAt_eq,
-  ``Rcic.Syn.tyCast,
-  ``Rcic.Syn.tyCastCtx,
-  ``Rcic.Syn.cvCast,
-  ``Rcic.Syn.cvCastCtx,
-  ``Rcic.Syn.wkFront,
-  ``Rcic.Syn.cvFront,
-  ``Rcic.Syn.retypeBvarSlot,
-  ``Rcic.Syn.ctx1_shift,
-  ``Rcic.Syn.ctx_shift,
-  ``Rcic.Syn.get?_shift,
-  ``Rcic.Syn.drop_shift,
-  ``Rcic.Syn.onDecl_assumption,
-  ``Rcic.Syn.app_pi,
-  ``Rcic.Syn.app_lam,
-  ``Rcic.Syn.app_app,
-  ``Rcic.Syn.app_letE,
-  ``Rcic.Syn.app_sort,
-  ``Rcic.Syn.app_const,
-  ``Rcic.Syn.app_lit,
-  ``Rcic.Syn.app_inst0,
-  ``Rcic.Syn.app_natExpand,
-  ``Rcic.Syn.eq_cons_of_get?_zero,
-  ``Rcic.Syn.lookupType_setAssump_at,
-  ``Rcic.Syn.lookupType_instLvlsCtx_some,
-  ``Rcic.Syn.lift_bvar_lt,
-  ``Rcic.Syn.lift_bvar_ge,
-  ``Rcic.Syn.instantiate_bvar_lt,
-  ``Rcic.Syn.instantiate_bvar_gt,
-  ``Rcic.Syn.instantiate_bvar_eq,
-  ``Rcic.Syn.Found.retypeOf,
-  ``Rcic.Syn.foundUnder,
-  ``Rcic.Syn.iotaUnder,
-  ``Rcic.Syn.appLevel_succ,
-  ``Rcic.Syn.appLevel_imax,
-  ``Rcic.Syn.eqN_appLevel,
-  ``Rcic.Syn.eqNList_appLevels,
-  ``Rcic.Syn.app_lift0,
-  ``Rcic.Syn.app_instantiateLevels_closed,
-  ``Rcic.Syn.levelsBounded_steps,
-  ``Rcic.Syn.get?_cons_succ_assumption,
-  ``Rcic.Syn.steps_shiftAll,
-  ``Rcic.Syn.fuel_shiftAll,
-  ``Rcic.Syn.esInv_shiftAll,
-  ``Rcic.Syn.appLevel_shift,
-  ``Rcic.Syn.ctx_under_binder,
-  ``Rcic.Syn.get?_under_binder,
-  ``Rcic.Syn.drop_under_binder,
-  ``Rcic.Syn.lookupValue_assumption_none,
-  ``Rcic.Syn.ConvChain.snoc,
-  ``Rcic.Syn.ConvChain.apply,
-  ``Rcic.Syn.BWalk.cast,
-  ``Rcic.Syn.BWalk.castCtx,
-  ``Rcic.Syn.bwalk,
-  ``Rcic.Syn.appLevels_length,
-  ``Rcic.Syn.length_appLevels_of,
-  ``Rcic.Syn.app_instantiateLevels_member,
-  ``Rcic.Syn.app_instantiateLevels_memberOf,
-  ``Rcic.Syn.app_instantiateLevels_body,
-  ``Rcic.Syn.tySort,
-  ``Rcic.Syn.tyConst,
-  ``Rcic.Syn.tyPi,
-  ``Rcic.Syn.tyLam,
-  ``Rcic.Syn.tyApp,
-  ``Rcic.Syn.tyLet,
-  ``Rcic.Syn.tyLit,
-  ``Rcic.Syn.onDecl_let,
-  ``Rcic.Syn.appLevel_zero,
-  ``Rcic.Syn.app_shift_bvar0,
-  ``Rcic.Syn.app_eta_lam,
-  ``Rcic.Syn.app_beta_lhs,
-  ``Rcic.Syn.lookupValue_setAssump_ne,
-  ``Rcic.Syn.shift_cctx_term,
-  ``Rcic.Syn.shift_esub_hctx,
-  ``Rcic.Syn.shift_cctx_hctx,
-  ``Rcic.Syn.run_shift,
-  ``Rcic.Syn.packWk,
-  ``Rcic.Syn.packLinst,
-  ``Rcic.Syn.packEsub,
-  ``Rcic.Syn.packCctx,
-  ``Rcic.Syn.packUnder,
-  ``Rcic.Syn.moveUnder,
-  ``Rcic.Syn.moveUnderCv,
-  ``Rcic.Syn.toSort,
-  ``Rcic.Syn.toSortZero,
-  ``Rcic.Syn.toPi,
-  ``Rcic.Syn.cvToSort,
-  ``Rcic.Syn.cvToPi,
-  ``Rcic.Syn.BHit.castTerm,
-  ``Rcic.Syn.bwalkAt,
-  ``Rcic.Syn.chainSort,
-  ``Rcic.Syn.finishBvar,
-  ``Rcic.Syn.ValHit.castTerm,
-  ``Rcic.Syn.valWalk,
-  ``Rcic.Syn.packConsWk,
-  ``Rcic.Syn.app_sort_succ,
-  ``Rcic.Syn.app_sort_imax,
-  ``Rcic.Syn.cvBeta,
-  ``Rcic.Syn.cvZeta,
-  ``Rcic.Syn.cvDelta,
-  ``Rcic.Syn.cvApp,
-  ``Rcic.Syn.cvLam,
-  ``Rcic.Syn.cvPi,
-  ``Rcic.Syn.cvLetE,
-  ``Rcic.Syn.cvSorts,
-  ``Rcic.Syn.cvConsts,
-  ``Rcic.Syn.cvEta,
-  ``Rcic.Syn.cvIrr,
-  ``Rcic.Syn.cvLit,
-  ``Rcic.Syn.cvFsub,
-  ``Rcic.Syn.tyAt,
-  ``Rcic.Syn.cvAt,
-  ``Rcic.Syn.hget_succ,
-  ``Rcic.Syn.substRemove_cod,
-  ``Rcic.Syn.substRemove_cod_eq,
-  ``Rcic.Syn.instantiate_succ_merge,
-  ``Rcic.Syn.get?_one_assumption,
-  ``Rcic.Syn.setAssump_one,
-  ``Rcic.Syn.packNil,
-  ``Rcic.Syn.tyCctxAt,
-  ``Rcic.Syn.piWk,
-  ``Rcic.Syn.piLinst,
-  ``Rcic.Syn.piEsub,
-  ``Rcic.Syn.piCctx,
-  ``Rcic.Syn.piInv,
-  ``Rcic.Syn.cvMeas,
-  ``Rcic.Syn.tyMeas,
-  ``Rcic.Syn.tyPairMeas,
-  ``Rcic.Syn.cvTyMeas,
-  ``Rcic.Syn.EUT,
-  ``Rcic.Syn.CTS,
-  ``Rcic.Syn.PBit,
-  ``Rcic.Syn.levelIsZero_pres_inst,
-  ``Rcic.Syn.Below,
-  ``Rcic.Syn.es_of_below_refl,
-  ``Rcic.Syn.es_of_below_symm,
-  ``Rcic.Syn.es_of_below_trans,
-  ``Rcic.Syn.es_of_below_tyConv,
-  ``Rcic.Syn.es_of_below_irr,
-  ``Rcic.Syn.cl_under,
-  ``Rcic.Syn.eut_under,
-  ``Rcic.Syn.es_of_below_sorts,
-  ``Rcic.Syn.es_of_below_lit,
-  ``Rcic.Syn.const_reg_levels,
-  ``Rcic.Syn.es_of_below_consts,
-  ``Rcic.Syn.instantiate0_lift0,
-  ``Rcic.Syn.assumption_get0,
-  ``Rcic.Syn.wt_tyCast,
-  ``Rcic.Syn.atoms_tyCast,
-  ``Rcic.Syn.eps_tyCast,
-  ``Rcic.Syn.castLift0,
-  ``Rcic.Syn.wt_castLift0,
-  ``Rcic.Syn.eps_castLift0,
-  ``Rcic.Syn.sortLift0,
-  ``Rcic.Syn.wt_sortLift0,
-  ``Rcic.Syn.instEnd,
-  ``Rcic.Syn.instEnd_wt,
-  ``Rcic.Syn.instEnd_eps_drop,
-  ``Rcic.Syn.instEnd_eps_keep,
-  ``Rcic.Syn.es_of_below_fsub,
-  ``Rcic.Syn.beta_dr_drop,
-  ``Rcic.Syn.beta_dr_keep,
-  ``Rcic.Syn.eps_app_clause,
-  ``Rcic.Syn.eps_let_clause,
-  ``Rcic.Syn.app_dl,
-  ``Rcic.Syn.pi_dl,
-  ``Rcic.Syn.letE_dl,
-  ``Rcic.Syn.zeta_dl,
-  ``Rcic.Syn.iota_dl,
-  ``Rcic.Syn.iota_dr,
-  ``Rcic.Syn.delta_dr,
-  ``Rcic.Syn.eta_dr,
-  ``Rcic.Syn.instLvls_assumption,
-  ``Rcic.Syn.atoms_tyCastCtx,
-  ``Rcic.Syn.atoms_esub,
-  ``Rcic.Syn.atoms_pushBodyEsub,
-  ``Rcic.Syn.pushBodyEsub,
-  ``Rcic.Syn.pushLamEsub,
-  ``Rcic.Syn.readLam,
-  ``Rcic.Syn.readLam_lam_yes,
-  ``Rcic.Syn.app_of_lam,
-  ``Rcic.Syn.redexOfApp,
-  ``Rcic.Syn.pushRedexEsub,
-  ``Rcic.Syn.readRedex,
-  ``Rcic.Syn.redexRead,
-  ``Rcic.Syn.readRedex_app_yes,
-  ``Rcic.Syn.cl_under_atoms,
-  ``Rcic.Syn.eps_lam_keep,
-  ``Rcic.Syn.appClause,
-  ``Rcic.Syn.lamClause,
-  ``Rcic.Syn.lamErasure,
-  ``Rcic.Syn.redexClause,
-  ``Rcic.Syn.binderDisp,
-  ``Rcic.Syn.binderDisp_drop,
-  ``Rcic.Syn.binderDisp_keep,
-  ``Rcic.Syn.appClause_right_star,
-  ``Rcic.Syn.appClause_app,
-  ``Rcic.Syn.appClause_cases,
-  ``Rcic.Syn.lamClause_of_ne,
-  ``Rcic.Syn.lift_eq_star,
-  ``Rcic.Syn.inst_eq_star,
-  ``Rcic.Syn.lift_ne_star,
-  ``Rcic.Syn.inst_ne_star,
-  ``Rcic.Syn.lift_appClause,
-  ``Rcic.Syn.lift_lamClause,
-  ``Rcic.Syn.inst_appClause_right_star,
-  ``Rcic.Syn.inst_appClause_both,
-  ``Rcic.Syn.inst_appClause,
-  ``Rcic.Syn.inst_lamClause,
-  ``Rcic.Syn.inst_appClause_star_ne,
-  ``Rcic.Syn.lift_redexClause_drop,
-  ``Rcic.Syn.lift_redexClause_keep,
-  ``Rcic.Syn.inst_redexClause_drop,
-  ``Rcic.Syn.inst_redexClause_keep,
-  ``Rcic.Syn.eps_app_appClause,
-  ``Rcic.Syn.eps_lam_clause,
-  ``Rcic.Syn.eps_beta_node,
-  ``Rcic.Syn.eps_conv_redex,
-  ``Rcic.Syn.eps_ewk_redex,
-  ``Rcic.Syn.eps_cctx_redex,
-  ``Rcic.Syn.eps_linst_redex,
-  ``Rcic.Syn.eps_wk_redex_skip,
-  ``Rcic.Syn.eps_wk_redex_drop,
-  ``Rcic.Syn.eps_wk_redex_keep,
-  ``Rcic.Syn.eps_esub_redex_drop,
-  ``Rcic.Syn.eps_esub_redex_keep_drop,
-  ``Rcic.Syn.eps_esub_redex_keep_keep,
-  ``Rcic.Syn.eps_tyCastCtx,
-  ``Rcic.Syn.get?_not_keep_succ,
-  ``Rcic.Syn.eps_pushBody_drop,
-  ``Rcic.Syn.esub_bvar_drop_star,
-  ``Rcic.Syn.esub_bvar_drop_ne,
-  ``Rcic.Syn.linst_redex_yes,
-  ``Rcic.Syn.wk_redex_skip,
-  ``Rcic.Syn.wk_redex_drop,
-  ``Rcic.Syn.wk_redex_keep,
-  ``Rcic.Syn.esub_redex_drop_yes,
-  ``Rcic.Syn.eps_pushBody_keep_drop,
-  ``Rcic.Syn.eps_pushBody_keep_keep,
-  ``Rcic.Syn.esub_redex_keep_drop,
-  ``Rcic.Syn.esub_redex_keep_keep,
-  ``Rcic.Syn.readRedex_app_clause,
-  ``Rcic.Syn.eps_wk_star,
-  ``Rcic.Syn.eps_linst_star,
-  ``Rcic.Syn.eps_esub_drop_star,
-  ``Rcic.Syn.eps_esub_keep_star,
-  ``Rcic.Syn.wk_lam_skip,
-  ``Rcic.Syn.wk_lam_drop,
-  ``Rcic.Syn.wk_lam_keep,
-  ``Rcic.Syn.linst_lam_yes,
-  ``Rcic.Syn.esub_lam_drop_yes,
-  ``Rcic.Syn.esub_lam_keep_drop,
-  ``Rcic.Syn.esub_lam_keep_keep,
-  ``Rcic.Syn.eps_here_drop_bvar,
-  ``Rcic.Syn.eps_here_keep_hit,
-  ``Rcic.Syn.eps_here_keep_hit_redex,
-  ``Rcic.Syn.lamVerdict_node,
-  ``Rcic.Syn.lamVerdict_conv,
-  ``Rcic.Syn.lamVerdict_ewk,
-  ``Rcic.Syn.lamVerdict_cctx,
-  ``Rcic.Syn.lamVerdict_wk,
-  ``Rcic.Syn.lamVerdict_linst,
-  ``Rcic.Syn.lamVerdict_esub_drop,
-  ``Rcic.Syn.lamVerdict_esub_keep,
-  ``Rcic.Syn.lamVerdict_here,
-  ``Rcic.Syn.epsReadLam,
-  ``Rcic.Syn.wk_redex_skip_ext,
-  ``Rcic.Syn.wk_redex_drop_ext,
-  ``Rcic.Syn.wk_redex_keep_ext,
-  ``Rcic.Syn.linst_redex_yes_ext,
-  ``Rcic.Syn.esub_redex_drop_ext,
-  ``Rcic.Syn.esub_redex_keep_drop_ext,
-  ``Rcic.Syn.esub_redex_keep_keep_ext,
-  ``Rcic.Syn.redexVerdict_app,
-  ``Rcic.Syn.redexVerdict_conv,
-  ``Rcic.Syn.redexVerdict_ewk,
-  ``Rcic.Syn.redexVerdict_cctx,
-  ``Rcic.Syn.redexVerdict_wk,
-  ``Rcic.Syn.redexVerdict_linst,
-  ``Rcic.Syn.redexVerdict_esub_drop,
-  ``Rcic.Syn.redexVerdict_esub_keep,
-  ``Rcic.Syn.redexVerdict_born,
-  ``Rcic.Syn.redexVerdict_here,
-  ``Rcic.Syn.epsReadRedex,
-  ``Rcic.Syn.bvarEpsCast,
-  ``Rcic.Syn.bvarEpsAux,
-  ``Rcic.Syn.bvarEps,
-  ``Rcic.Syn.inst_star,
-  ``Rcic.Syn.bareHere,
-  ``Rcic.Syn.lamVerdict_bare,
-  ``Rcic.Syn.epsWalkLam,
-  ``Rcic.Syn.redexVerdict_bare,
-  ``Rcic.Syn.epsWalkRedex,
-  ``Rcic.Syn.eps_lsub,
-  ``Rcic.Syn.letBinding_get0,
-  ``Rcic.Syn.letSub,
-  ``Rcic.Syn.letSub_wt,
-  ``Rcic.Syn.letSub_eps,
-  ``Rcic.Syn.zeta_dr,
-  ``Rcic.Syn.instantiate_bvar_lift_id,
-  ``Rcic.Syn.lookup_assumption_zero,
-  ``Rcic.Syn.wkAtZero,
-  ``Rcic.Syn.etaLam,
-  ``Rcic.Syn.etaLam_eps_drop,
-  ``Rcic.Syn.etaLam_eps_keep,
-  ``Rcic.Syn.etaLam_eps_keep_star,
-  ``Rcic.Syn.wk_atom_src,
-  ``Rcic.Syn.linst_atom_src,
-  ``Rcic.Syn.ewk_atom_src,
-  ``Rcic.Syn.conv_atom_src,
-  ``Rcic.Syn.esub_inner_src,
-  ``Rcic.Syn.esub_val_src,
-  ``Rcic.Syn.esub_ty_src,
-  ``Rcic.Syn.readApp,
-  ``Rcic.Syn.readApp_app_yes,
-  ``Rcic.Syn.readApp_ewk_cast_yes,
-  ``Rcic.Syn.readApp_app_hf_eps,
-  ``Rcic.Syn.readApp_app_ha_eps,
-  ``Rcic.Syn.ofRead_isYes,
-  ``Rcic.Syn.meetEta,
-  ``Rcic.Syn.meetEta_lam_app_yes,
-  ``Rcic.Syn.etaArg,
-  ``Rcic.Syn.etaApp,
-  ``Rcic.Syn.etaLam_expand,
-  ``Rcic.Syn.eta_fun_keep,
-  ``Rcic.Syn.eta_fun_drop,
-  ``Rcic.Syn.eta_arg_rel,
-  ``Rcic.Syn.eta_arg_drop,
-  ``Rcic.Syn.etaApp_clause,
-  ``Rcic.Syn.etaLam_eps_of_etaApp,
-  ``Rcic.Syn.readApp_etaApp_yes,
-  ``Rcic.Syn.meetEta_etaLam_yes,
-  ``Rcic.Syn.etaLam_meets_drop,
-  ``Rcic.Syn.etaLam_meets_keep,
-  ``Rcic.Syn.etaLam_meets_keep_star,
-  ``Rcic.Syn.lift_shift,
-  ``Rcic.Syn.resolve_removeAt_lo,
-  ``Rcic.Syn.resolve_removeAt_hi_drop,
-  ``Rcic.Syn.resolve_removeAt_hi_inline,
-  ``Rcic.Syn.resolve_removeAt_hi_keep,
-  ``Rcic.Syn.eps_wk_rel_lo,
-  ``Rcic.Syn.eps_wk_rel_hi_drop,
-  ``Rcic.Syn.eps_wk_rel_hi_inline,
-  ``Rcic.Syn.eps_wk_rel_hi_keep,
-  ``Rcic.Syn.bvarEpsWk,
-  ``Rcic.Syn.resolve_insertDisp_lo,
-  ``Rcic.Syn.resolve_insertDisp_hi_drop,
-  ``Rcic.Syn.resolve_insertDisp_hi_inline,
-  ``Rcic.Syn.resolve_insertDisp_hi_keep,
-  ``Rcic.Syn.resolve_insertDisp_inline,
-  ``Rcic.Syn.eps_esub_star_drop,
-  ``Rcic.Syn.eps_esub_star_keep,
-  ``Rcic.Syn.eps_esub_rel_drop_lo,
-  ``Rcic.Syn.eps_esub_rel_drop_hi,
-  ``Rcic.Syn.eps_esub_rel_keep_hi,
-  ``Rcic.Syn.eps_esub_hole_drop,
-  ``Rcic.Syn.eps_esub_hole_keep,
-  ``Rcic.Syn.bvarEpsEsub,
-  ``Rcic.Syn.eps_lsub_ne_star,
-  ``Rcic.Syn.eps_lsub_star_drop,
-  ``Rcic.Syn.eps_lsub_star_inline,
-  ``Rcic.Syn.eps_lsub_rel_drop_lo,
-  ``Rcic.Syn.eps_lsub_rel_drop_hi,
-  ``Rcic.Syn.eps_lsub_rel_inline_lo,
-  ``Rcic.Syn.eps_lsub_rel_inline_hi,
-  ``Rcic.Syn.eps_lsub_hole_drop,
-  ``Rcic.Syn.eps_lsub_hole_inline,
-  ``Rcic.Syn.bvarEpsLsub,
-  ``Rcic.Syn.appClauseOf,
-  ``Rcic.Syn.AppVerdict.move,
-  ``Rcic.Syn.wk_app_skip,
-  ``Rcic.Syn.wk_app_keep,
-  ``Rcic.Syn.linst_app_yes,
-  ``Rcic.Syn.esub_app_drop,
-  ``Rcic.Syn.esub_app_keep,
-  ``Rcic.Syn.appVerdict_node,
-  ``Rcic.Syn.appVerdict_conv,
-  ``Rcic.Syn.appVerdict_ewk,
-  ``Rcic.Syn.appVerdict_wk,
-  ``Rcic.Syn.appVerdict_linst,
-  ``Rcic.Syn.appVerdict_esub_drop,
-  ``Rcic.Syn.appVerdict_esub_keep,
-  ``Rcic.Syn.appVerdict_bare,
-  ``Rcic.Syn.epsWalkApp,
-  ``Rcic.Syn.lamErasure_star,
-  ``Rcic.Syn.etaVerdict,
-  ``Rcic.Syn.eta_var_drop_rel,
-  ``Rcic.Syn.eta_var_keep_rel,
-  ``Rcic.Syn.es_eta_meet_drop,
-  ``Rcic.Syn.es_eta_meet_keep,
-  ``Rcic.Syn.es_eta_meet_keep_star,
-  ``Rcic.Syn.es_eta_meet_keep_starX,
-  ``Rcic.Syn.atoms_wkAtZero,
-  ``Rcic.Syn.eta_fun_cl,
-  ``Rcic.Syn.es_eta_of_below_drop,
-  ``Rcic.Syn.es_eta_of_below_keep,
-  ``Rcic.Syn.appN_ne_star,
-  ``Rcic.Syn.rStep_star_normal,
-  ``Rcic.Syn.etaStep_star_normal,
-  ``Rcic.Syn.eStep_star_normal,
-  ``Rcic.Syn.lvlEq_star_left,
-  ``Rcic.Syn.eStep_lift_inv,
-  ``Rcic.Syn.rstar_lift_inv,
-  ``Rcic.Syn.convMod_of_rstar_rev,
-  ``Rcic.Syn.convMod_star_of_lift,
-  ``Rcic.Syn.tableWF_nil,
-  ``Rcic.Syn.not_eqN_one_zero,
-  ``Rcic.Syn.pbitCtx,
-  ``Rcic.Syn.pbitSort,
-  ``Rcic.Syn.pbit_lookup,
-  ``Rcic.Syn.pbitVar,
-  ``Rcic.Syn.pbitVar_wt,
-  ``Rcic.Syn.pbitSort_wt,
-  ``Rcic.Syn.pbitVar_eps_drop,
-  ``Rcic.Syn.not_pbit_drop,
-  ``Rcic.Syn.zetaCtx,
-  ``Rcic.Syn.zeta_lookupType,
-  ``Rcic.Syn.zeta_lookupValue,
-  ``Rcic.Syn.zetaVal,
-  ``Rcic.Syn.zetaVar,
-  ``Rcic.Syn.zetaNode,
-  ``Rcic.Syn.zetaNode_wt,
-  ``Rcic.Syn.not_es_inline,
-  ``Rcic.Syn.below_false_of_pb,
-  ``Rcic.Syn.below_false_of_es,
-  ``Rcic.Syn.refl_wt_gt_two,
-  ``Rcic.Syn.below_false_refl,
-  ``Rcic.Syn.LevelSub,
-  ``Rcic.Syn.levelSub_id,
-  ``Rcic.Syn.LevelSub.linst,
-  ``Rcic.Syn.SortCoh,
-  ``Rcic.Syn.BitCoh,
-  ``Rcic.Syn.bitCoh_of_sortCoh,
-  ``Rcic.Syn.DispFor,
-  ``Rcic.Syn.DispFor.levelSub,
-  ``Rcic.Syn.DispFor.length_eq,
-  ``Rcic.Syn.dispFor_of_ctxP,
-  ``Rcic.Syn.dispFor_ctxP_id,
-  ``Rcic.Syn.dispFor_binderDisp,
-  ``Rcic.Syn.dispFor_assumption_drop,
-  ``Rcic.Syn.dispFor_assumption_keep,
-  ``Rcic.Syn.dispFor_letClause,
-  ``Rcic.Syn.dispFor_insertDisp_zero,
-  ``Rcic.Syn.dispFor_insertDisp_zero_drop,
-  ``Rcic.Syn.dispFor_insertDisp_zero_keep,
-  ``Rcic.Syn.dispFor_insertDisp_zero_let,
-  ``Rcic.Syn.dispFor_removeAt_zero,
-  ``Rcic.Syn.dispFor_ewk,
-  ``Rcic.Syn.dispFor_instLvlsCtx,
-  ``Rcic.Syn.bitCoh_under,
-  ``Rcic.Syn.bitCoh_under_atoms,
-  ``Rcic.Syn.dispFor_pinBetaP,
-  ``Rcic.Syn.atoms_pos_ty,
-  ``Rcic.Syn.atoms_pos_cv,
-  ``Rcic.Syn.not_dmStep_singleton_one,
-  ``Rcic.Syn.below_pinSortP,
-  ``Rcic.Syn.not_pbit_const_zero,
-  ``Rcic.Syn.eStep_bvar_normal,
-  ``Rcic.Syn.rstar_bvar_eq,
-  ``Rcic.Syn.lvlEq_bvar_left,
-  ``Rcic.Syn.not_convMod_bvar_ne,
-  ``Rcic.Syn.not_convMod_sort_bvar,
-  ``Rcic.Syn.zetaLetCtx,
-  ``Rcic.Syn.zetaCtxP,
-  ``Rcic.Syn.zetaLetCtxP,
-  ``Rcic.Syn.zetaLetNode,
-  ``Rcic.Syn.not_es_insertDisp_keep,
-  ``Rcic.Syn.wkZetaCtx,
-  ``Rcic.Syn.wkZetaCtxP,
-  ``Rcic.Syn.wkZetaNode,
-  ``Rcic.Syn.not_es_wk_inline,
-  ``Rcic.Syn.below_false_of_wk_inline,
-  ``Rcic.Syn.below_false_pinBetaP,
-  ``Rcic.Syn.esubZetaPreCtx,
-  ``Rcic.Syn.esubZetaPreNode,
-  ``Rcic.Syn.esubZetaNode,
-  ``Rcic.Syn.not_es_esub_inline,
-  ``Rcic.Syn.es_zetaNode_inline,
-  ``Rcic.Syn.resolve_keep_drop,
-  ``Rcic.Syn.not_convMod_star_sort,
-  ``Rcic.Syn.not_convMod_bvar_sort,
-  ``Rcic.Syn.not_es_zetaLocal_keep_drop,
-  ``Rcic.Syn.zetaOneCtx,
-  ``Rcic.Syn.zetaOneNode,
-  ``Rcic.Syn.not_es_zetaLocal_same_disp,
-  ``Rcic.Syn.CtxP.atoms,
-  ``Rcic.Syn.CtxP.wt,
-  ``Rcic.Syn.ctxMeas,
-  ``Rcic.Syn.PairLexDM,
-  ``Rcic.Syn.combMeas,
-  ``Rcic.Syn.acc_asymm,
-  ``Rcic.Syn.lexDM_asymm,
-  ``Rcic.Syn.pairLexDM_wf,
-  ``Rcic.Syn.pairLexDM_asymm,
-  ``Rcic.Syn.lexDM_ctxMeas_assumption,
-  ``Rcic.Syn.lexDM_ctxMeas_letBinding,
-  ``Rcic.Syn.not_pairLexDM_binder_extend,
-  ``Rcic.Syn.not_pairLexDM_let_extend,
-  ``Rcic.Syn.combLexDM_binder_rule,
-  ``Rcic.Syn.pbitWallHeavySort,
-  ``Rcic.Syn.cctxWallDomCv,
-  ``Rcic.Syn.cctxWallOutCtxP,
-  ``Rcic.Syn.cctxWallInCtxP,
-  ``Rcic.Syn.not_pairLexDM_cctx,
-  ``Rcic.Syn.combLexDM_cctx_inner,
-  ``Rcic.Syn.combLexDM_cctx_bitCoh,
-  ``Rcic.Syn.pbitWallCtxP,
-  ``Rcic.Syn.pbitWallWkHeavy,
-  ``Rcic.Syn.not_pairLexDM_pbit_bvar,
-  ``Rcic.Syn.not_combLexDM_pbit_bvar,
-  ``Rcic.Syn.CtxP.entrySort,
-  ``Rcic.Syn.DispForC,
-  ``Rcic.Syn.DispForC.levelSub,
-  ``Rcic.Syn.DispForC.toDispFor,
-  ``Rcic.Syn.dispForC_of_ctxP,
-  ``Rcic.Syn.dispForC_ctxP_id,
-  ``Rcic.Syn.SpineLetPBit,
-  ``Rcic.Syn.resolve_eq_star_iff_of_dispForC,
-  ``Rcic.Syn.pbit_bvar_spine,
-  ``Rcic.Syn.pbit_bvar_zero_assumption,
-  ``Rcic.Syn.pbit_bvar_zero_letBinding,
-  ``Rcic.Syn.combLexDM_pbit_bvar_sort,
-  ``Rcic.Syn.combLexDM_pbit_bvar_wall_removed,
-  ``Rcic.Syn.combLexDM_pbit_bvar_let_zero,
-  ``Rcic.Syn.combLexDM_rule_cv,
-  ``Rcic.Syn.combLexDM_rule_pair,
-  ``Rcic.Syn.combLexDM_let_rule,
-  ``Rcic.Syn.combLexDM_wk_strip,
-  ``Rcic.Syn.combLexDM_esub_strip,
-  ``Rcic.Syn.combLexDM_esub_repl,
-  ``Rcic.Syn.combLexDM_ewk_strip,
-  ``Rcic.Syn.combLexDM_linst_strip,
-  ``Rcic.Syn.AssumptionPrefix,
-  ``Rcic.Syn.assumptionPrefix_zero,
-  ``Rcic.Syn.not_assumptionPrefix_zetaLetCtx_one,
-  ``Rcic.Syn.not_assumptionPrefix_esubZetaPreCtx_one,
-  ``Rcic.Syn.betaLetBody,
-  ``Rcic.Syn.betaLetReduct,
-  ``Rcic.Syn.cl_instEnd_letE_top,
-  ``Rcic.Syn.not_cl_esub_letBody,
-  ``Rcic.Syn.cl_wkAtZero_letE_top,
-  ``Rcic.Syn.not_cl_wk_letBody,
-  ``Rcic.Syn.letSub_eps_eq_letE,
-  ``Rcic.Syn.convT_substLet0_of_envWfT,
-  ``Rcic.Syn.hasTyT_letE_inline0_of_envWfT,
-  ``Rcic.Syn.convT_letE_inline0_of_envWfT,
-  ``Rcic.Syn.assumptionPrefix_succ_assumption,
-  ``Rcic.Syn.TyP.AssumpPref,
-  ``Rcic.Syn.CvP.AssumpPref,
-  ``Rcic.Syn.assumpPref_tyCast,
-  ``Rcic.Syn.assumpPref_tyCastCtx,
-  ``Rcic.Syn.assumpPref_cvCast,
-  ``Rcic.Syn.assumpPref_cvCastCtx,
-  ``Rcic.Syn.assumpPref_castLift0,
-  ``Rcic.Syn.assumpPref_sortLift0,
-  ``Rcic.Syn.assumpPref_dl,
-  ``Rcic.Syn.assumpPref_dr,
-  ``Rcic.Syn.assumpPref_reg,
-  ``Rcic.Syn.assumpPref_wkAtZero,
-  ``Rcic.Syn.wkLetAtZero,
-  ``Rcic.Syn.assumpPref_wkLetAtZero,
-  ``Rcic.Syn.assumpPref_instEnd,
-  ``Rcic.Syn.assumpPref_letSub,
-  ``Rcic.Syn.assumpPref_pushBodyEsub,
-  ``Rcic.Syn.trLetNorm,
-  ``Rcic.Syn.trLetE,
-  ``Rcic.Syn.trZeta,
-  ``Rcic.Syn.assumpPref_trLetNorm,
-  ``Rcic.Syn.assumpPref_trLetE,
-  ``Rcic.Syn.assumpPref_trZeta,
-  ``Rcic.Syn.trLetNorm_eps_eq_trLetE,
-  ``Rcic.Syn.assumpPref_instEnd_betaLetBody_norm,
-  ``Rcic.Syn.assumpPref_wkAtZero_betaLetReduct_norm,
-  ``Rcic.Syn.letEndL,
-  ``Rcic.Syn.letSurfL,
-  ``Rcic.Syn.letEndR,
-  ``Rcic.Syn.letSurfR,
-  ``Rcic.Syn.letEndL_eps_eq_letSurfL,
-  ``Rcic.Syn.letEndR_eps_eq_letSurfR,
-  ``Rcic.Syn.assumpPref_letEndL,
-  ``Rcic.Syn.assumpPref_letSurfL,
-  ``Rcic.Syn.assumpPref_letEndR,
-  ``Rcic.Syn.assumpPref_letSurfR,
-  ``Rcic.Syn.cvpLetDecomp,
-  ``Rcic.Syn.assumpPref_cvpLetDecomp,
-  ``Rcic.Syn.es_of_below_zeta,
-  ``Rcic.Syn.letE_body_es,
-  ``Rcic.Syn.es_of_below_letE_of_dr,
-  ``Rcic.Syn.zetaLocal_dr,
-  ``Rcic.Syn.es_of_below_zetaLocal_of_lhs,
-  ``Rcic.Syn.es_of_below_zetaLocal_zero_drop,
-  ``Rcic.Syn.es_of_below_zetaLocal_zero_inline,
-  ``Rcic.Syn.pi_dom_es,
-  ``Rcic.Syn.pi_cod_es,
-  ``Rcic.Syn.es_of_below_pi_of_dr,
-  ``Rcic.Syn.lam_body_es,
-  ``Rcic.Syn.es_of_below_lam_drop,
-  ``Rcic.Syn.es_of_below_lam_keep,
-  ``Rcic.Syn.app_fun_es,
-  ``Rcic.Syn.app_arg_es,
-  ``Rcic.Syn.es_of_below_app_of_dr,
-  ``Rcic.Syn.es_of_below_app_star_of_dr,
-  ``Rcic.Syn.es_of_below_beta_drop,
-  ``Rcic.Syn.es_of_below_beta_keep,
-  ``Rcic.Syn.es_of_below_delta_of_lhs,
-  ``Rcic.Syn.es_of_below_iota_of_step,
-  ``Rcic.Syn.delta_dl_proof,
-  ``Rcic.Syn.delta_dl_rel,
-  ``Rcic.Syn.delta_hb_star,
-  ``Rcic.Syn.es_of_below_delta_proof,
-  ``Rcic.Syn.es_of_below_delta_rel,
-  ``Rcic.Syn.wkClosed,
-  ``Rcic.Syn.atoms_wkClosed,
-  ``Rcic.Syn.assumpPref_wkClosed,
-  ``Rcic.Syn.eps_wkClosed,
-  ``Rcic.Syn.deltaBodyInst,
-  ``Rcic.Syn.atoms_deltaBodyInst,
-  ``Rcic.Syn.assumpPref_deltaBodyInst,
-  ``Rcic.Syn.eps_deltaBodyInst,
-  ``Rcic.Syn.delta_body_cl,
-  ``Rcic.Syn.es_of_below_delta_table,
-  ``Rcic.Syn.beta_got_body_cl,
-  ``Rcic.Syn.beta_got_arg_cl,
-  ``Rcic.Syn.es_of_below_beta_got_drop,
-  ``Rcic.Syn.es_of_below_beta_got_keep,
-  ``Rcic.Syn.es_of_below_beta_got_keep_star,
-  ``Rcic.Syn.app_dr_fun_cl,
-  ``Rcic.Syn.app_dr_arg_cl,
-  ``Rcic.Syn.es_of_below_app_got_rel,
-  ``Rcic.Syn.es_of_below_app_got_arg_star,
-  ``Rcic.Syn.es_of_below_app_got_fun_star,
-  ``Rcic.Syn.lam_dl_body_cl,
-  ``Rcic.Syn.es_of_below_lam_got_drop,
-  ``Rcic.Syn.es_of_below_lam_got_keep,
-  ``Rcic.Syn.atoms_cctx,
-  ``Rcic.Syn.lam_dr_body_cl,
-  ``Rcic.Syn.es_of_below_lam_got_both_drop,
-  ``Rcic.Syn.es_of_below_lam_got_both_keep,
-  ``Rcic.Syn.es_of_below_lam_got_both_keep_star,
-  ``Rcic.Syn.eps_pi_clause,
-  ``Rcic.Syn.pi_dl_clause,
-  ``Rcic.Syn.PiRead.isYes,
-  ``Rcic.Syn.piOfNode,
-  ``Rcic.Syn.piClauseOf,
-  ``Rcic.Syn.piOfNode_eps,
-  ``Rcic.Syn.pushPiWk,
-  ``Rcic.Syn.pushPiLinst,
-  ``Rcic.Syn.pushPiEsub,
-  ``Rcic.Syn.readPi,
-  ``Rcic.Syn.readPi_pi_yes,
-  ``Rcic.Syn.pi_dr_dom_bitCoh,
-  ``Rcic.Syn.pi_dr_dom_cl,
-  ``Rcic.Syn.pi_dr_cod_cl,
-  ``Rcic.Syn.es_of_below_pi_got,
-  ``Rcic.Syn.es_of_below_pi_got_drop,
-  ``Rcic.Syn.es_of_below_pi_got_keep,
-  ``Rcic.Syn.eqN_of_cvp_sorts_es_cl,
-  ``Rcic.Syn.eqN_of_cvp_sorts_es_cl_id,
-  ``Rcic.Syn.eqN_of_cvp_sorts_below,
-  ``Rcic.Syn.eqN_of_cvp_sorts_below_nil,
-  ``Rcic.Syn.not_eqN_zero_succ,
-  ``Rcic.Syn.not_cvp_sort_zero_succ_of_below,
-  ``Rcic.Syn.appClause_eq_star_iff,
-  ``Rcic.Syn.lamClause_eq_star_iff,
-  ``Rcic.Syn.lamErasure_eq_star_iff,
-  ``Rcic.Syn.etm_lift_eq_star_iff,
-  ``Rcic.Syn.etm_inst_eq_star_iff,
-  ``Rcic.Syn.pbit_of_reg_and_bitCoh,
-  ``Rcic.Syn.pbit_sort_reg,
-  ``Rcic.Syn.pbit_sort_of_bitCoh,
-  ``Rcic.Syn.pbit_const_reg,
-  ``Rcic.Syn.pbit_const_of_bitCoh,
-  ``Rcic.Syn.pbit_pi_reg,
-  ``Rcic.Syn.pbit_pi_of_bitCoh,
-  ``Rcic.Syn.pbit_lam_of_body,
-  ``Rcic.Syn.pbit_app_of_fun,
-  ``Rcic.Syn.pbit_letE_of_body,
-  ``Rcic.Syn.pbit_lit_iff,
-  ``Rcic.Syn.pbit_conv_of_inner,
-  ``Rcic.Syn.pbit_wk_of_inner,
-  ``Rcic.Syn.pbit_esub_drop_of_inner,
-  ``Rcic.Syn.pbit_esub_keep_of_inner,
-  ``Rcic.Syn.pbit_lsub_of_inner,
-  ``Rcic.Syn.pbit_linst_iff,
-  ``Rcic.Syn.pbit_ewk_iff,
-  ``Rcic.Syn.pbit_cctx_iff,
-  ``Rcic.Syn.sortCoh_of_eut_cl,
-  ``Rcic.Syn.bitCoh_of_eut_cl,
-  ``Rcic.Syn.cts_of_sortCoh_id,
-  ``Rcic.Syn.cts_of_eut_cl,
-  ``Rcic.Syn.PiVerdict.move,
-  ``Rcic.Syn.wk_pi_skip,
-  ``Rcic.Syn.wk_pi_keep,
-  ``Rcic.Syn.wk_pi_keep_proof,
-  ``Rcic.Syn.linst_pi_yes,
-  ``Rcic.Syn.esub_pi_drop,
-  ``Rcic.Syn.esub_pi_keep,
-  ``Rcic.Syn.esub_pi_keep_proof,
-  ``Rcic.Syn.piVerdict_node,
-  ``Rcic.Syn.piVerdict_conv,
-  ``Rcic.Syn.piVerdict_ewk,
-  ``Rcic.Syn.piVerdict_wk,
-  ``Rcic.Syn.piVerdict_linst,
-  ``Rcic.Syn.piVerdict_esub_drop,
-  ``Rcic.Syn.piVerdict_esub_keep,
-  ``Rcic.Syn.piVerdict_bare,
-  ``Rcic.Syn.epsWalkPi,
-  ``Rcic.Syn.cl_sort_nodes,
-  ``Rcic.Syn.eut_sort_nodes,
-  ``Rcic.Syn.cl_bvar_nodes,
-  ``Rcic.Syn.cl_const_nodes,
-  ``Rcic.Syn.cl_pi_nodes,
-  ``Rcic.Syn.eut_pi_nodes,
-  ``Rcic.Syn.cl_lam_nodes_drop,
-  ``Rcic.Syn.cl_lam_nodes_keep,
-  ``Rcic.Syn.cl_lam_nodes_keep_star,
-  ``Rcic.Syn.eut_lam_nodes,
-  ``Rcic.Syn.cl_app_nodes_rel,
-  ``Rcic.Syn.cl_app_nodes_arg_star,
-  ``Rcic.Syn.cl_app_nodes_fun_star,
-  ``Rcic.Syn.cl_lit_nodes,
-  ``Rcic.Syn.cl_conv_left,
-  ``Rcic.Syn.cl_conv_right,
-  ``Rcic.Syn.iota_dl_proof,
-  ``Rcic.Syn.iota_dr_proof,
-  ``Rcic.Syn.es_of_below_iota_proof,
-  ``Rcic.Syn.iota_hlhs_not_star,
-  ``Rcic.Syn.iota_hrhs_not_star,
-  ``Rcic.Syn.cl_letE_nodes_drop,
-  ``Rcic.Syn.cl_letE_nodes_inline_eq,
-  ``Rcic.Syn.cl_letE_left_iff_letSub,
-  ``Rcic.Syn.cl_letE_right_iff_letSub,
-  ``Rcic.Syn.cl_letE_nodes_iff_letSub,
-  ``Rcic.Syn.eut_letE_nodes,
-  ``Rcic.Syn.eut_bvar_nodes,
-  ``Rcic.Syn.eut_const_nodes,
-  ``Rcic.Syn.eut_app_nodes,
-  ``Rcic.Syn.eut_lit_nodes,
-  ``Rcic.Syn.eut_conv_left,
-  ``Rcic.Syn.eut_conv_right,
-  ``Rcic.Syn.cl_ewk_left,
-  ``Rcic.Syn.cl_ewk_right,
-  ``Rcic.Syn.eut_ewk_left,
-  ``Rcic.Syn.eut_ewk_right,
-  ``Rcic.Syn.cl_cctx_left,
-  ``Rcic.Syn.cl_cctx_right,
-  ``Rcic.Syn.eut_cctx_left,
-  ``Rcic.Syn.eut_cctx_right,
-  ``Rcic.Syn.cl_linst_both,
-  ``Rcic.Syn.eut_linst_both,
-  ``Rcic.Syn.cl_wk_not_keep_both,
-  ``Rcic.Syn.cl_wk_keep_both,
-  ``Rcic.Syn.eut_wk_not_keep_both,
-  ``Rcic.Syn.eut_wk_keep_both,
-  ``Rcic.Syn.cl_esub_drop_both,
-  ``Rcic.Syn.cl_esub_keep_both,
-  ``Rcic.Syn.eut_esub_drop_both,
-  ``Rcic.Syn.eut_esub_keep_both,
-  ``Rcic.Syn.cl_lsub_drop_both,
-  ``Rcic.Syn.cl_lsub_inline_eq_both,
-  ``Rcic.Syn.appN_eq_pi,
-  ``Rcic.Syn.appN_const_ne_pi,
-  ``Rcic.Syn.rStep_pi_inv,
-  ``Rcic.Syn.etaStep_pi_inv,
-  ``Rcic.Syn.eStep_pi_inv,
-  ``Rcic.Syn.rstar_eStep_pi_inv,
-  ``Rcic.Syn.lvlEq_pi_inv,
-  ``Rcic.Syn.convMod_of_rstar_fwd,
-  ``Rcic.Syn.convE_pi_inv_wf,
-  ``Rcic.Syn.not_convE_sort_pi_wf,
-  ``Rcic.Syn.not_convE_pi_sort_wf,
-  ``Rcic.Syn.eut_app_nodes_drop,
-  ``Rcic.Syn.eut_app_nodes_keep,
-  ``Rcic.Syn.not_cvp_sort_pi_es_cl,
-  ``Rcic.Syn.not_cvp_sort_pi_of_below,
-  ``Rcic.Syn.not_cvp_pi_sort_of_below,
-  ``Rcic.Syn.TyCvP,
-  ``Rcic.Syn.TyCvP.ESChain,
-  ``Rcic.Syn.convMod_of_tyCvP_esChain,
-  ``Rcic.Syn.eqN_of_tyCvP_sorts_esChain,
-  ``Rcic.Syn.sortRow_of_tyCvP_esChain_id,
-  ``Rcic.Syn.not_tyCvP_sort_zero_succ_esChain,
-  ``Rcic.Syn.iotaPack_of_envWfT,
-  ``Rcic.Syn.tyCctxAt_of_envWfT,
-  ``Rcic.Syn.piInv_of_envWfT,
-  ``Rcic.Syn.piInv_here_of_envWfT,
-  ``Rcic.Syn.cvWkAtZero,
-  ``Rcic.Syn.assumpPref_cvWkAtZero,
-  ``Rcic.Syn.assumptionPrefix_two_assumptions,
-  ``Rcic.Syn.cctxAtOne,
-  ``Rcic.Syn.assumpPref_cctxAtOne,
-  ``Rcic.Syn.piCctxP,
-  ``Rcic.Syn.assumpPref_piCctxP,
-  ``Rcic.Syn.assumpPref_piWk,
-  ``Rcic.Syn.assumpPref_piLinst,
-  ``Rcic.Syn.assumpPref_piEsub,
-  ``Rcic.Syn.assumpPref_piLsub,
-  ``Rcic.Syn.piInvP,
-  ``Rcic.Syn.piInvP_here,
-  ``Rcic.Syn.assumpPref_piInvP,
-  ``Rcic.Syn.assumpPref_piInvP_here,
-  ``Rcic.Syn.CtxP.AssumpPref,
-  ``Rcic.Syn.LookupTypeConsSucc,
-  ``Rcic.Syn.lookupType_cons_succ_inv,
-  ``Rcic.Syn.LookupValueConsSucc,
-  ``Rcic.Syn.lookupValue_cons_succ_inv,
-  ``Rcic.Syn.lookupType_cons_zero_assumption,
-  ``Rcic.Syn.lookupType_cons_zero_letBinding,
-  ``Rcic.Syn.lookupValue_cons_zero_letBinding,
-  ``Rcic.Syn.ctxP_lookupType_sort,
-  ``Rcic.Syn.assumpPref_ctxP_lookupType_sort,
-  ``Rcic.Syn.ctxP_lookupValue_ty,
-  ``Rcic.Syn.assumpPref_ctxP_lookupValue_ty,
-  ``Rcic.Syn.MemberSortP,
-  ``Rcic.Syn.MemberSortP.AssumpPref,
-  ``Rcic.Syn.memberSortP_of_envWfP,
-  ``Rcic.Syn.instMemberSortP,
-  ``Rcic.Syn.assumpPref_instMemberSortP,
-  ``Rcic.Syn.betaLeftP,
-  ``Rcic.Syn.assumpPref_betaLeftP,
-  ``Rcic.Syn.appRightP,
-  ``Rcic.Syn.assumpPref_appRightP,
-  ``Rcic.Syn.lamRightP,
-  ``Rcic.Syn.assumpPref_lamRightP,
-  ``Rcic.Syn.piRightP,
-  ``Rcic.Syn.assumpPref_piRightP,
-  ``Rcic.Syn.sortsRightP,
-  ``Rcic.Syn.assumpPref_sortsRightP,
-  ``Rcic.Syn.eqNList_symm_of,
-  ``Rcic.Syn.constsRightP,
-  ``Rcic.Syn.assumpPref_constsRightP,
-  ``Rcic.Syn.etaLeftP,
-  ``Rcic.Syn.assumpPref_etaLam,
-  ``Rcic.Syn.assumpPref_etaLeftP,
-  ``Rcic.Syn.cvP_inst0_sortCongrLet,
-  ``Rcic.Syn.assumpPref_cvP_inst0_sortCongrLet,
-  ``Rcic.Syn.cvpLetInline0,
-  ``Rcic.Syn.assumpPref_cvpLetInline0,
-  ``Rcic.Syn.LetCtxConvP,
-  ``Rcic.Syn.LetCtxConvP.AssumpPref,
-  ``Rcic.Syn.letRightP,
-  ``Rcic.Syn.assumpPref_letRightP,
-  ``Rcic.Syn.enrichHasTyT,
-  ``Rcic.Syn.enrichConvT,
-  ``Rcic.Syn.assumpPref_enrichHasTyT,
-  ``Rcic.Syn.assumpPref_enrichConvT,
-  ``Rcic.Syn.enrichTyConvT,
-  ``Rcic.Syn.enrichCtxWfT,
-  ``Rcic.Syn.assumpPref_enrichCtxWfT,
-  ``Rcic.Syn.sortRow_of_tyConvT_esChain_id,
-  ``Rcic.Syn.sortRow_of_convT_es_cl_id,
-  ``Rcic.Syn.memberSortP_extendEnv,
-  ``Rcic.Syn.enrichGroupMembersT,
-  ``Rcic.Syn.enrichEnvWfT,
-  ``Rcic.Syn.memberSortP_of_envWfT,
-  ``Rcic.Syn.enrichCtxWfT_of_envWfT,
-  ``Rcic.Syn.enrichHasTyT_of_envWfT,
-  ``Rcic.Syn.enrichConvT_of_envWfT,
-  ``Rcic.Syn.enrichTyConvT_of_envWfT,
-  ``Rcic.Syn.sortRow_of_tyConvT_envWfT,
-  ``Rcic.Syn.sortUnique_of_tyP_eut_cl,
-  ``Rcic.Syn.sortPairNode,
-  ``Rcic.Syn.sortCoh_of_below_pair,
-  ``Rcic.Syn.sortUnique_of_tyP_below,
-  ``Rcic.Syn.sortUnique_of_tyP_below_nil,
-  ``Rcic.Syn.not_tyP_sort_zero_succ_of_sortCoh,
-  ``Rcic.Syn.not_tyP_sort_zero_succ_of_below,
-  ``Rcic.Syn.sortUnique_of_hasTyT_sortCoh,
-  ``Rcic.Syn.sortUnique_of_hasTyT_eut_cl,
-  ``Rcic.Syn.sortUnique_of_hasTyT_envWfT,
-  ``Rcic.Syn.sortUnique_of_hasTyT_envWfT_below,
-  ``Rcic.Syn.TyCvP.endpoints,
-  ``Rcic.Syn.TyCvP.SortCoh,
-  ``Rcic.Syn.eqN_of_tyCvP_endpoints,
-  ``Rcic.Syn.TyCvP.SortChainCoh,
-  ``Rcic.Syn.eqN_of_tyCvP_sortChainCoh,
-  ``Rcic.Syn.eqN_of_tyCvP_sortChainCoh_id,
-  ``Rcic.Syn.not_tyCvP_sort_prop_of_sortChainCoh,
-  ``Rcic.Syn.not_tyCvP_prop_sort_of_sortChainCoh,
-  ``Rcic.Syn.not_cvp_sort_prop_of_sortCoh,
-  ``Rcic.Syn.not_cvp_prop_sort_of_sortCoh,
-  ``Rcic.Syn.not_cvp_sort_prop_of_below,
-  ``Rcic.Syn.not_cvp_prop_sort_of_below,
-  ``Rcic.Syn.sepContract_of_tyConvT,
-  ``Rcic.Syn.sepContract_of_tyConvT_envWfT,
-  ``Rcic.Syn.sepContract_symm_of_tyConvT_envWfT,
-  ``Rcic.Syn.sepContract_of_convT_envWfT,
-  ``Rcic.Syn.sepContract_of_convT_envWfT_below,
-  ``Rcic.Syn.illCtxReg,
-  ``Rcic.Syn.hasTyT_illCtxReg_bvar0,
-  ``Rcic.Syn.not_hasTyT_illCtxReg_bvar1,
-  ``Rcic.Syn.not_hasTyT_regularity_illCtx,
-  ``Rcic.Syn.illCtxEta,
-  ``Rcic.Syn.hasTyT_illCtxEta_bvar0,
-  ``Rcic.Syn.convT_illCtxEta_eta,
-  ``Rcic.Syn.not_hasTyT_illCtxEta_bvar1,
-  ``Rcic.Syn.not_hasTyT_illCtxEta_lam,
-  ``Rcic.Syn.not_convT_lhs_typed_illCtx,
-  ``Rcic.Syn.AllBelow,
-  ``Rcic.Syn.allBelow_of_lexDM_step,
-  ``Rcic.Syn.lexDM_succ_snd,
-  ``Rcic.Syn.es_of_allBelow,
-  ``Rcic.Syn.cl_of_allBelow,
-  ``Rcic.Syn.eut_of_allBelow,
-  ``Rcic.Syn.cts_of_allBelow,
-  ``Rcic.Syn.pbit_of_allBelow,
-  ``Rcic.Syn.bitCoh_of_allBelow,
-  ``Rcic.Syn.sortCoh_of_allBelow,
-  ``Rcic.Syn.esChain_of_allBelow,
-  ``Rcic.Syn.sortCoh_tyCvP_of_allBelow,
-  ``Rcic.Syn.sortChainCoh_of_allBelow,
-  ``Rcic.Syn.canonPiOfTyP,
-  ``Rcic.Syn.not_tyCvP_sort_pi_of_allBelow,
-  ``Rcic.Syn.not_tyCvP_pi_sort_of_allBelow,
-  ``Rcic.Syn.not_tyConvT_sort_pi_of_allBelow,
-  ``Rcic.Syn.not_tyConvT_pi_sort_of_allBelow,
-  ``Rcic.Syn.not_convT_sort_pi_of_allBelow,
-  ``Rcic.Syn.sortRow_tyCvP_of_allBelow,
-  ``Rcic.Syn.sortRow_of_allBelow,
-  ``Rcic.Syn.sortRow_convT_of_allBelow,
-  ``Rcic.Syn.sortUnique_tyP_of_allBelow,
-  ``Rcic.Syn.sortUnique_of_allBelow,
-  ``Rcic.Syn.sepContract_tyCvP_of_allBelow,
-  ``Rcic.Syn.sepContract_of_allBelow,
-  ``Rcic.Syn.sepContract_symm_of_allBelow,
-  ``Rcic.Syn.sepContract_convT_of_allBelow,
-  ``Rcic.Syn.DispLvlEq,
-  ``Rcic.Syn.DispLvlEq.refl,
-  ``Rcic.Syn.DispLvlEq.symm,
-  ``Rcic.Syn.DispLvlEq.trans,
-  ``Rcic.Syn.DispLvlEq.length_eq,
-  ``Rcic.Syn.DispLvlEq.countKeep_eq,
-  ``Rcic.Syn.DispLvlEq.take,
-  ``Rcic.Syn.DispLvlEq.countKeep_take_eq,
-  ``Rcic.Syn.DispLvlEq.removeAt,
-  ``Rcic.Syn.DispLvlEq.insertDisp_keep,
-  ``Rcic.Syn.DispLvlEq.insertDisp_drop,
-  ``Rcic.Syn.DispLvlEq.insertDisp_inline,
-  ``Rcic.Syn.DispLvlEq.getElem?_keep_cases,
-  ``Rcic.Syn.lvlEq_resolve,
-  ``Rcic.Syn.eqNList_map_of_pointwise,
-  ``Rcic.Syn.eps_wk_not_keep_of_ne,
-  ``Rcic.Syn.lamOut,
-  ``Rcic.Syn.appOut,
-  ``Rcic.Syn.letDisp,
-  ``Rcic.Syn.eps_lam_keep_eq,
-  ``Rcic.Syn.eps_app_eq,
-  ``Rcic.Syn.let_eps_eq,
-  ``Rcic.Syn.lsub_eps_eq,
-  ``Rcic.Syn.lvlEq_lam_match,
-  ``Rcic.Syn.lvlEq_app_match,
-  ``Rcic.Syn.dispLvlEq_let_match,
-  ``Rcic.Syn.dispLvlEq_lsub_match,
-  ``Rcic.Syn.lvlEq_eps,
-  ``Rcic.Syn.lvlEq_eps_instLevel,
-  ``Rcic.Syn.lvlEq_eps_instLevel_nil,
-  ``Rcic.Syn.ETm.closedAt_lift,
-  ``Rcic.Syn.ETm.closedAt_inst,
-  ``Rcic.Syn.lt_length_of_lookupType_some,
-  ``Rcic.Syn.DispClosed,
-  ``Rcic.Syn.closedAt_resolve,
-  ``Rcic.Syn.countKeep_take_le,
-  ``Rcic.Syn.countKeep_insertDisp_drop,
-  ``Rcic.Syn.countKeep_insertDisp_keep,
-  ``Rcic.Syn.dispClosed_insertDisp_drop,
-  ``Rcic.Syn.dispClosed_insertDisp_keep,
-  ``Rcic.Syn.AssumpCut,
-  ``Rcic.Syn.AssumpCut.le_length,
-  ``Rcic.Syn.AssumpCut.assumptionPrefix,
-  ``Rcic.Syn.DispShape,
-  ``Rcic.Syn.DispShape.length_eq,
-  ``Rcic.Syn.dispShape_binderDisp,
-  ``Rcic.Syn.dispShape_of_dispFor,
-  ``Rcic.Syn.dispShape_of_ctxP,
-  ``Rcic.Syn.dispShape_cctx,
-  ``Rcic.Syn.dispShape_of_instLvlsCtx,
-  ``Rcic.Syn.dispShape_insertDisp_drop,
-  ``Rcic.Syn.dispShape_insertDisp_keep,
-  ``Rcic.Syn.dispShape_let_clause,
-  ``Rcic.Syn.dispClosed_let_clause,
-  ``Rcic.Syn.countKeep_let_clause,
-  ``Rcic.Syn.dispShape_insertDisp_let,
-  ``Rcic.Syn.dispClosed_insertDisp_let,
-  ``Rcic.Syn.countKeep_insertDisp_let,
-  ``Rcic.Syn.wk_closed_step,
-  ``Rcic.Syn.TyP.ClosedWf,
-  ``Rcic.Syn.CtxP.ClosedWf,
-  ``Rcic.Syn.closedWf_tyCast,
-  ``Rcic.Syn.closedWf_tyCastCtx,
-  ``Rcic.Syn.closedWf_castLift0,
-  ``Rcic.Syn.closedWf_wkAtZero,
-  ``Rcic.Syn.closedWf_wkLetAtZero,
-  ``Rcic.Syn.closedWf_wkClosed,
-  ``Rcic.Syn.closedWf_deltaBodyInst,
-  ``Rcic.Syn.closedWf_instEnd,
-  ``Rcic.Syn.closedWf_letSub,
-  ``Rcic.Syn.closedWf_trLetNorm,
-  ``Rcic.Syn.closedWf_trLetE,
-  ``Rcic.Syn.closedWf_enrichHasTyT,
-  ``Rcic.Syn.closedWf_enrichCtxWfT,
-  ``Rcic.Syn.closedAt_lam_match,
-  ``Rcic.Syn.closedAt_app_match,
-  ``Rcic.Syn.closedAt_eps,
-  ``Rcic.Syn.closedAt_eps_nil,
-  ``Rcic.Syn.eps_nil_lift,
-  ``Rcic.Syn.eps_nil_lift_zero,
-  ``Rcic.Syn.eps_nil_inst,
-  ``Rcic.Syn.dispClosed_of_ctxP,
-  ``Rcic.Syn.closedAt_eps_ctxP,
-  ``Rcic.Syn.closedAt_enrichHasTyT_nil,
-  ``Rcic.Syn.deltaRule,
-  ``Rcic.Syn.deltaRule_congr_rhs,
-  ``Rcic.Syn.deltaRule_closed,
-  ``Rcic.Syn.tableCongr_cons_deltaRule,
-  ``Rcic.Syn.tableWF_cons_deltaRule,
-  ``Rcic.Syn.tableWF_singleton_deltaRule,
-  ``Rcic.Syn.eps_deltaBodyInst_closed,
-  ``Rcic.Syn.es_of_below_delta_table_closed,
-  ``Rcic.Syn.es_of_below_delta_crule,
-  ``Rcic.Syn.es_of_below_delta_crule_id,
-  ``Rcic.Syn.LevelHom,
-  ``Rcic.Syn.levelHom_id,
-  ``Rcic.Syn.LevelHom.linst,
-  ``Rcic.Syn.getD_map_of_lt,
-  ``Rcic.Syn.instLevel_map_of_levelHom,
-  ``Rcic.Syn.es_of_below_delta_crule_eqN,
-  ``Rcic.Syn.dmStep_perm_left,
-  ``Rcic.Syn.dmStep_perm_right,
-  ``Rcic.Syn.dmStep_append_right,
-  ``Rcic.Syn.dmStep_append_left,
-  ``Rcic.Syn.dmStep_drop_right,
-  ``Rcic.Syn.dmStep_drop_left,
-  ``Rcic.Syn.ETm.isSortOrPi,
-  ``Rcic.Syn.ETm.ne_star_of_isSortOrPi,
-  ``Rcic.Syn.ETm.isSortOrPi_lift_of_true,
-  ``Rcic.Syn.ETm.isSortOrPi_inst_of_true,
-  ``Rcic.Syn.TyP.isSortOrPiHead,
-  ``Rcic.Syn.isSortOrPi_eps_of_isSortOrPiHead,
-  ``Rcic.Syn.eps_ne_star_of_isSortOrPiHead,
-  ``Rcic.Syn.reg_fst_succ_of_isSortOrPiHead,
-  ``Rcic.Syn.pbit_reg_of_isSortOrPiHead,
-  ``Rcic.Syn.reg_eps_of_isSortOrPiHead,
-  ``Rcic.Syn.reg_eps_sort_of_isSortOrPiHead,
-  ``Rcic.Syn.cl_reg_sort_of_isSortOrPiHead,
-  ``Rcic.Syn.dmStep_append_middle,
-  ``Rcic.Syn.dmStep_append_middle2,
-  ``Rcic.Syn.dmStep_reg_nonTransport,
-  ``Rcic.Syn.dmStep_reg_of_not_isSortOrPiHead,
-  ``Rcic.Syn.dmStep_reg_atoms,
-  ``Rcic.Syn.dmStep_reg_sort_pair,
-  ``Rcic.Syn.lexDM_reg_pair_left,
-  ``Rcic.Syn.lexDM_reg_sort_of_tyMeas,
-  ``Rcic.Syn.lexDM_reg_sort_of_pair_left,
-  ``Rcic.Syn.lexDM_reg_sort_of_pair_right,
-  ``Rcic.Syn.cl_reg_sort_of_below_ty,
-  ``Rcic.Syn.cl_reg_sort_of_below_pair_left,
-  ``Rcic.Syn.cl_reg_sort_of_below_pair_right,
-  ``Rcic.Syn.sortCoh_of_below_and_eut,
-  ``Rcic.Syn.bitCoh_of_below_and_eut,
-  ``Rcic.Syn.sortCoh_of_below_lex,
-  ``Rcic.Syn.bitCoh_of_below_lex,
-  ``Rcic.Syn.pbit_of_below_not_isSortOrPiHead,
-  ``Rcic.Syn.dmStep_cvp_rule_with_list,
-  ``Rcic.Syn.CvP.elab_transports,
-  ``Rcic.Syn.dmStep_cvp_dl,
-  ``Rcic.Syn.dmStep_cvp_dr,
-  ``Rcic.Syn.dmStep_cvp_dl_reg,
-  ``Rcic.Syn.dmStep_cvp_dr_reg,
-  ``Rcic.Syn.dmStep_cts_pair,
-  ``Rcic.Syn.lexDM_cts_pair,
-  ``Rcic.Syn.cl_reg_sort_of_below_cts_left,
-  ``Rcic.Syn.cl_reg_sort_of_below_cts_right,
-  ``Rcic.Syn.cts_of_below,
-  ``Rcic.Syn.TyP.isSortHead,
-  ``Rcic.Syn.dmStep_reg_of_not_isSortHead,
-  ``Rcic.Syn.dmStep_reg_atoms_of_not_isSortHead,
-  ``Rcic.Syn.lexDM_reg_pair_left_of_not_isSortHead,
-  ``Rcic.Syn.pbit_of_below_not_isSortHead,
-  ``Rcic.Syn.pbit_of_below_piHead,
-  ``Rcic.Syn.eval_levelHom,
-  ``Rcic.Syn.LevelHom.eqN_map,
-  ``Rcic.Syn.LevelHom.zero_bit,
-  ``Rcic.Syn.LevelHom.succ_bit,
-  ``Rcic.Syn.LevelHom.levelSub,
-  ``Rcic.Syn.LevelHom.imax_bit,
-  ``Rcic.Syn.LevelHom.max_bit,
-  ``Rcic.Syn.DispForHom,
-  ``Rcic.Syn.dispForHom_nil,
-  ``Rcic.Syn.dispForHom_id,
-  ``Rcic.Syn.DispForHom.assumption,
-  ``Rcic.Syn.DispForHom.letDrop,
-  ``Rcic.Syn.DispForHom.letInline,
-  ``Rcic.Syn.DispForHom.linst,
-  ``Rcic.Syn.dispForHom_of_ctxP,
-  ``Rcic.Syn.isSortOrPiHead_of_isSortHead,
-  ``Rcic.Syn.isSortHead_expr_and_type,
-  ``Rcic.Syn.isPiHead_expr,
-  ``Rcic.Syn.isSortHead_of_isSortOrPiHead_sort_subject,
-  ``Rcic.Syn.levelIsZero_false_of_isSortOrPiHead_sort_subject,
-  ``Rcic.Syn.pbit_of_isSortHead_and_isSortOrPiHead,
-  ``Rcic.Syn.atoms_reg_of_isSortHead,
-  ``Rcic.Syn.wt_reg_of_isSortHead,
-  ``Rcic.Syn.tyPairMeas_reg_of_isSortHead,
-  ``Rcic.Syn.pbit_of_below_and_eut_isSortHead,
-  ``Rcic.Syn.pbit_of_below_lex_isSortHead,
-  ``Rcic.Syn.pbit_of_below_lex_isSortOrPiHead,
-  ``Rcic.Syn.dmStep_cvTy_pair,
-  ``Rcic.Syn.lexDM_cvTy_pair,
-  ``Rcic.Syn.sortCoh_cvp_dl_of_below,
-  ``Rcic.Syn.cts_pack_of_below,
-  ``Rcic.Syn.pbit_const_of_below,
-  ``Rcic.Syn.dmStep_lit_reg_pair,
-  ``Rcic.Syn.lexDM_lit_reg_pair,
-  ``Rcic.Syn.pbit_lit_reg_of_below,
-  ``Rcic.Syn.pbit_lit_of_below,
-  ``Rcic.Syn.dmStep_conv_inner_pair,
-  ``Rcic.Syn.lexDM_conv_inner_pair,
-  ``Rcic.Syn.pbit_conv_reg_of_below,
-  ``Rcic.Syn.pbit_conv_of_below,
-  ``Rcic.Syn.dmStep_lam_body_pair,
-  ``Rcic.Syn.lexDM_lam_body_pair,
-  ``Rcic.Syn.pbit_lam_reg_of_below,
-  ``Rcic.Syn.pbit_lam_of_below,
-  ``Rcic.Syn.dmStep_letE_letSub_pair,
-  ``Rcic.Syn.lexDM_letE_letSub_pair,
-  ``Rcic.Syn.pbit_letE_reg_of_below,
-  ``Rcic.Syn.pbit_letE_of_below,
-  ``Rcic.Syn.pbit_ewk_reg_iff,
-  ``Rcic.Syn.pbit_cctx_reg_iff,
-  ``Rcic.Syn.pbit_wk_reg_of_inner,
-  ``Rcic.Syn.pbit_esub_drop_reg_of_inner,
-  ``Rcic.Syn.dmStep_esub_val_pair,
-  ``Rcic.Syn.lexDM_esub_val_pair,
-  ``Rcic.Syn.pbit_esub_keep_reg_of_below,
-  ``Rcic.Syn.pbit_lsub_reg_of_inner,
-  ``Rcic.Syn.es_of_below_delta_all,
-  ``Rcic.Syn.es_of_below_delta_all_id,
-  ``Rcic.Syn.pbit_bvar_proof_reg,
-  ``Rcic.Syn.pbit_bvar_proof_of_below,
-  ``Rcic.Syn.DispEntry,
-  ``Rcic.Syn.resolve_eq_star_iff_of_dispEntry,
-  ``Rcic.Syn.pbit_bvar_reg_of_dispEntry,
-  ``Rcic.Syn.pbit_bvar_of_below_dispEntry,
-  ``Rcic.Syn.pbit_bvar_reg_of_dispForC,
-  ``Rcic.Syn.pbit_bvar_of_below_dispForC,
-  ``Rcic.Syn.not_bvar_of_isSortOrPiHead,
-  ``Rcic.Syn.isSortHead_false_of_pi_expr,
-  ``Rcic.Syn.isPiHead_type_sort,
-  ``Rcic.Syn.readPi_sort_eq_of_isSortOrPiHead,
-  ``Rcic.Syn.readPi_sort_level_eq_of_isSortOrPiHead,
-  ``Rcic.Syn.atoms_castLift0,
-  ``Rcic.Syn.atoms_sortLift0,
-  ``Rcic.Syn.atoms_instEnd,
-  ``Rcic.Syn.dmStep_app_fun_reg_pair,
-  ``Rcic.Syn.lexDM_app_fun_reg_pair,
-  ``Rcic.Syn.pbit_app_fun_reg_of_below,
-  ``Rcic.Syn.dmStep_app_instEnd_pair,
-  ``Rcic.Syn.lexDM_app_instEnd_pair,
-  ``Rcic.Syn.sortCoh_app_instEnd_of_below,
-  ``Rcic.Syn.bitCoh_app_instEnd_of_below,
-  ``Rcic.Syn.pbit_app_reg_of_below_got,
-  ``Rcic.Syn.pbit_app_of_below_got,
-  ``Rcic.Syn.app_fun_reg_atom_src,
-  ``Rcic.Syn.pbit_app_reg_of_below_readPi,
-  ``Rcic.Syn.pbit_app_of_below_readPi,
-  ``Rcic.Syn.pbit_app_reg_of_below_lam,
-  ``Rcic.Syn.pbit_app_of_below_lam,
-  ``Rcic.Syn.pbit_of_below_lex_and_reg,
-  ``Rcic.Syn.pbit_ewk_of_below,
-  ``Rcic.Syn.pbit_cctx_of_below,
-  ``Rcic.Syn.pbit_linst_reg_of_inner,
-  ``Rcic.Syn.pbit_linst_of_below,
-  ``Rcic.Syn.pbit_wk_of_below,
-  ``Rcic.Syn.pbit_esub_drop_of_below,
-  ``Rcic.Syn.pbit_esub_keep_of_below,
-  ``Rcic.Syn.pbit_esub_of_below,
-  ``Rcic.Syn.pbit_lsub_of_below,
-  ``Rcic.Syn.dmStep_append_both,
-  ``Rcic.Syn.dmStep_drop_right_nonempty,
-  ``Rcic.Syn.dmStep_wt_lt_singleton,
-  ``Rcic.Syn.dmStep_wt_lt_pair,
-  ``Rcic.Syn.lexDM_wt_lt_pair,
-  ``Rcic.Syn.dmStep_both_wt_lt_singleton,
-  ``Rcic.Syn.lexDM_both_wt_lt_left,
-  ``Rcic.Syn.lexDM_both_wt_lt_right,
-  ``Rcic.Syn.getElem?_keep_or_not_keep,
-  ``Rcic.Syn.LevelHom.succ_eqN,
-  ``Rcic.Syn.LevelHom.max_eqN,
-  ``Rcic.Syn.LevelHom.imax_eqN,
-  ``Rcic.Syn.cl_sort_of_below,
-  ``Rcic.Syn.eut_sort_of_below,
-  ``Rcic.Syn.cl_bvar_of_below,
-  ``Rcic.Syn.eut_bvar_of_below,
-  ``Rcic.Syn.cl_const_of_below_eq,
-  ``Rcic.Syn.eut_const_of_below_eq,
-  ``Rcic.Syn.cl_const_canon_of_below,
-  ``Rcic.Syn.eut_const_canon_of_below,
-  ``Rcic.Syn.cl_pi_of_below,
-  ``Rcic.Syn.eut_pi_of_below,
-  ``Rcic.Syn.cl_lam_of_below_bit,
-  ``Rcic.Syn.cl_lam_same_cod_of_below,
-  ``Rcic.Syn.eut_lam_of_below,
-  ``Rcic.Syn.cl_app_of_below_bits,
-  ``Rcic.Syn.cl_app_same_pi_of_below,
-  ``Rcic.Syn.eut_app_same_pi_of_below,
-  ``Rcic.Syn.eut_app_of_below_got_drop,
-  ``Rcic.Syn.eut_app_of_below_got_keep,
-  ``Rcic.Syn.cl_letE_of_below,
-  ``Rcic.Syn.eut_letE_of_below,
-  ``Rcic.Syn.cl_lit_of_below,
-  ``Rcic.Syn.eut_lit_of_below,
-  ``Rcic.Syn.cl_conv_left_of_below,
-  ``Rcic.Syn.cl_conv_right_of_below,
-  ``Rcic.Syn.eut_conv_left_of_below,
-  ``Rcic.Syn.eut_conv_right_of_below,
-  ``Rcic.Syn.cl_ewk_both_of_below,
-  ``Rcic.Syn.eut_ewk_both_of_below,
-  ``Rcic.Syn.cl_linst_both_of_below,
-  ``Rcic.Syn.eut_linst_both_of_below,
-  ``Rcic.Syn.cl_wk_both_of_below,
-  ``Rcic.Syn.eut_wk_both_of_below,
-  ``Rcic.Syn.cl_cctx_both_of_below,
-  ``Rcic.Syn.eut_cctx_both_of_below,
-  ``Rcic.Syn.cl_esub_both_of_below,
-  ``Rcic.Syn.eut_esub_both_of_below,
-  ``Rcic.Declarative.DeclAritiesT,
-  ``Rcic.Declarative.groupArity_of_declAritiesT,
-  ``Rcic.Declarative.ctorArity_of_declAritiesT,
-  ``Rcic.Declarative.recArity_of_declAritiesT,
-  ``Rcic.Declarative.ctorArityS_of_declAritiesT,
-  ``Rcic.Declarative.recArityS_of_declAritiesT,
-  ``Rcic.Declarative.iotaLevelsT_of,
-  ``Rcic.Syn.CvWalkHyp,
-  ``Rcic.Syn.cvWalkHyp_of_envWfT,
-  ``Rcic.Syn.cvWalkHyp_cons,
-  ``Rcic.Syn.iotaLevelsT_of_cvWalkHyp,
-  ``Rcic.Syn.iotaPack_of_cvWalkHyp,
-  ``Rcic.Syn.setLetB,
-  ``Rcic.Syn.setLetB_zero,
-  ``Rcic.Syn.setLetB_succ,
-  ``Rcic.Syn.setLetB_nil,
-  ``Rcic.Syn.length_setLetB,
-  ``Rcic.Syn.drop_setLetB,
-  ``Rcic.Syn.get?_setLetB_ne,
-  ``Rcic.Syn.lookupType_setLetB_ne,
-  ``Rcic.Syn.lookupValue_setLetB_ne,
-  ``Rcic.Syn.lookupType_setLetB_hit,
-  ``Rcic.Syn.lookupValue_setLetB_hit,
-  ``Rcic.Syn.lookupType_setLetB_at,
-  ``Rcic.Syn.setLetB_insertAt_gt,
-  ``Rcic.Syn.setLetB_insertAt_eq,
-  ``Rcic.Syn.RunL,
-  ``Rcic.Syn.shiftL_lsub_hctx,
-  ``Rcic.Syn.shiftL_esub_hctx,
-  ``Rcic.Syn.shiftL_cctx_hctx,
-  ``Rcic.Syn.runL_shift,
-  ``Rcic.Syn.PackL,
-  ``Rcic.Syn.packLWk,
-  ``Rcic.Syn.packLConsWk,
-  ``Rcic.Syn.packLLinst,
-  ``Rcic.Syn.packLEsub,
-  ``Rcic.Syn.packLLsub,
-  ``Rcic.Syn.packLCctx,
-  ``Rcic.Syn.packLUnder,
-  ``Rcic.Syn.moveUnderL,
-  ``Rcic.Syn.moveUnderCvL,
-  ``Rcic.Syn.retypeLetBVarSlot,
-  ``Rcic.Syn.retypeLetBValSlot,
-  ``Rcic.Syn.bwalkAtL,
-  ``Rcic.Syn.finishBvarL,
-  ``Rcic.Syn.valWalkL,
-  ``Rcic.Syn.tyAtLet,
-  ``Rcic.Syn.cvAtLet,
-  ``Rcic.Syn.packNilL,
-  ``Rcic.Syn.tyCctxLetAt,
-  ``Rcic.Syn.letCtxConvP_of_cvWalkHyp,
-  ``Rcic.Syn.letCtxConvP_of_envWfT,
   -- END codex-w12: retain stacked cursor/syn-step3 sealed names
 
   -- BEGIN codex-w12: native slot-origin sealed names
@@ -20233,7 +18840,6 @@ def sealedTheorems : List Name := [
   ``Rcic.Declarative.F8Measure.J5aVia.Pins.exact_certificate_refuses,
   ``Rcic.Declarative.F8Measure.J5aVia.Pins.live_mutants,
   -- WK-2 (#7128 Q2, #7148 design): RcicF8CtxWfViaS — the J context premise over PR-A's CtxMorph (ins/sub/subLet); Wk/CtxWfVia embed; D1 re-proved; J1/J2/J3 ViaS twins; JProcViaSP; teeth (illCtx_no_viaS, mutants U/W); depth/K/two-entry pins
-  ``Rcic.Declarative.CtxMorph.apply_const,
   ``Rcic.Declarative.F8Measure.Wk.toCtxMorph,
   ``Rcic.Declarative.F8Measure.Wk.toCtxMorph_apply,
   ``Rcic.Declarative.F8Measure.CtxWfViaS,
@@ -20491,8 +19097,6 @@ def sealedTheorems : List Name := [
   ``Rcic.Declarative.F8SepAllPins.ctxWf_gate_mutant,
   -- END CODEX-PKG SEPALL SEAL
 
-  ``Rcic.Declarative.F8Measure.litApp?,
-  ``Rcic.Declarative.F8Measure.UProcXPins.abelΓ,
   -- JT-1: ChatGPT pre-answer J demand and actual U-app re-entry.
   -- BEGIN CODEX-PKG JLAM SEAL
   -- J-LAM-FIXED pre-#7150 (ChatGPT supply map §3/§4.7/§5/§7): generic
@@ -23725,103 +22329,9 @@ def sealedTheorems : List Name := [
   ``Rcic.Declarative.F8Measure.JTotality.Pins.filtered_universal_wrongly_accepts,
   ``Rcic.Declarative.F8Measure.JTotality.Pins.global_unsupported_demand_deletion,
   -- W-J-LOCAL-STORED: exact stored context read, raw local-zeta, and boundary controls.
-  ``Rcic.Declarative.F8Measure.JLocalStored.StoredLetAt,
-  ``Rcic.Declarative.F8Measure.JLocalStored.StoredLetAt.mk,
-  ``Rcic.Declarative.F8Measure.JLocalStored.StoredLetAt.storedType,
-  ``Rcic.Declarative.F8Measure.JLocalStored.StoredLetAt.storedValue,
-  ``Rcic.Declarative.F8Measure.JLocalStored.StoredLetAt.entry,
-  ``Rcic.Declarative.F8Measure.JLocalStored.StoredLetAt.type_eq,
-  ``Rcic.Declarative.F8Measure.JLocalStored.StoredLetAt.value_eq,
-  ``Rcic.Declarative.F8Measure.JLocalStored.recoverStoredLet,
-  ``Rcic.Declarative.F8Measure.JLocalStored.stored_lookup_exact,
-  ``Rcic.Declarative.F8Measure.JLocalStored.stored_data_exact,
-  ``Rcic.Declarative.F8Measure.JLocalStored.stored_type_exact,
-  ``Rcic.Declarative.F8Measure.JLocalStored.StoredLetTyping,
-  ``Rcic.Declarative.F8Measure.JLocalStored.StoredLetTyping.mk,
-  ``Rcic.Declarative.F8Measure.JLocalStored.StoredLetTyping.hvt,
-  ``Rcic.Declarative.F8Measure.JLocalStored.StoredLetTyping.hvt_exact,
-  ``Rcic.Declarative.F8Measure.JLocalStored.StoredLetTyping.lookup,
-  ``Rcic.Declarative.F8Measure.JLocalStored.stored_typing_exact,
-  ``Rcic.Declarative.F8Measure.JLocalStored.storedRefl,
-  ``Rcic.Declarative.F8Measure.JLocalStored.stored_refl_exact,
-  ``Rcic.Declarative.F8Measure.JLocalStored.localZetaLeft,
-  ``Rcic.Declarative.F8Measure.JLocalStored.localZetaRight,
-  ``Rcic.Declarative.F8Measure.JLocalStored.localZetaPlain,
-  ``Rcic.Declarative.F8Measure.JLocalStored.localZeta,
-  ``Rcic.Declarative.F8Measure.JLocalStored.localZeta_plain_exact,
-  ``Rcic.Declarative.F8Measure.JLocalStored.localZeta_left_exact,
-  ``Rcic.Declarative.F8Measure.JLocalStored.localZeta_right_exact,
-  ``Rcic.Declarative.F8Measure.JLocalStored.Pins.Γ,
-  ``Rcic.Declarative.F8Measure.JLocalStored.Pins.hΓ,
-  ``Rcic.Declarative.F8Measure.JLocalStored.Pins.ambientTy,
-  ``Rcic.Declarative.F8Measure.JLocalStored.Pins.original,
-  ``Rcic.Declarative.F8Measure.JLocalStored.Pins.packet,
-  ``Rcic.Declarative.F8Measure.JLocalStored.Pins.one,
-  ``Rcic.Declarative.F8Measure.JLocalStored.Pins.storedTy,
-  ``Rcic.Declarative.F8Measure.JLocalStored.Pins.stored,
-  ``Rcic.Declarative.F8Measure.JLocalStored.Pins.receipt,
-  ``Rcic.Declarative.F8Measure.JLocalStored.Pins.actual_stored_object,
-  ``Rcic.Declarative.F8Measure.JLocalStored.Pins.actual_context_read,
-  ``Rcic.Declarative.F8Measure.JLocalStored.Pins.original_leaf_inventory,
-  ``Rcic.Declarative.F8Measure.JLocalStored.Pins.stored_context_differs,
-  ``Rcic.Declarative.F8Measure.JLocalStored.Pins.stored_not_original_leaf,
-  ``Rcic.Declarative.F8Measure.JLocalStored.Pins.tailCtx,
-  ``Rcic.Declarative.F8Measure.JLocalStored.Pins.tailWf,
-  ``Rcic.Declarative.F8Measure.JLocalStored.Pins.tailValueTy,
-  ``Rcic.Declarative.F8Measure.JLocalStored.Pins.liftedCtx,
-  ``Rcic.Declarative.F8Measure.JLocalStored.Pins.liftedWf,
-  ``Rcic.Declarative.F8Measure.JLocalStored.Pins.liftedAmbientTy,
-  ``Rcic.Declarative.F8Measure.JLocalStored.Pins.liftedStored,
-  ``Rcic.Declarative.F8Measure.JLocalStored.Pins.liftedReceipt,
-  ``Rcic.Declarative.F8Measure.JLocalStored.Pins.actual_nontrivial_value_lift,
-  ``Rcic.Declarative.F8Measure.JLocalStored.Pins.actual_lifted_context_read,
-  ``Rcic.Declarative.F8Measure.JLocalStored.Pins.WeakStoredValue,
-  ``Rcic.Declarative.F8Measure.JLocalStored.Pins.ExactStoredValue,
-  ``Rcic.Declarative.F8Measure.JLocalStored.Pins.mutant_ambient_value_accepts,
-  ``Rcic.Declarative.F8Measure.JLocalStored.Pins.exact_stored_value_refuses,
-  ``Rcic.Declarative.F8Measure.JLocalStored.Pins.WeakTail,
-  ``Rcic.Declarative.F8Measure.JLocalStored.Pins.ExactTail,
-  ``Rcic.Declarative.F8Measure.JLocalStored.Pins.mutant_drop_i_accepts,
-  ``Rcic.Declarative.F8Measure.JLocalStored.Pins.exact_drop_succ_refuses,
-  ``Rcic.Declarative.F8Measure.JLocalStored.Pins.alternativeStoredTy,
-  ``Rcic.Declarative.F8Measure.JLocalStored.Pins.SameStoredJudgment,
-  ``Rcic.Declarative.F8Measure.JLocalStored.Pins.ExactContextField,
-  ``Rcic.Declarative.F8Measure.JLocalStored.Pins.mutant_same_judgment_accepts,
-  ``Rcic.Declarative.F8Measure.JLocalStored.Pins.exact_context_field_refuses,
-  ``Rcic.Declarative.F8Measure.JLocalStored.Pins.fakeLeaves,
-  ``Rcic.Declarative.F8Measure.JLocalStored.Pins.MergedContextBudget,
-  ``Rcic.Declarative.F8Measure.JLocalStored.Pins.ExactOriginalBudget,
-  ``Rcic.Declarative.F8Measure.JLocalStored.Pins.mutant_context_leaf_accepts,
-  ``Rcic.Declarative.F8Measure.JLocalStored.Pins.exact_original_leaf_refuses,
-  ``Rcic.Declarative.F8Measure.JLocalStored.Pins.raw,
-  ``Rcic.Declarative.F8Measure.JLocalStored.Pins.canonicalRaw,
-  ``Rcic.Declarative.F8Measure.JLocalStored.Pins.actual_raw_constructor,
-  ``Rcic.Declarative.F8Measure.JLocalStored.Pins.rawEntries,
-  ``Rcic.Declarative.F8Measure.JLocalStored.Pins.unconnectedStar,
-  ``Rcic.Declarative.F8Measure.JLocalStored.Pins.WeakMaterialized,
-  ``Rcic.Declarative.F8Measure.JLocalStored.Pins.EnteredActualStar,
-  ``Rcic.Declarative.F8Measure.JLocalStored.Pins.mutant_detached_payload_accepts,
-  ``Rcic.Declarative.F8Measure.JLocalStored.Pins.exact_star_entry_refuses,
-  ``Rcic.Declarative.F8Measure.JLocalStored.Pins.parent,
-  ``Rcic.Declarative.F8Measure.JLocalStored.Pins.ambientRoots,
-  ``Rcic.Declarative.F8Measure.JLocalStored.Pins.boundaryTile,
-  ``Rcic.Declarative.F8Measure.JLocalStored.Pins.callerTile,
-  ``Rcic.Declarative.F8Measure.JLocalStored.Pins.ambientCallerTile,
-  ``Rcic.Declarative.F8Measure.JLocalStored.Pins.WeakCaller,
-  ``Rcic.Declarative.F8Measure.JLocalStored.Pins.ExactCaller,
-  ``Rcic.Declarative.F8Measure.JLocalStored.Pins.mutant_ambient_caller_accepts,
-  ``Rcic.Declarative.F8Measure.JLocalStored.Pins.exact_original_caller_refuses,
 
   -- BEGIN CODEX-PKG SEPALL SEAL
   -- piRow integration item 2: conditional separation composition and pins.
-  ``Rcic.Declarative.F8Measure.SepAllWf,
-  ``Rcic.Declarative.F8Measure.sepAll_of_sortUnique,
-  ``Rcic.Declarative.F8SepAllPins.emptyEnv_sortUnique,
-  ``Rcic.Declarative.F8SepAllPins.SepInput,
-  ``Rcic.Declarative.F8SepAllPins.sepInput_no_sort,
-  ``Rcic.Declarative.F8SepAllPins.closed_consumer,
-  ``Rcic.Declarative.F8SepAllPins.SepInputNoCtxWf,
-  ``Rcic.Declarative.F8SepAllPins.ctxWf_gate_mutant,
   -- END CODEX-PKG SEPALL SEAL
   -- JT-2 same-output adapters and exact fixed demand subdomains.
   -- RcicF8JSameOutput
@@ -25084,29 +23594,11 @@ def sealedTheorems : List Name := [
   -- sortRow rows 14/15/17 at tableOfI (`RcicSynSRClEut*`, glm-sr3): the raw
   -- `lamP`/`constCl` supplies are kernel-refuted at inhabited instances;
   -- restated walls `eut_case_wall`/`cl_case_wall`/`mixed_case_wall`.
-  ``Rcic.Syn.eutLamPorts_tableOfI_empty_refuted,
-  ``Rcic.Syn.eutLamP_tableOfI_empty_refuted,
-  ``Rcic.Syn.eut_case_wall_ident_sat,
-  ``Rcic.Syn.sr3hne,
-  ``Rcic.Syn.clConstPorts_tableOfI_empty_refuted,
-  ``Rcic.Syn.clConstP_tableOfI_empty_refuted,
-  ``Rcic.Syn.cl_case_wall_ident_sat,
-  ``Rcic.Syn.mixed_case_of_cl_eut_tableI,
-  ``Rcic.Syn.mixedField_iff_tableI,
   -- wall/fixture defs used by the refutations above (oaudit2 #7781: seal
   -- the public defs, not only the theorems): `sr3σ`/`sr3Mem`/`sr3hT₁`/`sr3hT₂`
   -- build the two legal `TyP.const` typings at a shared member; the
   -- `*_P_tableOfI` defs restate the closer premises; the `*_case_wall`
   -- telescopes are the exact restated walls as single named Props.
-  ``Rcic.Syn.sr3σ,
-  ``Rcic.Syn.sr3Mem,
-  ``Rcic.Syn.sr3hT₁,
-  ``Rcic.Syn.sr3hT₂,
-  ``Rcic.Syn.clConstP_tableOfI,
-  ``Rcic.Syn.cl_case_wall,
-  ``Rcic.Syn.eutLamP_tableOfI,
-  ``Rcic.Syn.eut_case_wall,
-  ``Rcic.Syn.mixed_case_wall,
   -- sortRow row 6 `es_iota_retained` at `tableOfI` (`RcicSynSRIotaRet`):
   -- table monotonicity of the residual structures, the
   -- `croot_of_iotaRule_mem` producers, inhabitation on the Nat fixture at
@@ -25182,6 +23674,7 @@ def sealedTheorems : List Name := [
   ``Rcic.Syn.srwkNode_nwk,
   ``Rcic.Syn.not_letE_occA_wk,
   -- END SR-LETE RcicSynSRLetE
+
 
   -- sortrow piRow §9.2/§9.4 (`RcicDTRowFields`;
   -- research/rcic/sortrow/PIROW_FAMAPPROW_FULL_ENVWFT.md via #7515):
@@ -26447,40 +24940,7 @@ def sealedTheorems : List Name := [
   ``Rcic.Declarative.NativeValleys.DecoRowsAudit.appSide_target_deco,
   ``Rcic.Declarative.NativeValleys.DecoRowsAudit.realign_argument_join,
   ``Rcic.Declarative.NativeValleys.DecoRowsAudit.row_app_app_same_deco,
-  ``Rcic.Declarative.NativeValleys.DecoStarAudit.Coherent,
-  ``Rcic.Declarative.NativeValleys.DecoStarAudit.CoherentDiamond,
-  ``Rcic.Declarative.NativeValleys.DecoStarAudit.confluenceOf,
-  ``Rcic.Declarative.NativeValleys.DecoStarAudit.StarJoin,
-  ``Rcic.Declarative.NativeValleys.DecoStarAudit.StarJoin.centre,
-  ``Rcic.Declarative.NativeValleys.DecoStarAudit.StarJoin.left,
-  ``Rcic.Declarative.NativeValleys.DecoStarAudit.StarJoin.leftCoherent,
-  ``Rcic.Declarative.NativeValleys.DecoStarAudit.StarJoin.leftSource,
-  ``Rcic.Declarative.NativeValleys.DecoStarAudit.StarJoin.mk,
-  ``Rcic.Declarative.NativeValleys.DecoStarAudit.StarJoin.right,
-  ``Rcic.Declarative.NativeValleys.DecoStarAudit.StarJoin.rightCoherent,
-  ``Rcic.Declarative.NativeValleys.DecoStarAudit.StarJoin.rightSource,
-  ``Rcic.Declarative.NativeValleys.DecoStarAudit.StarJoin.target,
-  ``Rcic.Declarative.NativeValleys.DecoStarAudit.StepJoin,
-  ``Rcic.Declarative.NativeValleys.DecoStarAudit.StepJoin.centre,
-  ``Rcic.Declarative.NativeValleys.DecoStarAudit.StepJoin.left,
-  ``Rcic.Declarative.NativeValleys.DecoStarAudit.StepJoin.leftSource,
-  ``Rcic.Declarative.NativeValleys.DecoStarAudit.StepJoin.mk,
-  ``Rcic.Declarative.NativeValleys.DecoStarAudit.StepJoin.right,
-  ``Rcic.Declarative.NativeValleys.DecoStarAudit.StepJoin.rightSource,
-  ``Rcic.Declarative.NativeValleys.DecoStarAudit.StepJoin.target,
-  ``Rcic.Declarative.NativeValleys.DecoStarAudit.StripJoin,
-  ``Rcic.Declarative.NativeValleys.DecoStarAudit.StripJoin.centre,
-  ``Rcic.Declarative.NativeValleys.DecoStarAudit.StripJoin.left,
-  ``Rcic.Declarative.NativeValleys.DecoStarAudit.StripJoin.leftCoherent,
-  ``Rcic.Declarative.NativeValleys.DecoStarAudit.StripJoin.leftSource,
-  ``Rcic.Declarative.NativeValleys.DecoStarAudit.StripJoin.mk,
-  ``Rcic.Declarative.NativeValleys.DecoStarAudit.StripJoin.right,
-  ``Rcic.Declarative.NativeValleys.DecoStarAudit.StripJoin.rightSource,
-  ``Rcic.Declarative.NativeValleys.DecoStarAudit.StripJoin.target,
-  ``Rcic.Declarative.NativeValleys.DecoStarAudit.stripOf,
   -- END CHATGPT NATIVE-DECORATED
-  ``Rcic.Declarative.NativeValleys.DecoIdentityAudit.identityStepOf_nonliteral,
-  ``Rcic.Declarative.NativeValleys.DecoIdentityAudit.coherentStarOf_nonliteral,
   -- END CHATGPT DECORATED-WALL SEAL
   -- BEGIN CHATGPT NATIVE-DECORATED (#7595, 98a4f12377; rebased by cc)
 
@@ -30272,7 +28732,6 @@ def sealedTheorems : List Name := [
   ``Rcic.Declarative.NativeValleys.PiModelIdealAudit.approxI_whRed,
   ``Rcic.Declarative.NativeValleys.PiModelIdealAudit.adequacyPiI_of_fundamentalTermI,
   -- END PIMODEL LRTERM (#7636)
-  ``Rcic.Declarative.NativeValleys.PiModelIdealAudit.piRow_of_fundamentalLRI,
   -- BEGIN PIMODEL K ETAK (#7634) (rebased by cc)
   ``Rcic.Declarative.NativeValleys.PiModelKAudit.irrLink_false,
   ``Rcic.Declarative.NativeValleys.PiModelKAudit.MajorStable,
@@ -33897,8 +32356,6 @@ def sealedTheorems : List Name := [
   ``Rcic.Declarative.NativeValleys.TypedModelAudit.covTyping2_cexType,
   ``Rcic.Declarative.NativeValleys.TypedModelAudit.memberRigidCov2_natSucc,
   -- END SWE-CTYCOV2 SEAL
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.covZeta_letSort1,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.modelSubstFactorT_witness_polyId,
   -- BEGIN GLM FUND SEAL (closure_claim = 0; 95 publics: RelSL variants + Tel/Beta/FinTransport/FundApp)
   ``Rcic.Declarative.NativeValleys.TypedModelAudit.apprT_rhoJunk_tpBindTy,
   ``Rcic.Declarative.NativeValleys.TypedModelAudit.apprT_rhoP_tpA,
@@ -34172,162 +32629,7 @@ def sealedTheorems : List Name := [
   ``Rcic.Declarative.NativePiCycleMeasure.no_alignment_in_earlier_environment,
   ``Rcic.Declarative.NativePiCycleMeasure.admitted_measure_obstruction,
   -- END RCIC_PI_CYCLE_AUDIT_ROOTS
-  ``Rcic.Declarative.NativeValleys.FamModelLRSAudit.link_eta_lam,
   -- BEGIN DEVIN-DESKTOP FUNDAMENTAL-CTX SEAL (seg 7-10, not yet landed)
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.TypedSubstT,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.ctxWfT_lookupValue_typed,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.ctxWfT_lookupType_sort,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.lookupType_of_lookupValue,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.typedSubstT_id,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.typedSubstT_up_decl,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.typedSubstT_upLet_decl,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.typedSubstT_up,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.typedSubstT_upLet,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.typedSubstT_up_conv,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.typedSubstT_upLet_conv,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.EnvMembersSubstTStable,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.envMembersSubstTStable_of_envClosed,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.IotaSubstT,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.substT_natExpand,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.hasTyT_substT,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.convT_substT,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.ConvSubstT,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.convSubstT_up_decl,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.convT_substT_pointwise,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.SpineClauseS,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.LRSCoreS,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.LRSS,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.lrSCoreS_bot,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.lrSCoreS_prop_iff,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.lrSCoreS_sort_iff,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.lrSCoreS_prop_iff_sort,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.lrSCoreS_spine_iff,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.ConvArgsSymmS,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.ConvArgsTransS,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.convArgsSymmS_emptyEnv,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.convArgsTransS_emptyEnv,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.spineClauseS_not_sort,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.spineClauseS_idx,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.spineClauseS_symm,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.spineClauseS_trans,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.lrSCoreS_sortIdx_irrel,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.IrrelAtS,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.SymmTmAtS,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.TransTmAtS,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.SymmTyAtS,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.TransTyAtS,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.symmTy_stepS,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.transTy_stepS,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.lrSCoreS_spine_notSort_of_tyIdx,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.irrel_stepS,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.symmTm_stepS,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.transTm_stepS,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.typedPERS,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.lrSCoreS_irrel,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.lrSCoreS_symm,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.lrSCoreS_trans,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.lrSCoreS_symm_tm,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.lrSCoreS_trans_tm,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.lrSCoreS_expand,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.lrSCoreS_expand_right,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.lrSCoreS_expand_red,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.lrSCoreS_expand_red_right,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.CtxModelT,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.CtxModelTLaws,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.ctxModelT_approxT,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.ctxModelTLaws_approxT,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.RelSubstAtT,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.RelSubstAtT.symm,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.RelSubstAtT.diagL,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.RelSubstAtT.diagR,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.FundTyAt,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.FundConvAt,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.FundamentalSAtT,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.fundT_bvar,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.fundT_sort,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.fundT_refl,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.relSubstAtT_cons,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.domRelations_of_ih,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.fundT_lam,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.fundT_pi,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.fundT_app,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.ModelBetaExpandT,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.fundT_beta,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.RecSpineTypedAt,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.recSpineTypedAt_append,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.recSpineTypedAt_of_hasTyT,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.recCall_typed_data,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.ConvArgsD,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.convArgsD_symm,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.convArgsD_append,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.convArgsD_of_spine,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.TyUniqT,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.convArgsD_trans_of_tyUniq,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.LevelCongrT,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.levelCongr_sort_instance,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.ConvChainBelow,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.ConvChainBelow.mono,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.convChainBelow_const,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.lrSCoreS_pi_components,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.lrSCoreS_pi_probe,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.approxT_of_redR,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.domAlign_of_chain,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.nodeDeclAlign_const_of_fundBelow,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.TyValidAt,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.CtxValidAt,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.CtxModelTLaws',
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.ctxModelTLaws'_approxT,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.EnvT.tail,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.EnvT.cons_tail,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.relSubstAtT_tail,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.RelSubstAtT.envs,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.tyValidAt_lift,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.ctxValidAt_cons,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.fundTyAt_sortIdx,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.IHBelow,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.TypingAt,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.ModelConvSoundAt,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.fundT_symm_strong,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.tyValidAt_inst,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.FundCases,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.fund_step,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.fund_strong,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.ctxValidAt_of_ctxWfT,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.fundamentalSAtT_of_cases,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.BackTransportT,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.backTransportT_zetaLocal,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.backTransportT_appHead_closure,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.domAlign_of_chain_backTransport,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.piProbeS_iff,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.piProbeS_symm,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.piProbeS_trans,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.piProbeS_right_diag,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.lrSCoreS_pi_self,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.LinkSeededBelow,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.domAlign_of_chain_probe,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.nodeDeclAlign_const_of_probeLinks,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.ArgTypedAt,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.ModelBetaExpandTyped,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.BackTransportBetaTyped,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.backTransportBetaTyped_of_expand,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.cexD,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.cexP,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.approxT_cexD_shape,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.not_argTypedAt_cex,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.modelBetaExpandTyped_excludes_cex,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.RelSubstIdT,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.fundConvAt_ctx_of_id,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.fundTyAt_ctx_of_id,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.EnvTypedAtT,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.HybridSeed,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.fundConvAt_hybrid_trans_shape,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.lrSCoreS_pi_probe_codom,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.convT_ctx_tyConvT,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.tyConvT_ctx_tyConvT,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.domCodAlign_of_chain_probe,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.RelSubstTypedAtT,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.TypingLemmaEnvT,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.typingAt_of_typedPackage,
   -- BEGIN DEVIN FUND-SWE-FSUB SEAL (closure_claim = 0)
   ``Rcic.Declarative.NativeValleys.TypedModelAudit.ModelLitInvT,
   ``Rcic.Declarative.NativeValleys.TypedModelAudit.ReadbackLitStepT,
@@ -34338,7 +32640,6 @@ def sealedTheorems : List Name := [
   ``Rcic.Declarative.NativeValleys.TypedModelAudit.fundT_lit,
   ``Rcic.Declarative.NativeValleys.TypedModelAudit.fundT_litConv,
   -- END DEVIN FUND-SWE-FSUB SEAL
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.envTypedAtT_bot,
   -- END DEVIN-DESKTOP FUNDAMENTAL-CTX SEAL
   -- BEGIN CHATGPT PI-PROBE ROUTE (#7723) (rebased by cc)
   ``Rcic.Declarative.NativeValleys.PiProbeAlgebraAudit.piProbe_reindexT,
@@ -34557,161 +32858,6 @@ def sealedTheorems : List Name := [
   ``Rcic.Declarative.NativeValleys.PiProbeModelBoundaryAudit.polyIdIrrConversion,
   ``Rcic.Declarative.NativeValleys.PiProbeModelBoundaryAudit.propExclusion_typed_nonvacuity,
   -- END CHATGPT PI-PROBE ROUTE (#7723)
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.TypedSubstT,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.ctxWfT_lookupValue_typed,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.ctxWfT_lookupType_sort,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.lookupType_of_lookupValue,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.typedSubstT_id,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.typedSubstT_up_decl,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.typedSubstT_upLet_decl,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.typedSubstT_up,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.typedSubstT_upLet,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.typedSubstT_up_conv,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.typedSubstT_upLet_conv,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.EnvMembersSubstTStable,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.envMembersSubstTStable_of_envClosed,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.IotaSubstT,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.substT_natExpand,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.hasTyT_substT,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.convT_substT,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.ConvSubstT,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.convSubstT_up_decl,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.convT_substT_pointwise,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.SpineClauseS,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.LRSCoreS,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.LRSS,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.lrSCoreS_bot,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.lrSCoreS_prop_iff,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.lrSCoreS_sort_iff,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.lrSCoreS_prop_iff_sort,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.lrSCoreS_spine_iff,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.ConvArgsSymmS,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.ConvArgsTransS,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.convArgsSymmS_emptyEnv,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.convArgsTransS_emptyEnv,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.spineClauseS_not_sort,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.spineClauseS_idx,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.spineClauseS_symm,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.spineClauseS_trans,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.lrSCoreS_sortIdx_irrel,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.IrrelAtS,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.SymmTmAtS,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.TransTmAtS,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.SymmTyAtS,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.TransTyAtS,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.symmTy_stepS,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.transTy_stepS,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.lrSCoreS_spine_notSort_of_tyIdx,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.irrel_stepS,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.symmTm_stepS,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.transTm_stepS,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.typedPERS,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.lrSCoreS_irrel,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.lrSCoreS_symm,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.lrSCoreS_trans,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.lrSCoreS_symm_tm,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.lrSCoreS_trans_tm,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.lrSCoreS_expand,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.lrSCoreS_expand_right,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.lrSCoreS_expand_red,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.lrSCoreS_expand_red_right,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.CtxModelT,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.CtxModelTLaws,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.ctxModelT_approxT,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.ctxModelTLaws_approxT,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.RelSubstAtT,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.RelSubstAtT.symm,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.RelSubstAtT.diagL,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.RelSubstAtT.diagR,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.FundTyAt,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.FundConvAt,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.FundamentalSAtT,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.fundT_bvar,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.fundT_sort,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.fundT_refl,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.relSubstAtT_cons,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.domRelations_of_ih,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.fundT_lam,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.fundT_pi,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.fundT_app,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.ModelBetaExpandT,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.fundT_beta,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.RecSpineTypedAt,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.recSpineTypedAt_append,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.recSpineTypedAt_of_hasTyT,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.recCall_typed_data,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.ConvArgsD,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.convArgsD_symm,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.convArgsD_append,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.convArgsD_of_spine,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.TyUniqT,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.convArgsD_trans_of_tyUniq,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.LevelCongrT,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.levelCongr_sort_instance,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.ConvChainBelow,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.ConvChainBelow.mono,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.convChainBelow_const,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.lrSCoreS_pi_components,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.lrSCoreS_pi_probe,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.approxT_of_redR,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.domAlign_of_chain,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.nodeDeclAlign_const_of_fundBelow,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.TyValidAt,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.CtxValidAt,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.CtxModelTLaws',
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.ctxModelTLaws'_approxT,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.EnvT.tail,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.EnvT.cons_tail,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.relSubstAtT_tail,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.RelSubstAtT.envs,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.tyValidAt_lift,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.ctxValidAt_cons,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.fundTyAt_sortIdx,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.IHBelow,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.TypingAt,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.ModelConvSoundAt,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.fundT_symm_strong,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.tyValidAt_inst,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.FundCases,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.fund_step,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.fund_strong,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.ctxValidAt_of_ctxWfT,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.fundamentalSAtT_of_cases,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.BackTransportT,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.backTransportT_zetaLocal,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.backTransportT_appHead_closure,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.domAlign_of_chain_backTransport,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.piProbeS_iff,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.piProbeS_symm,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.piProbeS_trans,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.piProbeS_right_diag,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.lrSCoreS_pi_self,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.LinkSeededBelow,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.domAlign_of_chain_probe,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.nodeDeclAlign_const_of_probeLinks,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.ArgTypedAt,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.ModelBetaExpandTyped,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.BackTransportBetaTyped,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.backTransportBetaTyped_of_expand,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.cexD,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.cexP,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.approxT_cexD_shape,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.not_argTypedAt_cex,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.modelBetaExpandTyped_excludes_cex,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.RelSubstIdT,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.fundConvAt_ctx_of_id,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.fundTyAt_ctx_of_id,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.EnvTypedAtT,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.HybridSeed,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.fundConvAt_hybrid_trans_shape,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.lrSCoreS_pi_probe_codom,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.convT_ctx_tyConvT,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.tyConvT_ctx_tyConvT,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.domCodAlign_of_chain_probe,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.RelSubstTypedAtT,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.TypingLemmaEnvT,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.typingAt_of_typedPackage,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.envTypedAtT_bot,
 
   -- BEGIN DEVIN-DESKTOP READBACK-CK (#7689) (rebased by cc)
   ``Rcic.Declarative.NativeValleys.ReadbackCKAudit.AppPropArgs,
@@ -35286,253 +33432,6 @@ def sealedTheorems : List Name := [
   ``Rcic.Declarative.NativeValleys.TypedModelAudit.not_approxT_beta_redex_cex,
   ``Rcic.Declarative.NativeValleys.TypedModelAudit.not_modelConvSoundAt_closed_beta,
   -- END #7731 symmTyping refutation record
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.TypingFin.ArgTypedFinAt,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.TypingFin.ModelBetaExpandTypedFin,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.TypingFin.argTypedFinAt_of_argTypedAt,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.TypingFin.not_argTypedFinAt_cex,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.TypingFin.modelBetaExpandTyped_of_fin,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.TypingFin.EnvTypedFinAtT,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.TypingFin.TypingLemmaEnvFinT,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.TypingFin.ArgTypedFinAtM,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.TypingFin.ModelBetaExpandTypedM,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.TypingFin.modelBetaExpandTypedM_iff_fin,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.TypingFin.ModelIotaStepT,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.TypingFin.ReadbackIotaStepT,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.TypingFin.readbackIotaStepT_whStepCtx,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.TypingFin.modelIotaStepT_of_iotaSoundT,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.TypingFin.sortCode_succ,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.TypingFin.cexPolyId,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.TypingFin.cexPolyIdTy,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.hasTyT_cexPolyId,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.polyIdDom1,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.polyIdWitness1,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.polyIdOut0,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.polyIdOut1,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.polyIdCpt0,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.polyIdCpt1,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.polyIdCpt01,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.tyCodeCT_polyIdDom1,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.not_isPropCT_polyIdDom1,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.ctyS_prop_sort,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.ctyS_sort_sort,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.ctyS_polyIdDom1_sort,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.ctyS_polyIdWitness1_polyIdDom1,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.approxT_polyIdOut0,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.approxT_polyIdOut1,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.approxT_cexPolyId_cpt0,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.approxT_cexPolyId_cpt1,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.approxT_cexPolyId_cpt01,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.not_ctyT_polyIdOut1_of_sub_sort,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.not_ctyS_polyIdOut1_of_sub_sort,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.not_elT_polyId_cpt01,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.not_joint_ctyS_polyId_cpt0_cpt1,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.not_argTypedFinAt_polyId,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.TypingFin.not_argTypedAt_polyId,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.not_typingLemmaT,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.not_typingLemmaEnvT,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.envTypedFinAtT_nil,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.not_typingLemmaEnvFinT,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.polyIdVarCtx,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.polyIdVarEnv,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.idOnVar,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.idOnVarTy,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.hasTyT_idOnVar,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.envTypedFinAtT_polyIdVarEnv,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.approxT_idOnVar_polyIdOut0,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.approxT_idOnVar_polyIdOut1,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.not_joint_ctyT_idOnVar,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.not_ctyT_spine_of_approxT_pi,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.not_elT_spine_pi,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.not_semEqT_eta_rigidConst,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.idSort1,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.idSort1Ty,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.idSort1TySort,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.letSort1Ctx,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.hasTyT_idSort1_bvar0,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.envTypedFinAtT_bot,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.approxT_idSort1_polyIdOut0,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.not_typingLemmaEnvFinT_letBinding,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.not_typingLemmaEnvFinT_via_letBinding,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.CTyCov,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.ctyCov_bot_inv,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.ctyCov_prop_inv,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.ctyCov_sort_inv,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.ctyCov_lam_inv,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.ctyCov_pi_inv,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.ctyCov_spine_inv,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.ctyCov_bot,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.ctyCov_of_ctyS,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.ctyCov_prop_bot,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.ctyCov_pi_mono_steps,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.ElTCov,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.elTCov_of_elT,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.elTCov_bot,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.not_ctyCov_spine_of_approxT_pi,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.not_elTCov_spine_pi,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.polyIdTyCod0,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.polyIdTyCod1,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.polyIdTyCpt01,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.approxT_polyIdTyCod0,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.approxT_polyIdTyCod1,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.approxT_cexPolyIdTy_cpt01,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.ctyS_polyIdOut1_polyIdTyCod1,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.not_isPropCT_polyIdTyCpt01,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.ctyCov_polyIdCpt01_polyIdTyCpt01,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.elTCov_polyId_cpt01,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.joint_ctyCov_polyId_cpt0_cpt1,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.relSubstAtT_cons_pointwise,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.TypingFin.ModelSubstFactorT,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.modelBetaExpandTypedM_of_substFactor,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.fundT_beta_pointwise,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.split_bot_list,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.CtxEnvM,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.ConvSoundEnvFinT,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.TypingLemmaEnvFinCtxT,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.IHBelowTypingFin,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.beta_expand_of_ih_and_modelBetaExpandTypedM,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.TypingFinCases,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.typingFin_step,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.typingFin_strong,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.typingLemmaEnvFin_and_convSound_of_cases,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.typingLemmaEnvFinT_of_cases,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.ctxModelT_botOnly,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.ctxModelTLaws'_botOnly,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.modelSubstFactorT_botOnly,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.modelBetaExpandTypedM_botOnly,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.modelIotaStepT_botOnly,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.typingFinCases_botOnly,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.typingLemmaEnvFinT_botOnly,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.EnvTypedCovAtT,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.TypingLemmaEnvCovT,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.ConvSoundEnvCovT,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.envTypedCovAtT_nil,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.envTypedCovAtT_cons_assumption,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.tyCodeCT_of_elTCov_sort,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.isPropCT_of_elTCov_sort_prop,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.eqN_zero_of_imax_eqN_zero,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.sortCode_v_prop_of_imax_prop,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.exists_cod_steps_of_lam_steps,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.covTyping_sort,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.covTyping_bvar,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.covTyping_pi,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.covTyping_lam,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.covTyping_lit,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.covTyping_conv,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.covConv_sorts,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.covConv_lit,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.covConv_irr,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.EnvT.updateAt,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.EnvT.le_updateAt_of_sub,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.EnvT.le_updateAt_cons,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.collect_fin_lists,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.approxT_fin_at,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.approxT_cons_iff_exists_demandT,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.covApproxT_subst0_iff,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.covModelSubstFactorT_approxT,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.modelBetaExpandTypedM_approxT,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.modelBetaExpandTypedFin_approxT,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.approxT_letE_iff,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.semEqT_letE_app_lam,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.envTypedCovAtT_cons_letBinding,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.covTyping_app,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.covTyping_letE,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.covConv_app,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.covConv_lam,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.covConv_pi,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.ExprEqN,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.exprEqN_refl,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.exprEqN_instantiateLevels,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.approxT_of_exprEqN,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.covConv_consts,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.approxT_delta_const_inv_cov,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.approxT_closedAt_env_cov,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.approxT_closed0_env_cov,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.covConv_delta,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.covConv_beta_fwd,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.covConv_zeta_fwd,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.cptT_eq_bot_or_ne_bot,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.covConv_beta_of_argTypedFinAt,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.covConv_zeta_of_argTypedFinAt,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.covConv_letE_of_zeta,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.approxT_idSort1Ty_polyIdDom1,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.elTCov_idSort1Ty_sort,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.envTypedCovAtT_letSort1Ctx,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.elTCov_polyIdOut0_bvar0_ctxEnvT,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.elTCov_idSort1_bvar0_ctxEnvT,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.letSort1,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.hasTyT_letSort1,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.convT_zeta_letSort1,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.semEqT_zeta_letSort1,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.elTCov_letSort1,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.letIdSort1,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.approxT_letIdSort1_polyIdOut0,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.elTCov_letIdSort1,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.IHBelowCov,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.CovModelCases,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.covTyping_step,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.covTyping_strong,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.typingLemmaEnvCovT_and_convSound_of_cases,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.covTyping_step_approxT,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.covTyping_strong_approxT,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.typingLemmaEnvCovT_and_convSound_of_cases_approxT,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.rigidConst_natEnvU_nat,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.not_propCtorT_natEnvU_nat,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.rigidConst_natEnvU_zero,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.not_propCtorT_natEnvU_zero,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.rigidConst_natEnvU_succ,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.not_propCtorT_natEnvU_succ,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.not_isPropCT_natEnvU_nat_spine,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.elT_natEnvU_nat,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.elTCov_natEnvU_nat,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.elT_natEnvU_zero,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.elTCov_natEnvU_zero,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.approxT_natSucc_spine,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.not_elTCov_natSucc_spine,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.not_semEqT_eta_natSucc,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.covNatSuccSchema,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.covWNatSucc,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.not_propFamilyS_covWNatSucc,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.instantiateLevels_natRecMemberU_mtype,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.elTCov_lam_singleton_pi_inv,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.covBadSpine,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.covBadHsCpt,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.covBadRecCpt,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.approxT_natRec_covBadRecCpt,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.not_elTCov_natRec_covBadRecCpt,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.not_elT_natRec_covBadRecCpt,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.covGoodMotiveCpt,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.covGoodHsCpt,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.covGoodRecCpt,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.approxT_natRec_covGoodRecCpt,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.ctyS_lam_singleton,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.not_isPropCT_pi_singleton,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.elT_natRec_covGoodRecCpt,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.elTCov_natRec_covGoodRecCpt,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.ConstCovClauseT,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.covTyping_const,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.elTCov_closed0_env,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.elT_closed0_env,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.groupMembersT_mtype_closed,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.envWfT_member_mtype_closed,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.ConstCovBotClauseT,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.constCovClauseT_iff_bot,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.MemberDeltaCovT,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.MemberRigidCovT,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.MemberRecCovT,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.constCovBotClauseT_of_arms,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.constCovClauseT_of_arms,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.hasTyT_natEnvU_nat,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.hasTyT_natEnvU_zero,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.hasTyT_natEnvU_succ,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.convT_eta_natSucc,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.hasTyT_natEnvU_rec,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.not_memberRigidCovT_natEnvU,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.not_memberRecCovT_natEnvU,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.not_constCovClauseT_natEnvU,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.not_constCovClauseT_natEnvU_via_rec,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.not_typingLemmaEnvCovT_natEnvU,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.not_typingLemmaEnvCovT_natEnvU_via_rec,
-  ``Rcic.Declarative.NativeValleys.TypedModelAudit.not_convSoundEnvCovT_natEnvU,
 
   -- BEGIN TBI-P3 RcicSynTableCongrI (TableWF congr+closed for ι rules, swe-esapp PART 3)
   ``Rcic.Syn.lvlEqList_refl,
@@ -35937,6 +33836,17 @@ def sealedTheorems : List Name := [
     ``Rcic.Syn.srDelta_agreeOn_zero_refuted
   ]
   -- END SR-DELTA-TABLEI
+  -- BEGIN SR-DELTA-ADMW RcicSynSRDeltaAdmW (row 5 es_delta: hag discharged at
+  -- Aw := admW; CL-only wall + calibrated field + fixture)
+  ++ [
+    ``Rcic.Syn.esDeltaCLWall,
+    ``Rcic.Syn.esDeltaKeptWall_of_clWall_admW,
+    ``Rcic.Syn.es_delta_kept_tableOfI_admW,
+    ``Rcic.Syn.es_delta_kept_tableOfI_pin_admW,
+    ``Rcic.Syn.srDeltaCLWall_fixture,
+    ``Rcic.Syn.srDeltaEsKept_tableOfI_admW_fixture
+  ]
+  -- END SR-DELTA-ADMW
   -- BEGIN RCIC_NATIVE_TYPED_MODEL_W4M_SEALED_ROOTS (devin/swe-wall4-model, closure_claim = 0)
   ++ [
     ``Rcic.Declarative.NativeValleys.TypedModelW4MAudit.ApproxTKR,
@@ -35962,6 +33872,7 @@ def sealedTheorems : List Name := [
     ``Rcic.Declarative.NativeValleys.TypedModelW4MAudit.ck2_adds_no_prop_at_blocked
   ]
   -- BEGIN LAND-UNION (seal names added by the landed PR; content-keyed union)
+  -- BEGIN GLM-SR1 INLINE SEALED ROOTS (classification + epsW repair candidate; closure_claim = 0)
   ++ [
     ``Rcic.Syn.wkInnerGo,
     ``Rcic.Syn.wkInnerDisp,
@@ -36053,6 +33964,7 @@ def sealedTheorems : List Name := [
     ``Rcic.Syn.eutLamPorts_lhom_fixtures_refuted
   ]
   -- BEGIN LAND-UNION (seal names added by the landed PR; content-keyed union)
+  -- BEGIN GLM-SR1 EPSW2 SEALED ROOTS (epsW blast radius: transfers + commutation + transports + wedge + zl tooth; closure_claim = 0)
   ++ [
     ``Rcic.Syn.NoWk,
     ``Rcic.Syn.epsW_eq_eps_noWk,
@@ -36340,6 +34252,34 @@ def sealedTheorems : List Name := [
     ``Rcic.Syn.eut_cctx_cctx_caseStepT,
     ``Rcic.Syn.cl_cctx_cctx_caseStepT
   ]
+  -- BEGIN LAND-UNION (seal names added by the landed PR; content-keyed union)
+  ++ [
+    ``Rcic.Syn.clAppPorts_of_iffs,
+    ``Rcic.Syn.clAppPorts_of_tagCoh,
+    ``Rcic.Syn.sr5PiFun,
+    ``Rcic.Syn.sr5Env,
+    ``Rcic.Syn.sr5Env_members0,
+    ``Rcic.Syn.sr5Env_members1,
+    ``Rcic.Syn.sr5Env_members2,
+    ``Rcic.Syn.sr5C00,
+    ``Rcic.Syn.sr5C10,
+    ``Rcic.Syn.sr5C00T,
+    ``Rcic.Syn.sr5C10T,
+    ``Rcic.Syn.sr5T₂,
+    ``Rcic.Syn.sr5T₂T,
+    ``Rcic.Syn.sr5hf₁,
+    ``Rcic.Syn.sr5D₂,
+    ``Rcic.Syn.sr5hv,
+    ``Rcic.Syn.sr5hvT,
+    ``Rcic.Syn.sr5hf₂,
+    ``Rcic.Syn.sr5ha,
+    ``Rcic.Syn.sr5_hf₁_eps,
+    ``Rcic.Syn.sr5_hf₂_eps,
+    ``Rcic.Syn.sr5_ha_eps,
+    ``Rcic.Syn.sr5_disp,
+    ``Rcic.Syn.sr5_appCl_sat
+  ]
+  -- END LAND-UNION
   -- END LAND-UNION
   -- END LAND-UNION
   -- END LAND-UNION
@@ -36349,6 +34289,610 @@ def sealedTheorems : List Name := [
   -- END LAND-UNION
   -- END LAND-UNION
   -- END RCIC_NATIVE_TYPED_MODEL_W4M_SEALED_ROOTS
+  -- BEGIN GLM-SR1 STEPW SEALED ROOTS (StepSuppliersW: the closer on epsW, boundary, rows 2/3/4; closure_claim = 0)
+  ++ [
+    ``Rcic.Syn.PBitW,
+    ``Rcic.Syn.GoalW,
+    ``Rcic.Syn.AnswerW,
+    ``Rcic.Syn.StepIHW,
+    ``Rcic.Syn.CaseStepW,
+    ``Rcic.Syn.StepW,
+    ``Rcic.Syn.ih_issueW,
+    ``Rcic.Syn.ih_localW,
+    ``Rcic.Syn.esW_refl,
+    ``Rcic.Syn.esW_symm,
+    ``Rcic.Syn.esW_trans,
+    ``Rcic.Syn.esW_tyConv,
+    ``Rcic.Syn.esW_irr_star,
+    ``Rcic.Syn.esW_sorts,
+    ``Rcic.Syn.esW_iota_proof_of_pbitWs,
+    ``Rcic.Syn.epsW_sort,
+    ``Rcic.Syn.reg_epsW_of_isSortOrPiHead,
+    ``Rcic.Syn.reg_epsW_sort_of_isSortOrPiHead,
+    ``Rcic.Syn.clW_reg_sort_of_isSortOrPiHead,
+    ``Rcic.Syn.sortCoh_of_eutW_clW,
+    ``Rcic.Syn.bitCoh_of_eutW_clW,
+    ``Rcic.Syn.cts_of_eutW_clW,
+    ``Rcic.Syn.StepSuppliersW,
+    ``Rcic.Syn.es_goalW_of_suppliers,
+    ``Rcic.Syn.head_goal_boundW,
+    ``Rcic.Syn.cts_goalW_of_ports,
+    ``Rcic.Syn.bitCoh_goalW_of_ports,
+    ``Rcic.Syn.head_goalW_of_ih,
+    ``Rcic.Syn.observation_goalW_of_demand,
+    ``Rcic.Syn.step_of_suppliersW,
+    ``Rcic.Syn.solve_of_stepW,
+    ``Rcic.Syn.BelowScopedW,
+    ``Rcic.Syn.AllBelowScopedW,
+    ``Rcic.Syn.allBelowScopedW_of_step,
+    ``Rcic.Syn.allBelowScopedW_of_suppliers,
+    ``Rcic.Syn.dispShape_can,
+    ``Rcic.Syn.es_of_allBelowScopedW,
+    ``Rcic.Syn.cl_of_allBelowScopedW,
+    ``Rcic.Syn.eut_of_allBelowScopedW,
+    ``Rcic.Syn.pbit_of_allBelowScopedW,
+    ``Rcic.Syn.TyCvP.AllCW,
+    ``Rcic.Syn.TyCvP.endpointsRC,
+    ``Rcic.Syn.esChain_of_allBelowScopedW,
+    ``Rcic.Syn.sortRow_of_allBelowScopedW,
+    ``Rcic.Syn.wkZetaCtxWfT,
+    ``Rcic.Syn.wkZetaScoped,
+    ``Rcic.Syn.wkZetaScoped_can,
+    ``Rcic.Syn.boundary_epsW_ne_eps,
+    ``Rcic.Syn.not_assumpPref_wkZetaNode,
+    ``Rcic.Syn.epsW_let_clause,
+    ``Rcic.Syn.epsW_lsub_node,
+    ``Rcic.Syn.letSub_epsW,
+    ``Rcic.Syn.esW_zeta,
+    ``Rcic.Syn.ZetaSurfaceClWallW,
+    ``Rcic.Syn.ZetaReductClWallW,
+    ``Rcic.Syn.zeta_caseStepW_of_port_cls,
+    ``Rcic.Syn.esW_zeta_field_of_walls,
+    ``Rcic.Syn.zetaLocal_issued_value_clW,
+    ``Rcic.Syn.ZetaLocalPortsW,
+    ``Rcic.Syn.zetaLocal_caseStepW_of_ports,
+    ``Rcic.Syn.ZetaLocalResConvWallRoutedW,
+    ``Rcic.Syn.zl_res_convW_canon,
+    ``Rcic.Syn.zl_routed_no_keep_at_zetaCtx,
+    ``Rcic.Syn.zetaLocal_issued_reg_pbW,
+    ``Rcic.Syn.esW_zetaLocal_field_portsW,
+    ``Rcic.Syn.ZetaLocalSurfaceClWallW,
+    ``Rcic.Syn.ZetaLocalRegOccWallW,
+    ``Rcic.Syn.esW_zetaLocal_field_of_walls,
+    ``Rcic.Syn.BetaBodyClWallW,
+    ``Rcic.Syn.BetaReductClWallW,
+    ``Rcic.Syn.BetaBodyTagWallW,
+    ``Rcic.Syn.beta_body_clW_fixture_holds,
+    ``Rcic.Syn.beta_reduct_clW_fixture_holds,
+    ``Rcic.Syn.wkInnerDisp_zero,
+    ``Rcic.Syn.epsW_wk_zero_liftIfKeep
+  ]
+  -- END GLM-SR1 STEPW SEALED ROOTS
+  -- BEGIN GLM-SR1 STEPW NOINLINE SEALED ROOTS (es_wk_keep in-range discharge; closure_claim = 0)
+  ++ [
+    ``Rcic.Syn.ctxP_disp_inline_letBinding,
+    ``Rcic.Syn.binderDisp_ne_inline,
+    ``Rcic.Syn.insertAt_letBinding_inv_lo,
+    ``Rcic.Syn.insertAt_letBinding_inv_hi,
+    ``Rcic.Syn.substRemove_letBinding_inv_lo,
+    ``Rcic.Syn.substRemove_getElem?_ge,
+    ``Rcic.Syn.instLvlsDecl_letBinding_inv,
+    ``Rcic.Syn.insertDisp_inline_lt,
+    ``Rcic.Syn.insertDisp_self_ne_inline,
+    ``Rcic.Syn.routedDisp_inline_letBinding,
+    ``Rcic.Syn.wkInnerGo_eq_removeAt_noInlineBelow,
+    ``Rcic.Syn.routedDisp_noInlineBelow_of_ap,
+    ``Rcic.Syn.wkInnerDisp_eq_removeAt_of_ap,
+    ``Rcic.Syn.wkInnerDisp_eq_removeAt_of_demand
+  ]
+  -- END GLM-SR1 STEPW NOINLINE SEALED ROOTS
+  -- BEGIN GLM-SR1 STEPW CLOSEDWF SEALED ROOTS (closedWf_enrichConvT boundary discharge; closure_claim = 0)
+  ++ [
+    ``Rcic.Syn.LetCtxConvP.ClosedWf,
+    ``Rcic.Syn.closedWf_betaLeftP,
+    ``Rcic.Syn.closedWf_trZeta,
+    ``Rcic.Syn.closedWf_appRightP,
+    ``Rcic.Syn.closedWf_lamRightP,
+    ``Rcic.Syn.closedWf_piRightP,
+    ``Rcic.Syn.closedWf_etaLam,
+    ``Rcic.Syn.closedWf_etaLeftP,
+    ``Rcic.Syn.closedWf_letSurfL,
+    ``Rcic.Syn.closedWf_letSurfR,
+    ``Rcic.Syn.closedWf_letRightP,
+    ``Rcic.Syn.closedWf_enrichConvT,
+    ``Rcic.Syn.closedWf_enrichTyConvT,
+    ``Rcic.Syn.closedWf_enrichTyConvT_of_envWfT,
+    ``Rcic.Syn.sortRow_of_allBelowScopedW_letCW
+  ]
+  -- END GLM-SR1 STEPW CLOSEDWF SEALED ROOTS
+  -- BEGIN GLM-SR1 STEPW LETCW SEALED ROOTS (let-slot walker ClosedWf-preservation; closure_claim = 0)
+  ++ [
+    ``Rcic.Syn.PStep.stepCW,
+    ``Rcic.Syn.stepsCW,
+    ``Rcic.Syn.stepsCW_nil,
+    ``Rcic.Syn.stepsCW_cons,
+    ``Rcic.Syn.stepsCW_tail,
+    ``Rcic.Syn.stepCW_shiftStep,
+    ``Rcic.Syn.stepsCW_shiftAll,
+    ``Rcic.Syn.PackL.CW,
+    ``Rcic.Syn.PackL.CW_nil,
+    ``Rcic.Syn.PackL.CW_wkCons,
+    ``Rcic.Syn.PackL.CW_esubCons,
+    ``Rcic.Syn.PackL.CW_lsubCons,
+    ``Rcic.Syn.PackL.CW_linstCons,
+    ``Rcic.Syn.PackL.CW_cctxCons,
+    ``Rcic.Syn.PackL.CW_under,
+    ``Rcic.Syn.closedWf_convChain,
+    ``Rcic.Syn.BHit.ClosedWf,
+    ``Rcic.Syn.bhit_closedWf_castTerm,
+    ``Rcic.Syn.retypeLetBVarSlot_closedWf,
+    ``Rcic.Syn.finishBvarL_closedWf,
+    ``Rcic.Syn.bwalkAtL_closedWf,
+    ``Rcic.Syn.tyAtLet_closedWf,
+    ``Rcic.Syn.tyCctxLetAt_closedWf,
+    ``Rcic.Syn.letCtxConvP_of_cvWalkHyp_closedWf,
+    ``Rcic.Syn.letCtxConvP_of_envWfT_closedWf,
+    ``Rcic.Syn.sortRow_of_allBelowScopedW_envWfT
+  ]
+  -- END GLM-SR1 STEPW LETCW SEALED ROOTS
+
+  -- END GLM-SR1 EPSW2 SEALED ROOTS
+  -- BEGIN GLM-SR2 ESW SEALED ROOTS (epsW + LevelHom re-measure layer; closure_claim = 0)
+  ++ [
+    ``Rcic.Syn.GoalW,
+    ``Rcic.Syn.CaseStepW,
+    ``Rcic.Syn.levelIsZero_congr_hom,
+    ``Rcic.Syn.sr2_σ_not_hom,
+    ``Rcic.Syn.lit_tooth_bit_hom,
+    ``Rcic.Syn.lit_tooth_pair_clw_hom,
+    ``Rcic.Syn.sr2w_zeroTyAss,
+    ``Rcic.Syn.sr2w_zeroEsub,
+    ``Rcic.Syn.sr2w_litEsub,
+    ``Rcic.Syn.lit_esub_epsW_inert,
+    ``Rcic.Syn.lit_esub_clw_id,
+    ``Rcic.Syn.litW_erasure_unique_wall,
+    ``Rcic.Syn.TransportHeadSortAtW,
+    ``Rcic.Syn.thsaW_ewk_of,
+    ``Rcic.Syn.thsaW_apply,
+    ``Rcic.Syn.sr2_σ2_not_hom,
+    ``Rcic.Syn.pi_tooth_bit_hom,
+    ``Rcic.Syn.pi_tooth_pair_clw_hom,
+    ``Rcic.Syn.piW_field_wall,
+    ``Rcic.Syn.thsaW_app_hclF,
+    ``Rcic.Syn.thsaW_app_hclA,
+    ``Rcic.Syn.thsaW_delta_hL,
+    ``Rcic.Syn.thsaW_delta_hB,
+    ``Rcic.Syn.thsaW_consts_hclL,
+    ``Rcic.Syn.thsaW_consts_hclR,
+    ``Rcic.Syn.appW_field_wall,
+    ``Rcic.Syn.deltaW_field_wall,
+    ``Rcic.Syn.constsW_field_wall
+  ]
+  -- END GLM-SR2 ESW SEALED ROOTS
+  -- BEGIN GLM-SR2 CLW SEALED ROOTS (typing-erasure coherence; closure_claim = 0)
+  ++ [
+    ``Rcic.Syn.TypingEpsCoherenceW,
+    ``Rcic.Syn.thsaW_of_coherence,
+    ``Rcic.Syn.zetaSurfaceClWallW_cone_of_coherence,
+    ``Rcic.Syn.zetaReductClWallW_cone_of_coherence,
+    ``Rcic.Syn.esW_zeta_field_of_coherence,
+    ``Rcic.Syn.zetaLocalSurfaceClWallW_cone_of_coherence,
+    ``Rcic.Syn.zetaLocalBvarSurface_epsW_resolve,
+    ``Rcic.Syn.CLWx,
+    ``Rcic.Syn.ClwBvarValueConeW,
+    ``Rcic.Syn.zetaLocalResConvWallRoutedW_of_clwBvarValue,
+    ``Rcic.Syn.clwBvarValueConeW_canon_routed,
+    ``Rcic.Syn.clwBvarValueConeW_canon,
+    ``Rcic.Syn.esW_zetaLocal_field_of_coherence,
+    ``Rcic.Syn.betaBodyClWallW_cone_of_coherence,
+    ``Rcic.Syn.betaReductClWallW_cone_of_coherence,
+    ``Rcic.Syn.ConvModStarIffW,
+    ``Rcic.Syn.betaBodyTagWallW_cone_of_coherence,
+    ``Rcic.Syn.litW_erasureConv_cone_of_coherence,
+    ``Rcic.Syn.constsW_clwLegs_of_coherence,
+    ``Rcic.Syn.deltaW_clwLegs_of_coherence,
+    ``Rcic.Syn.appW_clwLegs_of_coherence,
+    ``Rcic.Syn.piW_clwPorts_of_coherence,
+    ``Rcic.Syn.clw_convR,
+    ``Rcic.Syn.clw_convL_of,
+    ``Rcic.Syn.clw_ewk_of,
+    ``Rcic.Syn.clw_sort,
+    ``Rcic.Syn.clw_const_of_bit,
+    ``Rcic.Syn.clw_bvar_of_bit,
+    ``Rcic.Syn.clw_lit_of,
+    ``Rcic.Syn.ConvModPiCongrW,
+    ``Rcic.Syn.clw_pi_true,
+    ``Rcic.Syn.clw_pi_false,
+    ``Rcic.Syn.ConstUnivBitCohW,
+    ``Rcic.Syn.ConstSortLadderEqNW,
+    ``Rcic.Syn.constUnivBitCohW_of_ladderEqN,
+    ``Rcic.Syn.ConstSortLadderEqNWWf,
+    ``Rcic.Syn.TyPEraseW,
+    ``Rcic.Syn.InstEqNCongrW,
+    ``Rcic.Syn.ConvSubjectRetypeW,
+    ``Rcic.Syn.constSortLadderEqNWWf_of_coneRows,
+    ``Rcic.Syn.ZetaSlotAlignW,
+    ``Rcic.Syn.clwBvarValueConeW_of_align_coh
+  ]
+  -- END GLM-SR2 CLW SEALED ROOTS
+  -- BEGIN GLM-SR2 ALIGN SEALED ROOTS (row-4 slot alignment + row-1 env-prefix residual; closure_claim = 0)
+  ++ [
+    ``Rcic.Syn.resolve_ctxP_disp_lookupValue,
+    ``Rcic.Syn.ZetaSlotHeadUnwkW,
+    ``Rcic.Syn.ZetaSlotAlignEW,
+    ``Rcic.Syn.ZetaSlotWkArmW,
+    ``Rcic.Syn.ZetaSlotEsubArmW,
+    ``Rcic.Syn.ZetaSlotLinstArmW,
+    ``Rcic.Syn.ZetaSlotEwkArmW,
+    ``Rcic.Syn.zetaSlotAlignEW_of_residuals,
+    ``Rcic.Syn.EpsEpsWPairW,
+    ``Rcic.Syn.clwBvarValueConeW_of_alignE_pair,
+    ``Rcic.Syn.EpsWPrefixNormW,
+    ``Rcic.Syn.epsWPrefixNormW_onCone_inst,
+    ``Rcic.Syn.zetaSlotHeadUnwkW_onCone,
+    ``Rcic.Syn.zetaSlotWkArmW_onCone,
+    ``Rcic.Syn.zetaSlotEsubArmW_onCone,
+    ``Rcic.Syn.zetaSlotLinstArmW_onCone,
+    ``Rcic.Syn.zetaSlotEwkArmW_onCone,
+    ``Rcic.Syn.epsEpsWPairW_onCone
+  ]
+  -- END GLM-SR2 ALIGN SEALED ROOTS
+  -- BEGIN GLM-SR2 ISSUESSR SEALED ROOTS (issuance rows for the reduction-arm walls; closure_claim = 0)
+  ++ [
+    ``Rcic.Syn.IssuesSR,
+    ``Rcic.Syn.IssuesSR.hom,
+    ``Rcic.Syn.IssuesSR.routed,
+    ``Rcic.Syn.DemandSR,
+    ``Rcic.Syn.StepIHSR,
+    ``Rcic.Syn.CaseStepWSR,
+    ``Rcic.Syn.ih_issueSR,
+    ``Rcic.Syn.StepIHSR.toStepIHW,
+    ``Rcic.Syn.betaSRbody_before,
+    ``Rcic.Syn.betaSRreduct_before,
+    ``Rcic.Syn.zetaSRsurface_before,
+    ``Rcic.Syn.zetaSRreduct_before,
+    ``Rcic.Syn.zetaLocalSRsurface_before,
+    ``Rcic.Syn.litSRsurface_before,
+    ``Rcic.Syn.piSRsurfaceL_before,
+    ``Rcic.Syn.piSRsurfaceR_before_of,
+    ``Rcic.Syn.esW_zeta_fieldSR,
+    ``Rcic.Syn.litSRcl_edge,
+    ``Rcic.Syn.litSRsurface_epsW,
+    ``Rcic.Syn.esW_lit_fieldSR,
+    ``Rcic.Syn.esW_zetaLocal_fieldSR
+  ]
+  -- END GLM-SR2 ISSUESSR SEALED ROOTS
+  -- BEGIN GLM-SR2 MEAS SEALED ROOTS (cc 00:40Z measure lemmas + ConvModPiCongrW + W-assemblers; closure_claim = 0)
+  ++ [
+    ``Rcic.Syn.piDomain_H_wt_le,
+    ``Rcic.Syn.appSrc_wt_le,
+    ``Rcic.Syn.piSRsurfaceR_before,
+    ``Rcic.Syn.convModPiCongrW_of_tableClosed,
+    ``Rcic.Syn.convModPiCongrW_tableOfI,
+    ``Rcic.Syn.esW_beta_drop,
+    ``Rcic.Syn.esW_beta_rel,
+    ``Rcic.Syn.TyP.epsW_castS,
+    ``Rcic.Syn.TyP.epsW_castT,
+    ``Rcic.Syn.piLeftSurface_epsW,
+    ``Rcic.Syn.piRightSurfaceSrc_epsW,
+    ``Rcic.Syn.piRightSurface_epsW,
+    ``Rcic.Syn.esW_pi_of_congr
+  ]
+  -- END GLM-SR2 MEAS SEALED ROOTS
+  -- BEGIN GLM-SR2 REDEXAP SEALED ROOTS (readRedex preserves AssumpPref; closure_claim = 0)
+  ++ [
+    ``Rcic.Syn.LamRead.apBody,
+    ``Rcic.Syn.RedexRead.apBoth,
+    ``Rcic.Syn.LamRead.apBody_raise,
+    ``Rcic.Syn.RedexRead.apBoth_raise,
+    ``Rcic.Syn.assumptionPrefix_cons,
+    ``Rcic.Syn.pushLamWk_apBody,
+    ``Rcic.Syn.pushLamLinst_apBody,
+    ``Rcic.Syn.pushBodyEsub_ap,
+    ``Rcic.Syn.pushLamEsub_apBody,
+    ``Rcic.Syn.pushRedexWk_apBoth,
+    ``Rcic.Syn.pushRedexLinst_apBoth,
+    ``Rcic.Syn.pushRedexEsub_apBoth,
+    ``Rcic.Syn.redexOfApp_apBoth,
+    ``Rcic.Syn.lamRead_ap,
+    ``Rcic.Syn.redexRead_ap,
+    ``Rcic.Syn.redexRead_ap_yes
+  ]
+  -- BEGIN LAND-UNION (seal names added by the landed PR; content-keyed union)
+  ++ [
+    ``Rcic.Syn.perm_cl_esub_bvarR,
+    ``Rcic.Syn.perm_cl_esub_bvarL,
+    ``Rcic.Syn.lexDM_tyPair_esub_bvarR,
+    ``Rcic.Syn.lexDM_tyPair_esub_bvarL,
+    ``Rcic.Syn.goal_cl_esub_bvar_keep,
+    ``Rcic.Syn.goal_cl_esub_bvar_drop,
+    ``Rcic.Syn.bvarCollapseCL,
+    ``Rcic.Syn.cl_esub_bvar_drop_eps
+  ]
+  -- BEGIN LAND-UNION (seal names added by the landed PR; content-keyed union)
+  ++ [
+    ``Rcic.Syn.appCl_bitWall_fun,
+    ``Rcic.Syn.appCl_bitWall_arg,
+    ``Rcic.Syn.clAppPorts_of_bitWalls,
+    ``Rcic.Syn.appCl_hf_reg_lex_lt,
+    ``Rcic.Syn.appCl_ha_reg_lex_lt,
+    ``Rcic.Syn.appCl_hom_bitCoh,
+    ``Rcic.Syn.appCl_hom_bitCoh_goal,
+    ``Rcic.Syn.cl_pi_body_lex_lt,
+    ``Rcic.Syn.cl_pi_body_routed,
+    ``Rcic.Syn.clLetEPorts_shape_diag,
+    ``Rcic.Syn.cl_letE_body_lex_lt,
+    ``Rcic.Syn.cl_letE_body_drop_routed,
+    ``Rcic.Syn.cl_letE_body_inline_routed,
+    ``Rcic.Syn.IssuesCTP,
+    ``Rcic.Syn.DemandCTP,
+    ``Rcic.Syn.IssuesCTP.ap,
+    ``Rcic.Syn.IssuesCTP.hom,
+    ``Rcic.Syn.IssuesCTP.routed,
+    ``Rcic.Syn.DemandCTP.ap,
+    ``Rcic.Syn.DemandCTP.hom,
+    ``Rcic.Syn.DemandCTP.routed,
+    ``Rcic.Syn.StepIHTP,
+    ``Rcic.Syn.CaseStepCTP,
+    ``Rcic.Syn.ih_issueCTP,
+    ``Rcic.Syn.ih_localCTP,
+    ``Rcic.Syn.cl_pi_pi_caseStepCTP,
+    ``Rcic.Syn.cl_letE_letE_caseStepCTP
+  ]
+  -- BEGIN LAND-UNION (seal names added by the landed PR; content-keyed union)
+  ++ [
+    ``Rcic.Declarative.frame_shiftC,
+    ``Rcic.Declarative.instPrefix_image_bvar_idsC,
+    ``Rcic.Declarative.instPrefix_image_bvar_consumedC,
+    ``Rcic.Declarative.instOff_piC,
+    ``Rcic.Declarative.instPrefix_piC,
+    ``Rcic.Declarative.img_piC,
+    ``Rcic.Declarative.fieldBvars_succC,
+    ``Rcic.Declarative.instPrefix_stepC,
+    ``Rcic.Declarative.instPrefix_appC,
+    ``Rcic.Declarative.img_foldAppsC,
+    ``Rcic.Declarative.spine_img_constC,
+    ``Rcic.Declarative.recCallField_imgC,
+    ``Rcic.Declarative.idextC,
+    ``Rcic.Declarative.instOff_bvar_ltC,
+    ``Rcic.Declarative.instPrefix_idext_liftC,
+    ``Rcic.Declarative.instOff_constC,
+    ``Rcic.Declarative.instOff_appC,
+    ``Rcic.Declarative.instOff_lamC,
+    ``Rcic.Declarative.instOff_foldAppsC,
+    ``Rcic.Declarative.fieldBvars_map_constC,
+    ``Rcic.Declarative.fieldBvars_imgC,
+    ``Rcic.Declarative.telImgC,
+    ``Rcic.Declarative.telImg_lengthC,
+    ``Rcic.Declarative.img_lamTelescope_offC,
+    ``Rcic.Declarative.img_lamTelescopeC,
+    ``Rcic.Declarative.img_lift_entryC,
+    ``Rcic.Declarative.map_map_imgC,
+    ``Rcic.Declarative.instLevels_foldAppsC,
+    ``Rcic.Declarative.recCallFunS_imgC,
+    ``Rcic.Declarative.funRecArg_of_canonC,
+    ``Rcic.Declarative.WalkSuppliesC,
+    ``Rcic.Declarative.iotaArgs_agreeC,
+    ``Rcic.Declarative.Ann.preMajorBvars_map_img,
+    ``Rcic.Declarative.Ann.fieldBvars_map_img,
+    ``Rcic.Declarative.Ann.recPrefix_map_img,
+    ``Rcic.Declarative.Ann.iotaRhsOfS_eq_rhsArgsS_ctorFieldTelInst,
+    ``Rcic.Declarative.Ann.iotaRhsOfS_eq_rhsArgsS_ctorAfter,
+    ``Rcic.Declarative.Ann.derivedIotaUS_of_iotaFnA_frec,
+    ``Rcic.Declarative.Ann.FrecFiringGates,
+    ``Rcic.Declarative.Ann.iotaErasesTUA_frec,
+    ``Rcic.Declarative.Ann.iotaCorrTUA_frec
+  ]
+  -- BEGIN LAND-UNION (seal names added by the landed PR; content-keyed union)
+  ++ [
+    ``Rcic.Declarative.exists_telTypedT_of_policyPi,
+    ``Rcic.Declarative.telTypedT_of_eqN,
+    ``Rcic.Declarative.envAgreeBelow_extendEnv_self,
+    ``Rcic.Declarative.envAgreeBelow_extendEnv_foldl,
+    ``Rcic.Declarative.envAgreeBelow_groupEnvT_ctorScope,
+    ``Rcic.Declarative.CleanTelDataT,
+    ``Rcic.Declarative.telTypedT_of_agreeBelow,
+    ``Rcic.Declarative.exists_telTypedT_headerScope,
+    ``Rcic.Declarative.exists_telTypedT_headerScope_of_admission,
+    ``Rcic.Declarative.familyHeaderRetypingRemaining_of_aligned,
+    ``Rcic.Declarative.familyHeaderRetypingRemaining_of_clean,
+    ``Rcic.Declarative.familyHeaderRetypingRemaining_of_familyTypedT,
+    ``Rcic.Declarative.familyHeaderRetypingRemaining_iff,
+    ``Rcic.Declarative.exists_telTypedT_constructorScope,
+    ``Rcic.Declarative.exists_telTypedT_constructorScope_of_admission,
+    ``Rcic.Declarative.constructorRecordedRetypingRemaining_of_aligned,
+    ``Rcic.Declarative.constructorRecordedRetypingRemaining_of_clean,
+    ``Rcic.Declarative.constructorRecordedRetypingRemaining_of_ctorTypedT,
+    ``Rcic.Declarative.constructorRecordedRetypingRemaining_iff,
+    ``Rcic.Declarative.familyHeaderDomain_constsIn,
+    ``Rcic.Declarative.familyHeaderDomain_constsIn_of_extension,
+    ``Rcic.Declarative.constructorScope_domain_constsIn
+  ]
+  -- BEGIN LAND-UNION (seal names added by the landed PR; content-keyed union)
+  ++ [
+    ``Rcic.Declarative.Ann.ctorSpineN,
+    ``Rcic.Declarative.Ann.ctorMajorN,
+    ``Rcic.Declarative.Ann.iotaLhsOfN,
+    ``Rcic.Declarative.Ann.iotaRhsOfN,
+    ``Rcic.Declarative.Ann.derivedIotaN_unpack,
+    ``Rcic.Declarative.Ann.iotaGroupA_of_witnessN,
+    ``Rcic.Declarative.Ann.iotaFnA_of_witnessN,
+    ``Rcic.Declarative.Ann.witness_ctor_arityN,
+    ``Rcic.Declarative.Ann.envWfA_normTy_levels,
+    ``Rcic.Declarative.Ann.iotaFnA_of_derivedIotaN,
+    ``Rcic.Declarative.Ann.derivedIotaN_of_iotaFnA,
+    ``Rcic.Declarative.Ann.IotaErasesToN,
+    ``Rcic.Declarative.Ann.IotaErasesAN,
+    ``Rcic.Declarative.Ann.IotaAnnotatesAN,
+    ``Rcic.Declarative.Ann.iotaCorrN_of_envWfA,
+    ``Rcic.Declarative.Ann.iotaAnnotatesAN_of_envWfA,
+    ``Rcic.Declarative.Ann.iotaErasesAN_of_envWfA,
+    ``Rcic.Declarative.Ann.erase_hasTyAD,
+    ``Rcic.Declarative.Ann.erase_convAD,
+    ``Rcic.Declarative.Ann.erase_tyConvAD,
+    ``Rcic.Declarative.Ann.erase_hasTyAD_wf,
+    ``Rcic.Declarative.Ann.erase_convAD_wf,
+    ``Rcic.Declarative.Ann.copyRulesClosedTD,
+    ``Rcic.Declarative.Ann.hasTyTD_of_hasTyA,
+    ``Rcic.Declarative.Ann.convTD_of_convA,
+    ``Rcic.Declarative.Ann.tyConvTD_of_tyConvA,
+    ``Rcic.Declarative.Ann.convArgsTD_of_convArgsA,
+    ``Rcic.Declarative.Ann.ctxWfTD_of_ctxWfA,
+    ``Rcic.Declarative.Ann.annHasTyTD,
+    ``Rcic.Declarative.Ann.annConvTD,
+    ``Rcic.Declarative.Ann.annCtxWfTD,
+    ``Rcic.Declarative.Ann.annHasTyTD',
+    ``Rcic.Declarative.Ann.annCtxWfTD',
+    ``Rcic.Declarative.Ann.annConvTD',
+    ``Rcic.Declarative.Ann.TyConvTD.firstOf,
+    ``Rcic.Declarative.Ann.PiRowFieldD,
+    ``Rcic.Declarative.Ann.PiRowFieldD.of_typedRowsWfD,
+    ``Rcic.Declarative.Ann.iotaErasesAN_of_annEnvA,
+    ``Rcic.Declarative.Ann.hasTyTD_of_hasTyA_of_annEnvA,
+    ``Rcic.Declarative.Ann.convTD_of_convA_of_annEnvA,
+    ``Rcic.Declarative.Ann.tyConvTD_of_tyConvA_of_annEnvA,
+    ``Rcic.Declarative.Ann.convArgsTD_of_convArgsA_of_annEnvA,
+    ``Rcic.Declarative.Ann.hasTyTD_sort_of_convTD,
+    ``Rcic.Declarative.Ann.hasTyTD_sortRight_of_convTD,
+    ``Rcic.Declarative.Ann.convTD_of_tyConvTD_sort,
+    ``Rcic.Declarative.Ann.sortConvCharTD,
+    ``Rcic.Declarative.Ann.piConvInjTD,
+    ``Rcic.Declarative.Ann.famAppConvInjTD,
+    ``Rcic.Declarative.Ann.famAppConvInjTD_prop,
+    ``Rcic.Declarative.Ann.famAppConvInjTD_any,
+    ``Rcic.Declarative.Ann.sortConvCharTD',
+    ``Rcic.Declarative.Ann.piConvInjTD',
+    ``Rcic.Declarative.Ann.famAppConvInjTD',
+    ``Rcic.Declarative.Ann.famAppConvInjTD_prop',
+    ``Rcic.Declarative.Ann.famAppConvInjTD_any',
+    ``Rcic.Declarative.Ann.typedRowsWfD_of_annEnvA,
+    ``Rcic.Declarative.groupInScopeTD_of_groupInScopeT,
+    ``Rcic.Declarative.EnvWfT.InScopeD,
+    ``Rcic.Declarative.EnvWfT.inScopeD_of_inScope,
+    ``Rcic.Declarative.Ann.drCtorMemberAD,
+    ``Rcic.Declarative.Ann.drCtorMemberAD_normTy,
+    ``Rcic.Declarative.Ann.drCtorMemberAD_shapes,
+    ``Rcic.Declarative.Ann.drCtorMemberAD_kinds,
+    ``Rcic.Declarative.Ann.drCtorMemberAD_normTy_pi,
+    ``Rcic.Declarative.Ann.drCtorMemberAD_normTy_erase,
+    ``Rcic.Declarative.Ann.drCtorMemberAD_erase_peelPis,
+    ``Rcic.Declarative.Ann.drCtorMemberAD_analyzeFields,
+    ``Rcic.Declarative.Ann.drCtorMemberAD_fieldShapesE,
+    ``Rcic.Declarative.Ann.drCtorMemberAD_not_envNormEraseA,
+    ``Rcic.Declarative.drFieldTyTD,
+    ``Rcic.Declarative.drIdBodyTyTD,
+    ``Rcic.Declarative.drConvTD_delta,
+    ``Rcic.Declarative.drConvTD_beta,
+    ``Rcic.Declarative.drConvTD,
+    ``Rcic.Declarative.drCtorViewTD_drecD,
+    ``Rcic.Declarative.drCtorViewTD,
+    ``Rcic.Declarative.drCtorTD,
+    ``Rcic.Declarative.drRecTD,
+    ``Rcic.Declarative.drGroupInScopeTD,
+    ``Rcic.Declarative.drCtorTD_field_isDrecD,
+    ``Rcic.Declarative.drCtorTD_hsnd_fails,
+    ``Rcic.Declarative.drEnvWfT_inScopeD
+  ]
+  -- BEGIN LAND-UNION (seal names added by the landed PR; content-keyed union)
+  ++ [
+    ``Rcic.Syn.starEtaLHS,
+    ``Rcic.Syn.starEtaLHS_eq,
+    ``Rcic.Syn.starEtaLHS_ne_star,
+    ``Rcic.Syn.convModStarIff_eta,
+    ``Rcic.Syn.convModStarIffW_refuted,
+    ``Rcic.Syn.convModStarIffW_refuted_tableOfI,
+    ``Rcic.Syn.lvlEq_star_right,
+    ``Rcic.Syn.confluent_eStep_tableOfI,
+    ``Rcic.Syn.convE_pi_inv_tableOfI,
+    ``Rcic.Syn.convE_star_rstar_of_wf,
+    ``Rcic.Syn.convE_star_rstar_tableOfI,
+    ``Rcic.Syn.cl_star_reaches,
+    ``Rcic.Syn.EpsStarNormal,
+    ``Rcic.Syn.tag_iff_of_cl_epsStarNormal,
+    ``Rcic.Syn.appN_eq_star,
+    ``Rcic.Syn.croot_inv,
+    ``Rcic.Syn.croot_star_args_nil,
+    ``Rcic.Syn.croot_star_ctor_nil,
+    ``Rcic.Syn.DeltaStarEntry,
+    ``Rcic.Syn.StarEntryShape,
+    ``Rcic.Syn.eStep_star_root,
+    ``Rcic.Syn.rstar_star_last,
+    ``Rcic.Syn.rstar_star_entry,
+    ``Rcic.Syn.BetaStarEntryWall,
+    ``Rcic.Syn.EtaStarEntryWall,
+    ``Rcic.Syn.DeltaStarEntryWall,
+    ``Rcic.Syn.StarEntryWall,
+    ``Rcic.Syn.starEntryShape_ne_star,
+    ``Rcic.Syn.eStep_star_of_entry,
+    ``Rcic.Syn.epsStarNormal_iff_noEntry,
+    ``Rcic.Syn.tableOfI_source,
+    ``Rcic.Syn.deltaStarEntry_tableOfI,
+    ``Rcic.Syn.DeltaRhsStarWall,
+    ``Rcic.Syn.deltaStarEntryWall_tableOfI,
+    ``Rcic.Syn.IssuesCTB,
+    ``Rcic.Syn.issuesCTB_hom,
+    ``Rcic.Syn.issuesCTB_routed,
+    ``Rcic.Syn.beta_body_cl_ap,
+    ``Rcic.Syn.beta_body_cl_before,
+    ``Rcic.Syn.RedexBodyAPWall,
+    ``Rcic.Syn.removeAt_length_ge,
+    ``Rcic.Syn.removeAt_length_le,
+    ``Rcic.Syn.routedDisp_length_ge,
+    ``Rcic.Syn.wk_noOp_outOfRange,
+    ``Rcic.Syn.scopedCtx_can_length,
+    ``Rcic.Syn.wk_canonicalDisp_notKeep,
+    ``Rcic.Syn.wkInnerDisp_eq_removeAt_canonical,
+    ``Rcic.Syn.resolve_keep_slot,
+    ``Rcic.Syn.countKeep_take_mono_keep,
+    ``Rcic.Syn.inst_star_eq_of_closedAt,
+    ``Rcic.Syn.wkInnerGo_eq_removeAt_of_closedAt,
+    ``Rcic.Syn.wkInnerDisp_eq_removeAt_of_closedAt,
+    ``Rcic.Syn.removeAt_eq_of_ge,
+    ``Rcic.Syn.removeAt_length_of_lt,
+    ``Rcic.Syn.routedDisp_wk_witness,
+    ``Rcic.Syn.mem_of_list_tail,
+    ``Rcic.Syn.letBinding_mem_insertAt,
+    ``Rcic.Syn.letBinding_mem_substRemove,
+    ``Rcic.Syn.letBinding_mem_instLvlsCtx,
+    ``Rcic.Syn.issues_letTail,
+    ``Rcic.Syn.wk_noOp_blocked_of_let,
+    ``Rcic.Syn.demand_surplus_wk,
+    ``Rcic.Syn.srPropTy,
+    ``Rcic.Syn.srPropMember,
+    ``Rcic.Syn.srPropEnv,
+    ``Rcic.Syn.srPropDefMember,
+    ``Rcic.Syn.srPropDefEnv,
+    ``Rcic.Syn.srPropTy_ty,
+    ``Rcic.Syn.srPropBodyTy,
+    ``Rcic.Syn.srPropEnvWf,
+    ``Rcic.Syn.srPropDefEnvWf,
+    ``Rcic.Syn.srPropDef_rhs_star,
+    ``Rcic.Syn.deltaRhsStarWall_refuted,
+    ``Rcic.Syn.DeltaSlotBitWall,
+    ``Rcic.Syn.ReductClReadWall,
+    ``Rcic.Syn.bGot_Aarg,
+    ``Rcic.Syn.bGot_hbody_eps_keep,
+    ``Rcic.Syn.bGot_harg_eps,
+    ``Rcic.Syn.reductClRead_wedge,
+    ``Rcic.Syn.reductClReadWall_at_wedge,
+    ``Rcic.Syn.bApp_assumpPref,
+    ``Rcic.Syn.bDl_not_assumpPref,
+    ``Rcic.Syn.bApp_read_isYes,
+    ``Rcic.Syn.bAppGot,
+    ``Rcic.Syn.bApp_hr,
+    ``Rcic.Syn.bAppGot_hbody_assumpPref,
+    ``Rcic.Syn.redexBodyAP_bApp,
+    ``Rcic.Syn.redexBodyAP_bDl,
+    ``Rcic.Syn.redexBodyAPWall_at_bApp
+  ]
+  -- END LAND-UNION
+  -- END LAND-UNION
+  -- END LAND-UNION
+  -- END LAND-UNION
+  -- END LAND-UNION
+  -- END LAND-UNION
+  -- END GLM-SR2 REDEXAP SEALED ROOTS
+  -- END GLM-SR1 INLINE SEALED ROOTS
 
 /-- R-Retire: names whose statements cannot be
 re-proved over a replaced object. Text kept under
@@ -36882,8 +35426,6 @@ run_cmd do
 #print axioms Rcic.Syn.hasTyT_foldApps_prefix_pi
 #print axioms Rcic.Syn.famApp_saturated_of_piRow_scoped
 -- END PIROW-E-SATURATION RcicPiRowSaturation
-#print axioms Rcic.Syn.es_zeta_field
-#print axioms Rcic.Syn.es_zetaLocal_field
 -- END p-scmbridge RcicSynStepZetaField
 -- BEGIN SR-ZETA RcicSynClosedZeta AXIOMS
 #print axioms Rcic.Syn.zetaLocal_conv_reg_occ
@@ -37422,17 +35964,6 @@ end Rcic.FoundationSeal
 #print axioms Rcic.Syn.CleutWit.eutLetPorts_sat
 #print axioms Rcic.Syn.CleutWit.eutConstPorts_sat
 -- END SWE-CLEUT RcicSynClosedCleut AXIOM QUERIES
-#print axioms Rcic.Syn.buildTableSyntax
-#print axioms Rcic.Syn.tableOf
-#print axioms Rcic.Syn.head_mem_build
-#print axioms Rcic.Syn.major_none_tableOf
-#print axioms Rcic.Syn.tableWF_build
-#print axioms Rcic.Syn.tableOf_congr
-#print axioms Rcic.Syn.tableOf_closed
-#print axioms Rcic.Syn.tableOf_rigid
-#print axioms Rcic.Syn.tableOf_bare_unique
-#print axioms Rcic.Syn.tableOf_ctor_disjoint
-#print axioms Rcic.Syn.tableOf_bare_nullary
 -- BEGIN DEVIN-BELOW-B RcicSynPbBvarFrame
 #print axioms Rcic.Syn.pb_bvar_bitCoh_before_frame
 #print axioms Rcic.Syn.pb_issued_bvar_bitCoh_frame
@@ -37512,181 +36043,10 @@ end Rcic.FoundationSeal
 #print axioms Rcic.Syn.es_app_field_closed_fixture
 -- END SR-ESAPP RcicSynClosedEsapp
 -- BEGIN CHATGPT STEP-TRANSFER AXIOM QUERIES
-#print axioms Rcic.Declarative.NativeValleys.StepTransferRowsAudit.coherent_trans
-#print axioms Rcic.Declarative.NativeValleys.StepTransferRowsAudit.coherent_reindex
-#print axioms Rcic.Declarative.NativeValleys.StepTransferRowsAudit.expansionStepOf_typing
-#print axioms Rcic.Declarative.NativeValleys.StepTransferRowsAudit.literalStarOf_typing
-#print axioms Rcic.Declarative.NativeValleys.StepTransferAudit.coherentStepOf_typing
-#print axioms Rcic.Declarative.NativeValleys.StepTransferAudit.coherentStarOf_typing
-#print axioms Rcic.Declarative.NativeValleys.StepTransferAudit.confluenceOf_coherentDiamond
-#print axioms Rcic.Declarative.NativeValleys.StepTransferProducerAudit.StarConfluence
-#print axioms Rcic.Declarative.NativeValleys.StepTransferProducerAudit.valleyTrans_of_confluence
-#print axioms Rcic.Declarative.NativeValleys.StepTransferProducerAudit.valleyOf_context_confluence
-#print axioms Rcic.Declarative.NativeValleys.StepTransferProducerAudit.valleyOf_confluence
-#print axioms Rcic.Declarative.NativeValleys.StepTransferProducerAudit.valleyOf_coherentDiamond
-#print axioms Rcic.Declarative.NativeValleys.StepTransferProducerAudit.nativeConvValleys_of_coherentDiamond
-#print axioms Rcic.Declarative.NativeValleys.StepTransferCounterexample.admitted_single_step_transfer_false
-#print axioms Rcic.Declarative.NativeValleys.StepTransferCounterexample.admitted_coherent_transfer_survives
 -- END CHATGPT STEP-TRANSFER AXIOM QUERIES
 -- BEGIN DEVIN-FCD COHERENT-DIAMOND AXIOM QUERIES
-#print axioms Rcic.Declarative.NativeValleys.ProofLeaf
-#print axioms Rcic.Declarative.NativeValleys.ProofLeaf.mk
-#print axioms Rcic.Declarative.NativeValleys.ProofLeaf.hT
-#print axioms Rcic.Declarative.NativeValleys.ProofLeaf.hp
-#print axioms Rcic.Declarative.NativeValleys.ProofLeaf.hq
-#print axioms Rcic.Declarative.NativeValleys.proofLeafIface
-#print axioms Rcic.Declarative.NativeValleys.ProofLeafAudit.typed_ofIrr
-#print axioms Rcic.Declarative.NativeValleys.ProofLeafAudit.irrDeco
-#print axioms Rcic.Declarative.NativeValleys.ProofLeafAudit.stepDeco_irr
-#print axioms Rcic.Declarative.NativeValleys.ProofLeafAudit.lift
-#print axioms Rcic.Declarative.NativeValleys.ProofLeafAudit.liftDeco
-#print axioms Rcic.Declarative.NativeValleys.ProofLeafAudit.ctx
-#print axioms Rcic.Declarative.NativeValleys.ProofLeafAudit.ctxDeco
-#print axioms Rcic.Declarative.NativeValleys.ProofLeafAudit.StepDecoTransferT
-#print axioms Rcic.Declarative.NativeValleys.ProofLeafAudit.stepDecoTransferT_of_transfer
-#print axioms Rcic.Declarative.NativeValleys.ProofLeafAudit.cdiamond_of_cdiamondD_transferT
-#print axioms Rcic.Declarative.NativeValleys.ProofLeafAudit.stepDecoTransferT_of_propIndex
-#print axioms Rcic.Declarative.NativeValleys.ProofLeafAudit.peelApp
-#print axioms Rcic.Declarative.NativeValleys.ProofLeafAudit.peelLam
-#print axioms Rcic.Declarative.NativeValleys.ProofLeafAudit.peelPi
-#print axioms Rcic.Declarative.NativeValleys.ProofLeafAudit.peelLetE
-#print axioms Rcic.Declarative.NativeValleys.ProofLeafAudit.represent
-#print axioms Rcic.Declarative.NativeValleys.ProofLeafAudit.transferCore
-#print axioms Rcic.Declarative.NativeValleys.ProofLeafAudit.stepDecoTransferT_proofLeaf
-#print axioms Rcic.Declarative.NativeValleys.ProofLeafAudit.cdiamond_of_cdiamondD_proofLeaf
-#print axioms Rcic.Declarative.NativeValleys.LeafJoinAudit.StepJoinL
-#print axioms Rcic.Declarative.NativeValleys.LeafJoinAudit.StepJoinL.mk
-#print axioms Rcic.Declarative.NativeValleys.LeafJoinAudit.StepJoinL.centre
-#print axioms Rcic.Declarative.NativeValleys.LeafJoinAudit.StepJoinL.left
-#print axioms Rcic.Declarative.NativeValleys.LeafJoinAudit.StepJoinL.right
-#print axioms Rcic.Declarative.NativeValleys.LeafJoinAudit.StepJoinL.leftCoherent
-#print axioms Rcic.Declarative.NativeValleys.LeafJoinAudit.StepJoinL.leftSource
-#print axioms Rcic.Declarative.NativeValleys.LeafJoinAudit.StepJoinL.rightSource
-#print axioms Rcic.Declarative.NativeValleys.LeafJoinAudit.StepJoinL.target
-#print axioms Rcic.Declarative.NativeValleys.LeafJoinAudit.StepJoinL.ofStepJoin
-#print axioms Rcic.Declarative.NativeValleys.LeafJoinAudit.CoherentDiamondL
-#print axioms Rcic.Declarative.NativeValleys.LeafJoinAudit.coherentDiamondL_of_coherentDiamond
-#print axioms Rcic.Declarative.NativeValleys.LeafJoinAudit.stripOfL
-#print axioms Rcic.Declarative.NativeValleys.LeafJoinAudit.confluenceOfL
-#print axioms Rcic.Declarative.NativeValleys.LeafJoinAudit.stepJoin_of_propIndex
-#print axioms Rcic.Declarative.NativeValleys.LeafJoinAudit.coherentDiamond_propIndex
-#print axioms Rcic.Declarative.NativeValleys.LeafJoinAudit.stepJoin_peq_left
-#print axioms Rcic.Declarative.NativeValleys.LeafJoinAudit.stepJoin_peq_right
-#print axioms Rcic.Declarative.NativeValleys.LeafJoinAudit.etaLeafRevLeaf
-#print axioms Rcic.Declarative.NativeValleys.LeafJoinAudit.etaLeafRevLeafConv
-#print axioms Rcic.Declarative.NativeValleys.LeafJoinAudit.etaLeafRevInnerStep
-#print axioms Rcic.Declarative.NativeValleys.LeafJoinAudit.etaLeafRevInnerConv
-#print axioms Rcic.Declarative.NativeValleys.LeafJoinAudit.etaLeafRevInnerCert
-#print axioms Rcic.Declarative.NativeValleys.LeafJoinAudit.etaLeafRevBodyStep
-#print axioms Rcic.Declarative.NativeValleys.LeafJoinAudit.etaLeafRevBodyConv
-#print axioms Rcic.Declarative.NativeValleys.LeafJoinAudit.etaLeafRevBodyCert
-#print axioms Rcic.Declarative.NativeValleys.LeafJoinAudit.etaLeafRevLamStep
-#print axioms Rcic.Declarative.NativeValleys.LeafJoinAudit.etaLeafRevLamCert
-#print axioms Rcic.Declarative.NativeValleys.LeafJoinAudit.etaLeafRevStep
-#print axioms Rcic.Declarative.NativeValleys.LeafJoinAudit.etaLeafEtaCStep
-#print axioms Rcic.Declarative.NativeValleys.LeafJoinAudit.etaLeafFRefl
-#print axioms Rcic.Declarative.NativeValleys.LeafJoinAudit.etaLeaf_stepJoinL
-#print axioms Rcic.Declarative.NativeValleys.LeafJoinAudit.appVarStep_target'
-#print axioms Rcic.Declarative.NativeValleys.LeafJoinAudit.appVarStar_target
-#print axioms Rcic.Declarative.NativeValleys.LeafJoinAudit.coherentDiamondL_false_of_notProof
-#print axioms Rcic.Declarative.NativeValleys.LeafJoinAudit.cdiamondD_false_of_notProof
-#print axioms Rcic.Declarative.NativeValleys.LeafJoinAudit.PureLeaf
-#print axioms Rcic.Declarative.NativeValleys.LeafJoinAudit.LeafStar
-#print axioms Rcic.Declarative.NativeValleys.LeafJoinAudit.LeafAdjJoin
-#print axioms Rcic.Declarative.NativeValleys.LeafJoinAudit.LeafAdjJoin.mk
-#print axioms Rcic.Declarative.NativeValleys.LeafJoinAudit.LeafAdjJoin.centre
-#print axioms Rcic.Declarative.NativeValleys.LeafJoinAudit.LeafAdjJoin.dAdj
-#print axioms Rcic.Declarative.NativeValleys.LeafJoinAudit.LeafAdjJoin.eAdj
-#print axioms Rcic.Declarative.NativeValleys.LeafJoinAudit.LeafAdjJoin.leftAdj
-#print axioms Rcic.Declarative.NativeValleys.LeafJoinAudit.LeafAdjJoin.rightAdj
-#print axioms Rcic.Declarative.NativeValleys.LeafJoinAudit.LeafAdjJoin.leftAdjLeaf
-#print axioms Rcic.Declarative.NativeValleys.LeafJoinAudit.LeafAdjJoin.rightAdjLeaf
-#print axioms Rcic.Declarative.NativeValleys.LeafJoinAudit.LeafAdjJoin.leftAdjCoherent
-#print axioms Rcic.Declarative.NativeValleys.LeafJoinAudit.LeafAdjJoin.rightAdjCoherent
-#print axioms Rcic.Declarative.NativeValleys.LeafJoinAudit.LeafAdjJoin.left
-#print axioms Rcic.Declarative.NativeValleys.LeafJoinAudit.LeafAdjJoin.right
-#print axioms Rcic.Declarative.NativeValleys.LeafJoinAudit.LeafAdjJoin.leftSource
-#print axioms Rcic.Declarative.NativeValleys.LeafJoinAudit.LeafAdjJoin.rightSource
-#print axioms Rcic.Declarative.NativeValleys.LeafJoinAudit.LeafAdjJoin.leftAdjInterface
-#print axioms Rcic.Declarative.NativeValleys.LeafJoinAudit.LeafAdjJoin.rightAdjInterface
-#print axioms Rcic.Declarative.NativeValleys.LeafJoinAudit.LeafAdjJoin.target
-#print axioms Rcic.Declarative.NativeValleys.LeafJoinAudit.CoherentDiamondAdj
-#print axioms Rcic.Declarative.NativeValleys.LeafJoinAudit.etaLeafRevLamStep_pureLeaf
-#print axioms Rcic.Declarative.NativeValleys.LeafJoinAudit.etaLeaf_leafAdjJoin
-#print axioms Rcic.Declarative.NativeValleys.LeafJoinAudit.etaLeaf_leafAdjJoin_symm
-#print axioms Rcic.Declarative.NativeValleys.IotaDecoAudit.IotaReductTyping
-#print axioms Rcic.Declarative.NativeValleys.IotaDecoAudit.IotaReductTyping.mk
-#print axioms Rcic.Declarative.NativeValleys.IotaDecoAudit.IotaReductTyping.ty
-#print axioms Rcic.Declarative.NativeValleys.IotaDecoAudit.IotaReductTyping.deco
-#print axioms Rcic.Declarative.NativeValleys.IotaDecoAudit.IotaLegD
-#print axioms Rcic.Declarative.NativeValleys.IotaDecoAudit.IotaRefireD
-#print axioms Rcic.Declarative.NativeValleys.IotaDecoAudit.IotaLegD.reindex
-#print axioms Rcic.Declarative.NativeValleys.IotaDecoAudit.iotaCoreD
-#print axioms Rcic.Declarative.NativeValleys.IotaDecoAudit.stepJoinL_iota_iota
-#print axioms Rcic.Declarative.NativeValleys.IotaDecoAudit.LiteralRedecoration
-#print axioms Rcic.Declarative.NativeValleys.IotaDecoAudit.identityStepOf_literalRedecoration
 -- END DEVIN-FCD COHERENT-DIAMOND AXIOM QUERIES
 -- BEGIN DEVIN-FCD2 PIINJ-LEAFPEAK AXIOM QUERIES
-#print axioms Rcic.Declarative.NativeValleys.PiInjConfluenceAudit.cvalley_of_tyConvT_of_confluence
-#print axioms Rcic.Declarative.NativeValleys.PiInjConfluenceAudit.convT_sort_inv_of_confluence
-#print axioms Rcic.Declarative.NativeValleys.PiInjConfluenceAudit.convT_pi_inv_of_confluence
-#print axioms Rcic.Declarative.NativeValleys.PiInjConfluenceAudit.sortCoh_of_confluence_sortRetype
-#print axioms Rcic.Declarative.NativeValleys.PiInjConfluenceAudit.piInj_of_confluence_sortRetype
-#print axioms Rcic.Declarative.NativeValleys.PiInjConfluenceAudit.piInj_of_confluence_sortUniq
-#print axioms Rcic.Declarative.NativeValleys.PiInjConfluenceAudit.piInj_of_coherentDiamond_sortUniq
-#print axioms Rcic.Declarative.NativeValleys.PiInjConfluenceAudit.uniq_of_confluence_sortUniq
-#print axioms Rcic.Declarative.NativeValleys.LeafPeakAudit.LeafPeakJoin
-#print axioms Rcic.Declarative.NativeValleys.LeafPeakAudit.LeafPeakJoin.mk
-#print axioms Rcic.Declarative.NativeValleys.LeafPeakAudit.LeafPeakJoin.centre
-#print axioms Rcic.Declarative.NativeValleys.LeafPeakAudit.LeafPeakJoin.dAdj
-#print axioms Rcic.Declarative.NativeValleys.LeafPeakAudit.LeafPeakJoin.eAdj
-#print axioms Rcic.Declarative.NativeValleys.LeafPeakAudit.LeafPeakJoin.leftAdj
-#print axioms Rcic.Declarative.NativeValleys.LeafPeakAudit.LeafPeakJoin.rightAdj
-#print axioms Rcic.Declarative.NativeValleys.LeafPeakAudit.LeafPeakJoin.leftAdjLeaf
-#print axioms Rcic.Declarative.NativeValleys.LeafPeakAudit.LeafPeakJoin.rightAdjLeaf
-#print axioms Rcic.Declarative.NativeValleys.LeafPeakAudit.LeafPeakJoin.leftAdjCoherent
-#print axioms Rcic.Declarative.NativeValleys.LeafPeakAudit.LeafPeakJoin.rightAdjCoherent
-#print axioms Rcic.Declarative.NativeValleys.LeafPeakAudit.LeafPeakJoin.left
-#print axioms Rcic.Declarative.NativeValleys.LeafPeakAudit.LeafPeakJoin.right
-#print axioms Rcic.Declarative.NativeValleys.LeafPeakAudit.LeafPeakJoin.leftSource
-#print axioms Rcic.Declarative.NativeValleys.LeafPeakAudit.LeafPeakJoin.rightSource
-#print axioms Rcic.Declarative.NativeValleys.LeafPeakAudit.LeafPeakJoin.leftAdjInterface
-#print axioms Rcic.Declarative.NativeValleys.LeafPeakAudit.LeafPeakJoin.rightAdjInterface
-#print axioms Rcic.Declarative.NativeValleys.LeafPeakAudit.LeafPeakJoin.target
-#print axioms Rcic.Declarative.NativeValleys.LeafPeakAudit.LeafPeakDiamond
-#print axioms Rcic.Declarative.NativeValleys.LeafPeakAudit.coherentDiamondAdj_of_leafPeakDiamond
-#print axioms Rcic.Declarative.NativeValleys.LeafPeakAudit.RStep
-#print axioms Rcic.Declarative.NativeValleys.LeafPeakAudit.RStep.mk
-#print axioms Rcic.Declarative.NativeValleys.LeafPeakAudit.RStep.mid
-#print axioms Rcic.Declarative.NativeValleys.LeafPeakAudit.RStep.adj
-#print axioms Rcic.Declarative.NativeValleys.LeafPeakAudit.RStep.step
-#print axioms Rcic.Declarative.NativeValleys.LeafPeakAudit.RStep.adjLeaf
-#print axioms Rcic.Declarative.NativeValleys.LeafPeakAudit.RStep.adjCoherent
-#print axioms Rcic.Declarative.NativeValleys.LeafPeakAudit.RStep.interface
-#print axioms Rcic.Declarative.NativeValleys.LeafPeakAudit.RStep.leftTyped
-#print axioms Rcic.Declarative.NativeValleys.LeafPeakAudit.RStep.rightTyped
-#print axioms Rcic.Declarative.NativeValleys.LeafPeakAudit.RStep.toCStar
-#print axioms Rcic.Declarative.NativeValleys.LeafPeakAudit.RStep.ofStep
-#print axioms Rcic.Declarative.NativeValleys.LeafPeakAudit.RStep.ofStep_leftTyped
-#print axioms Rcic.Declarative.NativeValleys.LeafPeakAudit.RStep.ofStep_rightTyped
-#print axioms Rcic.Declarative.NativeValleys.LeafPeakAudit.RStar
-#print axioms Rcic.Declarative.NativeValleys.LeafPeakAudit.RStar.leftTyped
-#print axioms Rcic.Declarative.NativeValleys.LeafPeakAudit.RStar.rightTyped
-#print axioms Rcic.Declarative.NativeValleys.LeafPeakAudit.RStar.Coherent
-#print axioms Rcic.Declarative.NativeValleys.LeafPeakAudit.RStar.toCStar
-#print axioms Rcic.Declarative.NativeValleys.LeafPeakAudit.RStar.ofCStar
-#print axioms Rcic.Declarative.NativeValleys.LeafPeakAudit.RStar.ofCStar_leftTyped
-#print axioms Rcic.Declarative.NativeValleys.LeafPeakAudit.RStar.ofCStar_rightTyped
-#print axioms Rcic.Declarative.NativeValleys.LeafPeakAudit.RStar.ofCStar_coherent
-#print axioms Rcic.Declarative.NativeValleys.LeafPeakAudit.rDiamond
-#print axioms Rcic.Declarative.NativeValleys.LeafPeakAudit.stripR
-#print axioms Rcic.Declarative.NativeValleys.LeafPeakAudit.confluenceR
-#print axioms Rcic.Declarative.NativeValleys.LeafPeakAudit.starConfluence_of_leafPeakDiamond
-#print axioms Rcic.Declarative.NativeValleys.LeafPeakAudit.piInj_of_leafPeakDiamond
-#print axioms Rcic.Declarative.NativeValleys.LeafPeakAudit.valleyOf_leafPeakDiamond
-#print axioms Rcic.Declarative.NativeValleys.LeafPeakAudit.etaLeafLamStep_pureLeaf
-#print axioms Rcic.Declarative.NativeValleys.LeafPeakAudit.etaLeafDRefl
-#print axioms Rcic.Declarative.NativeValleys.LeafPeakAudit.etaLeaf_leafPeakJoin
 -- END DEVIN-FCD2 PIINJ-LEAFPEAK AXIOM QUERIES
 -- BEGIN DEVIN-FCD3 CERTIFIEDK AXIOM QUERIES
 #print axioms Rcic.Declarative.NativeValleys.etaK_head_eq
@@ -37778,114 +36138,8 @@ end Rcic.FoundationSeal
 #print axioms Rcic.Declarative.NativeValleys.PiModelIdealAudit.whStep_detEnv_delta
 #print axioms Rcic.Declarative.NativeValleys.PiModelIdealAudit.whDet_detEnv_false
 -- END DEVIN-FCD13 WHDET AXIOM QUERIES
-#print axioms Rcic.Syn.buildTableSyntax
-#print axioms Rcic.Syn.tableOf
-#print axioms Rcic.Syn.head_mem_build
-#print axioms Rcic.Syn.major_none_tableOf
-#print axioms Rcic.Syn.tableWF_build
-#print axioms Rcic.Syn.tableOf_congr
-#print axioms Rcic.Syn.tableOf_closed
-#print axioms Rcic.Syn.tableOf_rigid
-#print axioms Rcic.Syn.tableOf_bare_unique
-#print axioms Rcic.Syn.tableOf_ctor_disjoint
-#print axioms Rcic.Syn.tableOf_bare_nullary
 
 -- BEGIN CHATGPT COHERENT-DIAMOND AXIOM QUERIES
-#print axioms Rcic.Declarative.NativeValleys.CoherentAppAudit.appNode
-#print axioms Rcic.Declarative.NativeValleys.CoherentAppAudit.appNode_source_deco
-#print axioms Rcic.Declarative.NativeValleys.CoherentAppAudit.appNode_rightTyped
-#print axioms Rcic.Declarative.NativeValleys.CoherentAppAudit.appSide_source_deco
-#print axioms Rcic.Declarative.NativeValleys.CoherentAppAudit.appSide_source_interface_iff
-#print axioms Rcic.Declarative.NativeValleys.CoherentAppAudit.stepJoin_app_app_same_indices
-#print axioms Rcic.Declarative.NativeValleys.CoherentAppAudit.admitted_appSide_source_obstruction
-#print axioms Rcic.Declarative.NativeValleys.CoherentCanonicalAudit.nativeLeafIface
-#print axioms Rcic.Declarative.NativeValleys.CoherentCanonicalAudit.native_typed_ofIrr
-#print axioms Rcic.Declarative.NativeValleys.CoherentCanonicalAudit.native_ofIrr_source_deco
-#print axioms Rcic.Declarative.NativeValleys.CoherentCanonicalAudit.native_ofIrr_target_deco
-#print axioms Rcic.Declarative.NativeValleys.CoherentCanonicalAudit.native_irr_leftTyped
-#print axioms Rcic.Declarative.NativeValleys.CoherentCanonicalAudit.native_irr_rightTyped
-#print axioms Rcic.Declarative.NativeValleys.CoherentCanonicalAudit.proofLeaf_lift
-#print axioms Rcic.Declarative.NativeValleys.CoherentCanonicalAudit.proofLeaf_lift_source_deco
-#print axioms Rcic.Declarative.NativeValleys.CoherentCanonicalAudit.proofLeaf_lift_target_deco
-#print axioms Rcic.Declarative.NativeValleys.CoherentCanonicalAudit.proofLeaf_ctx
-#print axioms Rcic.Declarative.NativeValleys.CoherentCanonicalAudit.proofLeaf_ctx_source_deco
-#print axioms Rcic.Declarative.NativeValleys.CoherentCanonicalAudit.proofLeaf_ctx_target_deco
-#print axioms Rcic.Declarative.NativeValleys.CoherentCanonicalAudit.native_cstep_lift_source_deco
-#print axioms Rcic.Declarative.NativeValleys.CoherentCanonicalAudit.native_cstep_ctxTransport_source_deco
-#print axioms Rcic.Declarative.NativeValleys.CoherentCanonicalAudit.stepJoin_symm
-#print axioms Rcic.Declarative.NativeValleys.CoherentCanonicalAudit.stepJoin_refl_left
-#print axioms Rcic.Declarative.NativeValleys.CoherentCanonicalAudit.stepJoin_refl_right
-#print axioms Rcic.Declarative.NativeValleys.CoherentCanonicalAudit.stepJoin_of_prop
-#print axioms Rcic.Declarative.NativeValleys.CoherentCanonicalAudit.stepJoin_peq_left
-#print axioms Rcic.Declarative.NativeValleys.CoherentCanonicalAudit.stepJoin_peq_right
-#print axioms Rcic.Declarative.NativeValleys.CoherentConsumerAudit.length
-#print axioms Rcic.Declarative.NativeValleys.CoherentConsumerAudit.length_tail
-#print axioms Rcic.Declarative.NativeValleys.CoherentConsumerAudit.AtMostOne
-#print axioms Rcic.Declarative.NativeValleys.CoherentConsumerAudit.stepOf_short
-#print axioms Rcic.Declarative.NativeValleys.CoherentConsumerAudit.StarStepJoin
-#print axioms Rcic.Declarative.NativeValleys.CoherentConsumerAudit.ShortRightDiamond
-#print axioms Rcic.Declarative.NativeValleys.CoherentConsumerAudit.AsymmetricStepJoin
-#print axioms Rcic.Declarative.NativeValleys.CoherentConsumerAudit.AsymmetricDiamond
-#print axioms Rcic.Declarative.NativeValleys.CoherentConsumerAudit.asymmetricOf_shortRight
-#print axioms Rcic.Declarative.NativeValleys.CoherentConsumerAudit.shortRightOf_asymmetric
-#print axioms Rcic.Declarative.NativeValleys.CoherentConsumerAudit.asymmetricOf_coherentDiamond
-#print axioms Rcic.Declarative.NativeValleys.CoherentConsumerAudit.stripOf_asymmetric
-#print axioms Rcic.Declarative.NativeValleys.CoherentConsumerAudit.confluenceOf_asymmetric
-#print axioms Rcic.Declarative.NativeValleys.CoherentConsumerAudit.stripOf_shortRight
-#print axioms Rcic.Declarative.NativeValleys.CoherentConsumerAudit.confluenceOf_shortRight
-#print axioms Rcic.Declarative.NativeValleys.CoherentConsumerAudit.starConfluenceOf_asymmetric
-#print axioms Rcic.Declarative.NativeValleys.CoherentConsumerAudit.valleyOf_asymmetric
-#print axioms Rcic.Declarative.NativeValleys.CoherentConsumerAudit.valleyOf_shortRight
-#print axioms Rcic.Declarative.NativeValleys.CoherentCounterexampleAudit.canonical_eta_no_join
-#print axioms Rcic.Declarative.NativeValleys.CoherentCounterexampleAudit.canonical_eta_no_stepJoin
-#print axioms Rcic.Declarative.NativeValleys.CoherentCounterexampleAudit.admitted_canonical_coherentDiamond_false
-#print axioms Rcic.Declarative.NativeValleys.CoherentCounterexampleAudit.canonical_eta_no_star_step_join
-#print axioms Rcic.Declarative.NativeValleys.CoherentCounterexampleAudit.canonical_eta_reverse_right_not_short
-#print axioms Rcic.Declarative.NativeValleys.CoherentCounterexampleAudit.canonical_eta_no_asymmetric_reverse
-#print axioms Rcic.Declarative.NativeValleys.CoherentCounterexampleAudit.admitted_canonical_asymmetricDiamond_false
-#print axioms Rcic.Declarative.NativeValleys.CoherentCounterexampleAudit.admitted_canonical_shortRightDiamond_false
-#print axioms Rcic.Declarative.NativeValleys.CoherentEtaAudit.lamPeakStep
-#print axioms Rcic.Declarative.NativeValleys.CoherentEtaAudit.etaPeakStep
-#print axioms Rcic.Declarative.NativeValleys.CoherentEtaAudit.peak_source_deco
-#print axioms Rcic.Declarative.NativeValleys.CoherentEtaAudit.starJoin
-#print axioms Rcic.Declarative.NativeValleys.CoherentEtaAudit.starJoin_left_length
-#print axioms Rcic.Declarative.NativeValleys.CoherentEtaAudit.starJoin_right_length
-#print axioms Rcic.Declarative.NativeValleys.CoherentEtaAudit.starJoin_right_short
-#print axioms Rcic.Declarative.NativeValleys.CoherentEtaAudit.asymmetricJoin
-#print axioms Rcic.Declarative.NativeValleys.CoherentEtaAudit.starJoin_reverse
-#print axioms Rcic.Declarative.NativeValleys.CoherentEtaAudit.starJoin_reverse_right_length
-#print axioms Rcic.Declarative.NativeValleys.CoherentEtaAudit.starJoin_reverse_right_not_short
-#print axioms Rcic.Declarative.NativeValleys.CoherentLamAudit.nativeCertAssumpCtx
-#print axioms Rcic.Declarative.NativeValleys.CoherentLamAudit.nativeCertAssumpCtx_source_deco
-#print axioms Rcic.Declarative.NativeValleys.CoherentLamAudit.lamNode
-#print axioms Rcic.Declarative.NativeValleys.CoherentLamAudit.lamNode_source_deco
-#print axioms Rcic.Declarative.NativeValleys.CoherentLamAudit.lamNode_rightTyped
-#print axioms Rcic.Declarative.NativeValleys.CoherentLamAudit.lamSide_source_deco
-#print axioms Rcic.Declarative.NativeValleys.CoherentLamAudit.lamSide_target_deco
-#print axioms Rcic.Declarative.NativeValleys.CoherentLamAudit.lamSide_native_source_deco
-#print axioms Rcic.Declarative.NativeValleys.CoherentLamAudit.lamSide_source_interface_iff
-#print axioms Rcic.Declarative.NativeValleys.CoherentLamAudit.stepJoin_lam_lam_same_index
-#print axioms Rcic.Declarative.NativeValleys.CoherentLamAudit.nativeCertSubst0
-#print axioms Rcic.Declarative.NativeValleys.CoherentLamAudit.headSubstDeco
-#print axioms Rcic.Declarative.NativeValleys.CoherentLamAudit.nativeCertSubst0_source_deco
-#print axioms Rcic.Declarative.NativeValleys.CoherentLamAudit.betaRight_native_source_deco
-#print axioms Rcic.Declarative.NativeValleys.CoherentLamAudit.betaRight_source_interface_iff
-#print axioms Rcic.Declarative.NativeValleys.CoherentLamAudit.betaRight_target_deco
-#print axioms Rcic.Declarative.NativeValleys.CoherentLamAudit.betaRight_target_interface_iff
-#print axioms Rcic.Declarative.NativeValleys.CoherentLiteralAudit.literalStepOf_typing
-#print axioms Rcic.Declarative.NativeValleys.CoherentLiteralAudit.literal_transfer_exists
-#print axioms Rcic.Declarative.NativeValleys.CoherentLiteralAudit.stepJoin_same_nonliteral_target
-#print axioms Rcic.Declarative.NativeValleys.CoherentLiteralAudit.asymmetricJoin_same_literal_target
-#print axioms Rcic.Declarative.NativeValleys.CoherentLiteralAudit.asymmetricJoin_same_literal_target_length
-#print axioms RcicCoherentLocalBound.local_peaks_join_in_two
-#print axioms RcicCoherentLocalBound.finite_nonconfluence_witness
-#print axioms RcicCoherentLocalBound.not_confluent
-#print axioms Rcic.Declarative.NativeValleys.CoherentStarRowsAudit.starJoin_of_targetCompatible
-#print axioms Rcic.Declarative.NativeValleys.CoherentStarRowsAudit.starJoin_app_app
-#print axioms Rcic.Declarative.NativeValleys.CoherentStarStripAudit.StarStrip
-#print axioms Rcic.Declarative.NativeValleys.CoherentStarStripAudit.confluenceOf_starStrip
-#print axioms Rcic.Declarative.NativeValleys.CoherentStarStripAudit.starConfluenceOf_starStrip
-#print axioms Rcic.Declarative.NativeValleys.CoherentStarStripAudit.valleyOf_starStrip
 -- END CHATGPT COHERENT-DIAMOND AXIOM QUERIES
 
 -- BEGIN agy-census RcicRM009LiftTask AXIOM QUERIES
@@ -44313,500 +42567,9 @@ end Rcic.FoundationSeal
 #print axioms Rcic.Syn.tableClosed_tableOfI_nat
 -- END TBI-P3 AXIOM QUERIES
 -- BEGIN DEVIN-DESKTOP FUNDAMENTAL-TERMD AXIOM QUERIES
-#print axioms Rcic.Declarative.NativeValleys.PiModelTermDFundAudit.lrTypeIN_bvar_left_sort_false
-#print axioms Rcic.Declarative.NativeValleys.PiModelTermDFundAudit.lrTypeIN_bvar_right_sort_false
-#print axioms Rcic.Declarative.NativeValleys.PiModelTermDFundAudit.lrTypeIN_bvar_left_pi_false
-#print axioms Rcic.Declarative.NativeValleys.PiModelTermDFundAudit.lrTypeIN_bvar_right_pi_false
-#print axioms Rcic.Declarative.NativeValleys.PiModelTermDFundAudit.not_isPropTyI_sort_lit
-#print axioms Rcic.Declarative.NativeValleys.PiModelTermDFundAudit.lrTermD_bvar_right_sort_false
-#print axioms Rcic.Declarative.NativeValleys.PiModelTermDFundAudit.lrTermD_bvar_right_pi_false
-#print axioms Rcic.Declarative.NativeValleys.PiModelTermDFundAudit.zetaLocalSortCtx_conv_symm
-#print axioms Rcic.Declarative.NativeValleys.PiModelTermDFundAudit.idPiPropSort
-#print axioms Rcic.Declarative.NativeValleys.PiModelTermDFundAudit.hasTyT_idPiProp_at
-#print axioms Rcic.Declarative.NativeValleys.PiModelTermDFundAudit.zetaLocalPiCtx
-#print axioms Rcic.Declarative.NativeValleys.PiModelTermDFundAudit.zetaLocalPiCtx_wf
-#print axioms Rcic.Declarative.NativeValleys.PiModelTermDFundAudit.zetaLocalPiCtx_conv
-#print axioms Rcic.Declarative.NativeValleys.PiModelTermDFundAudit.zetaLocalPiCtx_conv_symm
-#print axioms Rcic.Declarative.NativeValleys.PiModelTermDFundAudit.not_fundamentalTermD
-#print axioms Rcic.Declarative.NativeValleys.PiModelTermDFundAudit.not_fundamentalTermD_zetaLocal
-#print axioms Rcic.Declarative.NativeValleys.PiModelTermDFundAudit.not_fundamentalTermD_zetaLocal_piBotNil
-#print axioms Rcic.Declarative.NativeValleys.PiModelTermDFundAudit.fundamentalTermD_zetaLocal_left_holds
-#print axioms Rcic.Declarative.NativeValleys.PiModelTermDFundAudit.piRow_of_fundamentalTermD_premises_unsat
-#print axioms Rcic.Declarative.NativeValleys.PiModelTermDFundAudit.not_fundamentalLRINBotDI
-#print axioms Rcic.Declarative.NativeValleys.PiModelTermDFundAudit.not_fundamentalLRINBotDI_sort
 -- END DEVIN-DESKTOP FUNDAMENTAL-TERMD AXIOM QUERIES
 
 -- BEGIN DEVIN-DESKTOP FUNDAMENTAL-CTX AXIOM QUERIES
-#print axioms Rcic.Declarative.NativeValleys.FamModelLRSAudit.Readback
-#print axioms Rcic.Declarative.NativeValleys.FamModelLRSAudit.RedR
-#print axioms Rcic.Declarative.NativeValleys.FamModelLRSAudit.NormalR
-#print axioms Rcic.Declarative.NativeValleys.FamModelLRSAudit.redR_trans
-#print axioms Rcic.Declarative.NativeValleys.FamModelLRSAudit.redR_single
-#print axioms Rcic.Declarative.NativeValleys.FamModelLRSAudit.ReadbackLaws
-#print axioms Rcic.Declarative.NativeValleys.FamModelLRSAudit.redR_sort_eq
-#print axioms Rcic.Declarative.NativeValleys.FamModelLRSAudit.redR_pi_eq
-#print axioms Rcic.Declarative.NativeValleys.FamModelLRSAudit.redR_famApp_eq
-#print axioms Rcic.Declarative.NativeValleys.FamModelLRSAudit.redR_appHead
-#print axioms Rcic.Declarative.NativeValleys.FamModelLRSAudit.redR_of_whRedCtx
-#print axioms Rcic.Declarative.NativeValleys.FamModelLRSAudit.whRedCtx_of_redR
-#print axioms Rcic.Declarative.NativeValleys.FamModelLRSAudit.redR_of_whRedK
-#print axioms Rcic.Declarative.NativeValleys.FamModelLRSAudit.readbackLaws_whStepCtx
-#print axioms Rcic.Declarative.NativeValleys.FamModelLRSAudit.readbackLaws_whStepK
-#print axioms Rcic.Declarative.NativeValleys.FamModelLRSAudit.IsPropTyR
-#print axioms Rcic.Declarative.NativeValleys.FamModelLRSAudit.TypeSpineR
-#print axioms Rcic.Declarative.NativeValleys.FamModelLRSAudit.typeSpineR_expand
-#print axioms Rcic.Declarative.NativeValleys.FamModelLRSAudit.LRSCore
-#print axioms Rcic.Declarative.NativeValleys.FamModelLRSAudit.LRS
-#print axioms Rcic.Declarative.NativeValleys.FamModelLRSAudit.lrSCore_bot
-#print axioms Rcic.Declarative.NativeValleys.FamModelLRSAudit.lrS_bot
-#print axioms Rcic.Declarative.NativeValleys.FamModelLRSAudit.lrS_prop_total
-#print axioms Rcic.Declarative.NativeValleys.FamModelLRSAudit.not_isPropTyR_of_redR_sort
-#print axioms Rcic.Declarative.NativeValleys.FamModelLRSAudit.lrSCore_expand
-#print axioms Rcic.Declarative.NativeValleys.FamModelLRSAudit.lrS_expand
-#print axioms Rcic.Declarative.NativeValleys.FamModelLRSAudit.lrSCore_lam_at_sort_false
-#print axioms Rcic.Declarative.NativeValleys.FamModelLRSAudit.lrSCore_pi_components
-#print axioms Rcic.Declarative.NativeValleys.FamModelLRSAudit.lrSCore_famApp_components
-#print axioms Rcic.Declarative.NativeValleys.FamModelLRSAudit.FundamentalLRST
-#print axioms Rcic.Declarative.NativeValleys.FamModelLRSAudit.piRowField_of_fundamentalLRST
-#print axioms Rcic.Declarative.NativeValleys.FamModelLRSAudit.famAppRow_of_fundamentalLRST
-#print axioms Rcic.Declarative.NativeValleys.FamModelLRSAudit.envOfSubst
-#print axioms Rcic.Declarative.NativeValleys.FamModelLRSAudit.RelSubst
-#print axioms Rcic.Declarative.NativeValleys.FamModelLRSAudit.FundamentalS
-#print axioms Rcic.Declarative.NativeValleys.FamModelLRSAudit.FundamentalSCtx
-#print axioms Rcic.Declarative.NativeValleys.FamModelLRSAudit.RelSubstId
-#print axioms Rcic.Declarative.NativeValleys.FamModelLRSAudit.envOfSubst_id_le
-#print axioms Rcic.Declarative.NativeValleys.FamModelLRSAudit.fundamentalSCtx_of_fundamentalS
-#print axioms Rcic.Declarative.NativeValleys.FamModelLRSAudit.NoLetCtx
-#print axioms Rcic.Declarative.NativeValleys.FamModelLRSAudit.noLetCtx_tail
-#print axioms Rcic.Declarative.NativeValleys.FamModelLRSAudit.ctxEnvI_noLet
-#print axioms Rcic.Declarative.NativeValleys.FamModelLRSAudit.relSubst_id_of_noLet
-#print axioms Rcic.Declarative.NativeValleys.FamModelLRSAudit.lrSCore_zetaSortCtx
-#print axioms Rcic.Declarative.NativeValleys.FamModelLRSAudit.lrSCore_zetaSortCtx_symm
-#print axioms Rcic.Declarative.NativeValleys.FamModelLRSAudit.whRedCtx_zetaLocalPiCtx_bvar0
-#print axioms Rcic.Declarative.NativeValleys.FamModelLRSAudit.semEqI_ctxEnvI_zetaLocalPiCtx
-#print axioms Rcic.Declarative.NativeValleys.FamModelLRSAudit.lrSCore_idPiProp_both
-#print axioms Rcic.Declarative.NativeValleys.FamModelLRSAudit.lrSCore_idPiProp_sortStep
-#print axioms Rcic.Declarative.NativeValleys.FamModelLRSAudit.lrSCore_zetaLocalPiCtx
-#print axioms Rcic.Declarative.NativeValleys.FamModelLRSAudit.lrSCore_zetaLocalPiCtx_symm
-#print axioms Rcic.Declarative.NativeValleys.FamModelLRSAudit.lrSCore_polyPi_diag
-#print axioms Rcic.Declarative.NativeValleys.FamModelLRSAudit.lrSCore_whStepK_kRec
-#print axioms Rcic.Declarative.NativeValleys.FamModelLRSAudit.lrSCore_whStepK_kRec_symm
-#print axioms Rcic.Declarative.NativeValleys.FamModelLRSAudit.lrSCore_whStepK_mixAnd
-#print axioms Rcic.Declarative.NativeValleys.FamModelLRSAudit.lrSCore_whStepK_mixAnd_symm
-#print axioms Rcic.Declarative.NativeValleys.FamModelLRSAudit.lrSCore_whStepK_etaK_app
-#print axioms Rcic.Declarative.NativeValleys.FamModelLRSAudit.not_fundamentalLRST_whStepCtx_trueEnvU
-#print axioms Rcic.Declarative.NativeValleys.FamModelLRSAudit.TypeSoundnessICtx
-#print axioms Rcic.Declarative.NativeValleys.FamModelLRSAudit.not_typeSoundnessICtx
-#print axioms Rcic.Declarative.NativeValleys.FamModelLRSAudit.whStepCtx_bvar_none_false
-#print axioms Rcic.Declarative.NativeValleys.FamModelLRSAudit.whRedCtx_bvar_none_eq
-#print axioms Rcic.Declarative.NativeValleys.FamModelLRSAudit.not_lrTypeFamIN_idPiProp_sortStep
-#print axioms Rcic.Declarative.NativeValleys.FamModelLRSAudit.not_fundamentalLRFamINT_idPiProp
-#print axioms Rcic.Declarative.NativeValleys.FamModelLRSAudit.not_fundamentalLRFamIN_idPiProp
-#print axioms Rcic.Declarative.NativeValleys.FamModelLRSAudit.NormalUniqueR
-#print axioms Rcic.Declarative.NativeValleys.FamModelLRSAudit.DetR
-#print axioms Rcic.Declarative.NativeValleys.FamModelLRSAudit.DiamondR
-#print axioms Rcic.Declarative.NativeValleys.FamModelLRSAudit.redR_of_normal
-#print axioms Rcic.Declarative.NativeValleys.FamModelLRSAudit.normalUniqueR_of_det
-#print axioms Rcic.Declarative.NativeValleys.FamModelLRSAudit.redR_strip
-#print axioms Rcic.Declarative.NativeValleys.FamModelLRSAudit.redR_confluent
-#print axioms Rcic.Declarative.NativeValleys.FamModelLRSAudit.normalUniqueR_of_diamond
-#print axioms Rcic.Declarative.NativeValleys.FamModelLRSAudit.detR_whStepCtx
-#print axioms Rcic.Declarative.NativeValleys.FamModelLRSAudit.normalUniqueR_whStepCtx
-#print axioms Rcic.Declarative.NativeValleys.FamModelLRSAudit.normalUniqueR_whStepK_of_det
-#print axioms Rcic.Declarative.NativeValleys.FamModelLRSAudit.normalUniqueR_whStepK_of_diamond
-#print axioms Rcic.Declarative.NativeValleys.FamModelLRSAudit.lrSCore_sort_index_irrel
-#print axioms Rcic.Declarative.NativeValleys.FamModelLRSAudit.lrSCore_symm_botPiCpt
-#print axioms Rcic.Declarative.NativeValleys.FamModelLRSAudit.lrSCore_trans_botPiCpt
-#print axioms Rcic.Declarative.NativeValleys.FamModelLRSAudit.lrS_symm_botPiCpt
-#print axioms Rcic.Declarative.NativeValleys.FamModelLRSAudit.lrS_trans_botPiCpt
-#print axioms Rcic.Declarative.NativeValleys.FamModelLRSAudit.sort_shape_of_symm_pi
-#print axioms Rcic.Declarative.NativeValleys.FamModelLRSAudit.CtxModel
-#print axioms Rcic.Declarative.NativeValleys.FamModelLRSAudit.CtxModel.at
-#print axioms Rcic.Declarative.NativeValleys.FamModelLRSAudit.ctxModelI
-#print axioms Rcic.Declarative.NativeValleys.FamModelLRSAudit.ctxModelDI
-#print axioms Rcic.Declarative.NativeValleys.FamModelLRSAudit.CtxModelLaws
-#print axioms Rcic.Declarative.NativeValleys.FamModelLRSAudit.ctxEnvI_none_bot
-#print axioms Rcic.Declarative.NativeValleys.FamModelLRSAudit.ctxEnvDI_none_bot
-#print axioms Rcic.Declarative.NativeValleys.FamModelLRSAudit.ctxModelLaws_I
-#print axioms Rcic.Declarative.NativeValleys.FamModelLRSAudit.ctxModelLaws_DI
-#print axioms Rcic.Declarative.NativeValleys.FamModelLRSAudit.ReadbackModelInv
-#print axioms Rcic.Declarative.NativeValleys.FamModelLRSAudit.redR_modelInv
-#print axioms Rcic.Declarative.NativeValleys.FamModelLRSAudit.readbackModelInv_whStepCtx_DI
-#print axioms Rcic.Declarative.NativeValleys.FamModelLRSAudit.readbackModelInv_whStepCtx_I
-#print axioms Rcic.Declarative.NativeValleys.FamModelLRSAudit.FundamentalLRSTM
-#print axioms Rcic.Declarative.NativeValleys.FamModelLRSAudit.fundamentalLRSTM_ctxModelI_iff
-#print axioms Rcic.Declarative.NativeValleys.FamModelLRSAudit.piRowField_of_fundamentalLRSTM
-#print axioms Rcic.Declarative.NativeValleys.FamModelLRSAudit.famAppRow_of_fundamentalLRSTM
-#print axioms Rcic.Declarative.NativeValleys.FamModelLRSAudit.envOfSubstM
-#print axioms Rcic.Declarative.NativeValleys.FamModelLRSAudit.RelSubstAt
-#print axioms Rcic.Declarative.NativeValleys.FamModelLRSAudit.FundamentalSAt
-#print axioms Rcic.Declarative.NativeValleys.FamModelLRSAudit.RelSubstM
-#print axioms Rcic.Declarative.NativeValleys.FamModelLRSAudit.FundamentalSM
-#print axioms Rcic.Declarative.NativeValleys.FamModelLRSAudit.fundamentalSM_of_fundamentalSAt
-#print axioms Rcic.Declarative.NativeValleys.FamModelLRSAudit.relSubst_of_relSubstM_I
-#print axioms Rcic.Declarative.NativeValleys.FamModelLRSAudit.fundamentalSM_I_of_fundamentalS
-#print axioms Rcic.Declarative.NativeValleys.FamModelLRSAudit.FundamentalSCtxM
-#print axioms Rcic.Declarative.NativeValleys.FamModelLRSAudit.RelSubstIdM
-#print axioms Rcic.Declarative.NativeValleys.FamModelLRSAudit.envOfSubstM_id_le
-#print axioms Rcic.Declarative.NativeValleys.FamModelLRSAudit.fundamentalSCtxM_of_fundamentalSM
-#print axioms Rcic.Declarative.NativeValleys.FamModelLRSAudit.relSubstM_id_of_noLet
-#print axioms Rcic.Declarative.NativeValleys.FamModelLRSAudit.ProbeCpt
-#print axioms Rcic.Declarative.NativeValleys.FamModelLRSAudit.botPiCpt_of_probe
-#print axioms Rcic.Declarative.NativeValleys.FamModelLRSAudit.modelAt_right_of_lrSCore_probe
-#print axioms Rcic.Declarative.NativeValleys.FamModelLRSAudit.FundamentalLRSTMProbe
-#print axioms Rcic.Declarative.NativeValleys.FamModelLRSAudit.fundamentalLRSTMProbe_of_fundamentalLRSTM
-#print axioms Rcic.Declarative.NativeValleys.FamModelLRSAudit.fundamentalLRSTMProbe_of_links
-#print axioms Rcic.Declarative.NativeValleys.FamModelLRSAudit.piRowField_of_fundamentalLRSTMProbe
-#print axioms Rcic.Declarative.NativeValleys.FamModelLRSAudit.piRowField_of_links
-#print axioms Rcic.Declarative.NativeValleys.FamModelLRSAudit.link_of_step
-#print axioms Rcic.Declarative.NativeValleys.FamModelLRSAudit.link_of_redR
-#print axioms Rcic.Declarative.NativeValleys.FamModelLRSAudit.link_beta_DI
-#print axioms Rcic.Declarative.NativeValleys.FamModelLRSAudit.link_zeta_DI
-#print axioms Rcic.Declarative.NativeValleys.FamModelLRSAudit.link_zetaLocal_DI
-#print axioms Rcic.Declarative.NativeValleys.FamModelLRSAudit.link_delta_DI
-#print axioms Rcic.Declarative.NativeValleys.FamModelLRSAudit.link_iota_DI
-#print axioms Rcic.Declarative.NativeValleys.FamModelLRSAudit.link_lit_DI
-#print axioms Rcic.Declarative.NativeValleys.FamModelLRSAudit.link_pmajor_K
-#print axioms Rcic.Declarative.NativeValleys.FamModelLRSAudit.diag_sort
-#print axioms Rcic.Declarative.NativeValleys.FamModelLRSAudit.link_sorts
-#print axioms Rcic.Declarative.NativeValleys.FamModelLRSAudit.link_irr
-#print axioms Rcic.Declarative.NativeValleys.FamModelLRSAudit.diag_pi_probe
-#print axioms Rcic.Declarative.NativeValleys.FamModelLRSAudit.link_pi_congr_probe
-#print axioms Rcic.Declarative.NativeValleys.FamModelLRSAudit.diag_bvar_assumption
-#print axioms Rcic.Declarative.NativeValleys.FamModelLRSAudit.diag_bvar_let
-#print axioms Rcic.Declarative.NativeValleys.FamModelLRSAudit.instantiate0_etaApp
-#print axioms Rcic.Declarative.NativeValleys.FamModelLRSAudit.link_eta_lam
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.CptT
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.sortCode
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.sortCode_eq_prop_iff
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.sortCode_eq_sort_iff
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.sortCode_zero
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.sortCode_prop_or_sort
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.EnvT
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.EnvT.bot
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.EnvT.cons
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.EnvT.insert
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.EnvT.le
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.demandT
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.botSetT
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.EnvT.insert_zero
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.EnvT.cons_insert
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.IsPropCT
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.TyCodeCT
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.CTyT
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.ctyT_prop_bot
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.ctyT_bot_inv
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.ctyT_prop_inv
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.ctyT_sort_inv
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.ctyT_lam_inv
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.ctyT_pi_inv
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.ctyT_spine_inv
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.not_isPropCT_prop
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.not_isPropCT_sort
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.not_isPropCT_lam
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.tyCodeCT_of_isPropCT
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.ApproxT
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.ElT
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.denT
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.SemEqT
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.approxT_bvar_inv
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.approxT_bvar_iff
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.approxT_sort_inv
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.approxT_sort_code
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.approxT_pi_inv
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.approxT_lam_inv
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.approxT_app_inv
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.approxT_rigid_const_inv
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.approxT_mono_env
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.approxT_pi_bot_nil
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.elT_bot
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.elT_sort_zero_iff
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.elT_sort_iff
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.elT_pi_lam_inv
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.not_elT_pi_sort
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.elT_bot_of_propIdeal
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.BotDemandT
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.BotPiCptT
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.approxT_pi_botDemand_iff
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.approxT_lam_botDemand_iff
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.idPiPropSortStepT
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.not_approxT_idPiProp_sortStep
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.isPropCT_of_approxT_idPiProp
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.elT_idPiProp_bot
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.approxT_pi_prop_dom_botDemand
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.approxT_lam_prop_dom_botDemand
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.isPropCT_true_spine
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.approxT_true_inv
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.elT_true_bot
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.approxT_lift_intro
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.approxT_lift_elim
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.approxT_cons_lift0_iff
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.CtxEnvT
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.ctxEnvT
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.ctxEnvT_respects
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.semEqT_zetaLocal
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.semEqT_ctxEnvT_zetaLocalPiCtx
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.ctxEnvT_none_bot
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.lrSCore_sort_iff
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.sizeOfT_fst_lt
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.sizeOfT_snd_lt
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.CptT.sizeOf_pos
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.CTyS
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.ctyS_bot_inv
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.ctyS_prop_inv
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.ctyS_sort_inv
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.ctyS_lam_inv
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.ctyS_pi_inv
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.ctyS_spine_inv
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.ctyS_bot
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.ctyT_of_ctyS
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.ctyS_prop_bot
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.ctyT_permissive
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.not_ctyS_permissive
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.SortClauseT
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.TypeSpineT
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.LRSCoreT
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.LRST
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.lrSCoreT_bot
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.lrSCoreT_prop_iff
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.lrSCoreT_sort_iff
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.lrSCoreT_prop_iff_sort
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.foldApps_const_ne_sort
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.foldApps_const_ne_pi
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.not_redR_sort_of_normal
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.not_redR_pi_of_redR_sort
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.redR_pi_unique
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.typeSpineT_not_sort
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.lrSCoreT_sortIdx_irrel
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.ConvArgsSymmT
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.ConvArgsTransT
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.eqN_symm'
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.eqN_trans'
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.eqNList_symm''
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.eqNList_trans''
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.IrrelAt
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.SymmTmAt
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.TransTmAt
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.SymmTyAt
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.TransTyAt
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.sizeOf_dom_lt_pi
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.sizeOf_out_lt_pi
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.sizeOf_dem_lt_lam
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.sizeOf_out_lt_lam
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.sizeOf_dem_lt_pi
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.typeSpineT_symm
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.typeSpineT_trans
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.symmTy_step
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.transTy_step
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.lrSCoreT_spine_data_of_tyIdx
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.irrel_step
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.symmTm_step
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.transTm_step
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.typedPER
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.lrSCoreT_irrel
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.lrSCoreT_symm
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.lrSCoreT_trans
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.lrSCoreT_symm_tm
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.lrSCoreT_trans_tm
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.convArgsSymmT_of_piRow
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.convArgsTransT_of_piRow
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.PropFamilyS
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.curryStepT
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.fieldDemandVectorsT
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.ctorDemandT
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.EnvT.pushArgs
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.headConst
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.PropCtorT
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.AppCptT
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.approxT_app_iff_appCpt
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.FoldAppCptT
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.approxT_foldApps_iff
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.foldAppCptT_bot_inv
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.ApproxArgsDemandT
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.foldAppCptT_curryStepT_iff
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.approxT_const_inv
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.approxT_propRec_inv
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.recRef_not_rigid
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.recRef_not_delta
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.approxArgsDemandT_append_singleton_inv
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.approxArgsDemandT_append_singleton
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.ApproxArgsDemandT.length_eq
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.approxT_recCall_major_indep
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.IotaSoundT
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.derivedIotaT_inv
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.semEqT_kStar_of_iotaSoundT
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.trueEnvU_recRef_propFamily
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.approxT_recCall_kRec_indep
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.EnvTypedT
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.TypingLemmaT
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.not_ctyS_lam_at_pi_bot_nil
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.polyIdProof
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.polyIdProp
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.hasTyT_polyIdProof
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.not_approxT_lam_botStep
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.approxT_bvar_propDemand_bot
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.approxT_polyIdProof_bot
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.isPropCT_of_approxT_polyIdProp
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.elT_polyIdProp_bot
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.typingLemma_at_polyIdProof
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.propCtorT_trueIntro
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.approxT_trueIntro_bot
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.lam_botStep_ne_bot
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.TypedSubstT
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.ctxWfT_lookupValue_typed
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.ctxWfT_lookupType_sort
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.lookupType_of_lookupValue
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.typedSubstT_id
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.typedSubstT_up_decl
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.typedSubstT_upLet_decl
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.typedSubstT_up
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.typedSubstT_upLet
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.typedSubstT_up_conv
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.typedSubstT_upLet_conv
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.EnvMembersSubstTStable
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.envMembersSubstTStable_of_envClosed
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.IotaSubstT
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.substT_natExpand
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.hasTyT_substT
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.convT_substT
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.ConvSubstT
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.convSubstT_up_decl
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.convT_substT_pointwise
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.SpineClauseS
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.LRSCoreS
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.LRSS
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.lrSCoreS_bot
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.lrSCoreS_prop_iff
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.lrSCoreS_sort_iff
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.lrSCoreS_prop_iff_sort
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.lrSCoreS_spine_iff
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.ConvArgsSymmS
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.ConvArgsTransS
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.convArgsSymmS_emptyEnv
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.convArgsTransS_emptyEnv
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.spineClauseS_not_sort
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.spineClauseS_idx
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.spineClauseS_symm
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.spineClauseS_trans
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.lrSCoreS_sortIdx_irrel
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.IrrelAtS
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.SymmTmAtS
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.TransTmAtS
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.SymmTyAtS
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.TransTyAtS
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.symmTy_stepS
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.transTy_stepS
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.lrSCoreS_spine_notSort_of_tyIdx
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.irrel_stepS
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.symmTm_stepS
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.transTm_stepS
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.typedPERS
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.lrSCoreS_irrel
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.lrSCoreS_symm
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.lrSCoreS_trans
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.lrSCoreS_symm_tm
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.lrSCoreS_trans_tm
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.lrSCoreS_expand
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.lrSCoreS_expand_right
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.lrSCoreS_expand_red
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.lrSCoreS_expand_red_right
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.CtxModelT
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.CtxModelTLaws
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.ctxModelT_approxT
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.ctxModelTLaws_approxT
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.RelSubstAtT
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.RelSubstAtT.symm
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.RelSubstAtT.diagL
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.RelSubstAtT.diagR
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.FundTyAt
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.FundConvAt
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.FundamentalSAtT
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.fundT_bvar
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.fundT_sort
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.fundT_refl
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.relSubstAtT_cons
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.domRelations_of_ih
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.fundT_lam
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.fundT_pi
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.fundT_app
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.ModelBetaExpandT
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.fundT_beta
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.RecSpineTypedAt
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.recSpineTypedAt_append
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.recSpineTypedAt_of_hasTyT
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.recCall_typed_data
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.ConvArgsD
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.convArgsD_symm
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.convArgsD_append
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.convArgsD_of_spine
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.TyUniqT
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.convArgsD_trans_of_tyUniq
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.LevelCongrT
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.levelCongr_sort_instance
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.ConvChainBelow
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.ConvChainBelow.mono
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.convChainBelow_const
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.lrSCoreS_pi_components
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.lrSCoreS_pi_probe
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.approxT_of_redR
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.domAlign_of_chain
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.nodeDeclAlign_const_of_fundBelow
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.TyValidAt
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.CtxValidAt
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.CtxModelTLaws'
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.ctxModelTLaws'_approxT
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.EnvT.tail
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.EnvT.cons_tail
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.relSubstAtT_tail
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.RelSubstAtT.envs
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.tyValidAt_lift
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.ctxValidAt_cons
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.fundTyAt_sortIdx
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.IHBelow
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.TypingAt
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.ModelConvSoundAt
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.fundT_symm_strong
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.tyValidAt_inst
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.FundCases
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.fund_step
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.fund_strong
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.ctxValidAt_of_ctxWfT
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.fundamentalSAtT_of_cases
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.BackTransportT
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.backTransportT_zetaLocal
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.backTransportT_appHead_closure
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.domAlign_of_chain_backTransport
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.piProbeS_iff
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.piProbeS_symm
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.piProbeS_trans
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.piProbeS_right_diag
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.lrSCoreS_pi_self
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.LinkSeededBelow
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.domAlign_of_chain_probe
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.nodeDeclAlign_const_of_probeLinks
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.ArgTypedAt
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.ModelBetaExpandTyped
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.BackTransportBetaTyped
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.backTransportBetaTyped_of_expand
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.cexD
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.cexP
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.approxT_cexD_shape
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.not_argTypedAt_cex
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.modelBetaExpandTyped_excludes_cex
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.RelSubstIdT
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.fundConvAt_ctx_of_id
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.fundTyAt_ctx_of_id
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.EnvTypedAtT
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.HybridSeed
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.fundConvAt_hybrid_trans_shape
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.lrSCoreS_pi_probe_codom
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.convT_ctx_tyConvT
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.tyConvT_ctx_tyConvT
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.domCodAlign_of_chain_probe
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.RelSubstTypedAtT
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.TypingLemmaEnvT
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.typingAt_of_typedPackage
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.envTypedAtT_bot
 -- END DEVIN-DESKTOP FUNDAMENTAL-CTX AXIOM QUERIES
 -- BEGIN DEVIN FUND-SWE-FSUB AXIOM QUERIES
 #print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.ModelLitInvT
@@ -45070,253 +42833,6 @@ end Rcic.FoundationSeal
 #print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.not_typingLemmaEnvCovT_natEnvU_via_rec
 #print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.not_convSoundEnvCovT_natEnvU
 
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.TypingFin.ArgTypedFinAt
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.TypingFin.ModelBetaExpandTypedFin
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.TypingFin.argTypedFinAt_of_argTypedAt
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.TypingFin.not_argTypedFinAt_cex
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.TypingFin.modelBetaExpandTyped_of_fin
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.TypingFin.EnvTypedFinAtT
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.TypingFin.TypingLemmaEnvFinT
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.TypingFin.ArgTypedFinAtM
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.TypingFin.ModelBetaExpandTypedM
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.TypingFin.modelBetaExpandTypedM_iff_fin
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.TypingFin.ModelIotaStepT
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.TypingFin.ReadbackIotaStepT
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.TypingFin.readbackIotaStepT_whStepCtx
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.TypingFin.modelIotaStepT_of_iotaSoundT
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.TypingFin.sortCode_succ
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.TypingFin.cexPolyId
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.TypingFin.cexPolyIdTy
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.hasTyT_cexPolyId
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.polyIdDom1
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.polyIdWitness1
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.polyIdOut0
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.polyIdOut1
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.polyIdCpt0
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.polyIdCpt1
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.polyIdCpt01
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.tyCodeCT_polyIdDom1
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.not_isPropCT_polyIdDom1
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.ctyS_prop_sort
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.ctyS_sort_sort
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.ctyS_polyIdDom1_sort
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.ctyS_polyIdWitness1_polyIdDom1
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.approxT_polyIdOut0
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.approxT_polyIdOut1
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.approxT_cexPolyId_cpt0
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.approxT_cexPolyId_cpt1
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.approxT_cexPolyId_cpt01
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.not_ctyT_polyIdOut1_of_sub_sort
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.not_ctyS_polyIdOut1_of_sub_sort
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.not_elT_polyId_cpt01
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.not_joint_ctyS_polyId_cpt0_cpt1
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.not_argTypedFinAt_polyId
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.TypingFin.not_argTypedAt_polyId
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.not_typingLemmaT
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.not_typingLemmaEnvT
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.envTypedFinAtT_nil
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.not_typingLemmaEnvFinT
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.polyIdVarCtx
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.polyIdVarEnv
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.idOnVar
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.idOnVarTy
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.hasTyT_idOnVar
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.envTypedFinAtT_polyIdVarEnv
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.approxT_idOnVar_polyIdOut0
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.approxT_idOnVar_polyIdOut1
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.not_joint_ctyT_idOnVar
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.not_ctyT_spine_of_approxT_pi
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.not_elT_spine_pi
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.not_semEqT_eta_rigidConst
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.idSort1
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.idSort1Ty
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.idSort1TySort
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.letSort1Ctx
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.hasTyT_idSort1_bvar0
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.envTypedFinAtT_bot
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.approxT_idSort1_polyIdOut0
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.not_typingLemmaEnvFinT_letBinding
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.not_typingLemmaEnvFinT_via_letBinding
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.CTyCov
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.ctyCov_bot_inv
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.ctyCov_prop_inv
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.ctyCov_sort_inv
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.ctyCov_lam_inv
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.ctyCov_pi_inv
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.ctyCov_spine_inv
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.ctyCov_bot
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.ctyCov_of_ctyS
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.ctyCov_prop_bot
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.ctyCov_pi_mono_steps
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.ElTCov
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.elTCov_of_elT
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.elTCov_bot
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.not_ctyCov_spine_of_approxT_pi
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.not_elTCov_spine_pi
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.polyIdTyCod0
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.polyIdTyCod1
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.polyIdTyCpt01
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.approxT_polyIdTyCod0
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.approxT_polyIdTyCod1
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.approxT_cexPolyIdTy_cpt01
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.ctyS_polyIdOut1_polyIdTyCod1
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.not_isPropCT_polyIdTyCpt01
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.ctyCov_polyIdCpt01_polyIdTyCpt01
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.elTCov_polyId_cpt01
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.joint_ctyCov_polyId_cpt0_cpt1
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.relSubstAtT_cons_pointwise
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.TypingFin.ModelSubstFactorT
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.modelBetaExpandTypedM_of_substFactor
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.fundT_beta_pointwise
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.split_bot_list
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.CtxEnvM
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.ConvSoundEnvFinT
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.TypingLemmaEnvFinCtxT
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.IHBelowTypingFin
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.beta_expand_of_ih_and_modelBetaExpandTypedM
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.TypingFinCases
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.typingFin_step
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.typingFin_strong
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.typingLemmaEnvFin_and_convSound_of_cases
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.typingLemmaEnvFinT_of_cases
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.ctxModelT_botOnly
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.ctxModelTLaws'_botOnly
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.modelSubstFactorT_botOnly
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.modelBetaExpandTypedM_botOnly
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.modelIotaStepT_botOnly
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.typingFinCases_botOnly
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.typingLemmaEnvFinT_botOnly
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.EnvTypedCovAtT
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.TypingLemmaEnvCovT
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.ConvSoundEnvCovT
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.envTypedCovAtT_nil
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.envTypedCovAtT_cons_assumption
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.tyCodeCT_of_elTCov_sort
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.isPropCT_of_elTCov_sort_prop
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.eqN_zero_of_imax_eqN_zero
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.sortCode_v_prop_of_imax_prop
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.exists_cod_steps_of_lam_steps
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.covTyping_sort
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.covTyping_bvar
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.covTyping_pi
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.covTyping_lam
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.covTyping_lit
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.covTyping_conv
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.covConv_sorts
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.covConv_lit
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.covConv_irr
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.EnvT.updateAt
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.EnvT.le_updateAt_of_sub
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.EnvT.le_updateAt_cons
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.collect_fin_lists
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.approxT_fin_at
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.approxT_cons_iff_exists_demandT
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.covApproxT_subst0_iff
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.covModelSubstFactorT_approxT
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.modelBetaExpandTypedM_approxT
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.modelBetaExpandTypedFin_approxT
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.approxT_letE_iff
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.semEqT_letE_app_lam
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.envTypedCovAtT_cons_letBinding
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.covTyping_app
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.covTyping_letE
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.covConv_app
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.covConv_lam
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.covConv_pi
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.ExprEqN
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.exprEqN_refl
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.exprEqN_instantiateLevels
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.approxT_of_exprEqN
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.covConv_consts
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.approxT_delta_const_inv_cov
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.approxT_closedAt_env_cov
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.approxT_closed0_env_cov
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.covConv_delta
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.covConv_beta_fwd
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.covConv_zeta_fwd
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.cptT_eq_bot_or_ne_bot
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.covConv_beta_of_argTypedFinAt
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.covConv_zeta_of_argTypedFinAt
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.covConv_letE_of_zeta
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.approxT_idSort1Ty_polyIdDom1
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.elTCov_idSort1Ty_sort
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.envTypedCovAtT_letSort1Ctx
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.elTCov_polyIdOut0_bvar0_ctxEnvT
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.elTCov_idSort1_bvar0_ctxEnvT
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.letSort1
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.hasTyT_letSort1
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.convT_zeta_letSort1
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.semEqT_zeta_letSort1
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.elTCov_letSort1
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.letIdSort1
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.approxT_letIdSort1_polyIdOut0
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.elTCov_letIdSort1
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.IHBelowCov
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.CovModelCases
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.covTyping_step
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.covTyping_strong
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.typingLemmaEnvCovT_and_convSound_of_cases
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.covTyping_step_approxT
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.covTyping_strong_approxT
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.typingLemmaEnvCovT_and_convSound_of_cases_approxT
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.rigidConst_natEnvU_nat
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.not_propCtorT_natEnvU_nat
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.rigidConst_natEnvU_zero
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.not_propCtorT_natEnvU_zero
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.rigidConst_natEnvU_succ
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.not_propCtorT_natEnvU_succ
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.not_isPropCT_natEnvU_nat_spine
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.elT_natEnvU_nat
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.elTCov_natEnvU_nat
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.elT_natEnvU_zero
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.elTCov_natEnvU_zero
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.approxT_natSucc_spine
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.not_elTCov_natSucc_spine
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.not_semEqT_eta_natSucc
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.covNatSuccSchema
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.covWNatSucc
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.not_propFamilyS_covWNatSucc
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.instantiateLevels_natRecMemberU_mtype
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.elTCov_lam_singleton_pi_inv
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.covBadSpine
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.covBadHsCpt
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.covBadRecCpt
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.approxT_natRec_covBadRecCpt
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.not_elTCov_natRec_covBadRecCpt
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.not_elT_natRec_covBadRecCpt
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.covGoodMotiveCpt
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.covGoodHsCpt
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.covGoodRecCpt
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.approxT_natRec_covGoodRecCpt
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.ctyS_lam_singleton
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.not_isPropCT_pi_singleton
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.elT_natRec_covGoodRecCpt
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.elTCov_natRec_covGoodRecCpt
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.ConstCovClauseT
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.covTyping_const
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.elTCov_closed0_env
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.elT_closed0_env
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.groupMembersT_mtype_closed
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.envWfT_member_mtype_closed
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.ConstCovBotClauseT
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.constCovClauseT_iff_bot
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.MemberDeltaCovT
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.MemberRigidCovT
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.MemberRecCovT
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.constCovBotClauseT_of_arms
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.constCovClauseT_of_arms
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.hasTyT_natEnvU_nat
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.hasTyT_natEnvU_zero
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.hasTyT_natEnvU_succ
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.convT_eta_natSucc
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.hasTyT_natEnvU_rec
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.not_memberRigidCovT_natEnvU
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.not_memberRecCovT_natEnvU
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.not_constCovClauseT_natEnvU
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.not_constCovClauseT_natEnvU_via_rec
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.not_typingLemmaEnvCovT_natEnvU
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.not_typingLemmaEnvCovT_natEnvU_via_rec
-#print axioms Rcic.Declarative.NativeValleys.TypedModelAudit.not_convSoundEnvCovT_natEnvU
 
 -- BEGIN DEVIN TABLEI-CENSUS AXIOM QUERIES
 #print axioms Rcic.Syn.es_pi_tableI
@@ -46270,88 +43786,10 @@ end Rcic.FoundationSeal
 #print axioms Rcic.Declarative.NativeValleys.TypedModelCovRelWitnessAudit.eqGapDirectAlias_lrsCoreCov_prop
 -- END CHATGPT COVARIANT RECURSIVE RELATION AXIOM ROOTS
 -- BEGIN RCIC_NATIVE_TYPED_MODEL_COV_K_ROOTS
-#print axioms Rcic.Declarative.NativeValleys.TypedModelCovKAudit.ElTCovM
-#print axioms Rcic.Declarative.NativeValleys.TypedModelCovKAudit.EnvTypedCovAtM
-#print axioms Rcic.Declarative.NativeValleys.TypedModelCovKAudit.CovTypingAtM
-#print axioms Rcic.Declarative.NativeValleys.TypedModelCovKAudit.TypingLemmaEnvCovM
-#print axioms Rcic.Declarative.NativeValleys.TypedModelCovKAudit.elTCovM_approxT_iff
-#print axioms Rcic.Declarative.NativeValleys.TypedModelCovKAudit.envTypedCovAtM_approxT_iff
-#print axioms Rcic.Declarative.NativeValleys.TypedModelCovKAudit.typingLemmaEnvCovM_approxT_iff
-#print axioms Rcic.Declarative.NativeValleys.TypedModelCovKAudit.envTypedCovAtM_nil
-#print axioms Rcic.Declarative.NativeValleys.TypedModelCovKAudit.envTypedCovAtM_of_envTypedAtT
-#print axioms Rcic.Declarative.NativeValleys.TypedModelCovKAudit.elTCovM_congr
-#print axioms Rcic.Declarative.NativeValleys.TypedModelCovKAudit.covTyping_cexTerm
-#print axioms Rcic.Declarative.NativeValleys.TypedModelCovKAudit.covTyping_cexType
-#print axioms Rcic.Declarative.NativeValleys.TypedModelCovKAudit.covTyping_cexTerm_approxTK
-#print axioms Rcic.Declarative.NativeValleys.TypedModelCovKAudit.covTyping_cexType_approxTK
-#print axioms Rcic.Declarative.NativeValleys.TypedModelCovKAudit.closed_cex_cov_control_approxTK
-#print axioms Rcic.Declarative.NativeValleys.TypedModelCovKAudit.closed_cex_cov_eq_nat_controls
-#print axioms Rcic.Declarative.NativeValleys.TypedModelCovKAudit.not_cov_global_of_natSucc_observations
-#print axioms Rcic.Declarative.NativeValleys.TypedModelCovKAudit.not_typingLemmaEnvCovM_approxTK_natEnvU
-#print axioms Rcic.Declarative.NativeValleys.TypedModelCovKAudit.nat_succ_cov_obstruction_control
-#print axioms Rcic.Declarative.NativeValleys.TypedModelCovKGuardAudit.kg_six_agreement_controls
-#print axioms Rcic.Declarative.NativeValleys.TypedModelCovKGuardAudit.kg_six_native_conjunction_controls
-#print axioms Rcic.Declarative.NativeValleys.TypedModelCovKGuardAudit.kg_six_native_typing_controls
-#print axioms Rcic.Declarative.NativeValleys.TypedModelCovKGuardAudit.kg_deltaBinder_native_obstruction
-#print axioms Rcic.Declarative.NativeValleys.TypedModelCovKGuardAudit.kg_and_strict_guard_cross_controls
-#print axioms Rcic.Declarative.NativeValleys.TypedModelCovKGuardAudit.kg_deltaConst_eta
-#print axioms Rcic.Declarative.NativeValleys.TypedModelCovKGuardAudit.KGDeltaEtaCompositionAt
-#print axioms Rcic.Declarative.NativeValleys.TypedModelCovKGuardAudit.not_kgDeltaEtaCompositionAt
-#print axioms Rcic.Declarative.NativeValleys.TypedModelCovPropagationAudit.fundConvAt_of_model_contractT
-#print axioms Rcic.Declarative.NativeValleys.TypedModelCovPropagationAudit.fundConvAt_beta_of_model_contractT
-#print axioms Rcic.Declarative.NativeValleys.TypedModelCovPropagationAudit.approxTK_function_variable_beta_contract
-#print axioms Rcic.Declarative.NativeValleys.TypedModelCovPropagationAudit.no_eqGap_realized_beta_factorization
-#print axioms Rcic.Declarative.NativeValleys.TypedModelCovPropagationAudit.approxTK_eqGapDirectAlias_bot
-#print axioms Rcic.Declarative.NativeValleys.TypedModelCovPropagationAudit.eqGapDirectAlias_lrsCoreS_prop
-#print axioms Rcic.Declarative.NativeValleys.TypedModelCovPropagationAudit.eqGapDirectAlias_beta_route_control
-#print axioms Rcic.Declarative.NativeValleys.TypedModelCovRelBoundaryAudit.ctyCov_strict_polyId
-#print axioms Rcic.Declarative.NativeValleys.TypedModelCovRelBoundaryAudit.NativeCovToSReentryM
-#print axioms Rcic.Declarative.NativeValleys.TypedModelCovRelBoundaryAudit.polyId_cov_reentry_control_approxT
-#print axioms Rcic.Declarative.NativeValleys.TypedModelCovRelBoundaryAudit.polyId_cov_reentry_control_approxTK
-#print axioms Rcic.Declarative.NativeValleys.TypedModelCovRelBoundaryAudit.not_nativeCovToSReentryM_approxT
-#print axioms Rcic.Declarative.NativeValleys.TypedModelCovRelBoundaryAudit.not_nativeCovToSReentryM_approxTK
-#print axioms Rcic.Declarative.NativeValleys.TypedModelCovRelBoundaryAudit.CovTypedEnvelopeT
-#print axioms Rcic.Declarative.NativeValleys.TypedModelCovRelBoundaryAudit.covTypedEnvelopeT_expand_red
-#print axioms Rcic.Declarative.NativeValleys.TypedModelCovRelBoundaryAudit.envTypedCovAtM_eqGap_bot
-#print axioms Rcic.Declarative.NativeValleys.TypedModelCovRelBoundaryAudit.eqGapDirectAlias_cov_envelope_control
-#print axioms Rcic.Declarative.NativeValleys.TypedModelCovAdapterWitnessAudit.sortBetaSrc
-#print axioms Rcic.Declarative.NativeValleys.TypedModelCovAdapterWitnessAudit.approxTK_sortBeta_contract
-#print axioms Rcic.Declarative.NativeValleys.TypedModelCovAdapterWitnessAudit.SortBetaAdapterWitnessT
-#print axioms Rcic.Declarative.NativeValleys.TypedModelCovAdapterWitnessAudit.sortBetaAdapterWitnessT
-#print axioms Rcic.Declarative.NativeValleys.TypedModelCovAdapterWitnessAudit.eq_nat_sortBetaAdapterWitnessT
 -- END RCIC_NATIVE_TYPED_MODEL_COV_K_ROOTS
 -- BEGIN RCIC_NATIVE_TYPED_MODEL_KG_ROOTS (glm lane, closure_claim = 0)
-#print axioms Rcic.Declarative.NativeValleys.TypedModelKAudit.KG.KIdxAgree
-#print axioms Rcic.Declarative.NativeValleys.TypedModelKAudit.KG.KGateAt
-#print axioms Rcic.Declarative.NativeValleys.TypedModelKAudit.KG.ApproxTK
-#print axioms Rcic.Declarative.NativeValleys.TypedModelKAudit.KG.approxTK_cases
-#print axioms Rcic.Declarative.NativeValleys.TypedModelKAudit.KG.approxTK_to_approxT
-#print axioms Rcic.Declarative.NativeValleys.TypedModelKAudit.KG.approxTK_of_approxT
-#print axioms Rcic.Declarative.NativeValleys.TypedModelKAudit.KG.ctxModelTApproxTK
-#print axioms Rcic.Declarative.NativeValleys.TypedModelKAudit.KG.eqIndexWS_exists
-#print axioms Rcic.Declarative.NativeValleys.TypedModelKAudit.KG.approxTK_apartRec_bot
-#print axioms Rcic.Declarative.NativeValleys.TypedModelKAudit.KG.not_apartRec_model_approxTK
-#print axioms Rcic.Declarative.NativeValleys.TypedModelKAudit.KG.approxTK_eqGapRedex_prop
-#print axioms Rcic.Declarative.NativeValleys.TypedModelKAudit.KG.approxTK_etaIndexRedex_prop
-#print axioms Rcic.Declarative.NativeValleys.TypedModelKAudit.KG.approxTK_deltaRedex_prop
-#print axioms Rcic.Declarative.NativeValleys.TypedModelKAudit.KG.approxTK_binderIndexRedex_prop
-#print axioms Rcic.Declarative.NativeValleys.TypedModelKAudit.KG.modelK_deltaBinder_divergence
-#print axioms Rcic.Declarative.NativeValleys.TypedModelKAudit.KG.approxTK_interface_status
-#print axioms Rcic.Declarative.NativeValleys.TypedModelKAudit.KG.not_ctxModelTLaws_approxTK
-#print axioms Rcic.Declarative.NativeValleys.TypedModelKAudit.KG.approxTK_eqEnvT_nonvacuity
-#print axioms Rcic.Declarative.NativeValleys.TypedModelKAudit.KG.approxTK_natEnvU_nonvacuity
 -- #7756 audit fix: the ten auxiliary public theorems of the KG model leaf,
 -- previously covered only by the leaf-local #print block, join the enumeration.
-#print axioms Rcic.Declarative.NativeValleys.TypedModelKAudit.KG.iotaWitnessS_preMajor_ne_nil
-#print axioms Rcic.Declarative.NativeValleys.TypedModelKAudit.KG.foldApps_preMajor_is_app
-#print axioms Rcic.Declarative.NativeValleys.TypedModelKAudit.KG.recursorPropK_source_ne_bvar
-#print axioms Rcic.Declarative.NativeValleys.TypedModelKAudit.KG.approxTK_bvar_inv
-#print axioms Rcic.Declarative.NativeValleys.TypedModelKAudit.KG.approxTK_sort_inv
-#print axioms Rcic.Declarative.NativeValleys.TypedModelKAudit.KG.approxTK_pi_inv
-#print axioms Rcic.Declarative.NativeValleys.TypedModelKAudit.KG.approxTK_lam_inv
-#print axioms Rcic.Declarative.NativeValleys.TypedModelKAudit.KG.approxTK_letE_inv
-#print axioms Rcic.Declarative.NativeValleys.TypedModelKAudit.KG.approxTK_sort_code
-#print axioms Rcic.Declarative.NativeValleys.TypedModelKAudit.KG.approxTK_bot
 -- END RCIC_NATIVE_TYPED_MODEL_KG_ROOTS
 
 -- BEGIN RCIC_NATIVE_TYPED_MODEL_KG2_ROOTS (glm lane, closure_claim = 0)
@@ -46387,6 +43825,28 @@ end Rcic.FoundationSeal
 #print axioms Rcic.Declarative.NativeValleys.TypedModelKAudit.KG2.kIndexConvAt_deltaBinder_stepDerived
 #print axioms Rcic.Declarative.NativeValleys.TypedModelKAudit.KG2.kg2_six_native_conjunction
 -- END RCIC_NATIVE_TYPED_MODEL_KG2_ROOTS
+-- BEGIN GLM-SR3 CL-EUT ROWS AXIOM QUERIES (sortRow rows 14/15/17)
+#print axioms Rcic.Syn.eutLamPorts_tableOfI_empty_refuted
+#print axioms Rcic.Syn.eutLamP_tableOfI_empty_refuted
+#print axioms Rcic.Syn.eut_case_wall_ident_sat
+#print axioms Rcic.Syn.sr3hne
+#print axioms Rcic.Syn.clConstPorts_tableOfI_empty_refuted
+#print axioms Rcic.Syn.clConstP_tableOfI_empty_refuted
+#print axioms Rcic.Syn.cl_case_wall_ident_sat
+#print axioms Rcic.Syn.mixed_case_of_cl_eut_tableI
+#print axioms Rcic.Syn.mixedField_iff_tableI
+-- oaudit2 #7781: the wall/fixture defs are public decls too — query them.
+#print axioms Rcic.Syn.sr3σ
+#print axioms Rcic.Syn.sr3Mem
+#print axioms Rcic.Syn.sr3hT₁
+#print axioms Rcic.Syn.sr3hT₂
+#print axioms Rcic.Syn.clConstP_tableOfI
+#print axioms Rcic.Syn.cl_case_wall
+#print axioms Rcic.Syn.eutLamP_tableOfI
+#print axioms Rcic.Syn.eut_case_wall
+#print axioms Rcic.Syn.mixed_case_wall
+-- END GLM-SR3 CL-EUT ROWS AXIOM QUERIES
+
 -- BEGIN GLM-SR2 LITPI LIT ROOTS (sortRow row 7 es_lit refuted; closure_claim = 0)
 #print axioms Rcic.Syn.sr2_eqN_max_zero
 #print axioms Rcic.Syn.sr2_eqN_succ
@@ -46406,6 +43866,7 @@ end Rcic.FoundationSeal
 #print axioms Rcic.Syn.sr2_lit_surfaceCL_refuted
 #print axioms Rcic.Syn.sr2_lit_row_premises_nonvacuous
 -- END GLM-SR2 LITPI LIT ROOTS
+
 -- BEGIN GLM-SR2 LITPI PI ROOTS (sortRow row 10 es_pi leftCL refuted; closure_claim = 0)
 #print axioms Rcic.Syn.appN_ne_pi
 #print axioms Rcic.Syn.rStep_pi_normal
@@ -46462,25 +43923,7 @@ end Rcic.FoundationSeal
 #print axioms Rcic.Syn.thsaLhom_lit_wall_instance_id
 -- END GLM-SR2 LITPI THSALHOM ROOTS
 -- BEGIN GLM-SR3 CL-EUT ROWS AXIOM QUERIES (sortRow rows 14/15/17)
-#print axioms Rcic.Syn.eutLamPorts_tableOfI_empty_refuted
-#print axioms Rcic.Syn.eutLamP_tableOfI_empty_refuted
-#print axioms Rcic.Syn.eut_case_wall_ident_sat
-#print axioms Rcic.Syn.sr3hne
-#print axioms Rcic.Syn.clConstPorts_tableOfI_empty_refuted
-#print axioms Rcic.Syn.clConstP_tableOfI_empty_refuted
-#print axioms Rcic.Syn.cl_case_wall_ident_sat
-#print axioms Rcic.Syn.mixed_case_of_cl_eut_tableI
-#print axioms Rcic.Syn.mixedField_iff_tableI
 -- oaudit2 #7781: the wall/fixture defs are public decls too — query them.
-#print axioms Rcic.Syn.sr3σ
-#print axioms Rcic.Syn.sr3Mem
-#print axioms Rcic.Syn.sr3hT₁
-#print axioms Rcic.Syn.sr3hT₂
-#print axioms Rcic.Syn.clConstP_tableOfI
-#print axioms Rcic.Syn.cl_case_wall
-#print axioms Rcic.Syn.eutLamP_tableOfI
-#print axioms Rcic.Syn.eut_case_wall
-#print axioms Rcic.Syn.mixed_case_wall
 -- END GLM-SR3 CL-EUT ROWS AXIOM QUERIES
 -- BEGIN DEVIN SR-ESLAM AXIOM ROOTS (sortRow row 6 es_iota_retained at tableOfI)
 #print axioms Rcic.Syn.cRoot_tbl_mono
@@ -46569,6 +44012,8 @@ end Rcic.FoundationSeal
 #print axioms Rcic.Declarative.NativeValleys.TypedModelW4MAudit.GuardBlockedModelOnly
 #print axioms Rcic.Declarative.NativeValleys.TypedModelW4MAudit.ck2_adds_no_prop_at_blocked
 -- END RCIC_NATIVE_TYPED_MODEL_W4M_AXIOM_ROOTS
+
+-- BEGIN GLM-SR1 INLINE ROOTS (classification + epsW repair; closure_claim = 0)
 #print axioms Rcic.Syn.wkInnerGo
 #print axioms Rcic.Syn.wkInnerDisp
 #print axioms Rcic.Syn.TyP.epsW
@@ -46591,6 +44036,27 @@ end Rcic.FoundationSeal
 #print axioms Rcic.Syn.wkInnerDisp_eq_removeAt
 #print axioms Rcic.Syn.HasNoInlinePush
 #print axioms Rcic.Syn.epsW_eq_eps_noInline
+#print axioms Rcic.Syn.epsW_eq_eps_noWk
+#print axioms Rcic.Syn.wkInnerDisp_eq_removeAt_of_shape
+#print axioms Rcic.Syn.DispLvlEq.wkInnerDisp
+#print axioms Rcic.Syn.lvlEq_epsW
+#print axioms Rcic.Syn.lvlEq_epsW_instLevel
+#print axioms Rcic.Syn.lvlEq_epsW_instLevel_nil
+#print axioms Rcic.Syn.epsW_eq_eps_closed
+#print axioms Rcic.Syn.closedAt_epsW
+#print axioms Rcic.Syn.closedAt_epsW_nil
+#print axioms Rcic.Syn.epsW_nil_lift
+#print axioms Rcic.Syn.epsW_nil_lift_zero
+#print axioms Rcic.Syn.epsW_nil_inst
+#print axioms Rcic.Syn.instEnd_epsW_drop
+#print axioms Rcic.Syn.instEnd_epsW_keep
+#print axioms Rcic.Syn.esW_wk_keep
+#print axioms Rcic.Syn.esW_transports
+#print axioms Rcic.Syn.not_es_wk_inline_epsW_false
+#print axioms Rcic.Syn.routedDisp_let_noKeep
+#print axioms Rcic.Syn.zl_rho_not_routed
+#print axioms Rcic.Syn.zl_res_conv_refuted_hom
+#print axioms Rcic.Syn.zl_res_conv_canon
 #print axioms Rcic.Syn.InlineWkLift
 #print axioms Rcic.Syn.zlRho_eq
 #print axioms Rcic.Syn.tooth_canonical
@@ -46654,27 +44120,6 @@ end Rcic.FoundationSeal
 #print axioms Rcic.Syn.sr4NotPbitConstZeroSort
 #print axioms Rcic.Syn.sr4PbGoalSupply
 #print axioms Rcic.Syn.sr4PbGoalSupplyRefuted
-#print axioms Rcic.Syn.epsW_eq_eps_noWk
-#print axioms Rcic.Syn.wkInnerDisp_eq_removeAt_of_shape
-#print axioms Rcic.Syn.DispLvlEq.wkInnerDisp
-#print axioms Rcic.Syn.lvlEq_epsW
-#print axioms Rcic.Syn.lvlEq_epsW_instLevel
-#print axioms Rcic.Syn.lvlEq_epsW_instLevel_nil
-#print axioms Rcic.Syn.epsW_eq_eps_closed
-#print axioms Rcic.Syn.closedAt_epsW
-#print axioms Rcic.Syn.closedAt_epsW_nil
-#print axioms Rcic.Syn.epsW_nil_lift
-#print axioms Rcic.Syn.epsW_nil_lift_zero
-#print axioms Rcic.Syn.epsW_nil_inst
-#print axioms Rcic.Syn.instEnd_epsW_drop
-#print axioms Rcic.Syn.instEnd_epsW_keep
-#print axioms Rcic.Syn.esW_wk_keep
-#print axioms Rcic.Syn.esW_transports
-#print axioms Rcic.Syn.not_es_wk_inline_epsW_false
-#print axioms Rcic.Syn.routedDisp_let_noKeep
-#print axioms Rcic.Syn.zl_rho_not_routed
-#print axioms Rcic.Syn.zl_res_conv_refuted_hom
-#print axioms Rcic.Syn.zl_res_conv_canon
 #print axioms Rcic.Syn.sr4PbHeadLhomWall
 #print axioms Rcic.Syn.sr4PbGoalSupplyLhom
 #print axioms Rcic.Syn.sr4ForallPi
@@ -46708,6 +44153,225 @@ end Rcic.FoundationSeal
 #print axioms Rcic.Syn.ClLamPortsW
 #print axioms Rcic.Syn.cl_lam_wallW
 #print axioms Rcic.Syn.cl_lam_wallW_ident_sat
+-- END GLM-SR1 INLINE ROOTS
+-- BEGIN GLM-SR1 STEPW AXIOMS (StepSuppliersW: the closer on epsW, boundary, rows 2/3/4; closure_claim = 0)
+#print axioms Rcic.Syn.GoalW
+#print axioms Rcic.Syn.esW_refl
+#print axioms Rcic.Syn.esW_symm
+#print axioms Rcic.Syn.esW_trans
+#print axioms Rcic.Syn.esW_tyConv
+#print axioms Rcic.Syn.esW_irr_star
+#print axioms Rcic.Syn.esW_sorts
+#print axioms Rcic.Syn.esW_iota_proof_of_pbitWs
+#print axioms Rcic.Syn.reg_epsW_of_isSortOrPiHead
+#print axioms Rcic.Syn.clW_reg_sort_of_isSortOrPiHead
+#print axioms Rcic.Syn.sortCoh_of_eutW_clW
+#print axioms Rcic.Syn.bitCoh_of_eutW_clW
+#print axioms Rcic.Syn.cts_of_eutW_clW
+#print axioms Rcic.Syn.step_of_suppliersW
+#print axioms Rcic.Syn.solve_of_stepW
+#print axioms Rcic.Syn.allBelowScopedW_of_suppliers
+#print axioms Rcic.Syn.dispShape_can
+#print axioms Rcic.Syn.es_of_allBelowScopedW
+#print axioms Rcic.Syn.cl_of_allBelowScopedW
+#print axioms Rcic.Syn.eut_of_allBelowScopedW
+#print axioms Rcic.Syn.pbit_of_allBelowScopedW
+#print axioms Rcic.Syn.esChain_of_allBelowScopedW
+#print axioms Rcic.Syn.sortRow_of_allBelowScopedW
+#print axioms Rcic.Syn.boundary_epsW_ne_eps
+#print axioms Rcic.Syn.not_assumpPref_wkZetaNode
+#print axioms Rcic.Syn.zeta_caseStepW_of_port_cls
+#print axioms Rcic.Syn.esW_zeta_field_of_walls
+#print axioms Rcic.Syn.zetaLocal_caseStepW_of_ports
+#print axioms Rcic.Syn.zl_res_convW_canon
+#print axioms Rcic.Syn.zl_routed_no_keep_at_zetaCtx
+#print axioms Rcic.Syn.esW_zetaLocal_field_portsW
+#print axioms Rcic.Syn.esW_zetaLocal_field_of_walls
+#print axioms Rcic.Syn.beta_body_clW_fixture_holds
+#print axioms Rcic.Syn.beta_reduct_clW_fixture_holds
+-- END GLM-SR1 STEPW AXIOMS
+-- BEGIN GLM-SR2 ESW ROOTS (epsW + LevelHom re-measure layer; closure_claim = 0)
+#print axioms Rcic.Syn.GoalW
+#print axioms Rcic.Syn.CaseStepW
+#print axioms Rcic.Syn.levelIsZero_congr_hom
+#print axioms Rcic.Syn.sr2_σ_not_hom
+#print axioms Rcic.Syn.lit_tooth_bit_hom
+#print axioms Rcic.Syn.lit_tooth_pair_clw_hom
+#print axioms Rcic.Syn.sr2w_zeroTyAss
+#print axioms Rcic.Syn.sr2w_zeroEsub
+#print axioms Rcic.Syn.sr2w_litEsub
+#print axioms Rcic.Syn.lit_esub_epsW_inert
+#print axioms Rcic.Syn.lit_esub_clw_id
+#print axioms Rcic.Syn.litW_erasure_unique_wall
+#print axioms Rcic.Syn.TransportHeadSortAtW
+#print axioms Rcic.Syn.thsaW_ewk_of
+#print axioms Rcic.Syn.thsaW_apply
+#print axioms Rcic.Syn.sr2_σ2_not_hom
+#print axioms Rcic.Syn.pi_tooth_bit_hom
+#print axioms Rcic.Syn.pi_tooth_pair_clw_hom
+#print axioms Rcic.Syn.piW_field_wall
+#print axioms Rcic.Syn.thsaW_app_hclF
+#print axioms Rcic.Syn.thsaW_app_hclA
+#print axioms Rcic.Syn.thsaW_delta_hL
+#print axioms Rcic.Syn.thsaW_delta_hB
+#print axioms Rcic.Syn.thsaW_consts_hclL
+#print axioms Rcic.Syn.thsaW_consts_hclR
+#print axioms Rcic.Syn.appW_field_wall
+#print axioms Rcic.Syn.deltaW_field_wall
+#print axioms Rcic.Syn.constsW_field_wall
+-- END GLM-SR2 ESW ROOTS
+-- BEGIN GLM-SR2 CLW ROOTS (typing-erasure coherence; closure_claim = 0)
+#print axioms Rcic.Syn.TypingEpsCoherenceW
+#print axioms Rcic.Syn.thsaW_of_coherence
+#print axioms Rcic.Syn.zetaSurfaceClWallW_cone_of_coherence
+#print axioms Rcic.Syn.zetaReductClWallW_cone_of_coherence
+#print axioms Rcic.Syn.esW_zeta_field_of_coherence
+#print axioms Rcic.Syn.zetaLocalSurfaceClWallW_cone_of_coherence
+#print axioms Rcic.Syn.zetaLocalBvarSurface_epsW_resolve
+#print axioms Rcic.Syn.CLWx
+#print axioms Rcic.Syn.ClwBvarValueConeW
+#print axioms Rcic.Syn.zetaLocalResConvWallRoutedW_of_clwBvarValue
+#print axioms Rcic.Syn.clwBvarValueConeW_canon_routed
+#print axioms Rcic.Syn.clwBvarValueConeW_canon
+#print axioms Rcic.Syn.esW_zetaLocal_field_of_coherence
+#print axioms Rcic.Syn.betaBodyClWallW_cone_of_coherence
+#print axioms Rcic.Syn.betaReductClWallW_cone_of_coherence
+#print axioms Rcic.Syn.ConvModStarIffW
+#print axioms Rcic.Syn.betaBodyTagWallW_cone_of_coherence
+#print axioms Rcic.Syn.litW_erasureConv_cone_of_coherence
+#print axioms Rcic.Syn.constsW_clwLegs_of_coherence
+#print axioms Rcic.Syn.deltaW_clwLegs_of_coherence
+#print axioms Rcic.Syn.appW_clwLegs_of_coherence
+#print axioms Rcic.Syn.piW_clwPorts_of_coherence
+#print axioms Rcic.Syn.clw_convR
+#print axioms Rcic.Syn.clw_convL_of
+#print axioms Rcic.Syn.clw_ewk_of
+#print axioms Rcic.Syn.clw_sort
+#print axioms Rcic.Syn.clw_const_of_bit
+#print axioms Rcic.Syn.clw_bvar_of_bit
+#print axioms Rcic.Syn.clw_lit_of
+#print axioms Rcic.Syn.ConvModPiCongrW
+#print axioms Rcic.Syn.clw_pi_true
+#print axioms Rcic.Syn.clw_pi_false
+#print axioms Rcic.Syn.ConstUnivBitCohW
+#print axioms Rcic.Syn.ConstSortLadderEqNW
+#print axioms Rcic.Syn.constUnivBitCohW_of_ladderEqN
+-- END GLM-SR2 CLW ROOTS
+-- BEGIN GLM-SR2 ISSUESSR ROOTS (issuance rows for the reduction-arm walls; closure_claim = 0)
+#print axioms Rcic.Syn.IssuesSR
+#print axioms Rcic.Syn.IssuesSR.hom
+#print axioms Rcic.Syn.IssuesSR.routed
+#print axioms Rcic.Syn.DemandSR
+#print axioms Rcic.Syn.ih_issueSR
+#print axioms Rcic.Syn.StepIHSR.toStepIHW
+#print axioms Rcic.Syn.betaSRbody_before
+#print axioms Rcic.Syn.betaSRreduct_before
+#print axioms Rcic.Syn.zetaSRsurface_before
+#print axioms Rcic.Syn.zetaSRreduct_before
+#print axioms Rcic.Syn.zetaLocalSRsurface_before
+#print axioms Rcic.Syn.litSRsurface_before
+#print axioms Rcic.Syn.piSRsurfaceL_before
+#print axioms Rcic.Syn.piSRsurfaceR_before_of
+#print axioms Rcic.Syn.esW_zeta_fieldSR
+#print axioms Rcic.Syn.litSRcl_edge
+#print axioms Rcic.Syn.litSRsurface_epsW
+#print axioms Rcic.Syn.esW_lit_fieldSR
+#print axioms Rcic.Syn.esW_zetaLocal_fieldSR
+-- END GLM-SR2 ISSUESSR ROOTS
+-- BEGIN GLM-SR2 MEAS ROOTS (cc 00:40Z measure lemmas + ConvModPiCongrW + W-assemblers; closure_claim = 0)
+#print axioms Rcic.Syn.piDomain_H_wt_le
+#print axioms Rcic.Syn.appSrc_wt_le
+#print axioms Rcic.Syn.piSRsurfaceR_before
+#print axioms Rcic.Syn.convModPiCongrW_of_tableClosed
+#print axioms Rcic.Syn.convModPiCongrW_tableOfI
+#print axioms Rcic.Syn.esW_beta_drop
+#print axioms Rcic.Syn.esW_beta_rel
+#print axioms Rcic.Syn.TyP.epsW_castS
+#print axioms Rcic.Syn.TyP.epsW_castT
+#print axioms Rcic.Syn.piLeftSurface_epsW
+#print axioms Rcic.Syn.piRightSurfaceSrc_epsW
+#print axioms Rcic.Syn.piRightSurface_epsW
+#print axioms Rcic.Syn.esW_pi_of_congr
+-- END GLM-SR2 MEAS ROOTS
+-- BEGIN GLM-SR2 REDEXAP ROOTS (readRedex preserves AssumpPref; closure_claim = 0)
+#print axioms Rcic.Syn.LamRead.apBody
+#print axioms Rcic.Syn.RedexRead.apBoth
+#print axioms Rcic.Syn.LamRead.apBody_raise
+#print axioms Rcic.Syn.RedexRead.apBoth_raise
+#print axioms Rcic.Syn.assumptionPrefix_cons
+#print axioms Rcic.Syn.pushLamWk_apBody
+#print axioms Rcic.Syn.pushLamLinst_apBody
+#print axioms Rcic.Syn.pushBodyEsub_ap
+#print axioms Rcic.Syn.pushLamEsub_apBody
+#print axioms Rcic.Syn.pushRedexWk_apBoth
+#print axioms Rcic.Syn.pushRedexLinst_apBoth
+#print axioms Rcic.Syn.pushRedexEsub_apBoth
+#print axioms Rcic.Syn.redexOfApp_apBoth
+#print axioms Rcic.Syn.lamRead_ap
+#print axioms Rcic.Syn.redexRead_ap
+#print axioms Rcic.Syn.redexRead_ap_yes
+-- END GLM-SR2 REDEXAP ROOTS
+-- BEGIN GLM-SR1 STEPW NOINLINE AXIOMS (es_wk_keep in-range discharge; closure_claim = 0)
+#print axioms Rcic.Syn.ctxP_disp_inline_letBinding
+#print axioms Rcic.Syn.binderDisp_ne_inline
+#print axioms Rcic.Syn.insertAt_letBinding_inv_lo
+#print axioms Rcic.Syn.insertAt_letBinding_inv_hi
+#print axioms Rcic.Syn.substRemove_letBinding_inv_lo
+#print axioms Rcic.Syn.substRemove_getElem?_ge
+#print axioms Rcic.Syn.instLvlsDecl_letBinding_inv
+#print axioms Rcic.Syn.insertDisp_inline_lt
+#print axioms Rcic.Syn.insertDisp_self_ne_inline
+#print axioms Rcic.Syn.routedDisp_inline_letBinding
+#print axioms Rcic.Syn.wkInnerGo_eq_removeAt_noInlineBelow
+#print axioms Rcic.Syn.routedDisp_noInlineBelow_of_ap
+#print axioms Rcic.Syn.wkInnerDisp_eq_removeAt_of_ap
+#print axioms Rcic.Syn.wkInnerDisp_eq_removeAt_of_demand
+-- END GLM-SR1 STEPW NOINLINE AXIOMS
+-- BEGIN GLM-SR1 STEPW CLOSEDWF AXIOMS (closedWf_enrichConvT boundary discharge; closure_claim = 0)
+#print axioms Rcic.Syn.LetCtxConvP.ClosedWf
+#print axioms Rcic.Syn.closedWf_betaLeftP
+#print axioms Rcic.Syn.closedWf_trZeta
+#print axioms Rcic.Syn.closedWf_appRightP
+#print axioms Rcic.Syn.closedWf_lamRightP
+#print axioms Rcic.Syn.closedWf_piRightP
+#print axioms Rcic.Syn.closedWf_etaLam
+#print axioms Rcic.Syn.closedWf_etaLeftP
+#print axioms Rcic.Syn.closedWf_letSurfL
+#print axioms Rcic.Syn.closedWf_letSurfR
+#print axioms Rcic.Syn.closedWf_letRightP
+#print axioms Rcic.Syn.closedWf_enrichConvT
+#print axioms Rcic.Syn.closedWf_enrichTyConvT
+#print axioms Rcic.Syn.closedWf_enrichTyConvT_of_envWfT
+#print axioms Rcic.Syn.sortRow_of_allBelowScopedW_letCW
+-- END GLM-SR1 STEPW CLOSEDWF AXIOMS
+-- BEGIN GLM-SR1 STEPW LETCW AXIOMS (let-slot walker ClosedWf-preservation; closure_claim = 0)
+#print axioms Rcic.Syn.PStep.stepCW
+#print axioms Rcic.Syn.stepsCW
+#print axioms Rcic.Syn.stepsCW_nil
+#print axioms Rcic.Syn.stepsCW_cons
+#print axioms Rcic.Syn.stepsCW_tail
+#print axioms Rcic.Syn.stepCW_shiftStep
+#print axioms Rcic.Syn.stepsCW_shiftAll
+#print axioms Rcic.Syn.PackL.CW
+#print axioms Rcic.Syn.PackL.CW_nil
+#print axioms Rcic.Syn.PackL.CW_wkCons
+#print axioms Rcic.Syn.PackL.CW_esubCons
+#print axioms Rcic.Syn.PackL.CW_lsubCons
+#print axioms Rcic.Syn.PackL.CW_linstCons
+#print axioms Rcic.Syn.PackL.CW_cctxCons
+#print axioms Rcic.Syn.PackL.CW_under
+#print axioms Rcic.Syn.closedWf_convChain
+#print axioms Rcic.Syn.BHit.ClosedWf
+#print axioms Rcic.Syn.bhit_closedWf_castTerm
+#print axioms Rcic.Syn.retypeLetBVarSlot_closedWf
+#print axioms Rcic.Syn.finishBvarL_closedWf
+#print axioms Rcic.Syn.bwalkAtL_closedWf
+#print axioms Rcic.Syn.tyAtLet_closedWf
+#print axioms Rcic.Syn.tyCctxLetAt_closedWf
+#print axioms Rcic.Syn.letCtxConvP_of_cvWalkHyp_closedWf
+#print axioms Rcic.Syn.letCtxConvP_of_envWfT_closedWf
+#print axioms Rcic.Syn.sortRow_of_allBelowScopedW_envWfT
+-- END GLM-SR1 STEPW LETCW AXIOMS
 #print axioms Rcic.Syn.eqNList_of_gates
 #print axioms Rcic.Syn.eqN_of_common_sort
 #print axioms Rcic.Syn.cl_hbit_hom_of_common_sort
@@ -46885,3 +44549,153 @@ end Rcic.FoundationSeal
 #print axioms Rcic.Syn.cl_linst_linst_caseStepT
 #print axioms Rcic.Syn.eut_cctx_cctx_caseStepT
 #print axioms Rcic.Syn.cl_cctx_cctx_caseStepT
+
+-- BEGIN SR-DELTA-ADMW AXIOM QUERIES (row 5 es_delta admW calibration)
+#print axioms Rcic.Syn.esDeltaCLWall
+#print axioms Rcic.Syn.esDeltaKeptWall_of_clWall_admW
+#print axioms Rcic.Syn.es_delta_kept_tableOfI_admW
+#print axioms Rcic.Syn.es_delta_kept_tableOfI_pin_admW
+#print axioms Rcic.Syn.srDeltaCLWall_fixture
+#print axioms Rcic.Syn.srDeltaEsKept_tableOfI_admW_fixture
+-- END SR-DELTA-ADMW AXIOM QUERIES
+#print axioms Rcic.Syn.clAppPorts_of_iffs
+#print axioms Rcic.Syn.clAppPorts_of_tagCoh
+#print axioms Rcic.Syn.sr5_appCl_sat
+#print axioms Rcic.Syn.perm_cl_esub_bvarR
+#print axioms Rcic.Syn.perm_cl_esub_bvarL
+#print axioms Rcic.Syn.lexDM_tyPair_esub_bvarR
+#print axioms Rcic.Syn.lexDM_tyPair_esub_bvarL
+#print axioms Rcic.Syn.goal_cl_esub_bvar_keep
+#print axioms Rcic.Syn.goal_cl_esub_bvar_drop
+#print axioms Rcic.Syn.bvarCollapseCL
+#print axioms Rcic.Syn.cl_esub_bvar_drop_eps
+#print axioms Rcic.Declarative.frame_shiftC
+#print axioms Rcic.Declarative.instPrefix_image_bvar_idsC
+#print axioms Rcic.Declarative.instPrefix_image_bvar_consumedC
+#print axioms Rcic.Declarative.instOff_piC
+#print axioms Rcic.Declarative.instPrefix_piC
+#print axioms Rcic.Declarative.img_piC
+#print axioms Rcic.Declarative.fieldBvars_succC
+#print axioms Rcic.Declarative.instPrefix_stepC
+#print axioms Rcic.Declarative.instPrefix_appC
+#print axioms Rcic.Declarative.img_foldAppsC
+#print axioms Rcic.Declarative.spine_img_constC
+#print axioms Rcic.Declarative.recCallField_imgC
+#print axioms Rcic.Declarative.idextC
+#print axioms Rcic.Declarative.instOff_bvar_ltC
+#print axioms Rcic.Declarative.instPrefix_idext_liftC
+#print axioms Rcic.Declarative.instOff_constC
+#print axioms Rcic.Declarative.instOff_appC
+#print axioms Rcic.Declarative.instOff_lamC
+#print axioms Rcic.Declarative.instOff_foldAppsC
+#print axioms Rcic.Declarative.fieldBvars_map_constC
+#print axioms Rcic.Declarative.fieldBvars_imgC
+#print axioms Rcic.Declarative.telImgC
+#print axioms Rcic.Declarative.telImg_lengthC
+#print axioms Rcic.Declarative.img_lamTelescope_offC
+#print axioms Rcic.Declarative.img_lamTelescopeC
+#print axioms Rcic.Declarative.img_lift_entryC
+#print axioms Rcic.Declarative.map_map_imgC
+#print axioms Rcic.Declarative.instLevels_foldAppsC
+#print axioms Rcic.Declarative.recCallFunS_imgC
+#print axioms Rcic.Declarative.funRecArg_of_canonC
+#print axioms Rcic.Declarative.WalkSuppliesC
+#print axioms Rcic.Declarative.iotaArgs_agreeC
+#print axioms Rcic.Declarative.Ann.preMajorBvars_map_img
+#print axioms Rcic.Declarative.Ann.fieldBvars_map_img
+#print axioms Rcic.Declarative.Ann.recPrefix_map_img
+#print axioms Rcic.Declarative.Ann.iotaRhsOfS_eq_rhsArgsS_ctorFieldTelInst
+#print axioms Rcic.Declarative.Ann.iotaRhsOfS_eq_rhsArgsS_ctorAfter
+#print axioms Rcic.Declarative.Ann.derivedIotaUS_of_iotaFnA_frec
+#print axioms Rcic.Declarative.Ann.FrecFiringGates
+#print axioms Rcic.Declarative.Ann.iotaErasesTUA_frec
+#print axioms Rcic.Declarative.Ann.iotaCorrTUA_frec
+#print axioms Rcic.Syn.starEtaLHS
+#print axioms Rcic.Syn.starEtaLHS_eq
+#print axioms Rcic.Syn.starEtaLHS_ne_star
+#print axioms Rcic.Syn.convModStarIff_eta
+#print axioms Rcic.Syn.convModStarIffW_refuted
+#print axioms Rcic.Syn.convModStarIffW_refuted_tableOfI
+#print axioms Rcic.Syn.lvlEq_star_right
+#print axioms Rcic.Syn.confluent_eStep_tableOfI
+#print axioms Rcic.Syn.convE_pi_inv_tableOfI
+#print axioms Rcic.Syn.convE_star_rstar_of_wf
+#print axioms Rcic.Syn.convE_star_rstar_tableOfI
+#print axioms Rcic.Syn.cl_star_reaches
+#print axioms Rcic.Syn.EpsStarNormal
+#print axioms Rcic.Syn.tag_iff_of_cl_epsStarNormal
+#print axioms Rcic.Syn.appN_eq_star
+#print axioms Rcic.Syn.croot_inv
+#print axioms Rcic.Syn.croot_star_args_nil
+#print axioms Rcic.Syn.croot_star_ctor_nil
+#print axioms Rcic.Syn.DeltaStarEntry
+#print axioms Rcic.Syn.StarEntryShape
+#print axioms Rcic.Syn.eStep_star_root
+#print axioms Rcic.Syn.rstar_star_last
+#print axioms Rcic.Syn.rstar_star_entry
+#print axioms Rcic.Syn.BetaStarEntryWall
+#print axioms Rcic.Syn.EtaStarEntryWall
+#print axioms Rcic.Syn.DeltaStarEntryWall
+#print axioms Rcic.Syn.StarEntryWall
+#print axioms Rcic.Syn.starEntryShape_ne_star
+#print axioms Rcic.Syn.eStep_star_of_entry
+#print axioms Rcic.Syn.epsStarNormal_iff_noEntry
+#print axioms Rcic.Syn.tableOfI_source
+#print axioms Rcic.Syn.deltaStarEntry_tableOfI
+#print axioms Rcic.Syn.DeltaRhsStarWall
+#print axioms Rcic.Syn.deltaStarEntryWall_tableOfI
+#print axioms Rcic.Syn.IssuesCTB
+#print axioms Rcic.Syn.issuesCTB_hom
+#print axioms Rcic.Syn.issuesCTB_routed
+#print axioms Rcic.Syn.beta_body_cl_ap
+#print axioms Rcic.Syn.beta_body_cl_before
+#print axioms Rcic.Syn.RedexBodyAPWall
+#print axioms Rcic.Syn.removeAt_length_ge
+#print axioms Rcic.Syn.removeAt_length_le
+#print axioms Rcic.Syn.routedDisp_length_ge
+#print axioms Rcic.Syn.wk_noOp_outOfRange
+#print axioms Rcic.Syn.scopedCtx_can_length
+#print axioms Rcic.Syn.wk_canonicalDisp_notKeep
+#print axioms Rcic.Syn.wkInnerDisp_eq_removeAt_canonical
+#print axioms Rcic.Syn.resolve_keep_slot
+#print axioms Rcic.Syn.countKeep_take_mono_keep
+#print axioms Rcic.Syn.inst_star_eq_of_closedAt
+#print axioms Rcic.Syn.wkInnerGo_eq_removeAt_of_closedAt
+#print axioms Rcic.Syn.wkInnerDisp_eq_removeAt_of_closedAt
+#print axioms Rcic.Syn.removeAt_eq_of_ge
+#print axioms Rcic.Syn.removeAt_length_of_lt
+#print axioms Rcic.Syn.routedDisp_wk_witness
+#print axioms Rcic.Syn.mem_of_list_tail
+#print axioms Rcic.Syn.letBinding_mem_insertAt
+#print axioms Rcic.Syn.letBinding_mem_substRemove
+#print axioms Rcic.Syn.letBinding_mem_instLvlsCtx
+#print axioms Rcic.Syn.issues_letTail
+#print axioms Rcic.Syn.wk_noOp_blocked_of_let
+#print axioms Rcic.Syn.demand_surplus_wk
+#print axioms Rcic.Syn.srPropTy
+#print axioms Rcic.Syn.srPropMember
+#print axioms Rcic.Syn.srPropEnv
+#print axioms Rcic.Syn.srPropDefMember
+#print axioms Rcic.Syn.srPropDefEnv
+#print axioms Rcic.Syn.srPropTy_ty
+#print axioms Rcic.Syn.srPropBodyTy
+#print axioms Rcic.Syn.srPropEnvWf
+#print axioms Rcic.Syn.srPropDefEnvWf
+#print axioms Rcic.Syn.srPropDef_rhs_star
+#print axioms Rcic.Syn.deltaRhsStarWall_refuted
+#print axioms Rcic.Syn.DeltaSlotBitWall
+#print axioms Rcic.Syn.ReductClReadWall
+#print axioms Rcic.Syn.bGot_Aarg
+#print axioms Rcic.Syn.bGot_hbody_eps_keep
+#print axioms Rcic.Syn.bGot_harg_eps
+#print axioms Rcic.Syn.reductClRead_wedge
+#print axioms Rcic.Syn.reductClReadWall_at_wedge
+#print axioms Rcic.Syn.bApp_assumpPref
+#print axioms Rcic.Syn.bDl_not_assumpPref
+#print axioms Rcic.Syn.bApp_read_isYes
+#print axioms Rcic.Syn.bAppGot
+#print axioms Rcic.Syn.bApp_hr
+#print axioms Rcic.Syn.bAppGot_hbody_assumpPref
+#print axioms Rcic.Syn.redexBodyAP_bApp
+#print axioms Rcic.Syn.redexBodyAP_bDl
+#print axioms Rcic.Syn.redexBodyAPWall_at_bApp
