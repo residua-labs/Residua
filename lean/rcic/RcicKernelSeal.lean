@@ -1407,6 +1407,8 @@ import rcic.RcicSynSRDeltaClosedField
 import rcic.RcicSynSRIotaRetK
 import rcic.RcicSynTableKCompat
 import rcic.RcicSynSRIotaRetKHmem
+import rcic.RcicSynSRLitPiErase
+import rcic.RcicSynSRLitPiInv
 open Lean
 -- END GLM-SR2 REDEXAP IMPORT
 
@@ -2433,6 +2435,8 @@ def sealedTheorems : List Name := [
   -- BEGIN FORGE 1.7 STORED RESULT SEAL
   -- BEGIN FORGE 1.9 SET FINISH SEAL
   -- END FORGE 1.9 SET FINISH SEAL
+  -- BEGIN FORGE 1.10 GOAL JOIN SEAL
+  -- END FORGE 1.10 GOAL JOIN SEAL
   -- END FORGE 1.7 STORED RESULT SEAL
   -- BEGIN FORGE 1.6 ACTUAL FEEDBACK SEAL
   -- END FORGE 1.6 ACTUAL FEEDBACK SEAL
@@ -35387,6 +35391,49 @@ def sealedTheorems : List Name := [
     ``Rcic.Syn.iotaRetainedRStep_iotaKRule,
     ``Rcic.Syn.es_iota_retained_field_tableOfK
   ]
+  -- BEGIN LAND-UNION (seal names added by the landed PR; content-keyed union)
+  ++ [
+    ``Rcic.Syn.TyPEraseGatesW,
+    ``Rcic.Syn.DerivedIotaEwkW,
+    ``Rcic.Syn.hasTyTEwk,
+    ``Rcic.Syn.convTEwk,
+    ``Rcic.Syn.tyPErase,
+    ``Rcic.Syn.cvPErase,
+    ``Rcic.Syn.tyPEraseW_of,
+    ``Rcic.Syn.cvPEraseW_of,
+    ``Rcic.Syn.tyPEraseGates_empty,
+    ``Rcic.Syn.derivedIotaEwk_empty,
+    ``Rcic.Syn.tyPEraseGates_of_memberless,
+    ``Rcic.Syn.TyPInvWkW,
+    ``Rcic.Syn.TyPInvEsubW,
+    ``Rcic.Syn.TyPInvLinstW,
+    ``Rcic.Syn.TyPInvEwkW,
+    ``Rcic.Syn.zetaSlotHeadUnwkW_of_invWk,
+    ``Rcic.Syn.zetaSlotWkArmW_of_align,
+    ``Rcic.Syn.zetaSlotEsubArmW_of_align,
+    ``Rcic.Syn.zetaSlotLinstArmW_of_align,
+    ``Rcic.Syn.zetaSlotEwkArmW_of_align,
+    ``Rcic.Syn.tyPInvWkW_onCone,
+    ``Rcic.Syn.tyPInvEsubW_onCone,
+    ``Rcic.Syn.tyPInvLinstW_onCone,
+    ``Rcic.Syn.tyPInvEwkW_onCone,
+    ``Rcic.Syn.tyP_bvar_oob,
+    ``Rcic.Syn.tyPInvWkW_unguarded_unsat,
+    ``Rcic.Syn.tyP_const_resolves,
+    ``Rcic.Syn.tyPInvEwkW_unguarded_unsat,
+    ``Rcic.Syn.levelBounded_param,
+    ``Rcic.Syn.levelsBounded_mem,
+    ``Rcic.Syn.tyP_const_param_lt,
+    ``Rcic.Syn.tyPInvLinstW_unguarded_unsat,
+    ``Rcic.Syn.TyPInvWkGW,
+    ``Rcic.Syn.TyPInvLinstGW,
+    ``Rcic.Syn.TyPInvEwkGW,
+    ``Rcic.Syn.zetaSlotHeadUnwkW_of_invWkG,
+    ``Rcic.Syn.tyPInvWkGW_onCone,
+    ``Rcic.Syn.tyPInvLinstGW_onCone,
+    ``Rcic.Syn.tyPInvEwkGW_onCone
+  ]
+  -- END LAND-UNION
   -- END LAND-UNION
   -- END LAND-UNION
   -- END LAND-UNION
@@ -44911,6 +44958,9 @@ end Rcic.FoundationSeal
 -- Forge 1.8 finite-goal-set public theorem audit roots.
 -- BEGIN FORGE 1.9 SET FINISH AXIOM QUERIES
 -- END FORGE 1.9 SET FINISH AXIOM QUERIES
+
+-- BEGIN FORGE 1.10 GOAL JOIN AXIOM QUERIES
+-- END FORGE 1.10 GOAL JOIN AXIOM QUERIES
 #print axioms Rcic.Syn.SortPiFrag
 #print axioms Rcic.Syn.tyP_sortPiFrag_transport
 #print axioms Rcic.Syn.cl_const_bitCoh_issuance
@@ -45352,3 +45402,42 @@ end Rcic.FoundationSeal
 #print axioms Rcic.Syn.es_iota_retained_field_of_ksim
 #print axioms Rcic.Syn.es_iota_retained_field_same_endpoints_of_ksim
 #print axioms Rcic.Syn.es_iota_retained_field_of_app_of_ksim
+#print axioms Rcic.Syn.TyPEraseGatesW
+#print axioms Rcic.Syn.DerivedIotaEwkW
+#print axioms Rcic.Syn.hasTyTEwk
+#print axioms Rcic.Syn.convTEwk
+#print axioms Rcic.Syn.tyPErase
+#print axioms Rcic.Syn.cvPErase
+#print axioms Rcic.Syn.tyPEraseW_of
+#print axioms Rcic.Syn.cvPEraseW_of
+#print axioms Rcic.Syn.tyPEraseGates_empty
+#print axioms Rcic.Syn.derivedIotaEwk_empty
+#print axioms Rcic.Syn.tyPEraseGates_of_memberless
+#print axioms Rcic.Syn.TyPInvWkW
+#print axioms Rcic.Syn.TyPInvEsubW
+#print axioms Rcic.Syn.TyPInvLinstW
+#print axioms Rcic.Syn.TyPInvEwkW
+#print axioms Rcic.Syn.zetaSlotHeadUnwkW_of_invWk
+#print axioms Rcic.Syn.zetaSlotWkArmW_of_align
+#print axioms Rcic.Syn.zetaSlotEsubArmW_of_align
+#print axioms Rcic.Syn.zetaSlotLinstArmW_of_align
+#print axioms Rcic.Syn.zetaSlotEwkArmW_of_align
+#print axioms Rcic.Syn.tyPInvWkW_onCone
+#print axioms Rcic.Syn.tyPInvEsubW_onCone
+#print axioms Rcic.Syn.tyPInvLinstW_onCone
+#print axioms Rcic.Syn.tyPInvEwkW_onCone
+#print axioms Rcic.Syn.tyP_bvar_oob
+#print axioms Rcic.Syn.tyPInvWkW_unguarded_unsat
+#print axioms Rcic.Syn.tyP_const_resolves
+#print axioms Rcic.Syn.tyPInvEwkW_unguarded_unsat
+#print axioms Rcic.Syn.levelBounded_param
+#print axioms Rcic.Syn.levelsBounded_mem
+#print axioms Rcic.Syn.tyP_const_param_lt
+#print axioms Rcic.Syn.tyPInvLinstW_unguarded_unsat
+#print axioms Rcic.Syn.TyPInvWkGW
+#print axioms Rcic.Syn.TyPInvLinstGW
+#print axioms Rcic.Syn.TyPInvEwkGW
+#print axioms Rcic.Syn.zetaSlotHeadUnwkW_of_invWkG
+#print axioms Rcic.Syn.tyPInvWkGW_onCone
+#print axioms Rcic.Syn.tyPInvLinstGW_onCone
+#print axioms Rcic.Syn.tyPInvEwkGW_onCone
