@@ -1403,6 +1403,10 @@ import rcic.RcicSynTableK
 import rcic.RcicSynTableKMeasure
 import rcic.RcicSynSREutOffDiag
 import rcic.RcicSynSRDeltaSlotBit
+import rcic.RcicSynSRDeltaClosedField
+import rcic.RcicSynSRIotaRetK
+import rcic.RcicSynTableKCompat
+import rcic.RcicSynSRIotaRetKHmem
 open Lean
 -- END GLM-SR2 REDEXAP IMPORT
 
@@ -35333,6 +35337,59 @@ def sealedTheorems : List Name := [
     ``Rcic.Syn.bitCoh_memberSort_delta_before,
     ``Rcic.Syn.slotBit_memberSort_goal
   ]
+  -- BEGIN LAND-UNION (seal names added by the landed PR; content-keyed union)
+  ++ [
+    ``Rcic.Syn.pb_deltaReg_before,
+    ``Rcic.Syn.es_delta_kept_admW_tableI,
+    ``Rcic.Syn.es_delta_proof_admW_tableI,
+    ``Rcic.Syn.es_delta_admW_tableI,
+    ``Rcic.Syn.es_delta_admW_tableOfI,
+    ``Rcic.Syn.es_delta_admW_tableOfI_pin,
+    ``Rcic.Syn.srDeltaEs_admW_closed_fixture
+  ]
+  -- BEGIN LAND-UNION (seal names added by the landed PR; content-keyed union)
+  ++ [
+    ``Rcic.Syn.IotaBareRoot,
+    ``Rcic.Syn.IotaBareRoot.toCRoot,
+    ``Rcic.Syn.IotaRetainedKSim,
+    ``Rcic.Syn.IotaRetainedKSim.toSimulation,
+    ``Rcic.Syn.es_iota_retained_field_of_ksim,
+    ``Rcic.Syn.es_iota_retained_field_same_endpoints_of_ksim,
+    ``Rcic.Syn.es_iota_retained_field_of_app_of_ksim
+  ]
+  -- BEGIN LAND-UNION (seal names added by the landed PR; content-keyed union)
+  ++ [
+    ``Rcic.Syn.tableOfK_headM,
+    ``Rcic.Syn.tableOfICompat_tableOfK,
+    ``Rcic.Syn.sortRow_of_allBelowScoped_tableOfK,
+    ``Rcic.Syn.sortRow_of_suppliers_tableOfK,
+    ``Rcic.Syn.built_no_family_rule_tableOfK,
+    ``Rcic.Syn.convE_appN_const_inv_tableOfK,
+    ``Rcic.Syn.deltaRule_mem_tableOfK,
+    ``Rcic.Syn.es_pi_tableK_wf,
+    ``Rcic.Syn.es_letE_tableK_wf,
+    ``Rcic.Syn.es_eta_tableK_wf,
+    ``Rcic.Syn.es_fsub_tableK_wf,
+    ``Rcic.Syn.es_delta_tableK_compat,
+    ``Rcic.Syn.eqK_es_caseStep,
+    ``Rcic.Syn.iotaKRuleOf_mem_iotaRulesKOf,
+    ``Rcic.Syn.groupMembersT_lookup_outside,
+    ``Rcic.Syn.iotaRulesKOf_sub_tableOfK,
+    ``Rcic.Syn.iotaKRuleOf_mem_tableOfK,
+    ``Rcic.Syn.IotaKHeadStep,
+    ``Rcic.Syn.IotaKHeadStep.toRStep,
+    ``Rcic.Syn.iotaKHeadStep_iotaKRule,
+    ``Rcic.Syn.IotaRetainedRStep,
+    ``Rcic.Syn.iota_erasure_from_answers_rstep,
+    ``Rcic.Syn.iota_retained_caseStep_of_rstep,
+    ``Rcic.Syn.es_iota_retained_field_of_rstep,
+    ``Rcic.Syn.es_iota_retained_field_same_endpoints_of_rstep,
+    ``Rcic.Syn.iotaRetainedRStep_iotaKRule,
+    ``Rcic.Syn.es_iota_retained_field_tableOfK
+  ]
+  -- END LAND-UNION
+  -- END LAND-UNION
+  -- END LAND-UNION
   -- END LAND-UNION
   -- END LAND-UNION
   -- END LAND-UNION
@@ -45281,3 +45338,17 @@ end Rcic.FoundationSeal
 #print axioms Rcic.Syn.eutOtherP_sameSubjHead_of_clash_false
 #print axioms Rcic.Syn.bitCoh_memberSort_delta_before
 #print axioms Rcic.Syn.slotBit_memberSort_goal
+#print axioms Rcic.Syn.pb_deltaReg_before
+#print axioms Rcic.Syn.es_delta_kept_admW_tableI
+#print axioms Rcic.Syn.es_delta_proof_admW_tableI
+#print axioms Rcic.Syn.es_delta_admW_tableI
+#print axioms Rcic.Syn.es_delta_admW_tableOfI
+#print axioms Rcic.Syn.es_delta_admW_tableOfI_pin
+#print axioms Rcic.Syn.srDeltaEs_admW_closed_fixture
+#print axioms Rcic.Syn.IotaBareRoot
+#print axioms Rcic.Syn.IotaBareRoot.toCRoot
+#print axioms Rcic.Syn.IotaRetainedKSim
+#print axioms Rcic.Syn.IotaRetainedKSim.toSimulation
+#print axioms Rcic.Syn.es_iota_retained_field_of_ksim
+#print axioms Rcic.Syn.es_iota_retained_field_same_endpoints_of_ksim
+#print axioms Rcic.Syn.es_iota_retained_field_of_app_of_ksim
