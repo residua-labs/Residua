@@ -94,6 +94,9 @@ import rcic.RcicAnnLR3HeadBoundary
 import rcic.RcicAnnLR3HeadSubstBoundary
 import rcic.RcicRouteCLR3MeasurementSeal
 -- END CHATGPT ROUTE C LR3 MEASUREMENT DIRECT IMPORTS
+-- BEGIN SWE-ZETA LR3 PAIRED PRODUCER DIRECT IMPORTS (closure_claim = 0)
+import rcic.RcicRouteCLR3PairedProducerSeal
+-- END SWE-ZETA LR3 PAIRED PRODUCER DIRECT IMPORTS
 -- BEGIN CHATGPT ROUTE C K INDEX DIRECT IMPORTS (closure_claim = 0)
 import rcic.RcicRouteCKContextBoundary
 import rcic.RcicAnnKIndexLaws
