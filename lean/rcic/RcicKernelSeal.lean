@@ -650,6 +650,11 @@ import rcic.RcicAnnIotaCorrUA
 import rcic.RcicIotaFunRecFrag
 import rcic.RcicAnnFrecAdmitted
 import rcic.RcicIotaFunRecWalk
+import rcic.RcicIotaFunRecCorr
+import rcic.RcicIotaFunRecCorrR
+import rcic.RcicAnnFrecCorrPin
+import rcic.RcicAnnAccFrecPin
+import rcic.RcicAnnAccCorrPin
 import rcic.RcicIotaSRTFront
 import rcic.RcicPredSigObj
 import rcic.RcicPredEnvObj
@@ -1292,6 +1297,9 @@ import rcic.RcicSynSREqnAppCell
 import rcic.RcicTypedScopeResidue
 import rcic.RcicTypedScopeAdmission
 import rcic.RcicTypedScopeResidueSeal
+-- BEGIN SWE-ROUTEC-C2 GROUP SCOPE DIRECT IMPORTS (closure_claim = 0)
+import rcic.RcicRouteCGroupScopeSeal
+-- END SWE-ROUTEC-C2 GROUP SCOPE DIRECT IMPORTS
 import rcic.RcicNativeTypedModelCovWRigidCore
 import rcic.RcicNativeTypedModelCovWRigidLocal
 import rcic.RcicNativeTypedModelCovWRigidSpines
@@ -1394,6 +1402,7 @@ import rcic.RcicSynSRDeltaClosed
 import rcic.RcicSynTableK
 import rcic.RcicSynTableKMeasure
 import rcic.RcicSynSREutOffDiag
+import rcic.RcicSynSRDeltaSlotBit
 open Lean
 -- END GLM-SR2 REDEXAP IMPORT
 
@@ -2418,6 +2427,8 @@ def sealedTheorems : List Name := [
   -- 1.3: submitted result, independent specification and original restore.
   -- 1.5: exact admitted-result support and existing RCC refinement.
   -- BEGIN FORGE 1.7 STORED RESULT SEAL
+  -- BEGIN FORGE 1.9 SET FINISH SEAL
+  -- END FORGE 1.9 SET FINISH SEAL
   -- END FORGE 1.7 STORED RESULT SEAL
   -- BEGIN FORGE 1.6 ACTUAL FEEDBACK SEAL
   -- END FORGE 1.6 ACTUAL FEEDBACK SEAL
@@ -11884,6 +11895,270 @@ def sealedTheorems : List Name := [
   ``Rcic.Declarative.instDoms_lift_closed,
   ``Rcic.Declarative.instDoms_append_drop,
   ``Rcic.Declarative.tel_cons,
+  -- R-NoFunRec S6 3b-2b (this lane): the ported walk-agreement algebra and the
+  -- (e) witness corollary, `RcicIotaFunRecCorr` — C-suffix names avoid the
+  -- `instPrefix_pi`/`instPrefix_app` collisions with RcicAdmit/RcicEtaKDecide.
+  -- The landed `RcicIotaFunRecWalkAgree` draft is left untouched (it does not
+  -- build against current main; errors reported upstream).
+  ``Rcic.Declarative.frame_shiftC,
+  ``Rcic.Declarative.instPrefix_image_bvar_idsC,
+  ``Rcic.Declarative.instPrefix_image_bvar_consumedC,
+  ``Rcic.Declarative.instOff_piC,
+  ``Rcic.Declarative.instPrefix_piC,
+  ``Rcic.Declarative.img_piC,
+  ``Rcic.Declarative.fieldBvars_succC,
+  ``Rcic.Declarative.instPrefix_stepC,
+  ``Rcic.Declarative.instPrefix_appC,
+  ``Rcic.Declarative.img_foldAppsC,
+  ``Rcic.Declarative.spine_img_constC,
+  ``Rcic.Declarative.recCallField_imgC,
+  ``Rcic.Declarative.idextC,
+  ``Rcic.Declarative.instOff_bvar_ltC,
+  ``Rcic.Declarative.instPrefix_idext_liftC,
+  ``Rcic.Declarative.instOff_constC,
+  ``Rcic.Declarative.instOff_appC,
+  ``Rcic.Declarative.instOff_lamC,
+  ``Rcic.Declarative.instOff_foldAppsC,
+  ``Rcic.Declarative.fieldBvars_map_constC,
+  ``Rcic.Declarative.fieldBvars_imgC,
+  ``Rcic.Declarative.telImgC,
+  ``Rcic.Declarative.telImg_lengthC,
+  ``Rcic.Declarative.img_lamTelescope_offC,
+  ``Rcic.Declarative.img_lamTelescopeC,
+  ``Rcic.Declarative.img_lift_entryC,
+  ``Rcic.Declarative.map_map_imgC,
+  ``Rcic.Declarative.instLevels_foldAppsC,
+  ``Rcic.Declarative.recCallFunS_imgC,
+  ``Rcic.Declarative.funRecArg_of_canonC,
+  ``Rcic.Declarative.WalkSuppliesC,
+  ``Rcic.Declarative.iotaArgs_agreeC,
+  ``Rcic.Declarative.Ann.preMajorBvars_map_img,
+  ``Rcic.Declarative.Ann.fieldBvars_map_img,
+  ``Rcic.Declarative.Ann.recPrefix_map_img,
+  ``Rcic.Declarative.Ann.iotaRhsOfS_eq_rhsArgsS_ctorFieldTelInst,
+  ``Rcic.Declarative.Ann.iotaRhsOfS_eq_rhsArgsS_ctorAfter,
+  ``Rcic.Declarative.Ann.derivedIotaUS_of_iotaFnA_frec,
+  ``Rcic.Declarative.Ann.FrecFiringGates,
+  ``Rcic.Declarative.Ann.iotaErasesTUA_frec,
+  ``Rcic.Declarative.Ann.iotaCorrTUA_frec,
+  -- R-NoFunRec S6 (this lane): `RcicIotaFunRecCorrR` — the reduct-gated frec
+  -- union faces under NEW names: `hgate` additionally receives the actual
+  -- `iotaReductA s g = some e'` evidence, so gate discharge may read the
+  -- successful firing's data (needed by the W and Acc S6-4 rows):
+  ``Rcic.Declarative.Ann.iotaErasesTUA_frecR,
+  ``Rcic.Declarative.Ann.iotaCorrTUA_frecR,
+  -- R-NoFunRec S6-4 (this lane): `RcicAnnFrecCorrPin` — the concrete
+  -- `pinFrecEnvA` fixture instantiation: erased `EnvWfT`, per-firing gates,
+  -- and the union erase face `IotaErasesTUA` past `EnvNoFunA`.
+  ``Rcic.Declarative.Ann.pinFrec_normErase,
+  ``Rcic.Declarative.Ann.pinFrec_group_hit,
+  ``Rcic.Declarative.Ann.pinFrec_group_inv,
+  ``Rcic.Declarative.Ann.pfFamT,
+  ``Rcic.Declarative.Ann.pfNodeT,
+  ``Rcic.Declarative.Ann.pfRecT,
+  ``Rcic.Declarative.Ann.pfFamEnvT,
+  ``Rcic.Declarative.Ann.pfSupEnvT,
+  ``Rcic.Declarative.Ann.pfEnvT,
+  ``Rcic.Declarative.Ann.pfFieldDom,
+  ``Rcic.Declarative.Ann.pfMotTy,
+  ``Rcic.Declarative.Ann.pfMinorTy,
+  ``Rcic.Declarative.Ann.pfRecTy,
+  ``Rcic.Declarative.Ann.pfEnvT_eq,
+  ``Rcic.Declarative.Ann.pfFamViewT,
+  ``Rcic.Declarative.Ann.pfFieldDomTy,
+  ``Rcic.Declarative.Ann.pfFieldDomTyT,
+  ``Rcic.Declarative.Ann.pfNodeView,
+  ``Rcic.Declarative.Ann.pfNodeUniv,
+  ``Rcic.Declarative.Ann.pfBefore,
+  ``Rcic.Declarative.Ann.pfContig,
+  ``Rcic.Declarative.Ann.pfNodeFieldsFam,
+  ``Rcic.Declarative.Ann.pfNodeFieldsSup,
+  ``Rcic.Declarative.Ann.pfGroupAdm,
+  ``Rcic.Declarative.Ann.pfCensus,
+  ``Rcic.Declarative.Ann.pfMinor_derived,
+  ``Rcic.Declarative.Ann.pfMinorMatch,
+  ``Rcic.Declarative.Ann.pfIotaCtx,
+  ``Rcic.Declarative.Ann.pfCall,
+  ``Rcic.Declarative.Ann.pfSchema,
+  ``Rcic.Declarative.Ann.pfEqTy,
+  ``Rcic.Declarative.Ann.pfSchema_derived,
+  ``Rcic.Declarative.Ann.pfEquation_shape,
+  ``Rcic.Declarative.Ann.pfRecHead,
+  ``Rcic.Declarative.Ann.pfIotaTy,
+  ``Rcic.Declarative.Ann.pfIotaLegacy,
+  ``Rcic.Declarative.Ann.pfIotaClause,
+  ``Rcic.Declarative.Ann.pfFamAdmitted,
+  ``Rcic.Declarative.Ann.pfNodeAdmitted,
+  ``Rcic.Declarative.Ann.pfRecAdmitted,
+  ``Rcic.Declarative.Ann.pfNodeSortU,
+  ``Rcic.Declarative.Ann.pfNodeTyT,
+  ``Rcic.Declarative.Ann.pfRecSortU,
+  ``Rcic.Declarative.Ann.pfRecTy_direct,
+  ``Rcic.Declarative.Ann.pfRecTyT,
+  ``Rcic.Declarative.Ann.pfNodeTypedE,
+  ``Rcic.Declarative.Ann.pfFamTypedT,
+  ``Rcic.Declarative.Ann.pfNodeTyped,
+  ``Rcic.Declarative.Ann.pfRecTyped,
+  ``Rcic.Declarative.Ann.pfMembersT,
+  ``Rcic.Declarative.Ann.pfEnvWfT,
+  ``Rcic.Declarative.Ann.pfEnvWfT_erase,
+  ``Rcic.Declarative.Ann.pfNodeDomsA_erase,
+  ``Rcic.Declarative.Ann.pfNodeBody_erase,
+  ``Rcic.Declarative.Ann.pfNodeShapes_norm,
+  ``Rcic.Declarative.Ann.pinFrec_nf,
+  ``Rcic.Declarative.Ann.pfFieldDom_lift,
+  ``Rcic.Declarative.Ann.instPrefix_of_liftClosed,
+  ``Rcic.Declarative.Ann.instOff_of_liftClosed,
+  ``Rcic.Declarative.Ann.instantiateLevels_pfFieldDom,
+  ``Rcic.Declarative.Ann.pfFieldDomFrag,
+  ``Rcic.Declarative.Ann.pinFrec_gates,
+  -- R-NoFunRec S6-4 class (a) Acc row (this lane): `RcicAnnAccFrecPin` — the
+  -- Type-valued indexed Acc fixture: `R : S0 → S0 → S0` as an opaque axiom at
+  -- `9`, `AccT : Π (x : S0), Sort 1` at `10`, `intro`'s function-recursive field
+  -- `Π (y : S0), R y x → AccT y` (shape `recursive 2`) at `11`, the AnySort
+  -- recursor at `12`; `EnvWfA`/`EnvSemA`, ι firing, and the `EnvNoFunA` tooth.
+  ``Rcic.Declarative.Ann.pinAccRelTyA,
+  ``Rcic.Declarative.Ann.pinAccRelA,
+  ``Rcic.Declarative.Ann.pinAccRelEnvA,
+  ``Rcic.Declarative.Ann.pinAccRelEnv_rel,
+  ``Rcic.Declarative.Ann.pinAccFamA,
+  ``Rcic.Declarative.Ann.pinAccGuardA,
+  ``Rcic.Declarative.Ann.pinAccFieldA,
+  ``Rcic.Declarative.Ann.pinAccIntroA,
+  ``Rcic.Declarative.Ann.pinAccRelTy_closed,
+  ``Rcic.Declarative.Ann.pinAccRelTyTy,
+  ``Rcic.Declarative.Ann.pinAccRelConstTy,
+  ``Rcic.Declarative.Ann.pinAccFamEnvA,
+  ``Rcic.Declarative.Ann.pinAccFamEnv_rel,
+  ``Rcic.Declarative.Ann.pinAccFamEnv_fam,
+  ``Rcic.Declarative.Ann.pinAccFamTyTy,
+  ``Rcic.Declarative.Ann.pinAccFamConstTy,
+  ``Rcic.Declarative.Ann.pinAccFamViewA,
+  ``Rcic.Declarative.Ann.pinAccGuardTy,
+  ``Rcic.Declarative.Ann.pinAccIntroTy,
+  ``Rcic.Declarative.Ann.pinAccIntroViewA,
+  ``Rcic.Declarative.Ann.pinAccIntro_mtype_boundOk,
+  ``Rcic.Declarative.Ann.pinAccIntro_mtype_closed,
+  ``Rcic.Declarative.Ann.pinAccIntro_mtype_levels,
+  ``Rcic.Declarative.Ann.pinAccIntroGroupA,
+  ``Rcic.Declarative.Ann.pinAccCs,
+  ``Rcic.Declarative.Ann.pinAccGroupEnvA,
+  ``Rcic.Declarative.Ann.pinAccGroupEnv_eq,
+  ``Rcic.Declarative.Ann.pinAccGroup_fresh,
+  ``Rcic.Declarative.Ann.pinAccGroup_layout,
+  ``Rcic.Declarative.Ann.pinAccRel_mem,
+  ``Rcic.Declarative.Ann.pinAccRel_closed,
+  ``Rcic.Declarative.Ann.pinAccRel_levels,
+  ``Rcic.Declarative.Ann.pinAccRel_normClosed,
+  ``Rcic.Declarative.Ann.pinAccRel_normLevels,
+  ``Rcic.Declarative.Ann.pinAccRel_normCtor,
+  ``Rcic.Declarative.Ann.pinAccGroup_mem,
+  ``Rcic.Declarative.Ann.pinAccGroup_closed,
+  ``Rcic.Declarative.Ann.pinAccGroup_normClosed,
+  ``Rcic.Declarative.Ann.pinAccGroup_levels,
+  ``Rcic.Declarative.Ann.pinAccGroup_normLevels,
+  ``Rcic.Declarative.Ann.pinAccRecMemberA,
+  ``Rcic.Declarative.Ann.pinAccEnvA,
+  ``Rcic.Declarative.Ann.pinAccRec_fresh,
+  ``Rcic.Declarative.Ann.pinAccRelWfA,
+  ``Rcic.Declarative.Ann.pinAccGroupWfA,
+  ``Rcic.Declarative.Ann.pinAccRel_sem,
+  ``Rcic.Declarative.Ann.pinAccRecTyAt0,
+  ``Rcic.Declarative.Ann.pinAccGroupAgree,
+  ``Rcic.Declarative.Ann.pinAccRecBuilt_closed,
+  ``Rcic.Declarative.Ann.pinAccRecA,
+  ``Rcic.Declarative.Ann.pinAccWfA,
+  ``Rcic.Declarative.Ann.pinAcc_mem,
+  ``Rcic.Declarative.Ann.pinAcc_inductive,
+  ``Rcic.Declarative.Ann.pinAcc_small,
+  ``Rcic.Declarative.Ann.pinAcc_propElim,
+  ``Rcic.Declarative.Ann.envSemA_pinAcc,
+  ``Rcic.Declarative.Ann.pinAcc_intro_shapes,
+  ``Rcic.Declarative.Ann.pinAcc_not_noFunA,
+  ``Rcic.Declarative.Ann.pinAcc_not_annEnvA,
+  ``Rcic.Declarative.Ann.pinAcc_iota_fires,
+  ``Rcic.Declarative.Ann.pinAcc_iota_fires_anySort,
+  ``Rcic.Declarative.Ann.pinAcc_propElim_not_gate,
+  ``Rcic.Declarative.Ann.pinFrec_iotaErasesTUA,
+  -- R-NoFunRec S6-4 class (a) Acc row, correspondence side: `RcicAnnAccCorrPin`
+  -- — the erased pinAcc env (axiom `R` @9, indexed `AccT` @10, `intro` @11,
+  -- rec @12) typed member-by-member to `EnvWfT (eraseEnv pinAccEnvA)`, the
+  -- four `FrecFiringGates` conjuncts instantiated at fuel `24` (FieldFragList,
+  -- WalkSuppliesC over the open field domain — the marker-substituted
+  -- `paFieldDomM`, `iotaWitnessStableB`, and the closed open-schema), and the
+  -- erase-face payoff `pinAcc_iotaErasesTUA : IotaErasesTUA pinAccEnvA`:
+  ``Rcic.Declarative.Ann.pinAcc_normErase,
+  ``Rcic.Declarative.Ann.pinAcc_group_hit,
+  ``Rcic.Declarative.Ann.pinAcc_group_inv,
+  ``Rcic.Declarative.Ann.paRelT,
+  ``Rcic.Declarative.Ann.paFamT,
+  ``Rcic.Declarative.Ann.paIntroT,
+  ``Rcic.Declarative.Ann.paRecT,
+  ``Rcic.Declarative.Ann.paRelEnvT,
+  ``Rcic.Declarative.Ann.paFamEnvT,
+  ``Rcic.Declarative.Ann.paSupEnvT,
+  ``Rcic.Declarative.Ann.paEnvT,
+  ``Rcic.Declarative.Ann.paFieldDom,
+  ``Rcic.Declarative.Ann.paMotTy,
+  ``Rcic.Declarative.Ann.paMinorTy,
+  ``Rcic.Declarative.Ann.paEnvT_eq,
+  ``Rcic.Declarative.Ann.paRelConstTy,
+  ``Rcic.Declarative.Ann.paFieldDomTy,
+  ``Rcic.Declarative.Ann.paFieldDomTyT,
+  ``Rcic.Declarative.Ann.paFamViewT,
+  ``Rcic.Declarative.Ann.paIntroViewT,
+  ``Rcic.Declarative.Ann.leN_imax_acc,
+  ``Rcic.Declarative.Ann.paIntroUniv,
+  ``Rcic.Declarative.Ann.paBefore,
+  ``Rcic.Declarative.Ann.paContig,
+  ``Rcic.Declarative.Ann.paIntroFieldsFam,
+  ``Rcic.Declarative.Ann.paIntroFieldsSup,
+  ``Rcic.Declarative.Ann.paFamAdmitted,
+  ``Rcic.Declarative.Ann.paIntroAdmitted,
+  ``Rcic.Declarative.Ann.paGroupAdm,
+  ``Rcic.Declarative.Ann.paCensus,
+  ``Rcic.Declarative.Ann.paMinor_derived,
+  ``Rcic.Declarative.Ann.paMinorMatch,
+  ``Rcic.Declarative.Ann.paIotaCtx,
+  ``Rcic.Declarative.Ann.paRyxX,
+  ``Rcic.Declarative.Ann.paCall,
+  ``Rcic.Declarative.Ann.paSchema,
+  ``Rcic.Declarative.Ann.paEqTy,
+  ``Rcic.Declarative.Ann.paSchema_derived,
+  ``Rcic.Declarative.Ann.paEquation_shape,
+  ``Rcic.Declarative.Ann.paRecHead,
+  ``Rcic.Declarative.Ann.paIotaTy,
+  ``Rcic.Declarative.Ann.paIotaLegacy,
+  ``Rcic.Declarative.Ann.paIotaClause,
+  ``Rcic.Declarative.Ann.paRecAdmitted,
+  ``Rcic.Declarative.Ann.paRelTyT,
+  ``Rcic.Declarative.Ann.paFamTyT,
+  ``Rcic.Declarative.Ann.paIntroSortU,
+  ``Rcic.Declarative.Ann.paIntroTyT,
+  ``Rcic.Declarative.Ann.paRecSortU,
+  ``Rcic.Declarative.Ann.paRecTy_direct,
+  ``Rcic.Declarative.Ann.paRecTyT,
+  ``Rcic.Declarative.Ann.paFamTypedT,
+  ``Rcic.Declarative.Ann.paIntroTypedE,
+  ``Rcic.Declarative.Ann.paIntroTyped,
+  ``Rcic.Declarative.Ann.paRecTyped,
+  ``Rcic.Declarative.Ann.paRelWfT,
+  ``Rcic.Declarative.Ann.paMembersT,
+  ``Rcic.Declarative.Ann.paEnvWfT,
+  ``Rcic.Declarative.Ann.paEnvWfT_erase,
+  ``Rcic.Declarative.Ann.paIntroDomsA_erase,
+  ``Rcic.Declarative.Ann.paIntroBody_erase,
+  ``Rcic.Declarative.Ann.paIntroShapes_norm,
+  ``Rcic.Declarative.Ann.pinAcc_nf,
+  ``Rcic.Declarative.Ann.paS0Frag,
+  ``Rcic.Declarative.Ann.paFieldFrag,
+  ``Rcic.Declarative.Ann.paFieldDomM,
+  ``Rcic.Declarative.Ann.paFieldDomM_canon,
+  ``Rcic.Declarative.Ann.paFieldDomM_hARtel,
+  ``Rcic.Declarative.Ann.paFieldDomM_hidx,
+  ``Rcic.Declarative.Ann.paSupplies,
+  ``Rcic.Declarative.Ann.pinAcc_gates,
+  ``Rcic.Declarative.Ann.pinAcc_iotaErasesTUA,
   -- IA-rec B (#6280): the `.drecD` group's recursor typed on the IA-021 checker
   -- route — section (7) of RcicTypedDeltaRecPins: the `Id F ≡ F` conv leaf, the
   -- `DrecDTypedT` evidence, the per-minor `sortTyAtC` leaf, the admission env's
@@ -35053,6 +35328,12 @@ def sealedTheorems : List Name := [
     ``Rcic.Syn.eutOtherP_caseStep_of_subjHeadClash_true,
     ``Rcic.Syn.eutOtherP_sameSubjHead_of_clash_false
   ]
+  -- BEGIN LAND-UNION (seal names added by the landed PR; content-keyed union)
+  ++ [
+    ``Rcic.Syn.bitCoh_memberSort_delta_before,
+    ``Rcic.Syn.slotBit_memberSort_goal
+  ]
+  -- END LAND-UNION
   -- END LAND-UNION
   -- END LAND-UNION
   -- END LAND-UNION
@@ -44571,6 +44852,8 @@ end Rcic.FoundationSeal
 -- END FORGE 1.7 AXIOM QUERIES
 
 -- Forge 1.8 finite-goal-set public theorem audit roots.
+-- BEGIN FORGE 1.9 SET FINISH AXIOM QUERIES
+-- END FORGE 1.9 SET FINISH AXIOM QUERIES
 #print axioms Rcic.Syn.SortPiFrag
 #print axioms Rcic.Syn.tyP_sortPiFrag_transport
 #print axioms Rcic.Syn.cl_const_bitCoh_issuance
@@ -44781,6 +45064,82 @@ end Rcic.FoundationSeal
 #print axioms Rcic.Declarative.Ann.FrecFiringGates
 #print axioms Rcic.Declarative.Ann.iotaErasesTUA_frec
 #print axioms Rcic.Declarative.Ann.iotaCorrTUA_frec
+#print axioms Rcic.Declarative.Ann.iotaErasesTUA_frecR
+#print axioms Rcic.Declarative.Ann.iotaCorrTUA_frecR
+#print axioms Rcic.Declarative.Ann.pinFrec_normErase
+#print axioms Rcic.Declarative.Ann.pinFrec_group_hit
+#print axioms Rcic.Declarative.Ann.pinFrec_group_inv
+#print axioms Rcic.Declarative.Ann.pfFamT
+#print axioms Rcic.Declarative.Ann.pfNodeT
+#print axioms Rcic.Declarative.Ann.pfRecT
+#print axioms Rcic.Declarative.Ann.pfFamEnvT
+#print axioms Rcic.Declarative.Ann.pfSupEnvT
+#print axioms Rcic.Declarative.Ann.pfEnvT
+#print axioms Rcic.Declarative.Ann.pfFieldDom
+#print axioms Rcic.Declarative.Ann.pfMotTy
+#print axioms Rcic.Declarative.Ann.pfMinorTy
+#print axioms Rcic.Declarative.Ann.pfRecTy
+#print axioms Rcic.Declarative.Ann.pfEnvT_eq
+#print axioms Rcic.Declarative.Ann.pfFamViewT
+#print axioms Rcic.Declarative.Ann.pfFieldDomTy
+#print axioms Rcic.Declarative.Ann.pfFieldDomTyT
+#print axioms Rcic.Declarative.Ann.pfNodeView
+#print axioms Rcic.Declarative.Ann.pfNodeUniv
+#print axioms Rcic.Declarative.Ann.pfBefore
+#print axioms Rcic.Declarative.Ann.pfContig
+#print axioms Rcic.Declarative.Ann.pfNodeFieldsFam
+#print axioms Rcic.Declarative.Ann.pfNodeFieldsSup
+#print axioms Rcic.Declarative.Ann.pfGroupAdm
+#print axioms Rcic.Declarative.Ann.pfCensus
+#print axioms Rcic.Declarative.Ann.pfMinor_derived
+#print axioms Rcic.Declarative.Ann.pfMinorMatch
+#print axioms Rcic.Declarative.Ann.pfIotaCtx
+#print axioms Rcic.Declarative.Ann.pfCall
+#print axioms Rcic.Declarative.Ann.pfSchema
+#print axioms Rcic.Declarative.Ann.pfEqTy
+#print axioms Rcic.Declarative.Ann.pfSchema_derived
+#print axioms Rcic.Declarative.Ann.pfEquation_shape
+#print axioms Rcic.Declarative.Ann.pfRecHead
+#print axioms Rcic.Declarative.Ann.pfIotaTy
+#print axioms Rcic.Declarative.Ann.pfIotaLegacy
+#print axioms Rcic.Declarative.Ann.pfIotaClause
+#print axioms Rcic.Declarative.Ann.pfFamAdmitted
+#print axioms Rcic.Declarative.Ann.pfNodeAdmitted
+#print axioms Rcic.Declarative.Ann.pfRecAdmitted
+#print axioms Rcic.Declarative.Ann.pfNodeSortU
+#print axioms Rcic.Declarative.Ann.pfNodeTyT
+#print axioms Rcic.Declarative.Ann.pfRecSortU
+#print axioms Rcic.Declarative.Ann.pfRecTy_direct
+#print axioms Rcic.Declarative.Ann.pfRecTyT
+#print axioms Rcic.Declarative.Ann.pfNodeTypedE
+#print axioms Rcic.Declarative.Ann.pfFamTypedT
+#print axioms Rcic.Declarative.Ann.pfNodeTyped
+#print axioms Rcic.Declarative.Ann.pfRecTyped
+#print axioms Rcic.Declarative.Ann.pfMembersT
+#print axioms Rcic.Declarative.Ann.pfEnvWfT
+#print axioms Rcic.Declarative.Ann.pfEnvWfT_erase
+#print axioms Rcic.Declarative.Ann.pfNodeDomsA_erase
+#print axioms Rcic.Declarative.Ann.pfNodeBody_erase
+#print axioms Rcic.Declarative.Ann.pfNodeShapes_norm
+#print axioms Rcic.Declarative.Ann.pinFrec_nf
+#print axioms Rcic.Declarative.Ann.pfFieldDom_lift
+#print axioms Rcic.Declarative.Ann.instPrefix_of_liftClosed
+#print axioms Rcic.Declarative.Ann.instOff_of_liftClosed
+#print axioms Rcic.Declarative.Ann.instantiateLevels_pfFieldDom
+#print axioms Rcic.Declarative.Ann.pfFieldDomFrag
+#print axioms Rcic.Declarative.Ann.pinFrec_gates
+#print axioms Rcic.Declarative.Ann.pinFrec_iotaErasesTUA
+#print axioms Rcic.Declarative.Ann.pinAccWfA
+#print axioms Rcic.Declarative.Ann.envSemA_pinAcc
+#print axioms Rcic.Declarative.Ann.pinAcc_not_noFunA
+#print axioms Rcic.Declarative.Ann.pinAcc_iota_fires
+#print axioms Rcic.Declarative.Ann.pinAcc_normErase
+#print axioms Rcic.Declarative.Ann.paEnvWfT_erase
+#print axioms Rcic.Declarative.Ann.paFieldDomM_hARtel
+#print axioms Rcic.Declarative.Ann.paFieldDomM_hidx
+#print axioms Rcic.Declarative.Ann.paSupplies
+#print axioms Rcic.Declarative.Ann.pinAcc_gates
+#print axioms Rcic.Declarative.Ann.pinAcc_iotaErasesTUA
 #print axioms Rcic.Syn.starEtaLHS
 #print axioms Rcic.Syn.starEtaLHS_eq
 #print axioms Rcic.Syn.starEtaLHS_ne_star
@@ -44920,3 +45279,5 @@ end Rcic.FoundationSeal
 #print axioms Rcic.Syn.subjHeadClash_false_head
 #print axioms Rcic.Syn.eutOtherP_caseStep_of_subjHeadClash_true
 #print axioms Rcic.Syn.eutOtherP_sameSubjHead_of_clash_false
+#print axioms Rcic.Syn.bitCoh_memberSort_delta_before
+#print axioms Rcic.Syn.slotBit_memberSort_goal
