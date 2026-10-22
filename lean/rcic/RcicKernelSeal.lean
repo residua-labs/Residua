@@ -1586,6 +1586,8 @@ import rcic.RcicAnnIotaCorrF
 import rcic.RcicAnnAccAnnCertPin
 import rcic.RcicSynLinkA
 import rcic.RcicSynPiLift
+import rcic.RcicRouteCGroupWalkSeal
+import rcic.RcicSynLinkA2
 open Lean
 -- END GLM-SR2 REDEXAP IMPORT
 
@@ -35853,6 +35855,21 @@ def sealedTheorems : List Name := [
     ``Rcic.Syn.epsConvReflects_tableOfI_false,
     ``Rcic.Syn.piEraseLift_tableOfK_false
   ]
+  -- BEGIN LAND-UNION (seal names added by the landed PR; content-keyed union)
+  ++ [
+    ``Rcic.Syn.TyPForgetNW,
+    ``Rcic.Syn.tyPForgetNW_of_gates,
+    ``Rcic.Syn.tyPEraseGates_at_of_envWfT,
+    ``Rcic.Syn.tyConvT_symm,
+    ``Rcic.Syn.instEqNCongr_sort,
+    ``Rcic.Syn.instEqNCongr_refl,
+    ``Rcic.Syn.sr2_instEqNCongr_mtype,
+    ``Rcic.Syn.tyPSortUniqW_of_sortUniq_gates,
+    ``Rcic.Syn.ConstSortLadderEqNWAt,
+    ``Rcic.Syn.constSortLadderEqNWAt_of_sortUniq,
+    ``Rcic.Syn.constPair_eps_eq_of_sortUniq
+  ]
+  -- END LAND-UNION
   -- END LAND-UNION
   -- END LAND-UNION
   -- END LAND-UNION
@@ -45897,3 +45914,14 @@ end Rcic.FoundationSeal
 #print axioms Rcic.Syn.eps_conv_inner
 #print axioms Rcic.Syn.eps_const_eq_of_bit
 #print axioms Rcic.Syn.epsIndepConvW_of_sortUniq_coh
+#print axioms Rcic.Syn.TyPForgetNW
+#print axioms Rcic.Syn.tyPForgetNW_of_gates
+#print axioms Rcic.Syn.tyPEraseGates_at_of_envWfT
+#print axioms Rcic.Syn.tyConvT_symm
+#print axioms Rcic.Syn.instEqNCongr_sort
+#print axioms Rcic.Syn.instEqNCongr_refl
+#print axioms Rcic.Syn.sr2_instEqNCongr_mtype
+#print axioms Rcic.Syn.tyPSortUniqW_of_sortUniq_gates
+#print axioms Rcic.Syn.ConstSortLadderEqNWAt
+#print axioms Rcic.Syn.constSortLadderEqNWAt_of_sortUniq
+#print axioms Rcic.Syn.constPair_eps_eq_of_sortUniq
