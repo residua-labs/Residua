@@ -1373,6 +1373,24 @@ import rcic.RcicCoreMetatheory
 import rcic.RcicCoreRelation
 import rcic.RcicCoreRows
 import rcic.RcicCoreMachine
+import rcic.RcicAnnSortSynthesisA3
+import rcic.RcicAnnLR3Positive
+import rcic.RcicAnnLR3Head
+import rcic.RcicAnnLR3HeadLayer
+import rcic.RcicAnnLR3Chain
+import rcic.RcicAnnLR3Sort
+import rcic.RcicAnnLR3Family
+import rcic.RcicAnnLR3PropEq
+import rcic.RcicAnnLR3Core
+import rcic.RcicAnnLR3EqHead
+import rcic.RcicRouteCLR3CoreSeal
+import rcic.RcicAnnKDeterminism
+import rcic.RcicAnnLR3RelationalFacts
+import rcic.RcicAnnLR3HeadBoundary
+import rcic.RcicAnnLR3HeadSubstBoundary
+import rcic.RcicRouteCLR3MeasurementSeal
+import rcic.RcicSynSRDeltaMemberCoh
+import rcic.RcicSynSRDeltaClosed
 open Lean
 -- END GLM-SR2 REDEXAP IMPORT
 
@@ -34885,6 +34903,22 @@ def sealedTheorems : List Name := [
     ``Rcic.Syn.redexBodyAP_bDl,
     ``Rcic.Syn.redexBodyAPWall_at_bApp
   ]
+  -- BEGIN LAND-UNION (seal names added by the landed PR; content-keyed union)
+  ++ [
+    ``Rcic.Syn.castArityZero_assumpPref,
+    ``Rcic.Syn.castArityZero_atoms,
+    ``Rcic.Syn.deltaAdmDb_assumpPref,
+    ``Rcic.Syn.deltaDbΓ_atoms_adm,
+    ``Rcic.Syn.defAdm_atoms_lt,
+    ``Rcic.Syn.typeAdm_atoms_lt,
+    ``Rcic.Syn.cl_deltaCanonL_before,
+    ``Rcic.Syn.cl_deltaDbΓ_before,
+    ``Rcic.Syn.es_delta_kept_memberCoh_tableOfI,
+    ``Rcic.Syn.es_delta_kept_admW_tableOfI,
+    ``Rcic.Syn.es_delta_kept_admW_tableOfI_pin,
+    ``Rcic.Syn.srDeltaEsKept_admW_closed_fixture
+  ]
+  -- END LAND-UNION
   -- END LAND-UNION
   -- END LAND-UNION
   -- END LAND-UNION
@@ -44699,3 +44733,15 @@ end Rcic.FoundationSeal
 #print axioms Rcic.Syn.redexBodyAP_bApp
 #print axioms Rcic.Syn.redexBodyAP_bDl
 #print axioms Rcic.Syn.redexBodyAPWall_at_bApp
+#print axioms Rcic.Syn.castArityZero_assumpPref
+#print axioms Rcic.Syn.castArityZero_atoms
+#print axioms Rcic.Syn.deltaAdmDb_assumpPref
+#print axioms Rcic.Syn.deltaDbΓ_atoms_adm
+#print axioms Rcic.Syn.defAdm_atoms_lt
+#print axioms Rcic.Syn.typeAdm_atoms_lt
+#print axioms Rcic.Syn.cl_deltaCanonL_before
+#print axioms Rcic.Syn.cl_deltaDbΓ_before
+#print axioms Rcic.Syn.es_delta_kept_memberCoh_tableOfI
+#print axioms Rcic.Syn.es_delta_kept_admW_tableOfI
+#print axioms Rcic.Syn.es_delta_kept_admW_tableOfI_pin
+#print axioms Rcic.Syn.srDeltaEsKept_admW_closed_fixture
