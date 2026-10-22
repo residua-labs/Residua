@@ -1409,6 +1409,7 @@ import rcic.RcicSynTableKCompat
 import rcic.RcicSynSRIotaRetKHmem
 import rcic.RcicSynSRLitPiErase
 import rcic.RcicSynSRLitPiInv
+import rcic.RcicSynTableKEsApp
 open Lean
 -- END GLM-SR2 REDEXAP IMPORT
 
@@ -35433,6 +35434,35 @@ def sealedTheorems : List Name := [
     ``Rcic.Syn.tyPInvLinstGW_onCone,
     ``Rcic.Syn.tyPInvEwkGW_onCone
   ]
+  -- BEGIN LAND-UNION (seal names added by the landed PR; content-keyed union)
+  ++ [
+    ``Rcic.Syn.IssuesCTK,
+    ``Rcic.Syn.DemandCTK,
+    ``Rcic.Syn.IssuesCTK.ap,
+    ``Rcic.Syn.IssuesCTK.hom,
+    ``Rcic.Syn.IssuesCTK.routed,
+    ``Rcic.Syn.DemandCTK.ap,
+    ``Rcic.Syn.DemandCTK.hom,
+    ``Rcic.Syn.DemandCTK.routed,
+    ``Rcic.Syn.StepIHCTK,
+    ``Rcic.Syn.CaseStepCTK,
+    ``Rcic.Syn.ih_issueCTK,
+    ``Rcic.Syn.ih_localCTK,
+    ``Rcic.Syn.solve_of_stepCTK,
+    ``Rcic.Syn.es_issued_occ_cl_CTK,
+    ``Rcic.Syn.es_issued_occ_pb_CTK,
+    ``Rcic.Syn.es_app_ih_fun_CTK,
+    ``Rcic.Syn.es_app_ih_arg_CTK,
+    ``Rcic.Syn.EsAppKPorts,
+    ``Rcic.Syn.esAppKPorts_of_closed,
+    ``Rcic.Syn.es_app_field_CTK,
+    ``Rcic.Syn.es_app_caseStepCTK,
+    ``Rcic.Syn.esAppKPorts_fixture,
+    ``Rcic.Syn.es_app_caseStepCTK_fixture,
+    ``Rcic.Syn.es_app_caseStepCTK_tableK,
+    ``Rcic.Syn.es_app_drClause_wall_inhabited
+  ]
+  -- END LAND-UNION
   -- END LAND-UNION
   -- END LAND-UNION
   -- END LAND-UNION
