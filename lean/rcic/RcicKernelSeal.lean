@@ -1565,6 +1565,8 @@ import rcic.RcicAnnLR3FamilyKey
 import rcic.RcicAnnLR3PinFamilyPositive
 import rcic.RcicAnnLR3TypeSubstBoundary
 import rcic.RcicRouteCLR3MathSeal
+import rcic.RcicAnnIotaCorrF
+import rcic.RcicAnnAccAnnCertPin
 open Lean
 -- END GLM-SR2 REDEXAP IMPORT
 
@@ -35759,6 +35761,34 @@ def sealedTheorems : List Name := [
     ``Rcic.Syn.es_app_caseStepCTK_tableK,
     ``Rcic.Syn.es_app_drClause_wall_inhabited
   ]
+  -- BEGIN LAND-UNION (seal names added by the landed PR; content-keyed union)
+  ++ [
+    ``Rcic.Declarative.Ann.iotaWitnessSAnnBF,
+    ``Rcic.Declarative.Ann.iotaWitnessSAnnBF_parts,
+    ``Rcic.Declarative.Ann.EnvCorrAnnCertF,
+    ``Rcic.Declarative.Ann.envCorrAnnCertF_of_envCorrAnnCert,
+    ``Rcic.Declarative.Ann.ctorShapesA_of_witnessSF,
+    ``Rcic.Declarative.Ann.iotaFnA_of_witnessSF,
+    ``Rcic.Declarative.Ann.iotaAnnotatesA_of_envWfAF,
+    ``Rcic.Declarative.Ann.iotaAnnotatesUA_of_envWfAF,
+    ``Rcic.Declarative.Ann.iotaCorrTUA_frecRA,
+    ``Rcic.Declarative.Ann.paRecDoms,
+    ``Rcic.Declarative.Ann.wPinAccS,
+    ``Rcic.Declarative.Ann.pin_iotaWitnessSAnnB_wPinAccS,
+    ``Rcic.Declarative.Ann.not_envCorrAnnCert_pinAcc,
+    ``Rcic.Declarative.Ann.pin_iotaWitnessSAnnBF_wPinAccS,
+    ``Rcic.Declarative.Ann.pinAcc_erase_mem,
+    ``Rcic.Declarative.Ann.pinAcc_fam_ref,
+    ``Rcic.Declarative.Ann.pinAcc_ctor_ref,
+    ``Rcic.Declarative.Ann.pinAcc_rec_ref,
+    ``Rcic.Declarative.Ann.pinAcc_envCorrEraseCert,
+    ``Rcic.Declarative.Ann.paFieldDomM_canonF,
+    ``Rcic.Declarative.Ann.pinAccSuppliesF,
+    ``Rcic.Declarative.Ann.pinAcc_envCorrAnnCertF,
+    ``Rcic.Declarative.Ann.pinAcc_iotaAnnotatesUA,
+    ``Rcic.Declarative.Ann.pinAcc_iotaCorrTUA
+  ]
+  -- END LAND-UNION
   -- END LAND-UNION
   -- END LAND-UNION
   -- END LAND-UNION
@@ -45774,3 +45804,10 @@ end Rcic.FoundationSeal
 #print axioms Rcic.Syn.tyPInvWkGW_onCone
 #print axioms Rcic.Syn.tyPInvLinstGW_onCone
 #print axioms Rcic.Syn.tyPInvEwkGW_onCone
+#print axioms Rcic.Declarative.Ann.iotaCorrTUA_frecRA
+#print axioms Rcic.Declarative.Ann.envCorrAnnCertF_of_envCorrAnnCert
+#print axioms Rcic.Declarative.Ann.not_envCorrAnnCert_pinAcc
+#print axioms Rcic.Declarative.Ann.pinAcc_envCorrEraseCert
+#print axioms Rcic.Declarative.Ann.pinAcc_envCorrAnnCertF
+#print axioms Rcic.Declarative.Ann.pinAcc_iotaAnnotatesUA
+#print axioms Rcic.Declarative.Ann.pinAcc_iotaCorrTUA
