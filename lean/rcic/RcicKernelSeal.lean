@@ -1,3 +1,16 @@
+-- BEGIN CHATGPT ROUTE C LR3 LANE SEALS DIRECT IMPORTS (closure_claim = 0)
+import rcic.RcicRouteCLR3InductiveCodesSeal
+import rcic.RcicRouteCLR3CandidateEnvironmentSeal
+import rcic.RcicRouteCLR3CandidateTransportSeal
+import rcic.RcicRouteCLR3SemanticActionSeal
+import rcic.RcicRouteCLR3EnrichedAssemblySeal
+import rcic.RcicRouteCLR3SaturatedRepairSeal
+-- END CHATGPT ROUTE C LR3 LANE SEALS DIRECT IMPORTS
+-- BEGIN CHATGPT ROUTE C LR3 LANDED SEALS DIRECT IMPORTS (closure_claim = 0)
+import rcic.RcicRouteCLR3FunctionFamilyProducerSeal
+import rcic.RcicAnnLR3PairedLookupSeal
+import rcic.RcicRouteCLR3LetArmsSeal
+-- END CHATGPT ROUTE C LR3 LANDED SEALS DIRECT IMPORTS
 -- BEGIN CHATGPT ROUTE C LR3 NEUTRAL PER DIRECT IMPORTS (closure_claim = 0)
 import rcic.RcicAnnLR3NeutralPER
 import rcic.RcicAnnLR3NeutralK
@@ -1470,6 +1483,10 @@ import rcic.RcicSynSRLitPiIssuesSR
 -- BEGIN GLM-SR2 MEAS IMPORT (cc 00:40Z measure lemmas + ConvModPiCongrW + W-assemblers; closure_claim = 0)
 import rcic.RcicSynSRLitPiMeas
 -- END GLM-SR2 MEAS IMPORT
+
+-- BEGIN CHATGPT ROUTE C LR3 TAGGED TOWER DIRECT IMPORTS (closure_claim = 0)
+import rcic.RcicRouteCLR3TaggedTowerSeal
+-- END CHATGPT ROUTE C LR3 TAGGED TOWER DIRECT IMPORTS
 -- BEGIN GLM-SR2 REDEXAP IMPORT (readRedex preserves AssumpPref; closure_claim = 0)
 import rcic.RcicSynSRLitPiRedexAP
 import rcic.RcicSynSRClEutBvar
@@ -1567,6 +1584,8 @@ import rcic.RcicAnnLR3TypeSubstBoundary
 import rcic.RcicRouteCLR3MathSeal
 import rcic.RcicAnnIotaCorrF
 import rcic.RcicAnnAccAnnCertPin
+import rcic.RcicSynLinkA
+import rcic.RcicSynPiLift
 open Lean
 -- END GLM-SR2 REDEXAP IMPORT
 
@@ -35788,6 +35807,54 @@ def sealedTheorems : List Name := [
     ``Rcic.Declarative.Ann.pinAcc_iotaAnnotatesUA,
     ``Rcic.Declarative.Ann.pinAcc_iotaCorrTUA
   ]
+  -- BEGIN LAND-UNION (seal names added by the landed PR; content-keyed union)
+  ++ [
+    ``Rcic.Syn.EpsDerivIndepEqW,
+    ``Rcic.Syn.EpsIndepConvW,
+    ``Rcic.Syn.sr2_zeroTy_at1,
+    ``Rcic.Syn.sr2_litTooth_at1,
+    ``Rcic.Syn.sr2_litToothEsub,
+    ``Rcic.Syn.sr2_tooth_eps_id,
+    ``Rcic.Syn.sr2_toothEsub_eps_id,
+    ``Rcic.Syn.sr2_zero_pair_eps_eq,
+    ``Rcic.Syn.sr2_lit_pair_eps_eq,
+    ``Rcic.Syn.TyPForgetW,
+    ``Rcic.Syn.sr2_famTy_plain,
+    ``Rcic.Syn.TyPSortUniqW,
+    ``Rcic.Syn.tyPSortUniqW_of_sortUniq,
+    ``Rcic.Syn.constLadder_sameSubj_of_sortUniq,
+    ``Rcic.Syn.sr2_ladder_instance,
+    ``Rcic.Syn.eps_sort_node_indep,
+    ``Rcic.Syn.eps_conv_inner,
+    ``Rcic.Syn.eps_const_eq_of_bit,
+    ``Rcic.Syn.epsIndepConvW_of_sortUniq_coh
+  ]
+  -- BEGIN LAND-UNION (seal names added by the landed PR; content-keyed union)
+  ++ [
+    ``Rcic.Syn.EpsConvReflects,
+    ``Rcic.Syn.EpsLevelFaithful,
+    ``Rcic.Syn.EpsConvReflectsG,
+    ``Rcic.Syn.PiSlotConvForget,
+    ``Rcic.Syn.PiEraseLift,
+    ``Rcic.Syn.piEraseLift_of_epsConvReflects,
+    ``Rcic.Syn.epsConvReflectsG_of_epsConvReflects,
+    ``Rcic.Syn.collapseParam,
+    ``Rcic.Syn.levelHom_collapseParam,
+    ``Rcic.Syn.eqN_param15_false,
+    ``Rcic.Syn.epsLevelFaithful_id,
+    ``Rcic.Syn.epsLevelFaithful_collapseParam_false,
+    ``Rcic.Syn.plLiftDL,
+    ``Rcic.Syn.plLiftDR,
+    ``Rcic.Syn.plLiftDB,
+    ``Rcic.Syn.not_tyConvT_sort_param15,
+    ``Rcic.Syn.epsConvReflects_false,
+    ``Rcic.Syn.piEraseLift_false,
+    ``Rcic.Syn.epsConvReflects_tableOfK_false,
+    ``Rcic.Syn.epsConvReflects_tableOfI_false,
+    ``Rcic.Syn.piEraseLift_tableOfK_false
+  ]
+  -- END LAND-UNION
+  -- END LAND-UNION
   -- END LAND-UNION
   -- END LAND-UNION
   -- END LAND-UNION
@@ -45811,3 +45878,22 @@ end Rcic.FoundationSeal
 #print axioms Rcic.Declarative.Ann.pinAcc_envCorrAnnCertF
 #print axioms Rcic.Declarative.Ann.pinAcc_iotaAnnotatesUA
 #print axioms Rcic.Declarative.Ann.pinAcc_iotaCorrTUA
+#print axioms Rcic.Syn.EpsDerivIndepEqW
+#print axioms Rcic.Syn.EpsIndepConvW
+#print axioms Rcic.Syn.sr2_zeroTy_at1
+#print axioms Rcic.Syn.sr2_litTooth_at1
+#print axioms Rcic.Syn.sr2_litToothEsub
+#print axioms Rcic.Syn.sr2_tooth_eps_id
+#print axioms Rcic.Syn.sr2_toothEsub_eps_id
+#print axioms Rcic.Syn.sr2_zero_pair_eps_eq
+#print axioms Rcic.Syn.sr2_lit_pair_eps_eq
+#print axioms Rcic.Syn.TyPForgetW
+#print axioms Rcic.Syn.sr2_famTy_plain
+#print axioms Rcic.Syn.TyPSortUniqW
+#print axioms Rcic.Syn.tyPSortUniqW_of_sortUniq
+#print axioms Rcic.Syn.constLadder_sameSubj_of_sortUniq
+#print axioms Rcic.Syn.sr2_ladder_instance
+#print axioms Rcic.Syn.eps_sort_node_indep
+#print axioms Rcic.Syn.eps_conv_inner
+#print axioms Rcic.Syn.eps_const_eq_of_bit
+#print axioms Rcic.Syn.epsIndepConvW_of_sortUniq_coh
