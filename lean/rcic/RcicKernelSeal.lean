@@ -1391,6 +1391,9 @@ import rcic.RcicAnnLR3HeadSubstBoundary
 import rcic.RcicRouteCLR3MeasurementSeal
 import rcic.RcicSynSRDeltaMemberCoh
 import rcic.RcicSynSRDeltaClosed
+import rcic.RcicSynTableK
+import rcic.RcicSynTableKMeasure
+import rcic.RcicSynSREutOffDiag
 open Lean
 -- END GLM-SR2 REDEXAP IMPORT
 
@@ -34918,6 +34921,140 @@ def sealedTheorems : List Name := [
     ``Rcic.Syn.es_delta_kept_admW_tableOfI_pin,
     ``Rcic.Syn.srDeltaEsKept_admW_closed_fixture
   ]
+  -- BEGIN LAND-UNION (seal names added by the landed PR; content-keyed union)
+  ++ [
+    ``Rcic.Syn.iotaKNparams,
+    ``Rcic.Syn.iotaKNargs,
+    ``Rcic.Syn.iotaKNfields,
+    ``Rcic.Syn.iotaKRule,
+    ``Rcic.Syn.iotaKGate,
+    ``Rcic.Syn.iotaKRuleOf,
+    ``Rcic.Syn.iotaRulesKOf,
+    ``Rcic.Syn.iotaKRuleOf_spec,
+    ``Rcic.Syn.mem_iotaRulesKOf,
+    ``Rcic.Syn.iotaRulesKOf_head,
+    ``Rcic.Syn.bare_mem_iotaRulesKOf,
+    ``Rcic.Syn.ctorMajor_mem_iotaRulesKOf,
+    ``Rcic.Syn.iotaRulesKOf_eq_of_bare,
+    ``Rcic.Syn.tableOfK,
+    ``Rcic.Syn.tableOfK_empty,
+    ``Rcic.Syn.tableOfK_axiom,
+    ``Rcic.Syn.tableOfK_definition,
+    ``Rcic.Syn.tableOfK_thm,
+    ``Rcic.Syn.tableOfK_opaque,
+    ``Rcic.Syn.tableOfK_group,
+    ``Rcic.Syn.mem_tableOfK_of_mem_tableOf,
+    ``Rcic.Syn.tableOfK_head_major,
+    ``Rcic.Syn.head_mem_tableOfK,
+    ``Rcic.Syn.iotaKRule_data,
+    ``Rcic.Syn.iotaRulesKOf_data,
+    ``Rcic.Syn.ruleData_tableOfK,
+    ``Rcic.Syn.tableCongr_tableOfK,
+    ``Rcic.Syn.tableClosed_tableOfK,
+    ``Rcic.Syn.tableOfK_rigid,
+    ``Rcic.Syn.iotaRulesKOf_ctor_disjoint,
+    ``Rcic.Syn.tableOfK_ctor_disjoint,
+    ``Rcic.Syn.tableOfK_bare_unique,
+    ``Rcic.Syn.tableOfK_bare_nullary,
+    ``Rcic.Syn.tableWF_tableOfK,
+    ``Rcic.Syn.confluent_eStep_tableOfK,
+    ``Rcic.Syn.kcpKRule,
+    ``Rcic.Syn.kcpCtorRule,
+    ``Rcic.Syn.kcpTable,
+    ``Rcic.Syn.kcpTable_head,
+    ``Rcic.Syn.rStep_appN_head,
+    ``Rcic.Syn.kcpBvar_normal,
+    ``Rcic.Syn.kcpTable_no_root_64,
+    ``Rcic.Syn.kcpConst64_normal,
+    ``Rcic.Syn.kcpLam2_normal,
+    ``Rcic.Syn.kcpSrc,
+    ``Rcic.Syn.kcpDK,
+    ``Rcic.Syn.kcpDC,
+    ``Rcic.Syn.kcp_step_bare,
+    ``Rcic.Syn.kcp_step_ctor,
+    ``Rcic.Syn.kcpDK_step,
+    ``Rcic.Syn.kcpDK1_step,
+    ``Rcic.Syn.kcpNK_normal,
+    ``Rcic.Syn.kcpDC_step,
+    ``Rcic.Syn.kcpDC1_step,
+    ``Rcic.Syn.kcp_chain_K,
+    ``Rcic.Syn.kcp_chain_C,
+    ``Rcic.Syn.kcpDK_reduct,
+    ``Rcic.Syn.kcpDC_reduct,
+    ``Rcic.Syn.lvlEq_app_lam_ne,
+    ``Rcic.Syn.lvlEq_app_bvar_ne,
+    ``Rcic.Syn.lvlEq_bvar_app_ne,
+    ``Rcic.Syn.lvlEq_bvar_lam_ne,
+    ``Rcic.Syn.lvlEq_lam_inv,
+    ``Rcic.Syn.lvlEq_app_inv,
+    ``Rcic.Syn.kcp_not_joinable,
+    ``Rcic.Syn.eqJoinCtxWf,
+    ``Rcic.Syn.eqScope,
+    ``Rcic.Syn.eqH,
+    ``Rcic.Syn.eqKSpine,
+    ``Rcic.Syn.eqKLhs,
+    ``Rcic.Syn.eqK_dl_eps,
+    ``Rcic.Syn.eqK_dr_eps,
+    ``Rcic.Syn.eqKGate_true,
+    ``Rcic.Syn.eqKRule_emit,
+    ``Rcic.Syn.eqKRule_mem,
+    ``Rcic.Syn.eqK_chain,
+    ``Rcic.Syn.eqK_es,
+    ``Rcic.Syn.tableOfI_eq65_major,
+    ``Rcic.Syn.eqTableOfI_const65_normal,
+    ``Rcic.Syn.eqTableOfI_app_normal,
+    ``Rcic.Syn.eqTableOfI_appN_normal,
+    ``Rcic.Syn.eqTableOfI_lhs_normal,
+    ``Rcic.Syn.eq_not_es_tableOfI,
+    ``Rcic.Syn.eqH_assumpPref,
+    ``Rcic.Syn.eqK_demand,
+    ``Rcic.Syn.loopKGate_true,
+    ``Rcic.Syn.loopKRule_emit,
+    ``Rcic.Syn.loopKRule_rhs
+  ]
+  -- BEGIN LAND-UNION (seal names added by the landed PR; content-keyed union)
+  ++ [
+    ``Rcic.Syn.eutTransportTags,
+    ``Rcic.Syn.eutRuleTags,
+    ``Rcic.Syn.eutOffDiagSat,
+    ``Rcic.Syn.eutOffDiagSat_of,
+    ``Rcic.Syn.eutOffDiagSat_wk_sort,
+    ``Rcic.Syn.eutOffDiagSat_sort_wk,
+    ``Rcic.Syn.TyP.isLamHead,
+    ``Rcic.Syn.eps_pi_of_piLeaf,
+    ``Rcic.Syn.reg_piLeaf_of_isLamHead,
+    ``Rcic.Syn.reg_eps_pi_of_isLamHead,
+    ``Rcic.Syn.eutOffDiagGoal_not_sortPi_lam,
+    ``Rcic.Syn.eutOffDiagGoal_not_lam_sortPi,
+    ``Rcic.Syn.exprHeadCtor,
+    ``Rcic.Syn.exprHeadCtor_lift,
+    ``Rcic.Syn.exprHeadCtor_instantiateLevels,
+    ``Rcic.Syn.exprHeadCtor_instantiate_of_ne_bvar,
+    ``Rcic.Syn.exprBvarIdx,
+    ``Rcic.Syn.exprHeadCtor_eq_bvar_iff,
+    ``Rcic.Syn.eq_bvar_of_exprBvarIdx,
+    ``Rcic.Syn.exprBvarIdx_lift,
+    ``Rcic.Syn.exprBvarIdx_instantiateLevels,
+    ``Rcic.Syn.exprBvarIdx_instantiate_of_ne_bvar,
+    ``Rcic.Syn.TyP.subjInfo,
+    ``Rcic.Syn.TyP.subjHead,
+    ``Rcic.Syn.TyP.subjBvarIdx,
+    ``Rcic.Syn.subjInfo_eq,
+    ``Rcic.Syn.subjHead_isSome,
+    ``Rcic.Syn.exprHeadCtor_of_subjHead,
+    ``Rcic.Syn.eutOffDiag_caseStep_of_subjHeadClash,
+    ``Rcic.Syn.eutOtherP_caseStep_of_subjHeadClash,
+    ``Rcic.Syn.subjHeadClash,
+    ``Rcic.Syn.eutOffDiag_caseStep_of_subjHeadClash_true,
+    ``Rcic.Syn.subjHeadClash_eq_decide,
+    ``Rcic.Syn.subjHeadClash_true_iff,
+    ``Rcic.Syn.subjHeadClash_false_same,
+    ``Rcic.Syn.subjHeadClash_false_head,
+    ``Rcic.Syn.eutOtherP_caseStep_of_subjHeadClash_true,
+    ``Rcic.Syn.eutOtherP_sameSubjHead_of_clash_false
+  ]
+  -- END LAND-UNION
+  -- END LAND-UNION
   -- END LAND-UNION
   -- END LAND-UNION
   -- END LAND-UNION
@@ -44745,3 +44882,41 @@ end Rcic.FoundationSeal
 #print axioms Rcic.Syn.es_delta_kept_admW_tableOfI
 #print axioms Rcic.Syn.es_delta_kept_admW_tableOfI_pin
 #print axioms Rcic.Syn.srDeltaEsKept_admW_closed_fixture
+#print axioms Rcic.Syn.eutTransportTags
+#print axioms Rcic.Syn.eutRuleTags
+#print axioms Rcic.Syn.eutOffDiagSat
+#print axioms Rcic.Syn.eutOffDiagSat_of
+#print axioms Rcic.Syn.eutOffDiagSat_wk_sort
+#print axioms Rcic.Syn.eutOffDiagSat_sort_wk
+#print axioms Rcic.Syn.TyP.isLamHead
+#print axioms Rcic.Syn.eps_pi_of_piLeaf
+#print axioms Rcic.Syn.reg_piLeaf_of_isLamHead
+#print axioms Rcic.Syn.reg_eps_pi_of_isLamHead
+#print axioms Rcic.Syn.eutOffDiagGoal_not_sortPi_lam
+#print axioms Rcic.Syn.eutOffDiagGoal_not_lam_sortPi
+#print axioms Rcic.Syn.exprHeadCtor
+#print axioms Rcic.Syn.exprHeadCtor_lift
+#print axioms Rcic.Syn.exprHeadCtor_instantiateLevels
+#print axioms Rcic.Syn.exprHeadCtor_instantiate_of_ne_bvar
+#print axioms Rcic.Syn.exprBvarIdx
+#print axioms Rcic.Syn.exprHeadCtor_eq_bvar_iff
+#print axioms Rcic.Syn.eq_bvar_of_exprBvarIdx
+#print axioms Rcic.Syn.exprBvarIdx_lift
+#print axioms Rcic.Syn.exprBvarIdx_instantiateLevels
+#print axioms Rcic.Syn.exprBvarIdx_instantiate_of_ne_bvar
+#print axioms Rcic.Syn.TyP.subjInfo
+#print axioms Rcic.Syn.TyP.subjHead
+#print axioms Rcic.Syn.TyP.subjBvarIdx
+#print axioms Rcic.Syn.subjInfo_eq
+#print axioms Rcic.Syn.subjHead_isSome
+#print axioms Rcic.Syn.exprHeadCtor_of_subjHead
+#print axioms Rcic.Syn.eutOffDiag_caseStep_of_subjHeadClash
+#print axioms Rcic.Syn.eutOtherP_caseStep_of_subjHeadClash
+#print axioms Rcic.Syn.subjHeadClash
+#print axioms Rcic.Syn.eutOffDiag_caseStep_of_subjHeadClash_true
+#print axioms Rcic.Syn.subjHeadClash_eq_decide
+#print axioms Rcic.Syn.subjHeadClash_true_iff
+#print axioms Rcic.Syn.subjHeadClash_false_same
+#print axioms Rcic.Syn.subjHeadClash_false_head
+#print axioms Rcic.Syn.eutOtherP_caseStep_of_subjHeadClash_true
+#print axioms Rcic.Syn.eutOtherP_sameSubjHead_of_clash_false
