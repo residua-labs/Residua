@@ -1,3 +1,4 @@
+import rcic.RcicLeanImportSeal
 -- BEGIN CHATGPT ROUTE C LR3 LANE SEALS DIRECT IMPORTS (closure_claim = 0)
 import rcic.RcicRouteCLR3InductiveCodesSeal
 import rcic.RcicRouteCLR3CandidateEnvironmentSeal
@@ -1591,6 +1592,7 @@ import rcic.RcicSynLinkA2
 import rcic.RcicAccPiEnv
 import rcic.RcicAccPiTable
 import rcic.RcicAccPiMeasure
+import rcic.RcicRouteCLR3AdeqPiRowSeal
 open Lean
 -- END GLM-SR2 REDEXAP IMPORT
 
