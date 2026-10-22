@@ -1,3 +1,281 @@
+-- BEGIN CHATGPT ROUTE C LR3 NEUTRAL PER DIRECT IMPORTS (closure_claim = 0)
+import rcic.RcicAnnLR3NeutralPER
+import rcic.RcicAnnLR3NeutralK
+import rcic.RcicAnnLR3NeutralExtraction
+import rcic.RcicAnnLR3NeutralControls
+import rcic.RcicAnnLR3NeutralKSource
+import rcic.RcicAnnLR3NeutralFamily
+import rcic.RcicRouteCLR3NeutralPERSeal
+-- END CHATGPT ROUTE C LR3 NEUTRAL PER DIRECT IMPORTS
+-- BEGIN CHATGPT ROUTE C LR3 TYPED LAYER DIRECT IMPORTS (closure_claim = 0)
+import rcic.RcicAnnLR3TypedPER
+import rcic.RcicAnnLR3UnitContextBoundary
+import rcic.RcicAnnLR3TypedInductive
+import rcic.RcicAnnLR3TruthAxiomBoundary
+import rcic.RcicAnnLR3TypedStatements
+import rcic.RcicAnnLR3TypedConstantModel
+import rcic.RcicAnnLR3TypedArms
+import rcic.RcicAnnLR3TypedArmBoundary
+import rcic.RcicAnnLR3TypedCoverageBoundary
+import rcic.RcicRouteCLR3TypedLayerSeal
+-- END CHATGPT ROUTE C LR3 TYPED LAYER DIRECT IMPORTS
+-- BEGIN CHATGPT ROUTE C LR3 UNIT MODEL DIRECT IMPORTS (closure_claim = 0)
+import rcic.RcicAnnLR3UnitCore
+import rcic.RcicAnnLR3UnitTranslate
+import rcic.RcicAnnLR3UnitEqProbe
+import rcic.RcicAnnLR3UnitLevels
+import rcic.RcicAnnLR3UnitSortExtraction
+import rcic.RcicAnnLR3UnitConstructorArms
+import rcic.RcicAnnLR3UnitArms
+import rcic.RcicAnnLR3UnitTypedEq
+import rcic.RcicAnnLR3UnitProofDomain
+import rcic.RcicRouteCLR3UnitModelSeal
+-- END CHATGPT ROUTE C LR3 UNIT MODEL DIRECT IMPORTS
+-- BEGIN CHATGPT ROUTE C LR3 MODEL ASSESSMENT DIRECT IMPORTS (closure_claim = 0)
+import rcic.RcicAnnLR3StrictProofModelBoundary
+import rcic.RcicAnnLR3ModelMembershipBoundary
+import rcic.RcicRouteCLR3ModelAssessmentSeal
+-- END CHATGPT ROUTE C LR3 MODEL ASSESSMENT DIRECT IMPORTS
+-- BEGIN CHATGPT ROUTE C LR3 DESCENT DIRECT IMPORTS (closure_claim = 0)
+import rcic.RcicAnnLR3IrrQueryDescent
+import rcic.RcicAnnLR3IrrQueryClosure
+import rcic.RcicAnnLR3PrefixQueryBoundary
+import rcic.RcicAnnLR3PrefixRows
+import rcic.RcicAnnLR3EqPropKey
+import rcic.RcicAnnLR3ReflQueryProvenance
+import rcic.RcicAnnLR3EqQueryAtZero
+import rcic.RcicRouteCLR3DescentSeal
+-- END CHATGPT ROUTE C LR3 DESCENT DIRECT IMPORTS
+-- BEGIN CHATGPT ROUTE C LR3 COHERENCE DIRECT IMPORTS (closure_claim = 0)
+import rcic.RcicAnnLR3SortCoherenceBoundary
+import rcic.RcicAnnLR3SortSynthesisDemand
+import rcic.RcicAnnLR3FrameSource
+import rcic.RcicAnnLR3ReflInferenceBoundary
+import rcic.RcicAnnLR3EqErasureReduction
+import rcic.RcicAnnLR3GuardHeightBoundary
+import rcic.RcicAnnLR3GuardHeightSemantic
+import rcic.RcicRouteCLR3CoherenceSeal
+-- END CHATGPT ROUTE C LR3 COHERENCE DIRECT IMPORTS
+-- BEGIN CHATGPT ROUTE C LR3 MATH DIRECT IMPORTS (closure_claim = 0)
+import rcic.RcicAnnLR3NormalDemand
+import rcic.RcicAnnLR3NormalSubstBoundary
+import rcic.RcicAnnLR3SubstLaws
+import rcic.RcicAnnLR3LetSubstBoundary
+import rcic.RcicAnnLR3SubstReflectionBoundary
+import rcic.RcicAnnLR3ProofIndexBoundary
+import rcic.RcicAnnLR3SaturatedIndexBoundary
+import rcic.RcicAnnLR3SaturatedNormalSubstBoundary
+import rcic.RcicAnnLR3AppPrefix
+import rcic.RcicAnnLR3NormalWk
+import rcic.RcicAnnLR3IndexCrossTransport
+import rcic.RcicAnnLR3HeadWk
+import rcic.RcicAnnLR3FamilyKey
+import rcic.RcicAnnLR3PinFamilyPositive
+import rcic.RcicAnnLR3TypeSubstBoundary
+import rcic.RcicRouteCLR3MathSeal
+-- END CHATGPT ROUTE C LR3 MATH DIRECT IMPORTS
+-- BEGIN CHATGPT ROUTE C LR3 CORE DIRECT IMPORTS (closure_claim = 0)
+import rcic.RcicAnnSortSynthesisA3
+import rcic.RcicAnnLR3Positive
+import rcic.RcicAnnLR3Head
+import rcic.RcicAnnLR3HeadLayer
+import rcic.RcicAnnLR3Chain
+import rcic.RcicAnnLR3Sort
+import rcic.RcicAnnLR3Family
+import rcic.RcicAnnLR3PropEq
+import rcic.RcicAnnLR3Core
+import rcic.RcicAnnLR3EqHead
+import rcic.RcicRouteCLR3CoreSeal
+-- END CHATGPT ROUTE C LR3 CORE DIRECT IMPORTS
+-- BEGIN CHATGPT ROUTE C LR3 MEASUREMENT DIRECT IMPORTS (closure_claim = 0)
+import rcic.RcicAnnKDeterminism
+import rcic.RcicAnnLR3RelationalFacts
+import rcic.RcicAnnLR3HeadBoundary
+import rcic.RcicAnnLR3HeadSubstBoundary
+import rcic.RcicRouteCLR3MeasurementSeal
+-- END CHATGPT ROUTE C LR3 MEASUREMENT DIRECT IMPORTS
+-- BEGIN CHATGPT ROUTE C K INDEX DIRECT IMPORTS (closure_claim = 0)
+import rcic.RcicRouteCKContextBoundary
+import rcic.RcicAnnKIndexLaws
+import rcic.RcicAnnKStage
+import rcic.RcicAnnKTransport
+import rcic.RcicAnnKEqPositive
+import rcic.RcicAnnKOldLRBoundary
+import rcic.RcicRouteCIndexSyntactic
+import rcic.RcicRouteCIndexTransport
+import rcic.RcicRouteCIndexFamilyFragment
+import rcic.RcicRouteCIndexFamilyPer
+import rcic.RcicRouteCKIndexSeal
+-- END CHATGPT ROUTE C K INDEX DIRECT IMPORTS
+-- BEGIN CHATGPT ROUTE C RELATION BOUNDARY DIRECT IMPORTS (closure_claim = 0)
+import rcic.RcicRouteCEqGuard
+import rcic.RcicAnnEqLargeFixture
+import rcic.RcicRouteCGuardedCycle
+import rcic.RcicRouteCLargeIndexBoundary
+import rcic.RcicRouteCRelationBoundarySeal
+-- END CHATGPT ROUTE C RELATION BOUNDARY DIRECT IMPORTS
+-- BEGIN CHATGPT SCOPE RESIDUE DIRECT IMPORTS (closure_claim = 0)
+import rcic.RcicTypedScopeResidue
+import rcic.RcicTypedScopeAdmission
+import rcic.RcicTypedScopeResidueSeal
+-- END CHATGPT SCOPE RESIDUE DIRECT IMPORTS
+-- BEGIN CHATGPT COVWRIGID DIRECT IMPORTS (closure_claim = 0)
+import rcic.RcicNativeTypedModelCovWRigidCore
+import rcic.RcicNativeTypedModelCovWRigidLocal
+import rcic.RcicNativeTypedModelCovWRigidSpines
+import rcic.RcicNativeTypedModelCovWRigidTransport
+import rcic.RcicNativeTypedModelCovWRigidLegacy
+import rcic.RcicNativeTypedModelCovWRigidTypingBoundary
+import rcic.RcicNativeTypedModelCovWRigidPiTrans
+import rcic.RcicNativeTypedModelCovWRigidMShape
+import rcic.RcicNativeTypedModelCovWRigidSeal
+-- END CHATGPT COVWRIGID DIRECT IMPORTS
+-- BEGIN CHATGPT COVWCONV DIRECT IMPORTS (closure_claim = 0)
+import rcic.RcicNativeTypedModelCovWConvAndK
+import rcic.RcicNativeTypedModelCovWConvBohm
+import rcic.RcicNativeTypedModelCovWConvCompact
+import rcic.RcicNativeTypedModelCovWConvControls
+import rcic.RcicNativeTypedModelCovWConvCore
+import rcic.RcicNativeTypedModelCovWConvForget
+import rcic.RcicNativeTypedModelCovWConvHo
+import rcic.RcicNativeTypedModelCovWConvK
+import rcic.RcicNativeTypedModelCovWConvLevels
+import rcic.RcicNativeTypedModelCovWConvLocal
+import rcic.RcicNativeTypedModelCovWConvLocalRealized
+import rcic.RcicNativeTypedModelCovWConvPositive
+import rcic.RcicNativeTypedModelCovWConvQuotientRows
+import rcic.RcicNativeTypedModelCovWConvReduction
+import rcic.RcicNativeTypedModelCovWConvUniverse
+import rcic.RcicNativeTypedModelCovWConvUniverseFragment
+import rcic.RcicNativeTypedModelCovWConvValley
+import rcic.RcicNativeTypedModelCovWConvSeal
+-- END CHATGPT COVWCONV DIRECT IMPORTS
+-- BEGIN CHATGPT COVWNATIVE FOLLOWUP DIRECT IMPORTS (closure_claim = 0)
+import rcic.RcicNativeTypedModelCovWNativeExpansionBoundary
+import rcic.RcicNativeTypedModelCovWNativeEtaFunctionBoundary
+import rcic.RcicNativeTypedModelCovWNativeFollowupSeal
+-- END CHATGPT COVWNATIVE FOLLOWUP DIRECT IMPORTS
+-- BEGIN CHATGPT COVWNATIVE DIRECT IMPORTS (closure_claim = 0)
+import rcic.RcicNativeTypedModelCovWNativeAliasControl
+import rcic.RcicNativeTypedModelCovWNativeApartGap
+import rcic.RcicNativeTypedModelCovWNativeCompleteness
+import rcic.RcicNativeTypedModelCovWNativeComputations
+import rcic.RcicNativeTypedModelCovWNativeContext
+import rcic.RcicNativeTypedModelCovWNativeControls
+import rcic.RcicNativeTypedModelCovWNativeCore
+import rcic.RcicNativeTypedModelCovWNativeDeclarativeHead
+import rcic.RcicNativeTypedModelCovWNativeFields
+import rcic.RcicNativeTypedModelCovWNativeFixtures
+import rcic.RcicNativeTypedModelCovWNativeFunctionControls
+import rcic.RcicNativeTypedModelCovWNativeHeadClosure
+import rcic.RcicNativeTypedModelCovWNativeHoControl
+import rcic.RcicNativeTypedModelCovWNativeKControls
+import rcic.RcicNativeTypedModelCovWNativeNat
+import rcic.RcicNativeTypedModelCovWNativeProofControls
+import rcic.RcicNativeTypedModelCovWNativeRecControl
+import rcic.RcicNativeTypedModelCovWNativeSeal
+import rcic.RcicNativeTypedModelCovWNativeUniverse
+-- END CHATGPT COVWNATIVE DIRECT IMPORTS
+-- BEGIN CHATGPT COVWMATRIX DIRECT IMPORTS (closure_claim = 0)
+import rcic.RcicNativeTypedModelCovWMatrixCells
+import rcic.RcicNativeTypedModelCovWMatrixCore
+import rcic.RcicNativeTypedModelCovWMatrixFunctionCells
+import rcic.RcicNativeTypedModelCovWMatrixIotaHead
+import rcic.RcicNativeTypedModelCovWMatrixKHead
+import rcic.RcicNativeTypedModelCovWMatrixLiteral
+import rcic.RcicNativeTypedModelCovWMatrixMajorIrrel
+import rcic.RcicNativeTypedModelCovWMatrixPositions
+import rcic.RcicNativeTypedModelCovWMatrixRawCongruence
+import rcic.RcicNativeTypedModelCovWMatrixRawDelta
+import rcic.RcicNativeTypedModelCovWMatrixRawEtaHead
+import rcic.RcicNativeTypedModelCovWMatrixRawIotaHead
+import rcic.RcicNativeTypedModelCovWMatrixSeal
+-- END CHATGPT COVWMATRIX DIRECT IMPORTS
+-- BEGIN CHATGPT COVWIRREL DIRECT IMPORTS (closure_claim = 0)
+import rcic.RcicNativeTypedModelCovWIrrelAliasControl
+import rcic.RcicNativeTypedModelCovWIrrelAligned
+import rcic.RcicNativeTypedModelCovWIrrelBoundary
+import rcic.RcicNativeTypedModelCovWIrrelCompact
+import rcic.RcicNativeTypedModelCovWIrrelControls
+import rcic.RcicNativeTypedModelCovWIrrelFixtures
+import rcic.RcicNativeTypedModelCovWIrrelFullProofEquality
+import rcic.RcicNativeTypedModelCovWIrrelFunctionBoundary
+import rcic.RcicNativeTypedModelCovWIrrelFunctionRawBoundary
+import rcic.RcicNativeTypedModelCovWIrrelFunctionRepairBoundary
+import rcic.RcicNativeTypedModelCovWIrrelKControls
+import rcic.RcicNativeTypedModelCovWIrrelNat
+import rcic.RcicNativeTypedModelCovWIrrelNatAdequacy
+import rcic.RcicNativeTypedModelCovWIrrelNativeEtaBody
+import rcic.RcicNativeTypedModelCovWIrrelNativePositions
+import rcic.RcicNativeTypedModelCovWIrrelPositionPins
+import rcic.RcicNativeTypedModelCovWIrrelPositions
+import rcic.RcicNativeTypedModelCovWIrrelProofDemand
+import rcic.RcicNativeTypedModelCovWIrrelProofSupplies
+import rcic.RcicNativeTypedModelCovWIrrelRecControl
+import rcic.RcicNativeTypedModelCovWIrrelRepair
+import rcic.RcicNativeTypedModelCovWIrrelScope
+import rcic.RcicNativeTypedModelCovWIrrelSeal
+import rcic.RcicNativeTypedModelCovWIrrelShape
+-- END CHATGPT COVWIRREL DIRECT IMPORTS
+-- BEGIN CHATGPT COVWETA DIRECT IMPORTS (closure_claim = 0)
+import rcic.RcicNativeTypedModelCovWEtaActions
+import rcic.RcicNativeTypedModelCovWEtaAliasControl
+import rcic.RcicNativeTypedModelCovWEtaAligned
+import rcic.RcicNativeTypedModelCovWEtaBoundary
+import rcic.RcicNativeTypedModelCovWEtaControls
+import rcic.RcicNativeTypedModelCovWEtaExpansionBoundary
+import rcic.RcicNativeTypedModelCovWEtaHoControl
+import rcic.RcicNativeTypedModelCovWEtaInverseBoundary
+import rcic.RcicNativeTypedModelCovWEtaKGuardControl
+import rcic.RcicNativeTypedModelCovWEtaNat
+import rcic.RcicNativeTypedModelCovWEtaNatAdequacy
+import rcic.RcicNativeTypedModelCovWEtaSeal
+-- END CHATGPT COVWETA DIRECT IMPORTS
+-- BEGIN CHATGPT COVWTYPED DIRECT IMPORTS (closure_claim = 0)
+import rcic.RcicNativeTypedModelCovWTypedActions
+import rcic.RcicNativeTypedModelCovWTypedAntiReduction
+import rcic.RcicNativeTypedModelCovWTypedBetaBoundary
+import rcic.RcicNativeTypedModelCovWTypedRawAdequacy
+import rcic.RcicNativeTypedModelCovWTypedSeal
+-- END CHATGPT COVWTYPED DIRECT IMPORTS
+-- BEGIN CHATGPT COVW DIRECT IMPORTS (closure_claim = 0)
+import rcic.RcicNativeTypedModelCovWAligned
+import rcic.RcicNativeTypedModelCovWArity
+import rcic.RcicNativeTypedModelCovWBasicK
+import rcic.RcicNativeTypedModelCovWCallBoundary
+import rcic.RcicNativeTypedModelCovWControls
+import rcic.RcicNativeTypedModelCovWFixtures
+import rcic.RcicNativeTypedModelCovWRawAdequacy
+import rcic.RcicNativeTypedModelCovWRealized
+import rcic.RcicNativeTypedModelCovWRevealed
+import rcic.RcicNativeTypedModelCovWValueActions
+import rcic.RcicNativeTypedModelCovWSeal
+-- END CHATGPT COVW DIRECT IMPORTS
+-- BEGIN CHATGPT COVV DIRECT IMPORTS (closure_claim = 0)
+import rcic.RcicNativeTypedModelCovVAligned
+import rcic.RcicNativeTypedModelCovVBasicK
+import rcic.RcicNativeTypedModelCovVControls
+import rcic.RcicNativeTypedModelCovVFixtures
+import rcic.RcicNativeTypedModelCovVHeadActions
+import rcic.RcicNativeTypedModelCovVHo
+import rcic.RcicNativeTypedModelCovVNativeHeads
+import rcic.RcicNativeTypedModelCovVProjection
+import rcic.RcicNativeTypedModelCovVRealized
+import rcic.RcicNativeTypedModelCovVRestriction
+import rcic.RcicNativeTypedModelCovVSeal
+import rcic.RcicNativeTypedModelW6Iota
+-- END CHATGPT COVV DIRECT IMPORTS
+-- BEGIN CHATGPT COVU DIRECT IMPORTS (closure_claim = 0)
+import rcic.RcicNativeTypedModelCovUCycle
+import rcic.RcicNativeTypedModelCovUFixtures
+import rcic.RcicNativeTypedModelCovUOmegaCore
+import rcic.RcicNativeTypedModelCovUProjection
+import rcic.RcicNativeTypedModelCovURealized
+import rcic.RcicNativeTypedModelCovURecInstance
+import rcic.RcicNativeTypedModelCovUSeal
+import rcic.RcicNativeTypedModelCovUSoundness
+import rcic.RcicNativeTypedModelCovUSoundnessEnv
+-- END CHATGPT COVU DIRECT IMPORTS
 -- BEGIN CHATGPT COVT DIRECT IMPORTS (closure_claim = 0)
 import rcic.RcicNativeTypedModelCovTData
 import rcic.RcicNativeTypedModelCovTRecursor
@@ -1038,7 +1316,6 @@ import rcic.RcicNativeTypedModelIotaSound
 -- END DEVIN SWE-IOTASOUND IMPORT
 
 -- BEGIN DEVIN SWE-WALL6-IOTA IMPORT
-import rcic.RcicNativeTypedModelW6Iota
 -- END DEVIN SWE-WALL6-IOTA IMPORT
 
 -- BEGIN RCIC_PI_CYCLE_AUDIT_IMPORTS
@@ -1150,26 +1427,6 @@ import rcic.RcicSynSRPbDeltaObs
 import rcic.RcicSynSRClEutEswW
 import rcic.RcicSynSRClEutEswEut
 import rcic.RcicSynSRClEutEswCl
-import rcic.RcicNativeTypedModelCovVAligned
-import rcic.RcicNativeTypedModelCovVBasicK
-import rcic.RcicNativeTypedModelCovVControls
-import rcic.RcicNativeTypedModelCovVFixtures
-import rcic.RcicNativeTypedModelCovVHeadActions
-import rcic.RcicNativeTypedModelCovVHo
-import rcic.RcicNativeTypedModelCovVNativeHeads
-import rcic.RcicNativeTypedModelCovVProjection
-import rcic.RcicNativeTypedModelCovVRealized
-import rcic.RcicNativeTypedModelCovVRestriction
-import rcic.RcicNativeTypedModelCovVSeal
-import rcic.RcicNativeTypedModelCovUCycle
-import rcic.RcicNativeTypedModelCovUFixtures
-import rcic.RcicNativeTypedModelCovUOmegaCore
-import rcic.RcicNativeTypedModelCovUProjection
-import rcic.RcicNativeTypedModelCovURealized
-import rcic.RcicNativeTypedModelCovURecInstance
-import rcic.RcicNativeTypedModelCovUSeal
-import rcic.RcicNativeTypedModelCovUSoundness
-import rcic.RcicNativeTypedModelCovUSoundnessEnv
 -- END GLM-SR1 EPSW2 IMPORT
 -- BEGIN GLM-SR1 STEPW IMPORT (StepSuppliersW: the closer on epsW, boundary, rows 2/3/4; closure_claim = 0)
 import rcic.RcicSynSRBetaZetaStepWCore
@@ -1182,71 +1439,6 @@ import rcic.RcicSynSRBetaZetaStepWLetCW
 -- END GLM-SR1 STEPW IMPORT
 import rcic.RcicSynSREqnClW
 import rcic.RcicSynSREqnIssue
-import rcic.RcicNativeTypedModelCovWTypedActions
-import rcic.RcicNativeTypedModelCovWTypedAntiReduction
-import rcic.RcicNativeTypedModelCovWTypedBetaBoundary
-import rcic.RcicNativeTypedModelCovWTypedRawAdequacy
-import rcic.RcicNativeTypedModelCovWTypedSeal
-import rcic.RcicNativeTypedModelCovWAligned
-import rcic.RcicNativeTypedModelCovWArity
-import rcic.RcicNativeTypedModelCovWBasicK
-import rcic.RcicNativeTypedModelCovWCallBoundary
-import rcic.RcicNativeTypedModelCovWControls
-import rcic.RcicNativeTypedModelCovWFixtures
-import rcic.RcicNativeTypedModelCovWRawAdequacy
-import rcic.RcicNativeTypedModelCovWRealized
-import rcic.RcicNativeTypedModelCovWRevealed
-import rcic.RcicNativeTypedModelCovWValueActions
-import rcic.RcicNativeTypedModelCovWSeal
-import rcic.RcicNativeTypedModelCovWEtaActions
-import rcic.RcicNativeTypedModelCovWEtaAliasControl
-import rcic.RcicNativeTypedModelCovWEtaAligned
-import rcic.RcicNativeTypedModelCovWEtaBoundary
-import rcic.RcicNativeTypedModelCovWEtaControls
-import rcic.RcicNativeTypedModelCovWEtaExpansionBoundary
-import rcic.RcicNativeTypedModelCovWEtaHoControl
-import rcic.RcicNativeTypedModelCovWEtaInverseBoundary
-import rcic.RcicNativeTypedModelCovWEtaKGuardControl
-import rcic.RcicNativeTypedModelCovWEtaNat
-import rcic.RcicNativeTypedModelCovWEtaNatAdequacy
-import rcic.RcicNativeTypedModelCovWEtaSeal
-import rcic.RcicNativeTypedModelCovWIrrelAliasControl
-import rcic.RcicNativeTypedModelCovWIrrelAligned
-import rcic.RcicNativeTypedModelCovWIrrelBoundary
-import rcic.RcicNativeTypedModelCovWIrrelCompact
-import rcic.RcicNativeTypedModelCovWIrrelControls
-import rcic.RcicNativeTypedModelCovWIrrelFixtures
-import rcic.RcicNativeTypedModelCovWIrrelFullProofEquality
-import rcic.RcicNativeTypedModelCovWIrrelFunctionBoundary
-import rcic.RcicNativeTypedModelCovWIrrelFunctionRawBoundary
-import rcic.RcicNativeTypedModelCovWIrrelFunctionRepairBoundary
-import rcic.RcicNativeTypedModelCovWIrrelKControls
-import rcic.RcicNativeTypedModelCovWIrrelNat
-import rcic.RcicNativeTypedModelCovWIrrelNatAdequacy
-import rcic.RcicNativeTypedModelCovWIrrelNativeEtaBody
-import rcic.RcicNativeTypedModelCovWIrrelNativePositions
-import rcic.RcicNativeTypedModelCovWIrrelPositionPins
-import rcic.RcicNativeTypedModelCovWIrrelPositions
-import rcic.RcicNativeTypedModelCovWIrrelProofDemand
-import rcic.RcicNativeTypedModelCovWIrrelProofSupplies
-import rcic.RcicNativeTypedModelCovWIrrelRecControl
-import rcic.RcicNativeTypedModelCovWIrrelRepair
-import rcic.RcicNativeTypedModelCovWIrrelScope
-import rcic.RcicNativeTypedModelCovWIrrelSeal
-import rcic.RcicNativeTypedModelCovWIrrelShape
-import rcic.RcicNativeTypedModelCovWMatrixCells
-import rcic.RcicNativeTypedModelCovWMatrixCore
-import rcic.RcicNativeTypedModelCovWMatrixFunctionCells
-import rcic.RcicNativeTypedModelCovWMatrixIotaHead
-import rcic.RcicNativeTypedModelCovWMatrixKHead
-import rcic.RcicNativeTypedModelCovWMatrixLiteral
-import rcic.RcicNativeTypedModelCovWMatrixMajorIrrel
-import rcic.RcicNativeTypedModelCovWMatrixPositions
-import rcic.RcicNativeTypedModelCovWMatrixRawCongruence
-import rcic.RcicNativeTypedModelCovWMatrixRawDelta
-import rcic.RcicNativeTypedModelCovWMatrixRawEtaHead
-import rcic.RcicNativeTypedModelCovWMatrixRawIotaHead
-import rcic.RcicNativeTypedModelCovWMatrixSeal
 import rcic.RcicSynSREqnTransport
 import rcic.RcicSynSREqnAnswer
 import rcic.RcicSynSREqnLevelGate
@@ -1255,67 +1447,10 @@ import rcic.RcicSynSRClEutConvb
 import rcic.RcicSynSRClEutApp
 import rcic.RcicSynSRClEutOther
 import rcic.RcicSynSRClEutTransport
-import rcic.RcicNativeTypedModelCovWNativeExpansionBoundary
-import rcic.RcicNativeTypedModelCovWNativeEtaFunctionBoundary
-import rcic.RcicNativeTypedModelCovWNativeFollowupSeal
-import rcic.RcicNativeTypedModelCovWNativeAliasControl
-import rcic.RcicNativeTypedModelCovWNativeApartGap
-import rcic.RcicNativeTypedModelCovWNativeCompleteness
-import rcic.RcicNativeTypedModelCovWNativeComputations
-import rcic.RcicNativeTypedModelCovWNativeContext
-import rcic.RcicNativeTypedModelCovWNativeControls
-import rcic.RcicNativeTypedModelCovWNativeCore
-import rcic.RcicNativeTypedModelCovWNativeDeclarativeHead
-import rcic.RcicNativeTypedModelCovWNativeFields
-import rcic.RcicNativeTypedModelCovWNativeFixtures
-import rcic.RcicNativeTypedModelCovWNativeFunctionControls
-import rcic.RcicNativeTypedModelCovWNativeHeadClosure
-import rcic.RcicNativeTypedModelCovWNativeHoControl
-import rcic.RcicNativeTypedModelCovWNativeKControls
-import rcic.RcicNativeTypedModelCovWNativeNat
-import rcic.RcicNativeTypedModelCovWNativeProofControls
-import rcic.RcicNativeTypedModelCovWNativeRecControl
-import rcic.RcicNativeTypedModelCovWNativeSeal
-import rcic.RcicNativeTypedModelCovWNativeUniverse
-import rcic.RcicNativeTypedModelCovWConvAndK
-import rcic.RcicNativeTypedModelCovWConvBohm
-import rcic.RcicNativeTypedModelCovWConvCompact
-import rcic.RcicNativeTypedModelCovWConvControls
-import rcic.RcicNativeTypedModelCovWConvCore
-import rcic.RcicNativeTypedModelCovWConvForget
-import rcic.RcicNativeTypedModelCovWConvHo
-import rcic.RcicNativeTypedModelCovWConvK
-import rcic.RcicNativeTypedModelCovWConvLevels
-import rcic.RcicNativeTypedModelCovWConvLocal
-import rcic.RcicNativeTypedModelCovWConvLocalRealized
-import rcic.RcicNativeTypedModelCovWConvPositive
-import rcic.RcicNativeTypedModelCovWConvQuotientRows
-import rcic.RcicNativeTypedModelCovWConvReduction
-import rcic.RcicNativeTypedModelCovWConvUniverse
-import rcic.RcicNativeTypedModelCovWConvUniverseFragment
-import rcic.RcicNativeTypedModelCovWConvValley
-import rcic.RcicNativeTypedModelCovWConvSeal
 import rcic.RcicSynSREqnAppCell
-import rcic.RcicTypedScopeResidue
-import rcic.RcicTypedScopeAdmission
-import rcic.RcicTypedScopeResidueSeal
 -- BEGIN SWE-ROUTEC-C2 GROUP SCOPE DIRECT IMPORTS (closure_claim = 0)
 import rcic.RcicRouteCGroupScopeSeal
 -- END SWE-ROUTEC-C2 GROUP SCOPE DIRECT IMPORTS
-import rcic.RcicNativeTypedModelCovWRigidCore
-import rcic.RcicNativeTypedModelCovWRigidLocal
-import rcic.RcicNativeTypedModelCovWRigidSpines
-import rcic.RcicNativeTypedModelCovWRigidTransport
-import rcic.RcicNativeTypedModelCovWRigidLegacy
-import rcic.RcicNativeTypedModelCovWRigidTypingBoundary
-import rcic.RcicNativeTypedModelCovWRigidPiTrans
-import rcic.RcicNativeTypedModelCovWRigidMShape
-import rcic.RcicNativeTypedModelCovWRigidSeal
-import rcic.RcicRouteCEqGuard
-import rcic.RcicAnnEqLargeFixture
-import rcic.RcicRouteCGuardedCycle
-import rcic.RcicRouteCLargeIndexBoundary
-import rcic.RcicRouteCRelationBoundarySeal
 -- BEGIN GLM-SR2 ESW IMPORT (sortRow rows re-measured under epsW + LevelHom; closure_claim = 0)
 import rcic.RcicSynSRLitPiEswW
 import rcic.RcicSynSRLitPiEswLit
@@ -1337,19 +1472,6 @@ import rcic.RcicSynSRLitPiRedexAP
 import rcic.RcicSynSRClEutBvar
 import rcic.RcicSynSREqnCellIH
 import rcic.RcicSynSREqnPiCl
-import rcic.RcicSynSRLitPiEswLit
-import rcic.RcicSynSRLitPiIssuesSR
-import rcic.RcicSynSREqnCellIH
-import rcic.RcicSynSRLitPiEswW
-import rcic.RcicSynSRLitPiMeas
-import rcic.RcicSynSREqnPiCl
-import rcic.RcicSynSRLitPiRedexAP
-import rcic.RcicSynSRLitPiEswPi
-import rcic.RcicSynSRClEutBvar
-import rcic.RcicSynSRLitPiEswLegs
-import rcic.RcicSynSRLitPiCLW
-import rcic.RcicSynSRLitPiAlign
-import rcic.RcicIotaFunRecCorr
 import rcic.RcicRouteCRetypeHeader
 import rcic.RcicAnnIotaCorrN
 import rcic.RcicTypedJD
@@ -1358,17 +1480,6 @@ import rcic.RcicTypedRowsWfD
 import rcic.RcicAnnRowsSupplyD
 import rcic.RcicTypedGroupD
 import rcic.RcicAnnDeltaPinD
-import rcic.RcicRouteCKContextBoundary
-import rcic.RcicAnnKIndexLaws
-import rcic.RcicAnnKStage
-import rcic.RcicAnnKTransport
-import rcic.RcicAnnKEqPositive
-import rcic.RcicAnnKOldLRBoundary
-import rcic.RcicRouteCIndexSyntactic
-import rcic.RcicRouteCIndexTransport
-import rcic.RcicRouteCIndexFamilyFragment
-import rcic.RcicRouteCIndexFamilyPer
-import rcic.RcicRouteCKIndexSeal
 import rcic.RcicSynSRBetaZetaStarIff
 import rcic.RcicSynSRBetaZetaStarEntry
 import rcic.RcicSynSRBetaZetaIssueCT
@@ -1383,22 +1494,6 @@ import rcic.RcicCoreMetatheory
 import rcic.RcicCoreRelation
 import rcic.RcicCoreRows
 import rcic.RcicCoreMachine
-import rcic.RcicAnnSortSynthesisA3
-import rcic.RcicAnnLR3Positive
-import rcic.RcicAnnLR3Head
-import rcic.RcicAnnLR3HeadLayer
-import rcic.RcicAnnLR3Chain
-import rcic.RcicAnnLR3Sort
-import rcic.RcicAnnLR3Family
-import rcic.RcicAnnLR3PropEq
-import rcic.RcicAnnLR3Core
-import rcic.RcicAnnLR3EqHead
-import rcic.RcicRouteCLR3CoreSeal
-import rcic.RcicAnnKDeterminism
-import rcic.RcicAnnLR3RelationalFacts
-import rcic.RcicAnnLR3HeadBoundary
-import rcic.RcicAnnLR3HeadSubstBoundary
-import rcic.RcicRouteCLR3MeasurementSeal
 import rcic.RcicSynSRDeltaMemberCoh
 import rcic.RcicSynSRDeltaClosed
 import rcic.RcicSynTableK
