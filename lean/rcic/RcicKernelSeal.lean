@@ -1588,6 +1588,9 @@ import rcic.RcicSynLinkA
 import rcic.RcicSynPiLift
 import rcic.RcicRouteCGroupWalkSeal
 import rcic.RcicSynLinkA2
+import rcic.RcicAccPiEnv
+import rcic.RcicAccPiTable
+import rcic.RcicAccPiMeasure
 open Lean
 -- END GLM-SR2 REDEXAP IMPORT
 
@@ -35869,6 +35872,186 @@ def sealedTheorems : List Name := [
     ``Rcic.Syn.constSortLadderEqNWAt_of_sortUniq,
     ``Rcic.Syn.constPair_eps_eq_of_sortUniq
   ]
+  -- BEGIN LAND-UNION (seal names added by the landed PR; content-keyed union)
+  ++ [
+    ``Rcic.Declarative.Ann.accPBefore,
+    ``Rcic.Declarative.Ann.accPCensus,
+    ``Rcic.Declarative.Ann.accPContig,
+    ``Rcic.Declarative.Ann.accPEnv_shape,
+    ``Rcic.Declarative.Ann.accPEnvT,
+    ``Rcic.Declarative.Ann.accPEnvWfT,
+    ``Rcic.Declarative.Ann.accPEquation_shape,
+    ``Rcic.Declarative.Ann.accPFamAdmitted,
+    ``Rcic.Declarative.Ann.accPFamEnvT,
+    ``Rcic.Declarative.Ann.accPFamT,
+    ``Rcic.Declarative.Ann.accPFamTypedT,
+    ``Rcic.Declarative.Ann.accPFamTyT,
+    ``Rcic.Declarative.Ann.accPFamViewT,
+    ``Rcic.Declarative.Ann.accPFieldDomTy,
+    ``Rcic.Declarative.Ann.accPFieldDomTyT,
+    ``Rcic.Declarative.Ann.accPGroupAdm,
+    ``Rcic.Declarative.Ann.accPIntroAdmitted,
+    ``Rcic.Declarative.Ann.accPIntroFieldsFam,
+    ``Rcic.Declarative.Ann.accPIntroFieldsSup,
+    ``Rcic.Declarative.Ann.accPIntroSafe,
+    ``Rcic.Declarative.Ann.accPIntroSortU,
+    ``Rcic.Declarative.Ann.accPIntroTyped,
+    ``Rcic.Declarative.Ann.accPIntroTypedE,
+    ``Rcic.Declarative.Ann.accPIntroTyT,
+    ``Rcic.Declarative.Ann.accPIntroUniv,
+    ``Rcic.Declarative.Ann.accPIntroViewT,
+    ``Rcic.Declarative.Ann.accPIotaClause,
+    ``Rcic.Declarative.Ann.accPIotaLegacy,
+    ``Rcic.Declarative.Ann.accPIotaTy,
+    ``Rcic.Declarative.Ann.accPMembersT,
+    ``Rcic.Declarative.Ann.accPMinor_derived,
+    ``Rcic.Declarative.Ann.accPMinorMatch,
+    ``Rcic.Declarative.Ann.accPRecAdmitted,
+    ``Rcic.Declarative.Ann.accPRecSortU,
+    ``Rcic.Declarative.Ann.accPRecTy_direct,
+    ``Rcic.Declarative.Ann.accPRecTyped,
+    ``Rcic.Declarative.Ann.accPRecTyT,
+    ``Rcic.Declarative.Ann.accPSchema_derived,
+    ``Rcic.Declarative.Ann.accPSupEnvT,
+    ``Rcic.Syn.accCG,
+    ``Rcic.Syn.accCIH,
+    ``Rcic.Syn.accCMBeta,
+    ``Rcic.Syn.accCR,
+    ``Rcic.Syn.accCX,
+    ``Rcic.Syn.accCY,
+    ``Rcic.Syn.accFLoopAt,
+    ``Rcic.Syn.accFLoopE,
+    ``Rcic.Syn.accFNat,
+    ``Rcic.Syn.accFReq,
+    ``Rcic.Syn.accGTy,
+    ``Rcic.Syn.accHAccP,
+    ``Rcic.Syn.accHFD,
+    ``Rcic.Syn.accHFLoop,
+    ``Rcic.Syn.accHIhDom,
+    ``Rcic.Syn.accHLoopGxr,
+    ``Rcic.Syn.accHLoopIH,
+    ``Rcic.Syn.accHLoopIntro,
+    ``Rcic.Syn.accHLoopRec1,
+    ``Rcic.Syn.accHLoopRec2,
+    ``Rcic.Syn.accHLoopRrx,
+    ``Rcic.Syn.accHLoopT1,
+    ``Rcic.Syn.accHLoopT2,
+    ``Rcic.Syn.accHLoopT3,
+    ``Rcic.Syn.accHLoopT4,
+    ``Rcic.Syn.accHLoopX,
+    ``Rcic.Syn.accHLoopX0,
+    ``Rcic.Syn.accHMLoop,
+    ``Rcic.Syn.accHMLoopBody,
+    ``Rcic.Syn.accHR,
+    ``Rcic.Syn.accHS0,
+    ``Rcic.Syn.accIhDom,
+    ``Rcic.Syn.accIntroXG,
+    ``Rcic.Syn.accIota_can,
+    ``Rcic.Syn.accIota_eps_lhs,
+    ``Rcic.Syn.accIota_eps_rhs,
+    ``Rcic.Syn.accIota_es_star,
+    ``Rcic.Syn.accIota_not_convE_nil,
+    ``Rcic.Syn.accIota_not_es_tableOfK,
+    ``Rcic.Syn.accIotaCtx,
+    ``Rcic.Syn.accIotaCtxWf,
+    ``Rcic.Syn.accIotaIH,
+    ``Rcic.Syn.accIotaLhs,
+    ``Rcic.Syn.accIotaLhsP,
+    ``Rcic.Syn.accIotaLhsTy,
+    ``Rcic.Syn.accIotaRhs,
+    ``Rcic.Syn.accIotaRhsP,
+    ``Rcic.Syn.accIotaRhsTy,
+    ``Rcic.Syn.accIotaScope,
+    ``Rcic.Syn.accIotaTyE,
+    ``Rcic.Syn.accIrr_can,
+    ``Rcic.Syn.accIrr_eps,
+    ``Rcic.Syn.accIrr_eps_irr,
+    ``Rcic.Syn.accIrr_es_star,
+    ``Rcic.Syn.accIrr_not_es_tableOfK,
+    ``Rcic.Syn.accIrrCtx,
+    ``Rcic.Syn.accIrrCtxWf,
+    ``Rcic.Syn.accIrrHP,
+    ``Rcic.Syn.accIrrHTy,
+    ``Rcic.Syn.accIrrIntro,
+    ``Rcic.Syn.accIrrIntroP,
+    ``Rcic.Syn.accIrrIntroTy,
+    ``Rcic.Syn.accIrrLeaf,
+    ``Rcic.Syn.accIrrLhs,
+    ``Rcic.Syn.accIrrLhsP,
+    ``Rcic.Syn.accIrrLhsTy,
+    ``Rcic.Syn.accIrrMid,
+    ``Rcic.Syn.accIrrMidP,
+    ``Rcic.Syn.accIrrMidTy,
+    ``Rcic.Syn.accIrrP,
+    ``Rcic.Syn.accIrrRhs,
+    ``Rcic.Syn.accIrrRhsP,
+    ``Rcic.Syn.accIrrRhsTy,
+    ``Rcic.Syn.accIrrScope,
+    ``Rcic.Syn.accIrrTyL,
+    ``Rcic.Syn.accIrrTyR,
+    ``Rcic.Syn.accLhsE,
+    ``Rcic.Syn.accLoop_beta,
+    ``Rcic.Syn.accLoop_can,
+    ``Rcic.Syn.accLoop_cycle,
+    ``Rcic.Syn.accLoop_eps,
+    ``Rcic.Syn.accLoop_es_star,
+    ``Rcic.Syn.accLoop_iota_es_tableOfK,
+    ``Rcic.Syn.accLoop_iota_star,
+    ``Rcic.Syn.accLoopCR,
+    ``Rcic.Syn.accLoopCtx,
+    ``Rcic.Syn.accLoopCtxWf,
+    ``Rcic.Syn.accLoopCY,
+    ``Rcic.Syn.accLoopIH,
+    ``Rcic.Syn.accLoopIHTy,
+    ``Rcic.Syn.accLoopRec,
+    ``Rcic.Syn.accLoopScope,
+    ``Rcic.Syn.accLoopT1,
+    ``Rcic.Syn.accLoopT1P,
+    ``Rcic.Syn.accLoopT2,
+    ``Rcic.Syn.accLoopT2E,
+    ``Rcic.Syn.accLoopT2P,
+    ``Rcic.Syn.accLoopT3,
+    ``Rcic.Syn.accLoopT3E,
+    ``Rcic.Syn.accLoopT3P,
+    ``Rcic.Syn.accLoopT4,
+    ``Rcic.Syn.accLoopT4P,
+    ``Rcic.Syn.accLoopX,
+    ``Rcic.Syn.accLoopXE,
+    ``Rcic.Syn.accLoopXP,
+    ``Rcic.Syn.accMinorU,
+    ``Rcic.Syn.accMLoop,
+    ``Rcic.Syn.accMLoopE,
+    ``Rcic.Syn.accP_iotaKGate_false,
+    ``Rcic.Syn.accP_iotaRulesKOf_nil,
+    ``Rcic.Syn.accP_iotaRulesOf_nil,
+    ``Rcic.Syn.accP_mem,
+    ``Rcic.Syn.accP_no_derivedIota,
+    ``Rcic.Syn.accP_no_iotaWitness,
+    ``Rcic.Syn.accRhsE,
+    ``Rcic.Syn.accRrTy,
+    ``Rcic.Syn.accStar_chain,
+    ``Rcic.Syn.accStar_step,
+    ``Rcic.Syn.accStar_step_twice,
+    ``Rcic.Syn.accStarCall,
+    ``Rcic.Syn.accStarCall_congr,
+    ``Rcic.Syn.accStarRule,
+    ``Rcic.Syn.accStarRule_mem,
+    ``Rcic.Syn.accStarTable,
+    ``Rcic.Syn.accStarTable_eq,
+    ``Rcic.Syn.accStarTable_wf,
+    ``Rcic.Syn.accTy,
+    ``Rcic.Syn.analyzeFields_accP_none,
+    ``Rcic.Syn.confluent_eStep_accStar,
+    ``Rcic.Syn.eqN_of_convE_sort_accStar,
+    ``Rcic.Syn.eStep_nil_lamFree,
+    ``Rcic.Syn.etaStep_spineHead_bvar,
+    ``Rcic.Syn.ETm.lamFree,
+    ``Rcic.Syn.lvlEq_spineHead_bvar,
+    ``Rcic.Syn.rstar_spineHead_bvar,
+    ``Rcic.Syn.rStep_spineHead_bvar,
+    ``Rcic.Syn.tableOfK_accP
+  ]
+  -- END LAND-UNION
   -- END LAND-UNION
   -- END LAND-UNION
   -- END LAND-UNION
@@ -45925,3 +46108,179 @@ end Rcic.FoundationSeal
 #print axioms Rcic.Syn.ConstSortLadderEqNWAt
 #print axioms Rcic.Syn.constSortLadderEqNWAt_of_sortUniq
 #print axioms Rcic.Syn.constPair_eps_eq_of_sortUniq
+#print axioms Rcic.Declarative.Ann.accPBefore
+#print axioms Rcic.Declarative.Ann.accPCensus
+#print axioms Rcic.Declarative.Ann.accPContig
+#print axioms Rcic.Declarative.Ann.accPEnv_shape
+#print axioms Rcic.Declarative.Ann.accPEnvT
+#print axioms Rcic.Declarative.Ann.accPEnvWfT
+#print axioms Rcic.Declarative.Ann.accPEquation_shape
+#print axioms Rcic.Declarative.Ann.accPFamAdmitted
+#print axioms Rcic.Declarative.Ann.accPFamEnvT
+#print axioms Rcic.Declarative.Ann.accPFamT
+#print axioms Rcic.Declarative.Ann.accPFamTypedT
+#print axioms Rcic.Declarative.Ann.accPFamTyT
+#print axioms Rcic.Declarative.Ann.accPFamViewT
+#print axioms Rcic.Declarative.Ann.accPFieldDomTy
+#print axioms Rcic.Declarative.Ann.accPFieldDomTyT
+#print axioms Rcic.Declarative.Ann.accPGroupAdm
+#print axioms Rcic.Declarative.Ann.accPIntroAdmitted
+#print axioms Rcic.Declarative.Ann.accPIntroFieldsFam
+#print axioms Rcic.Declarative.Ann.accPIntroFieldsSup
+#print axioms Rcic.Declarative.Ann.accPIntroSafe
+#print axioms Rcic.Declarative.Ann.accPIntroSortU
+#print axioms Rcic.Declarative.Ann.accPIntroTyped
+#print axioms Rcic.Declarative.Ann.accPIntroTypedE
+#print axioms Rcic.Declarative.Ann.accPIntroTyT
+#print axioms Rcic.Declarative.Ann.accPIntroUniv
+#print axioms Rcic.Declarative.Ann.accPIntroViewT
+#print axioms Rcic.Declarative.Ann.accPIotaClause
+#print axioms Rcic.Declarative.Ann.accPIotaLegacy
+#print axioms Rcic.Declarative.Ann.accPIotaTy
+#print axioms Rcic.Declarative.Ann.accPMembersT
+#print axioms Rcic.Declarative.Ann.accPMinor_derived
+#print axioms Rcic.Declarative.Ann.accPMinorMatch
+#print axioms Rcic.Declarative.Ann.accPRecAdmitted
+#print axioms Rcic.Declarative.Ann.accPRecSortU
+#print axioms Rcic.Declarative.Ann.accPRecTy_direct
+#print axioms Rcic.Declarative.Ann.accPRecTyped
+#print axioms Rcic.Declarative.Ann.accPRecTyT
+#print axioms Rcic.Declarative.Ann.accPSchema_derived
+#print axioms Rcic.Declarative.Ann.accPSupEnvT
+#print axioms Rcic.Syn.accCG
+#print axioms Rcic.Syn.accCIH
+#print axioms Rcic.Syn.accCMBeta
+#print axioms Rcic.Syn.accCR
+#print axioms Rcic.Syn.accCX
+#print axioms Rcic.Syn.accCY
+#print axioms Rcic.Syn.accFLoopAt
+#print axioms Rcic.Syn.accFLoopE
+#print axioms Rcic.Syn.accFNat
+#print axioms Rcic.Syn.accFReq
+#print axioms Rcic.Syn.accGTy
+#print axioms Rcic.Syn.accHAccP
+#print axioms Rcic.Syn.accHFD
+#print axioms Rcic.Syn.accHFLoop
+#print axioms Rcic.Syn.accHIhDom
+#print axioms Rcic.Syn.accHLoopGxr
+#print axioms Rcic.Syn.accHLoopIH
+#print axioms Rcic.Syn.accHLoopIntro
+#print axioms Rcic.Syn.accHLoopRec1
+#print axioms Rcic.Syn.accHLoopRec2
+#print axioms Rcic.Syn.accHLoopRrx
+#print axioms Rcic.Syn.accHLoopT1
+#print axioms Rcic.Syn.accHLoopT2
+#print axioms Rcic.Syn.accHLoopT3
+#print axioms Rcic.Syn.accHLoopT4
+#print axioms Rcic.Syn.accHLoopX
+#print axioms Rcic.Syn.accHLoopX0
+#print axioms Rcic.Syn.accHMLoop
+#print axioms Rcic.Syn.accHMLoopBody
+#print axioms Rcic.Syn.accHR
+#print axioms Rcic.Syn.accHS0
+#print axioms Rcic.Syn.accIhDom
+#print axioms Rcic.Syn.accIntroXG
+#print axioms Rcic.Syn.accIota_can
+#print axioms Rcic.Syn.accIota_eps_lhs
+#print axioms Rcic.Syn.accIota_eps_rhs
+#print axioms Rcic.Syn.accIota_es_star
+#print axioms Rcic.Syn.accIota_not_convE_nil
+#print axioms Rcic.Syn.accIota_not_es_tableOfK
+#print axioms Rcic.Syn.accIotaCtx
+#print axioms Rcic.Syn.accIotaCtxWf
+#print axioms Rcic.Syn.accIotaIH
+#print axioms Rcic.Syn.accIotaLhs
+#print axioms Rcic.Syn.accIotaLhsP
+#print axioms Rcic.Syn.accIotaLhsTy
+#print axioms Rcic.Syn.accIotaRhs
+#print axioms Rcic.Syn.accIotaRhsP
+#print axioms Rcic.Syn.accIotaRhsTy
+#print axioms Rcic.Syn.accIotaScope
+#print axioms Rcic.Syn.accIotaTyE
+#print axioms Rcic.Syn.accIrr_can
+#print axioms Rcic.Syn.accIrr_eps
+#print axioms Rcic.Syn.accIrr_eps_irr
+#print axioms Rcic.Syn.accIrr_es_star
+#print axioms Rcic.Syn.accIrr_not_es_tableOfK
+#print axioms Rcic.Syn.accIrrCtx
+#print axioms Rcic.Syn.accIrrCtxWf
+#print axioms Rcic.Syn.accIrrHP
+#print axioms Rcic.Syn.accIrrHTy
+#print axioms Rcic.Syn.accIrrIntro
+#print axioms Rcic.Syn.accIrrIntroP
+#print axioms Rcic.Syn.accIrrIntroTy
+#print axioms Rcic.Syn.accIrrLeaf
+#print axioms Rcic.Syn.accIrrLhs
+#print axioms Rcic.Syn.accIrrLhsP
+#print axioms Rcic.Syn.accIrrLhsTy
+#print axioms Rcic.Syn.accIrrMid
+#print axioms Rcic.Syn.accIrrMidP
+#print axioms Rcic.Syn.accIrrMidTy
+#print axioms Rcic.Syn.accIrrP
+#print axioms Rcic.Syn.accIrrRhs
+#print axioms Rcic.Syn.accIrrRhsP
+#print axioms Rcic.Syn.accIrrRhsTy
+#print axioms Rcic.Syn.accIrrScope
+#print axioms Rcic.Syn.accIrrTyL
+#print axioms Rcic.Syn.accIrrTyR
+#print axioms Rcic.Syn.accLhsE
+#print axioms Rcic.Syn.accLoop_beta
+#print axioms Rcic.Syn.accLoop_can
+#print axioms Rcic.Syn.accLoop_cycle
+#print axioms Rcic.Syn.accLoop_eps
+#print axioms Rcic.Syn.accLoop_es_star
+#print axioms Rcic.Syn.accLoop_iota_es_tableOfK
+#print axioms Rcic.Syn.accLoop_iota_star
+#print axioms Rcic.Syn.accLoopCR
+#print axioms Rcic.Syn.accLoopCtx
+#print axioms Rcic.Syn.accLoopCtxWf
+#print axioms Rcic.Syn.accLoopCY
+#print axioms Rcic.Syn.accLoopIH
+#print axioms Rcic.Syn.accLoopIHTy
+#print axioms Rcic.Syn.accLoopRec
+#print axioms Rcic.Syn.accLoopScope
+#print axioms Rcic.Syn.accLoopT1
+#print axioms Rcic.Syn.accLoopT1P
+#print axioms Rcic.Syn.accLoopT2
+#print axioms Rcic.Syn.accLoopT2E
+#print axioms Rcic.Syn.accLoopT2P
+#print axioms Rcic.Syn.accLoopT3
+#print axioms Rcic.Syn.accLoopT3E
+#print axioms Rcic.Syn.accLoopT3P
+#print axioms Rcic.Syn.accLoopT4
+#print axioms Rcic.Syn.accLoopT4P
+#print axioms Rcic.Syn.accLoopX
+#print axioms Rcic.Syn.accLoopXE
+#print axioms Rcic.Syn.accLoopXP
+#print axioms Rcic.Syn.accMinorU
+#print axioms Rcic.Syn.accMLoop
+#print axioms Rcic.Syn.accMLoopE
+#print axioms Rcic.Syn.accP_iotaKGate_false
+#print axioms Rcic.Syn.accP_iotaRulesKOf_nil
+#print axioms Rcic.Syn.accP_iotaRulesOf_nil
+#print axioms Rcic.Syn.accP_mem
+#print axioms Rcic.Syn.accP_no_derivedIota
+#print axioms Rcic.Syn.accP_no_iotaWitness
+#print axioms Rcic.Syn.accRhsE
+#print axioms Rcic.Syn.accRrTy
+#print axioms Rcic.Syn.accStar_chain
+#print axioms Rcic.Syn.accStar_step
+#print axioms Rcic.Syn.accStar_step_twice
+#print axioms Rcic.Syn.accStarCall
+#print axioms Rcic.Syn.accStarCall_congr
+#print axioms Rcic.Syn.accStarRule
+#print axioms Rcic.Syn.accStarRule_mem
+#print axioms Rcic.Syn.accStarTable
+#print axioms Rcic.Syn.accStarTable_eq
+#print axioms Rcic.Syn.accStarTable_wf
+#print axioms Rcic.Syn.accTy
+#print axioms Rcic.Syn.analyzeFields_accP_none
+#print axioms Rcic.Syn.confluent_eStep_accStar
+#print axioms Rcic.Syn.eqN_of_convE_sort_accStar
+#print axioms Rcic.Syn.eStep_nil_lamFree
+#print axioms Rcic.Syn.etaStep_spineHead_bvar
+#print axioms Rcic.Syn.ETm.lamFree
+#print axioms Rcic.Syn.lvlEq_spineHead_bvar
+#print axioms Rcic.Syn.rstar_spineHead_bvar
+#print axioms Rcic.Syn.rStep_spineHead_bvar
+#print axioms Rcic.Syn.tableOfK_accP
