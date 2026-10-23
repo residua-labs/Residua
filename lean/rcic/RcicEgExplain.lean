@@ -3,6 +3,7 @@ import Lean
 /-!
 Same shapes as `apps/assay-egraph`. `by simp` is attempted on each goal.
 A goal this file proves some other way is one `simp` did not close.
+`eg_fwd` is that goal: its premise is a cited rule, and `simp` made no progress.
 `closure_claim = 0`.
 -/
 
@@ -14,7 +15,13 @@ inductive T where
 
 theorem eg_refl (a : T) : a = a := by simp
 
-theorem eg_fwd (a b : T) (h : a = b) : a = b := by simp [h]
+/-- Forward use of a cited rule. `hcite` is the lookup `rules[i]? = some (a, b)`.
+    `hsound` says a pair stored in `rules` is an equation. Neither hypothesis is `a = b`.
+    `by simp` does not close this; the proof is the citation. -/
+theorem eg_fwd (rules : List (T × T)) (i : Nat) (a b : T)
+    (hcite : rules[i]? = some (a, b))
+    (hsound : ∀ l r, (l, r) ∈ rules → l = r) : a = b :=
+  hsound a b (List.getElem?_mem hcite)
 
 theorem eg_flip (a b : T) (h : a = b) : b = a := by simp [h]
 
@@ -28,8 +35,8 @@ theorem eg_cong_trans (f : Nat) (a b c z : T) (h1 : a = b) (h2 : b = c) :
     T.app f a z = T.app f c z := by simp [h1, h2]
 
 /-!
-One `Kernel.check` per stored `simp` proof. Node count is a local `exprSize`.
-This clock is not the scm step count.
+One `Kernel.check` per stored proof. Node count is a local `exprSize`.
+This clock is not the scm step count. `eg_fwd` is not a `simp` proof.
 -/
 
 open Lean

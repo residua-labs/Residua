@@ -1619,6 +1619,7 @@ import rcic.RcicAuthHGHistorySeal
 import rcic.RcicRouteCLR3EnvEvalSubstSeal
 -- BEGIN GROK ASSAY P5.3
 import rcic.RcicEgExplainSeal
+import rcic.RcicFarkasCertSeal
 -- END GROK ASSAY P5.3
 open Lean
 -- END GLM-SR2 REDEXAP IMPORT
