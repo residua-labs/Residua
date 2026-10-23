@@ -113,6 +113,9 @@ import rcic.RcicRouteCLR3MeasurementSeal
 -- BEGIN SWE-ZETA LR3 PAIRED PRODUCER DIRECT IMPORTS (closure_claim = 0)
 import rcic.RcicRouteCLR3PairedProducerSeal
 -- END SWE-ZETA LR3 PAIRED PRODUCER DIRECT IMPORTS
+-- BEGIN SWE-ZETA LR3 ENVIRONMENT PORTS DIRECT IMPORTS (closure_claim = 0)
+import rcic.RcicRouteCLR3EnvironmentPortsSeal
+-- END SWE-ZETA LR3 ENVIRONMENT PORTS DIRECT IMPORTS
 -- BEGIN CHATGPT ROUTE C K INDEX DIRECT IMPORTS (closure_claim = 0)
 import rcic.RcicRouteCKContextBoundary
 import rcic.RcicAnnKIndexLaws
@@ -1603,6 +1606,8 @@ import rcic.RcicAnnDeltaCorrUA
 import rcic.RcicAnnLR3EnvLookupSeal
 import rcic.RcicSynPiLiftDecide
 import rcic.RcicAuthHGHistorySeal
+import rcic.RcicClassCSeal
+import rcic.RcicRouteCLR3EnvEvalSubstSeal
 open Lean
 -- END GLM-SR2 REDEXAP IMPORT
 
