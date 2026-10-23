@@ -1616,6 +1616,9 @@ import rcic.RcicAnnLR3EnvLookupSeal
 import rcic.RcicSynPiLiftDecide
 import rcic.RcicAuthHGHistorySeal
 import rcic.RcicRouteCLR3EnvEvalSubstSeal
+-- BEGIN GROK ASSAY P5.3
+import rcic.RcicEgExplainSeal
+-- END GROK ASSAY P5.3
 open Lean
 -- END GLM-SR2 REDEXAP IMPORT
 
