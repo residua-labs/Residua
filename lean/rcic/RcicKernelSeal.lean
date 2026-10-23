@@ -45590,6 +45590,10 @@ end Rcic.FoundationSeal
 
 -- BEGIN FORGE 1.10 GOAL JOIN AXIOM QUERIES
 -- END FORGE 1.10 GOAL JOIN AXIOM QUERIES
+
+-- BEGIN FORGE 1.11 SET RUN AXIOM QUERIES
+-- END FORGE 1.11 SET RUN AXIOM QUERIES
+
 #print axioms Rcic.Syn.SortPiFrag
 #print axioms Rcic.Syn.tyP_sortPiFrag_transport
 #print axioms Rcic.Syn.cl_const_bitCoh_issuance
