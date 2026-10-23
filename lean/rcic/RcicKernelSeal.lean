@@ -1596,6 +1596,9 @@ import rcic.RcicRouteCLR3AdeqPiRowSeal
 import rcic.RcicRouteCLR3GuardedPERSeal
 import rcic.RcicRouteCLR3TaggedKSeal
 import rcic.RcicRouteCLR3GuardedReaderSeal
+import rcic.RcicAnnDeltaEnvA
+import rcic.RcicAnnDeltaCorrUA
+import rcic.RcicAnnLR3EnvLookupSeal
 open Lean
 -- END GLM-SR2 REDEXAP IMPORT
 
@@ -36056,6 +36059,78 @@ def sealedTheorems : List Name := [
     ``Rcic.Syn.rStep_spineHead_bvar,
     ``Rcic.Syn.tableOfK_accP
   ]
+  -- BEGIN LAND-UNION (seal names added by the landed PR; content-keyed union)
+  ++ [
+    ``Rcic.Declarative.Ann.drIdMemberA,
+    ``Rcic.Declarative.Ann.drFamMemberA,
+    ``Rcic.Declarative.Ann.drFieldDomA,
+    ``Rcic.Declarative.Ann.drIdEnvA,
+    ``Rcic.Declarative.Ann.drFamEnvA,
+    ``Rcic.Declarative.Ann.drGroupEnvA,
+    ``Rcic.Declarative.Ann.drFamViewA,
+    ``Rcic.Declarative.Ann.drIdMemberA_erase,
+    ``Rcic.Declarative.Ann.drFamMemberA_erase,
+    ``Rcic.Declarative.Ann.drCtorMemberAD_erase,
+    ``Rcic.Declarative.Ann.drIdEnvA_members,
+    ``Rcic.Declarative.Ann.drFamEnvA_members,
+    ``Rcic.Declarative.Ann.drGroupEnvA_members,
+    ``Rcic.Declarative.Ann.drIdBodyTyA,
+    ``Rcic.Declarative.Ann.drIdTyA,
+    ``Rcic.Declarative.Ann.drFamConstTyA,
+    ``Rcic.Declarative.Ann.drFieldDomTyA,
+    ``Rcic.Declarative.Ann.drFieldDomConvA_delta,
+    ``Rcic.Declarative.Ann.drFieldDomConvA_beta,
+    ``Rcic.Declarative.Ann.drFieldDomConvA,
+    ``Rcic.Declarative.Ann.drCtorViewAD_drecD,
+    ``Rcic.Declarative.Ann.drCtorNormConvA,
+    ``Rcic.Declarative.Ann.drCtorViewAD,
+    ``Rcic.Declarative.Ann.drMkTyA,
+    ``Rcic.Declarative.Ann.drCtorA,
+    ``Rcic.Declarative.Ann.drCs,
+    ``Rcic.Declarative.Ann.drRecMemberA,
+    ``Rcic.Declarative.Ann.drEnvA,
+    ``Rcic.Declarative.Ann.drIdWfA,
+    ``Rcic.Declarative.Ann.drGroupWfA,
+    ``Rcic.Declarative.Ann.drIdEnvA_noFam,
+    ``Rcic.Declarative.Ann.drIdEnvA_noRec,
+    ``Rcic.Declarative.Ann.drGroupRecHead,
+    ``Rcic.Declarative.Ann.drRecTyAt0,
+    ``Rcic.Declarative.Ann.drGroupAgree,
+    ``Rcic.Declarative.Ann.drGroupEnv_eq,
+    ``Rcic.Declarative.Ann.drRecBuilt_closed,
+    ``Rcic.Declarative.Ann.drRecA,
+    ``Rcic.Declarative.Ann.drEnvWfA,
+    ``Rcic.Declarative.Ann.drRecMemberA_erase,
+    ``Rcic.Declarative.Ann.drEnvA_members,
+    ``Rcic.Declarative.Ann.drEnvA_erase,
+    ``Rcic.Declarative.Ann.drEnvA_mem,
+    ``Rcic.Declarative.Ann.dr_not_envNormEraseA,
+    ``Rcic.Declarative.Ann.drNoFunA,
+    ``Rcic.Declarative.Ann.drWS_ctor,
+    ``Rcic.Declarative.Ann.drWS_fam,
+    ``Rcic.Declarative.Ann.drWS_rec,
+    ``Rcic.Declarative.Ann.drWS_counts,
+    ``Rcic.Declarative.Ann.drWS_tel,
+    ``Rcic.Declarative.Ann.drWS_shapes,
+    ``Rcic.Declarative.Ann.drWN_ctor,
+    ``Rcic.Declarative.Ann.drWN_fam,
+    ``Rcic.Declarative.Ann.drWN_rec,
+    ``Rcic.Declarative.Ann.drWN_counts,
+    ``Rcic.Declarative.Ann.drWN_tel,
+    ``Rcic.Declarative.Ann.drEnvCorrEraseCert,
+    ``Rcic.Declarative.Ann.dr_annB_false,
+    ``Rcic.Declarative.Ann.drNormCorrD,
+    ``Rcic.Declarative.Ann.drHsel,
+    ``Rcic.Declarative.Ann.iotaAnnotatesUADU_of_envWfA,
+    ``Rcic.Declarative.Ann.pinDr_iotaAnnotatesUA,
+    ``Rcic.Declarative.Ann.pinDr_iotaAnnotatesA,
+    ``Rcic.Declarative.Ann.iotaWitnessS_of_witnessN_dr,
+    ``Rcic.Declarative.Ann.dr_lhs_bridge,
+    ``Rcic.Declarative.Ann.dr_rhs_bridge,
+    ``Rcic.Declarative.Ann.pinDr_iotaErasesTUA,
+    ``Rcic.Declarative.Ann.pinDr_iotaCorrTUA
+  ]
+  -- END LAND-UNION
   -- END LAND-UNION
   -- END LAND-UNION
   -- END LAND-UNION
