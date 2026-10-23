@@ -1593,6 +1593,9 @@ import rcic.RcicAccPiEnv
 import rcic.RcicAccPiTable
 import rcic.RcicAccPiMeasure
 import rcic.RcicRouteCLR3AdeqPiRowSeal
+import rcic.RcicRouteCLR3GuardedPERSeal
+import rcic.RcicRouteCLR3TaggedKSeal
+import rcic.RcicRouteCLR3GuardedReaderSeal
 open Lean
 -- END GLM-SR2 REDEXAP IMPORT
 
