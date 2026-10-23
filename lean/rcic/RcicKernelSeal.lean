@@ -1,4 +1,6 @@
 import rcic.RcicLeanImportSeal
+-- BEGIN CC-CT023 INSTDEPTH IMPORT (closure_claim = 0)
+-- END CC-CT023 INSTDEPTH IMPORT
 -- BEGIN CHATGPT ROUTE C LR3 LANE SEALS DIRECT IMPORTS (closure_claim = 0)
 import rcic.RcicRouteCLR3InductiveCodesSeal
 import rcic.RcicRouteCLR3CandidateEnvironmentSeal
@@ -1599,6 +1601,8 @@ import rcic.RcicRouteCLR3GuardedReaderSeal
 import rcic.RcicAnnDeltaEnvA
 import rcic.RcicAnnDeltaCorrUA
 import rcic.RcicAnnLR3EnvLookupSeal
+import rcic.RcicSynPiLiftDecide
+import rcic.RcicAuthHGHistorySeal
 open Lean
 -- END GLM-SR2 REDEXAP IMPORT
 
@@ -36130,6 +36134,40 @@ def sealedTheorems : List Name := [
     ``Rcic.Declarative.Ann.pinDr_iotaErasesTUA,
     ``Rcic.Declarative.Ann.pinDr_iotaCorrTUA
   ]
+  -- BEGIN LAND-UNION (seal names added by the landed PR; content-keyed union)
+  ++ [
+    ``Rcic.Syn.levelHom_eval,
+    ``Rcic.Syn.eqN_map_levelHom,
+    ``Rcic.Syn.levelIsZero_sigma_eq,
+    ``Rcic.Syn.epsReflD_sortNode,
+    ``Rcic.Syn.piLiftSnd,
+    ``Rcic.Syn.piLiftL,
+    ``Rcic.Syn.piLiftR,
+    ``Rcic.Syn.piliftBodyW,
+    ``Rcic.Syn.piliftDL,
+    ``Rcic.Syn.piliftDR,
+    ``Rcic.Syn.piliftDL_eps,
+    ``Rcic.Syn.piliftDR_eps,
+    ``Rcic.Syn.pilift_eps_conv,
+    ``Rcic.Syn.piliftDL_ap,
+    ``Rcic.Syn.piliftDR_ap,
+    ``Rcic.Syn.emptyEnv_msap,
+    ``Rcic.Syn.not_tyConvT_piLift_of_allBelowScoped,
+    ``Rcic.Syn.EpsReflSameTy,
+    ``Rcic.Syn.not_epsReflSameTy_of_allBelowScoped,
+    ``Rcic.Syn.EpsReflSameTyInj,
+    ``Rcic.Syn.piliftDL_eps_σ,
+    ``Rcic.Syn.piliftDR_eps_σ,
+    ``Rcic.Syn.pilift_eps_conv_inj_absent,
+    ``Rcic.Syn.epsReflD_piComponents,
+    ``Rcic.Syn.epsReflD_conv_head,
+    ``Rcic.Syn.EpsReflSameTyInjK,
+    ``Rcic.Syn.epsReflD_sortNode_kfree,
+    ``Rcic.Syn.epsReflD_piComponents_kfree,
+    ``Rcic.Syn.EpsKIdxMismatchW,
+    ``Rcic.Syn.not_epsReflSameTyInj_of_kMismatch
+  ]
+  -- END LAND-UNION
   -- END LAND-UNION
   -- END LAND-UNION
   -- END LAND-UNION
