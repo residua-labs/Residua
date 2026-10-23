@@ -1,6 +1,9 @@
 import rcic.RcicLeanImportSeal
 -- BEGIN CC-CT023 INSTDEPTH IMPORT (closure_claim = 0)
 -- END CC-CT023 INSTDEPTH IMPORT
+-- BEGIN CC-CERTKERNEL IMPORT (closure_claim = 0)
+import rcic.RcicCertKernelSeal
+-- END CC-CERTKERNEL IMPORT
 -- BEGIN CHATGPT ROUTE C LR3 LANE SEALS DIRECT IMPORTS (closure_claim = 0)
 import rcic.RcicRouteCLR3InductiveCodesSeal
 import rcic.RcicRouteCLR3CandidateEnvironmentSeal
@@ -1603,10 +1606,15 @@ import rcic.RcicRouteCLR3TaggedKSeal
 import rcic.RcicRouteCLR3GuardedReaderSeal
 import rcic.RcicAnnDeltaEnvA
 import rcic.RcicAnnDeltaCorrUA
+-- BEGIN CC-CLASSC SEAL IMPORT (class (c) counterexample search; closure_claim = 0)
+import rcic.RcicClassCSeal
+-- END CC-CLASSC SEAL IMPORT
+-- BEGIN CC-CLASSAB SEAL IMPORT (class (a)/(b) counterexample search; closure_claim = 0)
+import rcic.RcicClassABSeal
+-- END CC-CLASSAB SEAL IMPORT
 import rcic.RcicAnnLR3EnvLookupSeal
 import rcic.RcicSynPiLiftDecide
 import rcic.RcicAuthHGHistorySeal
-import rcic.RcicClassCSeal
 import rcic.RcicRouteCLR3EnvEvalSubstSeal
 open Lean
 -- END GLM-SR2 REDEXAP IMPORT

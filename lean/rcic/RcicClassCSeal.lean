@@ -2,10 +2,12 @@ import Lean
 import rcic.RcicClassCCex
 import rcic.RcicClassCRevealed
 import rcic.RcicClassCMutant
+import rcic.RcicClassCRevealedRows
+import rcic.RcicClassCAxSpine
 
 /-!
 Bounded audit of every public declaration in the cc-classc modules (`RcicClassCCex`,
-`RcicClassCRevealed`, `RcicClassCMutant`), including generated public declarations. Only `propext` and `Quot.sound`
+`RcicClassCRevealed`, `RcicClassCMutant`, `RcicClassCRevealedRows`, `RcicClassCAxSpine`), including generated public declarations. Only `propext` and `Quot.sound`
 are permitted. No row in class (c) is claimed. closure_claim = 0.
 -/
 set_option maxRecDepth 65536
@@ -15,7 +17,9 @@ set_option maxHeartbeats 0
 private def classCModules : Array Lean.Name := #[
   `rcic.RcicClassCCex,
   `rcic.RcicClassCRevealed,
-  `rcic.RcicClassCMutant
+  `rcic.RcicClassCMutant,
+  `rcic.RcicClassCRevealedRows,
+  `rcic.RcicClassCAxSpine
 ]
 
 open Lean Elab Command in
