@@ -1,4 +1,7 @@
 import rcic.RcicLeanImportSeal
+-- BEGIN CC F3 DEFINITIONS IMPORT (closure_claim = 0)
+import rcic.RcicF3DefsSeal
+-- END CC F3 DEFINITIONS IMPORT
 -- BEGIN CC-CT023 INSTDEPTH IMPORT (closure_claim = 0)
 -- END CC-CT023 INSTDEPTH IMPORT
 -- BEGIN CC-CERTKERNEL IMPORT (closure_claim = 0)
