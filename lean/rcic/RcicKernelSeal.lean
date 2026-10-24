@@ -26,6 +26,9 @@ import rcic.RcicRouteCLR3FunctionFamilyProducerSeal
 import rcic.RcicAnnLR3PairedLookupSeal
 import rcic.RcicRouteCLR3LetArmsSeal
 -- END CHATGPT ROUTE C LR3 LANDED SEALS DIRECT IMPORTS
+-- BEGIN DEVIN LIEXPORT DECODE DIRECT IMPORTS (closure_claim = 0)
+import rcic.RcicLiexportDecode
+-- END DEVIN LIEXPORT DECODE DIRECT IMPORTS
 -- BEGIN CHATGPT ROUTE C LR3 NEUTRAL PER DIRECT IMPORTS (closure_claim = 0)
 import rcic.RcicAnnLR3NeutralPER
 import rcic.RcicAnnLR3NeutralK
@@ -659,6 +662,9 @@ import rcic.RcicF8SepAllViaSPins
 -- END codex-pkg SepAllViaS imports
 import rcic.RcicBudgetLedger
 import rcic.RcicNativeTypedModelTypingFin
+-- BEGIN RCIC LEAN IMPORT SLICE 2 (dependency-closed bytes; closure_claim = 0)
+import rcic.RcicLeanImportSlice2Seal
+-- END RCIC LEAN IMPORT SLICE 2
 /-
 RCIC foundation seal (knife 1, spine level 1) — the ChainAxiomSeal pattern
 (copied from the bootstrap branch's lean/Residua/Bootstrap/ChainAxiomSeal.lean
