@@ -8,6 +8,9 @@ import rcic.RcicF3BoundDefsSeal
 -- BEGIN FABLE F3D BOUND DEFINITIONS IMPORT (closure_claim = 0)
 import rcic.RcicF3DBoundDefsSeal
 -- END FABLE F3D BOUND DEFINITIONS IMPORT
+-- BEGIN CC-RISKEXPLORER TIER IMPORT (closure_claim = 0)
+import rcic.RcicRiskTierSeal
+-- END CC-RISKEXPLORER TIER IMPORT
 -- BEGIN CC-CT023 INSTDEPTH IMPORT (closure_claim = 0)
 -- END CC-CT023 INSTDEPTH IMPORT
 -- BEGIN CC-CERTKERNEL IMPORT (closure_claim = 0)
