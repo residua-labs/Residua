@@ -5,6 +5,9 @@ import rcic.RcicF3DefsSeal
 -- BEGIN CC F3 BOUND DEFINITIONS IMPORT (closure_claim = 0)
 import rcic.RcicF3BoundDefsSeal
 -- END CC F3 BOUND DEFINITIONS IMPORT
+-- BEGIN FABLE F3D BOUND DEFINITIONS IMPORT (closure_claim = 0)
+import rcic.RcicF3DBoundDefsSeal
+-- END FABLE F3D BOUND DEFINITIONS IMPORT
 -- BEGIN CC-CT023 INSTDEPTH IMPORT (closure_claim = 0)
 -- END CC-CT023 INSTDEPTH IMPORT
 -- BEGIN CC-CERTKERNEL IMPORT (closure_claim = 0)
