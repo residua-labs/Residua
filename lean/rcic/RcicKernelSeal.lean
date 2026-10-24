@@ -1621,6 +1621,9 @@ import rcic.RcicRouteCLR3EnvEvalSubstSeal
 import rcic.RcicEgExplainSeal
 import rcic.RcicFarkasCertSeal
 -- END GROK ASSAY P5.3
+-- BEGIN CC-F0 WIRE CONSUMER SEAL IMPORT (closure_claim = 0)
+import rcic.RcicWireConsumerSeal
+-- END CC-F0 WIRE CONSUMER SEAL IMPORT
 open Lean
 -- END GLM-SR2 REDEXAP IMPORT
 
