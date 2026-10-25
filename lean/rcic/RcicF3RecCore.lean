@@ -113,16 +113,28 @@ recursive field, `g x`.
 The λ's domain is the field's own graph domain `sImage pfst x`: when `x`
 is a functional graph on `Ed M (den M σ ρ D')` (e.g. `x ∈ piSet …`), the
 two agree (`sImage_pfst_of_isFuncOnDep`), so no ambient denotation
-environment is needed. -/
+environment is needed.
+
+The λ is emitted in the proof-irrelevant conditional form (the `lamVal`
+semantics of `RcicF3Denote`): `∅` when the pointwise IH is vacuous —
+the only element of a `PiProp` motive's denotation `tv …` — and the raw
+graph `mkLam … (sImage pfst x)` otherwise. A bare `mkLam` over a nonempty
+domain is not `≈ ∅`, so it cannot inhabit a Prop-valued `Pi` motive.
+The conditional is `condP`, a guarded-union form with no `Decidable`
+instance and hence no `Classical.choice` in the axiom footprint. -/
 def ihAt (g : PSet.{T} → PSet.{T}) : Expr Nat → PSet.{T} → PSet.{T}
-  | .pi _ B, x => mkLam (fun y => ihAt g B (fapp x y)) (sImage pfst x)
+  | .pi _ B, x =>
+      condP (∀ y, y ∈ sImage pfst x → Equiv (ihAt g B (fapp x y)) pempty)
+        pempty (mkLam (fun y => ihAt g B (fapp x y)) (sImage pfst x))
   | _, x => g x
 
 /-- `ihAt` with the recursion depth given explicitly (the `inner` of
 `FieldShape.recursive inner`). -/
 def ihAtN (g : PSet.{T} → PSet.{T}) : Nat → PSet.{T} → PSet.{T}
   | 0, x => g x
-  | n + 1, x => mkLam (fun y => ihAtN g n (fapp x y)) (sImage pfst x)
+  | n + 1, x =>
+      condP (∀ y, y ∈ sImage pfst x → Equiv (ihAtN g n (fapp x y)) pempty)
+        pempty (mkLam (fun y => ihAtN g n (fapp x y)) (sImage pfst x))
 
 /-- The number of leading `pi`s — the recursion depth `ihAt` uses. -/
 def ihDepth : Expr Nat → Nat
@@ -132,12 +144,23 @@ def ihDepth : Expr Nat → Nat
 theorem ihAt_eq_ihAtN (g : PSet.{T} → PSet.{T}) :
     (A : Expr Nat) → ∀ x, ihAt g A x = ihAtN g (ihDepth A) x
   | .pi _ B, x => by
-      show mkLam (fun y => ihAt g B (fapp x y)) (sImage pfst x) =
-          mkLam (fun y => ihAtN g (ihDepth B) (fapp x y)) (sImage pfst x)
-      unfold mkLam
-      rw [show (fun a => ordPair a (ihAt g B (fapp x a))) =
-          (fun a => ordPair a (ihAtN g (ihDepth B) (fapp x a))) from
-        funext fun y => congrArg (ordPair y) (ihAt_eq_ihAtN g B _)]
+      show condP (∀ y, y ∈ sImage pfst x → Equiv (ihAt g B (fapp x y)) pempty)
+          pempty (mkLam (fun y => ihAt g B (fapp x y)) (sImage pfst x)) =
+        condP (∀ y, y ∈ sImage pfst x → Equiv (ihAtN g (ihDepth B) (fapp x y)) pempty)
+          pempty (mkLam (fun y => ihAtN g (ihDepth B) (fapp x y)) (sImage pfst x))
+      have hiff : (∀ y, y ∈ sImage pfst x → Equiv (ihAt g B (fapp x y)) pempty) ↔
+          (∀ y, y ∈ sImage pfst x → Equiv (ihAtN g (ihDepth B) (fapp x y)) pempty) :=
+        ⟨fun h y hy => ihAt_eq_ihAtN g B _ ▸ h y hy,
+          fun h y hy => (ihAt_eq_ihAtN g B _).symm ▸ h y hy⟩
+      unfold condP
+      rw [propext hiff]
+      have hF : mkLam (fun y => ihAt g B (fapp x y)) (sImage pfst x) =
+          mkLam (fun y => ihAtN g (ihDepth B) (fapp x y)) (sImage pfst x) := by
+        unfold mkLam
+        rw [show (fun a => ordPair a (ihAt g B (fapp x a))) =
+            (fun a => ordPair a (ihAtN g (ihDepth B) (fapp x a))) from
+          funext fun y => congrArg (ordPair y) (ihAt_eq_ihAtN g B _)]
+      rw [hF]
   | .bvar _, _ => rfl | .sort _, _ => rfl | .const _ _, _ => rfl
   | .app _ _, _ => rfl | .lam _ _, _ => rfl | .letE _ _ _, _ => rfl
   | .lit _, _ => rfl
@@ -210,9 +233,31 @@ def ihAtOk (g g' : PSet.{T} → PSet.{T}) : Expr Nat → PSet.{T} → PSet.{T} �
 theorem ihAt_congr {g g' : PSet.{T} → PSet.{T}} :
     (A : Expr Nat) → ∀ {x x' : PSet.{T}}, Equiv x x' →
       ihAtOk g g' A x x' → Equiv (ihAt g A x) (ihAt g' A x')
-  | .pi _ B, _, _, hx, h =>
-      mkLam_congr' (sImage_congr (fun a a' ha => pfst_congr ha) hx)
-        fun a a' ha ha' haa' => ihAt_congr B (fapp_congr hx haa') (h a ha a' ha' haa')
+  | .pi _ B, x, x', hx, h => by
+      show Equiv
+        (condP (∀ y, y ∈ sImage pfst x → Equiv (ihAt g B (fapp x y)) pempty)
+          pempty (mkLam (fun y => ihAt g B (fapp x y)) (sImage pfst x)))
+        (condP (∀ y', y' ∈ sImage pfst x' → Equiv (ihAt g' B (fapp x' y')) pempty)
+          pempty (mkLam (fun y' => ihAt g' B (fapp x' y')) (sImage pfst x')))
+      have hdom : Equiv (sImage pfst x) (sImage pfst x') :=
+        sImage_congr (fun a a' ha => pfst_congr ha) hx
+      have hiff : (∀ y, y ∈ sImage pfst x → Equiv (ihAt g B (fapp x y)) pempty) ↔
+          (∀ y', y' ∈ sImage pfst x' → Equiv (ihAt g' B (fapp x' y')) pempty) := ⟨
+        fun hP y' hy' => by
+          obtain ⟨i', hi'⟩ := mem_sImage.mp hy'
+          obtain ⟨i, hi⟩ := Equiv.exists_mem_right hx i'
+          have hy : pfst (x.Func i) ∈ sImage pfst x := mem_sImage.mpr ⟨i, Equiv.refl _⟩
+          have hyy' : Equiv (pfst (x.Func i)) y' := (pfst_congr hi).trans hi'
+          exact (ihAt_congr B (fapp_congr hx hyy') (h _ hy _ hy' hyy')).symm.trans (hP _ hy),
+        fun hP y hy => by
+          obtain ⟨i, hi⟩ := mem_sImage.mp hy
+          obtain ⟨i', hi'⟩ := Equiv.exists_mem_left hx i
+          have hy' : pfst (x'.Func i') ∈ sImage pfst x' := mem_sImage.mpr ⟨i', Equiv.refl _⟩
+          have hyy' : Equiv y (pfst (x'.Func i')) := hi.symm.trans (pfst_congr hi')
+          exact (ihAt_congr B (fapp_congr hx hyy') (h _ hy _ hy' hyy')).trans (hP _ hy')⟩
+      exact condP_congr hiff (Equiv.refl _)
+        (mkLam_congr' hdom fun a a' ha ha' haa' =>
+          ihAt_congr B (fapp_congr hx haa') (h a ha a' ha' haa'))
   | .bvar _, _, _, _, h => h
   | .sort _, _, _, _, h => h
   | .const _ _, _, _, _, h => h

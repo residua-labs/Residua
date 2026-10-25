@@ -420,6 +420,35 @@ theorem mem_sUnion_pair {z A B : PSet.{u}} :
     · exact mem_sUnion.mpr ⟨A, mem_pair.mpr (Or.inl Equiv.rfl), h⟩
     · exact mem_sUnion.mpr ⟨B, mem_pair.mpr (Or.inr Equiv.rfl), h⟩
 
+/-- A conditional set, without a decision procedure: `≈ a` when `P` holds and
+`≈ b` when `¬P` — each branch is `⋃{x ∈ {a} | P}`, which is `a` exactly on the
+guarded case and empty otherwise. Unlike `cond`/`ite` this introduces no
+`Decidable` instance into the value, so theorems quantifying over it pick up
+no choice axiom. -/
+def condP (P : Prop) (a b : PSet.{u}) : PSet.{u} :=
+  sUnion (pair (sUnion (sep (fun _ => P) (singleton a)))
+    (sUnion (sep (fun _ => ¬P) (singleton b))))
+
+theorem mem_condP {P : Prop} {a b z : PSet.{u}} :
+    z ∈ condP P a b ↔ (z ∈ a ∧ P) ∨ (z ∈ b ∧ ¬P) := by
+  rw [condP, mem_sUnion_pair, mem_sUnion, mem_sUnion]
+  constructor
+  · rintro (⟨t, ht, hz⟩ | ⟨t, ht, hz⟩)
+    · obtain ⟨i, hp, hti⟩ := mem_sep.mp ht
+      exact Or.inl ⟨mem_congr_right hti.symm hz, hp⟩
+    · obtain ⟨i, hp, hti⟩ := mem_sep.mp ht
+      exact Or.inr ⟨mem_congr_right hti.symm hz, hp⟩
+  · rintro (⟨hz, hp⟩ | ⟨hz, hp⟩)
+    · exact Or.inl ⟨a, mem_sep.mpr ⟨PUnit.unit, hp, Equiv.refl _⟩, hz⟩
+    · exact Or.inr ⟨b, mem_sep.mpr ⟨PUnit.unit, hp, Equiv.refl _⟩, hz⟩
+
+theorem condP_congr {P P' : Prop} (hP : P ↔ P') {a a' b b' : PSet.{u}}
+    (ha : Equiv a a') (hb : Equiv b b') : Equiv (condP P a b) (condP P' a' b') := by
+  apply equiv_iff_mem.mpr; intro z
+  rw [mem_condP, mem_condP]
+  exact or_congr (and_congr (equiv_iff_mem.mp ha z) hP)
+    (and_congr (equiv_iff_mem.mp hb z) (not_congr hP))
+
 /-- The second component of a Kuratowski pair in `F` lives in `⋃⋃F`. -/
 theorem mem_sUnion_sUnion_of_pair {F a b : PSet.{u}} (h : ordPair a b ∈ F) :
     b ∈ sUnion (sUnion F) :=
@@ -656,6 +685,7 @@ theorem mkLam_fapp {A B F : PSet.{u}} (hF : isFuncOn A B F) :
       mem_congr_left (hp'.trans (ordPair_congr hi.symm Equiv.rfl)) hp
     have hfapp : Equiv (fapp F (A.Func i)) b := fapp_eq_of_pair hF hab'
     exact ⟨i, (ordPair_congr hi hfapp).trans hp'.symm⟩
+
 
 /-- The domain set of a functional graph is its first-component image:
 `sImage pfst F` recovers `A` exactly when `F` is functional on `A`. This is
