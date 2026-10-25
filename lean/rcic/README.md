@@ -180,7 +180,7 @@ Most of the tree is measurement and support. The core is the place to start.
 
 ## Provenance
 
-This directory mirrors `lean/rcic` of the Residua development tree at commit `79b985cda56e20658614a263a1b070c81a9a340e`. It is regenerated from there after each landing.
+This directory mirrors `lean/rcic` of the Residua development tree at commit `10400ff9648021348102d9589c45734b44a6e876`. It is regenerated from there after each landing.
 
 Every Lean file except the seal is byte-identical to the development tree.
 
