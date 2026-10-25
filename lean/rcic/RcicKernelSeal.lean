@@ -1649,6 +1649,7 @@ import rcic.RcicAssayTcacheSeal
 -- BEGIN CC-CLASSC-LOK SEAL IMPORT (closure_claim = 0)
 import rcic.RcicClassCRevealedLokSeal
 import rcic.RcicF3CcSeal
+import rcic.RcicF3DSeal
 -- END CC-CLASSC-LOK SEAL IMPORT
 open Lean
 -- END GLM-SR2 REDEXAP IMPORT
