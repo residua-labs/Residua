@@ -1643,6 +1643,9 @@ import rcic.RcicFarkasCertSeal
 import rcic.RcicWireConsumerSeal
 import rcic.RcicAssayTcacheSeal
 -- END CC-F0 WIRE CONSUMER SEAL IMPORT
+-- BEGIN CC-CLASSC-LOK SEAL IMPORT (closure_claim = 0)
+import rcic.RcicClassCRevealedLokSeal
+-- END CC-CLASSC-LOK SEAL IMPORT
 open Lean
 -- END GLM-SR2 REDEXAP IMPORT
 
