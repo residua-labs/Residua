@@ -70,5 +70,5 @@ Residua is released in versions, starting with **0.1**: the bootstrap compiler a
 Apache-2.0. See [LICENSE](LICENSE) and [NOTICE](NOTICE).
 
 <!-- BEGIN RCIC -->
-_R-CIC mirror: `lean/rcic/` is synced one way from Residua `cec149ac55`. Build: `lake build RCIC`._
+_R-CIC mirror: `lean/rcic/` is synced one way from Residua `f0ef2a25d0`. Build: `lake build RCIC`._
 <!-- END RCIC -->
