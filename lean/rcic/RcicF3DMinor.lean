@@ -49,6 +49,22 @@ theorem ShapesNorm.get {E : ResolvedEnv} {fuel f : Nat} {ss : List FieldShape} {
   have hk : k < Fs.length := by rw [← h.2.1]; exact (List.getElem?_eq_some_iff.mp hA').1
   exact ⟨Fs[k], List.getElem?_eq_getElem hk, h.2.2 k s _ A' hs (List.getElem?_eq_getElem hk) hA'⟩
 
+/-- Under `ShapesNorm`, every `occursConst`-true field has `ihDepth` `0` —
+admission's `recursive 0` shapes are the only family-mentioning fields. -/
+theorem ShapesNorm.depth0 {E : ResolvedEnv} {fuel f : Nat} {ss : List FieldShape} {Fs Fs' : List (Expr Nat)}
+    (h : ShapesNorm E fuel f ss Fs Fs') :
+    ∀ A, A ∈ Fs → occursConst f A = true → ihDepth A = 0 := by
+  intro A hA ho
+  obtain ⟨k, hk⟩ := List.mem_iff_getElem?.mp hA
+  have hklen : k < Fs.length := (List.getElem?_eq_some_iff.mp hk).1
+  have hks : k < ss.length := by rw [h.1]; exact hklen
+  have hkF' : k < Fs'.length := by rw [h.2.1]; exact hklen
+  obtain ⟨A0, hA2, hc⟩ := h.get (List.getElem?_eq_getElem hks) (List.getElem?_eq_getElem hkF')
+  cases Option.some.inj (hA2.symm.trans hk)
+  rcases hc with ⟨_, hof, _⟩ | ⟨_, _, _, ht⟩
+  · rw [hof] at ho; simp at ho
+  · exact ihDepth_eq_zero_of_telNil ht
+
 /-- The shapes match the normal forms. -/
 theorem ShapesNorm.toMatch {E : ResolvedEnv} {fuel f : Nat} {ss : List FieldShape} {Fs Fs' : List (Expr Nat)}
     (h : ShapesNorm E fuel f ss Fs Fs') : ShapesMatch f ss Fs' := by
@@ -70,11 +86,15 @@ theorem ShapesNorm.ihArgs_eq {E : ResolvedEnv} {fuel f : Nat} {ss : List FieldSh
   obtain ⟨A, hA, hc⟩ := h.get (List.getElem?_eq_getElem hk0) (List.getElem?_eq_getElem hk')
   rw [List.getElem?_eq_getElem hk] at hA
   cases Option.some.inj hA
-  rcases hc with ⟨_, ho, he⟩ | ⟨_, ho, hhd, _⟩
+  rcases hc with ⟨_, ho, he⟩ | ⟨_, ho, hhd, ht⟩
   · rw [he]
+    exact ⟨rfl, rfl⟩
   · obtain ⟨ls, args, he⟩ := hhd
-    rw [he, occursConst_foldApps, ho]
-    simp only [occursConst, decide_True, Bool.true_or]
+    refine ⟨?_, ?_⟩
+    · rw [he, occursConst_foldApps, ho]
+      simp only [occursConst, decide_True, Bool.true_or]
+    · rw [he, ihDepth_foldApps (fun _ _ h => Expr.noConfusion h)]
+      exact (ihDepth_eq_zero_of_telNil ht).symm
 
 /-- Shapes against lifted fields and lifted normal forms. -/
 theorem ShapesNorm.lift {E : ResolvedEnv} (hcl : EnvClosed E) {fuel f : Nat} {ss : List FieldShape}

@@ -42,6 +42,15 @@ theorem isFuncOnDep_of_mem_piSet {A f : PSet.{T}} {B : PSet.{T} → PSet.{T}}
   obtain ⟨i, hp, hi⟩ := mem_sep.mp hf
   exact isFuncOnDep_equiv Equiv.rfl hB hi hp
 
+/-- **The λ-IH graph domain is the denoted domain.** A member of a dependent
+product is a functional graph on `A`, so `sImage pfst f` — the domain `ihAt`'s
+pi-case puts inside `mkLam` — is `≈ A`. For a pi field, `piVal`'s functional
+branch is `piSet (Ed M (den D')) _`, so this is `sImage pfst x ≈ Ed M (den D')`. -/
+theorem sImage_pfst_of_mem_piSet {A f : PSet.{T}} {B : PSet.{T} → PSet.{T}}
+    (hB : ∀ a a', Equiv a a' → Equiv (B a) (B a')) (hf : f ∈ piSet A B) :
+    Equiv (sImage pfst f) A :=
+  sImage_pfst_of_isFuncOnDep (isFuncOnDep_of_mem_piSet hB hf)
+
 /-- Application of a member of a dependent product lands in the fibre. -/
 theorem fapp_mem_piSet {A f a : PSet.{T}} {B : PSet.{T} → PSet.{T}}
     (hB : ∀ a a', Equiv a a' → Equiv (B a) (B a')) (hf : f ∈ piSet A B) (ha : a ∈ A) :

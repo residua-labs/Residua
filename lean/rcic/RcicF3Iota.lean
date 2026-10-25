@@ -236,7 +236,7 @@ theorem recEnd_type_eq (M : Interp.{T}) (σ : Nat → Nat) (fd : FamData) (ps : 
       show Equiv (recCore M fd (minorsOf fd.indices.length fd.ctors.length
         (push (ps ++ mo :: (ms ++ (is ++ [z]))) ρ)) (push (ps ++ mo :: (ms ++ (is ++ [z]))) ρ 0)) _
       rw [minorsOf_env ps mo ms is z ρ hms his, hz']
-      refine (recCore_data M fd ms hz hj hxs).trans ?_
+      refine (recCore_data M fd ms hz hj hxs (ihChildL_of_free fd.fref z _ xs hfree)).trans ?_
       rw [ihArgs_free _ _ _ _ hfree (by rw [hxs, nfOf_eq])]
       exact Equiv.rfl
 

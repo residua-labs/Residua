@@ -657,6 +657,28 @@ theorem mkLam_fapp {A B F : PSet.{u}} (hF : isFuncOn A B F) :
     have hfapp : Equiv (fapp F (A.Func i)) b := fapp_eq_of_pair hF hab'
     exact ⟨i, (ordPair_congr hi hfapp).trans hp'.symm⟩
 
+/-- The domain set of a functional graph is its first-component image:
+`sImage pfst F` recovers `A` exactly when `F` is functional on `A`. This is
+the λ-IH domain the `ihAt` pi-case uses — see `RcicF3RecCore`. -/
+theorem sImage_pfst_of_isFuncOnDep {A F : PSet.{u}} {B : PSet.{u} → PSet.{u}}
+    (hF : isFuncOnDep A B F) : Equiv (sImage pfst F) A := by
+  apply ext; intro p; constructor
+  · intro hp
+    obtain ⟨i, hi⟩ := hp
+    obtain ⟨a, ha, _, _, he⟩ := hF.2.1 (F.Func i) ⟨i, Equiv.refl _⟩
+    exact mem_congr_left (((pfst_congr he).trans pfst_pair).symm.trans hi) ha
+  · intro hp
+    obtain ⟨i, hi⟩ := hp
+    obtain ⟨b, _, hab⟩ := hF.1 (A.Func i) ⟨i, Equiv.refl _⟩
+    obtain ⟨j, hj⟩ := hab
+    exact ⟨j, ((pfst_congr hj).trans pfst_pair).trans hi⟩
+
+/-- The first-component image of the empty graph is empty. -/
+theorem sImage_pfst_pempty : Equiv (sImage pfst (pempty.{u})) pempty := by
+  apply ext; intro p; constructor
+  · intro hp; obtain ⟨i, _⟩ := hp; exact i.elim
+  · intro hp; obtain ⟨i, _⟩ := hp; exact i.elim
+
 
 end PSet
 

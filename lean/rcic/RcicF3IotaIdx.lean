@@ -41,6 +41,43 @@ theorem recFieldsDirect_of_free {f : Nat} {lsF : List Level} {np nq : Nat} : (Fs
   | A :: Fs, d, h => ⟨Or.inl (h A (List.mem_cons_self _ _)),
       recFieldsDirect_of_free Fs (d + 1) fun T hT => h T (List.mem_cons_of_mem _ hT)⟩
 
+/-- `RecFieldsDirect` fields are non-`pi` where they recurse — `ihChild` vacuous. -/
+theorem ihChildL_of_recFieldsDirect {f : Nat} {lsF : List Level} {np nq : Nat} (z : PSet.{T}) :
+    (Fs : List (Expr Nat)) → (xs : List PSet.{T}) → (d : Nat) →
+    RecFieldsDirect f lsF np nq Fs d → ihChildL f z Fs xs
+  | [], _, _, _ => trivial
+  | A :: Fs, [], _, _ => trivial
+  | A :: Fs, x :: xs, d, ⟨hA, hFs⟩ =>
+      ⟨fun hocc => by
+         rcases hA with h0 | ⟨idx, rfl, _, _⟩
+         · simp [h0] at hocc
+         · exact ihChild_foldApps z (fun _ _ h => Expr.noConfusion h)
+             (policyParameterLocals np d ++ idx) x,
+       ihChildL_of_recFieldsDirect z Fs xs (d + 1) hFs⟩
+
+/-- `ihChildL` when admission's field analysis classified every field —
+`occursConst`-true fields went through `isFamilyApp` (non-`pi`, `ihDepth` `0`). -/
+theorem ihChildL_of_analyze {f : Nat} (z : PSet.{T}) :
+    (As : List (Expr Nat)) → (xs : List PSet.{T}) → (ks : List RecKind) →
+    analyzeFields f As = some ks → ihChildL f z As xs
+  | [], _, _, _ => trivial
+  | A :: As, [], _, _ => trivial
+  | A :: As, x :: xs, ks, h => by
+      unfold analyzeFields at h
+      cases ha : analyzeField f A with
+      | none => rw [ha] at h; simp at h
+      | some k =>
+          cases hb : analyzeFields f As with
+          | none => rw [ha, hb] at h; simp at h
+          | some ks' =>
+              rw [ha, hb] at h
+              refine ⟨fun hocc => ?_, ihChildL_of_analyze z As xs ks' hb⟩
+              unfold analyzeField at ha
+              rw [hocc] at ha; simp at ha
+              cases hf : isFamilyApp f A with
+              | true => exact ihChild_of_depth0 z (ihDepth_eq_zero_of_isFamilyApp hf) x
+              | false => rw [hf] at ha; simp at ha
+
 theorem RecFieldsDirect.get {f : Nat} {lsF : List Level} {np nq : Nat} : {Fs : List (Expr Nat)} → {d : Nat} →
     RecFieldsDirect f lsF np nq Fs d → (k : Nat) → (F : Expr Nat) → Fs[k]? = some F → occursConst f F = true →
     ∃ idx : List (Expr Nat), F = foldApps (.const f lsF) (policyParameterLocals np (d + k) ++ idx) ∧
@@ -128,7 +165,7 @@ theorem rhsArgs_den (M : Interp.{T}) (σ : Nat → Nat) (ρ : Nat → PSet.{T}) 
                       rhsArgs rec pre np nM fs ks' (instantiate0 x (policyPi Ds b))).map (den M σ ρ))
                     (ihArgs f g (F :: Fs) (den M σ ρ x :: fs.map (den M σ ρ)))
                   unfold ihArgs
-                  rw [ho, if_pos rfl]
+                  rw [ho, if_pos rfl, hFe, ihAt_foldApps (fun _ _ h => Expr.noConfusion h)]
                   exact ⟨Equiv.rfl, hcall 0 x A idx List.getElem?_cons_zero List.getElem?_cons_zero
                     (by rw [List.getElem?_cons_zero, Nat.add_zero, hFe]) hidxl hfam, ih⟩
   | [], _, _, _ :: _, _, _, _, _, _, hl, _ => (Nat.succ_ne_zero _ hl.symm).elim
@@ -354,8 +391,12 @@ theorem iota_group {M : Interp.{T}} (W : Nat → PSet.{T}) {E E0 : ResolvedEnv} 
               (push (ps ++ mo :: (ms ++ (is ++ [den M σ ρ (ctorMajor w)]))) (fun _ => pempty)))
               (push (ps ++ mo :: (ms ++ (is ++ [den M σ ρ (ctorMajor w)]))) (fun _ => pempty) 0)) _
             rw [minorsOf_env ps mo ms is _ _ (by rw [hmsl, hfdl]) (by simpa [famDataOf] using hisl), push_cons_eq]
+            have hchL : ihChildL (famDataOf a).fref (dataVal j.val (w.fields.map (den M σ ρ)))
+                (ctorFieldsOf (famDataOf a) j.val) (w.fields.map (den M σ ρ)) := by
+              rw [ctorFieldsOf_famDataOf a j]
+              exact ihChildL_of_analyze _ _ _ _ hkinds
             refine (recCore_data M (famDataOf a) ms hzv (by rw [hfdl]; exact hjk)
-              (by rw [List.length_map, hfl, hnfj])).trans ?_
+              (by rw [List.length_map, hfl, hnfj]) (ihChildL_congr' hzv.symm _ _ hchL)).trans ?_
             rw [ctorFieldsOf_famDataOf a j]
             exact Equiv.rfl
       -- the constructor telescope after the recursor-side parameters, read semantically

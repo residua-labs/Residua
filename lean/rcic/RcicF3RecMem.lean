@@ -442,6 +442,29 @@ theorem ihArgs_famDataOf_free {E : ResolvedEnv} {r : Nat} {m : CheckedMember} {M
   rw [hcc] at hA
   exact hfree ⟨j, hjk⟩ A hA
 
+/-- `ihChildL` for an admitted group's constructor `j` when every field is
+family-free — the vacuous discharge at the `recCore_data` premise. -/
+theorem ihChildL_famDataOf_free {E : ResolvedEnv} {r : Nat} {m : CheckedMember} {M : Interp.{4}}
+    (a : RecursorEliminationAdmitted E r m)
+    (hfree : ∀ (i : Fin a.constructors.length) (T : Expr Nat), T ∈ (a.constructorViews i).fields →
+      occursConst a.family.ref T = false) {σ : Nat → Nat} {ρp : Nat → PSet.{4}} {is : List PSet.{4}} {j : Nat}
+    {xs : List PSet.{4}} (hcf : CtorFits M σ (famDataOf a).ctors ρp is j xs) (z : PSet.{4}) :
+    ihChildL (famDataOf a).fref z (ctorFieldsOf (famDataOf a) j) xs := by
+  obtain ⟨c, hc, hf, _⟩ := hcf
+  have hjk : j < a.constructors.length := by
+    have := (List.getElem?_eq_some_iff.mp hc).1
+    rwa [famDataOf_ctors_length] at this
+  have hc' := famDataOf_ctor a ⟨j, hjk⟩
+  rw [hc] at hc'
+  have hcc : c = ((a.constructorViews ⟨j, hjk⟩).fields, (a.constructorViews ⟨j, hjk⟩).resultIndices) :=
+    Option.some.inj hc'
+  have hcf2 : ctorFieldsOf (famDataOf a) j = c.1 := by
+    unfold ctorFieldsOf; rw [List.getD_eq_getElem?_getD, hc]; rfl
+  rw [hcf2]
+  refine ihChildL_of_free (famDataOf a).fref z c.1 xs (fun A hA => ?_)
+  have hA' : A ∈ (a.constructorViews ⟨j, hjk⟩).fields := by rw [hcc] at hA; exact hA
+  exact hfree ⟨j, hjk⟩ A hA'
+
 /-- An element of a proposition of the model is `∅`. -/
 theorem ed_of_mem_U0 (M : Interp.{4}) {X : PSet.{4}} (hX : X ∈ U W4 0) {y : PSet.{4}} (hy : y ∈ Ed M X) :
     Equiv y pempty := by
@@ -493,6 +516,8 @@ theorem recVal_mem_gen {M : Interp.{4}} (hU : M.U = U W4) {E : ResolvedEnv} {r :
         CtorFits M (σOf vs) (famDataOf a).ctors (push ps ρ0) is 0 xs →
       ∀ (i : Fin a.constructors.length) (T : Expr Nat), T ∈ (a.constructorViews i).fields →
         occursConst a.family.ref T = false)
+    (hchild : ∀ ps is j xs, CtorFits M (σOf vs) (famDataOf a).ctors (push ps ρ0) is j xs →
+      ihChildL (famDataOf a).fref (dataVal j xs) (ctorFieldsOf (famDataOf a) j) xs)
     (g : List PSet.{4} → PSet.{4} → PSet.{4})
     (hg : evalTotal (σOf vs) a.family.resultLevel ≠ 0 → ∀ ms x, g ms x = recCore M (famDataOf a) ms x)
     (hminH : ∀ (ps : List PSet.{4}) (mo : PSet.{4}) (ms is : List PSet.{4}),
@@ -569,7 +594,7 @@ theorem recVal_mem_gen {M : Interp.{4}} (hU : M.U = U W4) {E : ResolvedEnv} {r :
     (by simpa [famDataOf] using hisl)
     (CtorFits M (σOf vs) (famDataOf a).ctors (push ps ρ0) is)
     (fun j xs ⟨c, hc, _, _⟩ => by
-      have := (List.getElem?_eq_some_iff.mp hc).1; exact this) ?_ ?_ (g ms) (fun h0 x => hg h0 ms x) ?_ ?_ ?_ ?_ ?_ ?_)
+      have := (List.getElem?_eq_some_iff.mp hc).1; exact this) ?_ ?_ (g ms) (fun h0 x => hg h0 ms x) ?_ ?_ ?_ ?_ ?_ ?_ ?_)
   · intro h0
     obtain ⟨j, xs, hc, he⟩ := famEnd_type_mem W4 (σOf vs) (famDataOf a) ps is
       (by simpa [famDataOf] using hisl) h0 hfit.2
@@ -603,6 +628,8 @@ theorem recVal_mem_gen {M : Interp.{4}} (hU : M.U = U W4) {E : ResolvedEnv} {r :
     · exact absurd h0 (Nat.pos_iff_ne_zero.mp (ht (σOf vs)))
     · omega
     · omega
+  · intro h0 j xs hcf
+    exact hchild ps is j xs hcf
 
 
 /-- **The recursor's value is an element of its type** (non-recursive constructors). -/
@@ -622,7 +649,9 @@ theorem recVal_mem {M : Interp.{4}} (hU : M.U = U W4) {E : ResolvedEnv} {r : Nat
     (hfree : ∀ (i : Fin a.constructors.length) (T : Expr Nat), T ∈ (a.constructorViews i).fields →
       occursConst a.family.ref T = false) :
     piLam M (σOf vs) (recEnd M (σOf vs) (famDataOf a)) ρ0 m.mtype ∈ Ed M (den M (σOf vs) ρ0 m.mtype) :=
-  recVal_mem_gen hU a vs hfamμ hsafe (fun _ _ _ _ _ _ _ => hfree) (recCore M (famDataOf a)) (fun _ _ _ => rfl)
+  recVal_mem_gen hU a vs hfamμ hsafe (fun _ _ _ _ _ _ _ => hfree)
+    (fun _ _ j xs hcf => ihChildL_famDataOf_free a hfree hcf (dataVal j xs))
+    (recCore M (famDataOf a)) (fun _ _ _ => rfl)
     (fun ps mo ms is _ hpsl hisl hmo hms hisfit j xs hcf => by
       rw [ihArgs_famDataOf_free a hfree hcf]
       exact minor_ok a vs hshapes hfamμ hctorμ ps mo ms is hpsl hisl hmo hms hisfit j xs hcf)

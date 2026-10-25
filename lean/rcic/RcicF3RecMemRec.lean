@@ -32,7 +32,7 @@ def ShapesMatch (f : Nat) (ss : List FieldShape) (Fs : List (Expr Nat)) : Prop :
 def IHOkF (M : Interp.{4}) (σ : Nat → Nat) (np : Nat) (mo : PSet.{4}) (g : PSet.{4} → PSet.{4}) (f : Nat) :
     List (Expr Nat) → (Nat → PSet.{4}) → List PSet.{4} → Prop
   | A :: Fs, ρ, x :: xs =>
-      (occursConst f A = true → g x ∈ Ed M (fapps mo ((familyIdx np A).map (den M σ ρ) ++ [x]))) ∧
+      (occursConst f A = true → ihAt g A x ∈ Ed M (fapps mo ((familyIdx np A).map (den M σ ρ) ++ [x]))) ∧
         IHOkF M σ np mo g f Fs (vcons x ρ) xs
   | _, _, _ => True
 
@@ -44,9 +44,12 @@ theorem ihOk_of_F (M : Interp.{4}) (σ : Nat → Nat) (np : Nat) (mo : PSet.{4})
   | _ :: _, _ :: _, _, _, [], _ => trivial
   | s :: ss, A :: Fs, ⟨hl, hm⟩, ρ, x :: xs, ⟨h1, h2⟩ =>
       ⟨fun hs => by
-        rcases hm 0 s A List.getElem?_cons_zero List.getElem?_cons_zero with ⟨hs', _⟩ | ⟨_, _, ho⟩
+        rcases hm 0 s A List.getElem?_cons_zero List.getElem?_cons_zero with ⟨hs', _⟩ | ⟨_, hRh, ho⟩
         · rw [hs'] at hs; cases hs
-        · exact h1 ho,
+        · obtain ⟨ls, args, hA⟩ := hRh
+          subst hA
+          rw [ihAt_foldApps (fun _ _ h => Expr.noConfusion h)] at h1
+          exact h1 ho,
        ihOk_of_F M σ np mo g f ss Fs ⟨Nat.succ.inj hl, fun k s' A' h1' h2' =>
          hm (k + 1) s' A' (by simp only [List.getElem?_cons_succ]; exact h1')
            (by simp only [List.getElem?_cons_succ]; exact h2')⟩ (vcons x ρ) xs h2⟩
@@ -59,9 +62,11 @@ theorem shArgs_eq_ihArgs (g : PSet.{4} → PSet.{4}) (f : Nat) :
       have ih := shArgs_eq_ihArgs g f ss Fs ⟨Nat.succ.inj hl, fun k s' A' h1' h2' =>
          hm (k + 1) s' A' (by simp only [List.getElem?_cons_succ]; exact h1')
            (by simp only [List.getElem?_cons_succ]; exact h2')⟩ xs (Nat.succ.inj hxl)
-      rcases hm 0 s A List.getElem?_cons_zero List.getElem?_cons_zero with ⟨rfl, ho⟩ | ⟨rfl, _, ho⟩
+      rcases hm 0 s A List.getElem?_cons_zero List.getElem?_cons_zero with ⟨rfl, ho⟩ | ⟨rfl, hRh, ho⟩
       · unfold ihArgs; rw [ho, if_neg (by decide), ← ih]; rfl
-      · unfold ihArgs; rw [ho, if_pos rfl, ← ih]; rfl
+      · unfold ihArgs; rw [ho, if_pos rfl, ← ih]
+        obtain ⟨ls, args, hA⟩ := hRh
+        rw [hA, ihAt_foldApps (fun _ _ h => Expr.noConfusion h)]; rfl
   | [], _ :: _, ⟨hl, _⟩, _, _ => (Nat.succ_ne_zero _ hl.symm).elim
   | _ :: _, [], ⟨hl, _⟩, _, _ => (Nat.succ_ne_zero _ hl).elim
   | [], [], _, _ :: _, hxl => (Nat.succ_ne_zero _ hxl).elim

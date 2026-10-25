@@ -172,7 +172,9 @@ theorem recEnd_mem (M : Interp.{T}) (σ : Nat → Nat) (fd : FamData) (ps : List
       ∀ xs, CF 0 xs → LEq xs (recon c is))
     (hsafeFree : evalTotal σ fd.resLevel = 0 → fd.policy = .anySort → ∀ c, fd.ctors = [c] →
       ∀ xs, CF 0 xs → ∀ A, A ∈ c.1 → occursConst fd.fref A = false)
-    (hsel : evalTotal σ fd.resLevel = 0 → fd.policy = .anySort → fd.ctors.length ≤ 1) :
+    (hsel : evalTotal σ fd.resLevel = 0 → fd.policy = .anySort → fd.ctors.length ≤ 1)
+    (hch : evalTotal σ fd.resLevel ≠ 0 → ∀ j xs, CF j xs →
+      ihChildL fd.fref (dataVal j xs) (ctorFieldsOf fd j) xs) :
     recEnd M σ fd (push (ps ++ mo :: (ms ++ (is ++ [z]))) ρ) ∈ Ed M (fapps mo (is ++ [z])) := by
   have hz : push (ps ++ mo :: (ms ++ (is ++ [z]))) ρ 0 = z := by rw [push_cons_eq]; rfl
   have hiv : lastVals fd.indices.length (shiftρ 1 (push (ps ++ mo :: (ms ++ (is ++ [z]))) ρ)) = is := by
@@ -244,7 +246,8 @@ theorem recEnd_mem (M : Interp.{T}) (σ : Nat → Nat) (fd : FamData) (ps : List
         unfold ctorV cond
         rw [hd]
         exact hzd.symm
-      exact mem_congr_left (recCore_data M fd ms hzd hjk hlen').symm
+      exact mem_congr_left (recCore_data M fd ms hzd hjk hlen'
+        (ihChildL_congr' hzd.symm (ctorFieldsOf fd j) xs (hch h0 j xs hc))).symm
         (zctor j xs _ (fapps_congr_args mo (LEq_append (LEq.refl is) ⟨hcv, trivial⟩)) (hmin j xs hc))
 
 end PSet

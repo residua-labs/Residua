@@ -496,6 +496,99 @@ theorem occursConst_normField_of_shapes {E : ResolvedEnv} {f nu np nq fuel : Nat
       | unresolved => rw [ha] at hs; cases hs
       | refused _ => rw [ha] at hs; cases hs
 
+/-- The normalized fields have the original's leading-`pi` depth, under
+admission's shapes: `nonrecursive` keeps the field; `recursive 0` normalizes
+to a `foldApps` (depth `0`) — and the original cannot be a literal `pi` either
+(its whnf would be `pi`, not the family's `foldApps`). -/
+theorem ihDepth_normField_of_shapes {E : ResolvedEnv} {f nu np nq fuel : Nat} (hFF : FamFreeBodies E f) :
+    (Fs : List (Expr Nat)) → (depth : Nat) → (shapes : List FieldShape) →
+    fieldShapesFuel E fuel f nu np nq depth Fs = some shapes →
+    (∀ s, s ∈ shapes → s = .nonrecursive ∨ s = .recursive 0) →
+    ∀ A, A ∈ Fs → ihDepth (normField E fuel f A) = ihDepth A
+  | [], _, _, _, _, _, hA => absurd hA (List.not_mem_nil _)
+  | A :: Fs, depth, shapes, hs, hsh, B, hB => by
+      unfold fieldShapesFuel at hs
+      cases ha : fieldAnalyze E fuel f nu np nq depth A with
+      | permitted s idx =>
+          rw [ha] at hs
+          cases hr : fieldShapesFuel E fuel f nu np nq (depth + 1) Fs with
+          | none => rw [hr] at hs; cases hs
+          | some rest =>
+              rw [hr] at hs
+              have e : shapes = s :: rest := (Option.some.inj hs).symm
+              subst e
+              rcases List.mem_cons.mp hB with rfl | hB
+              · rcases hsh s (List.mem_cons_self _ _) with rfl | rfl
+                · rw [normField_free (fieldAnalyze_nonrec_free ha)]
+                · obtain ⟨body, hw, _, _, fu, hpf⟩ := fieldAnalyze_rec0 ha
+                  obtain ⟨ls, args, hsp⟩ := properFamilyFuel_true_head hpf
+                  have hb : body = foldApps (.const f ls) args := by rw [← foldApps_appsSpine body, hsp]
+                  have hocc : occursConst f B = true := by
+                    rw [hb] at hw
+                    exact occursConst_of_whnf_head hFF hw
+                  rw [normField_of_whnf hocc hw, hb]
+                  rw [ihDepth_foldApps (fun _ _ h => Expr.noConfusion h)]
+                  cases hd : ihDepth B with
+                  | zero => rfl
+                  | succ d =>
+                      obtain ⟨D, B', rfl⟩ := ihDepth_ne_zero (by rw [hd]; exact Nat.succ_ne_zero _)
+                      rw [hb] at hw
+                      cases fuel with
+                      | zero =>
+                          rw [show whnfFuel E 0 (.pi D B') = none from rfl] at hw
+                          cases hw
+                      | succ f' =>
+                          have hpi : whnfFuel E (f' + 1) (.pi D B') = some (.pi D B') := by
+                            unfold whnfFuel
+                            rw [show appsSpine (.pi D B') = (.pi D B', []) from rfl]
+                          rw [hpi] at hw
+                          exact absurd ((Option.some.inj hw).symm)
+                            (foldApps_ne_pi _ (fun _ _ h => Expr.noConfusion h) _ _ _)
+              · exact ihDepth_normField_of_shapes hFF Fs (depth + 1) rest hr
+                  (fun s' hs' => hsh s' (List.mem_cons_of_mem _ hs')) B hB
+      | unresolved => rw [ha] at hs; cases hs
+      | refused _ => rw [ha] at hs; cases hs
+
+/-- The telescope of a literal `pi` has a nonempty domain list (or no
+result at all). -/
+theorem piTelescopeFuel_pi_dom {E : ResolvedEnv} {fuel : Nat} {D B : Expr Nat}
+    {ds : List (Expr Nat)} {b : Expr Nat}
+    (h : piTelescopeFuel E fuel (.pi D B) = some (ds, b)) : ∃ d ds', ds = d :: ds' := by
+  cases fuel with
+  | zero => simp only [piTelescopeFuel] at h; cases h
+  | succ f =>
+      simp only [piTelescopeFuel] at h
+      cases hw : whnfFuel E f (.pi D B) with
+      | none => rw [hw] at h; cases h
+      | some w =>
+          rw [hw] at h
+          cases f with
+          | zero =>
+              rw [show whnfFuel E 0 (.pi D B) = none from rfl] at hw
+              cases hw
+          | succ f' =>
+              have hpi : whnfFuel E (f' + 1) (.pi D B) = some (.pi D B) := by
+                unfold whnfFuel
+                rw [show appsSpine (.pi D B) = (.pi D B, []) from rfl]
+              rw [hpi] at hw
+              cases Option.some.inj hw
+              cases hf : piTelescopeFuel E (f' + 1) B with
+              | none => simp only [hf] at h; cases h
+              | some q =>
+                  obtain ⟨ds', b'⟩ := q
+                  simp only [hf] at h
+                  exact ⟨D, ds', (Prod.mk.inj (Option.some.inj h)).1.symm⟩
+
+/-- A field whose telescope has no binders has `ihDepth` `0`. -/
+theorem ihDepth_eq_zero_of_telNil {E : ResolvedEnv} {fuel : Nat} {A A' : Expr Nat}
+    (h : piTelescopeFuel E fuel A = some ([], A')) : ihDepth A = 0 := by
+  cases hd : ihDepth A with
+  | zero => rfl
+  | succ d =>
+      obtain ⟨D, B, rfl⟩ := ihDepth_ne_zero (by rw [hd]; exact Nat.succ_ne_zero _)
+      obtain ⟨d0, ds', he⟩ := piTelescopeFuel_pi_dom h
+      exact absurd he.symm (List.cons_ne_nil _ _)
+
 /-! ### the induction-hypothesis type of a hidden field -/
 
 /-- The recursor's induction-hypothesis type reads the field's normal form:

@@ -290,6 +290,7 @@ theorem rec_member_sound_empty (P : Premises4) {μ : Nat → List Nat → PSet.{
   refine mem_congr_left (hG.recur _).symm ?_
   exact recVal_mem_gen rfl node.a (ls.map (evalTotal σ)) (groupFaith_famAt P hG _)
     (fun _ _ _ _ _ _ _ _ hcf => (hemp _ _ _ _ _ hcf).elim) (fun _ _ _ _ _ _ hcf => (hemp _ _ _ _ _ hcf).elim)
+    (fun _ _ _ _ hcf => (hemp _ _ _ _ _ hcf).elim)
     (fun _ _ => pempty) (fun h0 => absurd (hU _) h0)
     (fun _ _ _ _ _ _ _ _ _ _ _ _ hcf => (hemp _ _ _ _ _ hcf).elim)
 

@@ -43,6 +43,43 @@ theorem appsSpine_foldApps : (f : Expr Nat) → (as : List (Expr Nat)) →
       rw [show foldApps f (a :: as) = foldApps (.app f a) as from rfl, appsSpine_foldApps (.app f a) as]
       simp [appsSpine]
 
+/-- `foldApps` pushes the last argument innermost. -/
+theorem foldApps_snoc (f : Expr Nat) (xs : List (Expr Nat)) (a : Expr Nat) :
+    foldApps f (xs ++ [a]) = .app (foldApps f xs) a := by
+  induction xs generalizing f with
+  | nil => rfl
+  | cons x xs ih => exact ih (f := .app f x)
+
+/-- The spine decomposition reconstructs the expression. -/
+theorem foldApps_appsSpine : (e : Expr Nat) → foldApps (appsSpine e).1 (appsSpine e).2 = e
+  | .app f a => by
+      have h : appsSpine (.app f a) = ((appsSpine f).1, (appsSpine f).2 ++ [a]) := rfl
+      rw [h, foldApps_snoc, foldApps_appsSpine f]
+  | .bvar _ => rfl | .sort _ => rfl | .const _ _ => rfl | .pi _ _ => rfl
+  | .lam _ _ => rfl | .letE _ _ _ => rfl | .lit _ => rfl
+
+/-- A field whose `appsSpine` head is not `pi` has `ihDepth` `0`. -/
+theorem ihDepth_eq_zero_of_spine {T e : Expr Nat} {args : List (Expr Nat)}
+    (hs : appsSpine T = (e, args)) (hpi : ∀ D B, e ≠ .pi D B) : ihDepth T = 0 := by
+  rw [← foldApps_appsSpine T, hs]
+  exact ihDepth_foldApps hpi args
+
+/-- A `isFamilyApp` field heads a `.const` — `ihDepth` `0`. -/
+theorem ihDepth_eq_zero_of_isFamilyApp {f : Nat} {T : Expr Nat}
+    (h : isFamilyApp f T = true) : ihDepth T = 0 := by
+  unfold isFamilyApp at h
+  cases hs : appsSpine T with
+  | mk e args =>
+      cases e with
+      | const r ls => exact ihDepth_eq_zero_of_spine hs (fun _ _ e2 => Expr.noConfusion e2)
+      | pi D B => rw [hs] at h; simp at h
+      | bvar _ => rw [hs] at h; simp at h
+      | sort _ => rw [hs] at h; simp at h
+      | app _ _ => rw [hs] at h; simp at h
+      | lam _ _ => rw [hs] at h; simp at h
+      | letE _ _ _ => rw [hs] at h; simp at h
+      | lit _ => rw [hs] at h; simp at h
+
 theorem familyIdx_foldApps_const (np r : Nat) (ls : List Level) (as : List (Expr Nat)) :
     familyIdx np (foldApps (.const r ls) as) = as.drop np := by
   simp [familyIdx, appsSpine_foldApps, appsSpine]

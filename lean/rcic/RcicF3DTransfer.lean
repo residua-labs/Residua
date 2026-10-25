@@ -334,10 +334,13 @@ theorem transparentBody_eq_of_sub {E₁ E₂ : ResolvedEnv}
 /-! ### the recursor's value reads only counts, result indices and occurrences -/
 
 /-- The minor's arguments depend on the fields only through the occurrence of
-the family. -/
+the family **and the leading-`pi` depth** (`ihDepth` — the Π-recursion depth
+`ihAt` uses). -/
 theorem ihArgs_congr_occ (f : Nat) (g : PSet.{T} → PSet.{T}) :
     (As As' : List (Expr Nat)) → (xs : List PSet.{T}) → As'.length = As.length →
-    (∀ k (hk : k < As.length) (hk' : k < As'.length), occursConst f (As'[k]'hk') = occursConst f (As[k]'hk)) →
+    (∀ k (hk : k < As.length) (hk' : k < As'.length),
+      occursConst f (As'[k]'hk') = occursConst f (As[k]'hk) ∧
+      ihDepth (As'[k]'hk') = ihDepth (As[k]'hk)) →
     ihArgs f g As xs = ihArgs f g As' xs
   | [], [], [], _, _ => rfl
   | [], [], _ :: _, _, _ => rfl
@@ -345,12 +348,16 @@ theorem ihArgs_congr_occ (f : Nat) (g : PSet.{T} → PSet.{T}) :
   | _ :: _, [], _, hl, _ => absurd hl.symm (Nat.succ_ne_zero _)
   | _ :: _, _ :: _, [], _, _ => rfl
   | A :: As, A' :: As', x :: xs, hl, h => by
-      have h0 : occursConst f A' = occursConst f A := h 0 (Nat.succ_pos _) (Nat.succ_pos _)
+      have h0 : occursConst f A' = occursConst f A := (h 0 (Nat.succ_pos _) (Nat.succ_pos _)).1
+      have h0' : ihDepth A' = ihDepth A := (h 0 (Nat.succ_pos _) (Nat.succ_pos _)).2
       have ih := ihArgs_congr_occ f g As As' xs (Nat.succ.inj hl)
         (fun k hk hk' => h (k + 1) (Nat.succ_lt_succ hk) (Nat.succ_lt_succ hk'))
-      show (if occursConst f A = true then x :: g x :: ihArgs f g As xs else x :: ihArgs f g As xs) =
-        (if occursConst f A' = true then x :: g x :: ihArgs f g As' xs else x :: ihArgs f g As' xs)
-      rw [h0, ih]
+      show (if occursConst f A = true then x :: ihAt g A x :: ihArgs f g As xs else x :: ihArgs f g As xs) =
+        (if occursConst f A' = true then x :: ihAt g A' x :: ihArgs f g As' xs else x :: ihArgs f g As' xs)
+      rw [h0]
+      split
+      · rw [ihAt_eq_of_depth h0'.symm x, ih]
+      · rw [ih]
 
 theorem ctorFieldsOf_of_get {fd : FamData} {j : Nat} {c : List (Expr Nat) × List (Expr Nat)}
     (hc : fd.ctors[j]? = some c) : ctorFieldsOf fd j = c.1 := by
@@ -373,13 +380,15 @@ structure RecDataAgree (fd fd' : FamData) : Prop where
   ctor : ∀ (j : Nat) (c c' : List (Expr Nat) × List (Expr Nat)), fd.ctors[j]? = some c → fd'.ctors[j]? = some c' →
     c'.1.length = c.1.length ∧ c'.2 = c.2 ∧
     ∀ k (hk : k < c.1.length) (hk' : k < c'.1.length),
-      occursConst fd.fref (c'.1[k]'hk') = occursConst fd.fref (c.1[k]'hk)
+      occursConst fd.fref (c'.1[k]'hk') = occursConst fd.fref (c.1[k]'hk) ∧
+      ihDepth (c'.1[k]'hk') = ihDepth (c.1[k]'hk)
 
 theorem RecDataAgree.get {fd fd' : FamData} (h : RecDataAgree fd fd') {j : Nat}
     {c : List (Expr Nat) × List (Expr Nat)} (hc : fd.ctors[j]? = some c) :
     ∃ c', fd'.ctors[j]? = some c' ∧ c'.1.length = c.1.length ∧ c'.2 = c.2 ∧
       ∀ k (hk : k < c.1.length) (hk' : k < c'.1.length),
-        occursConst fd.fref (c'.1[k]'hk') = occursConst fd.fref (c.1[k]'hk) := by
+        occursConst fd.fref (c'.1[k]'hk') = occursConst fd.fref (c.1[k]'hk) ∧
+        ihDepth (c'.1[k]'hk') = ihDepth (c.1[k]'hk) := by
   have hj : j < fd'.ctors.length := by rw [h.len]; exact (List.getElem?_eq_some_iff.mp hc).1
   exact ⟨_, List.getElem?_eq_getElem hj, h.ctor j c _ hc (List.getElem?_eq_getElem hj)⟩
 

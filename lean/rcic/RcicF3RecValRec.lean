@@ -101,6 +101,20 @@ theorem FieldsClass.mem {f ar np nq : Nat} : {Fs : List (Expr Nat)} → {d : Nat
         · exact Or.inr ⟨d, h⟩
       · exact FieldsClass.mem hFs B hB
 
+/-- `FieldsClass` fields are non-`pi` where they recurse — `ihChild` vacuous. -/
+theorem ihChildL_of_fieldsClass {f ar np nq : Nat} (z : PSet.{4}) :
+    (Fs : List (Expr Nat)) → (xs : List PSet.{4}) → (d : Nat) →
+    FieldsClass f ar np nq Fs d → ihChildL f z Fs xs
+  | [], _, _, _ => trivial
+  | A :: Fs, [], _, _ => trivial
+  | A :: Fs, x :: xs, d, ⟨hA, hFs⟩ =>
+      ⟨fun hocc => by
+         rcases hA with h0 | ⟨idx, rfl, _, _⟩
+         · simp [h0] at hocc
+         · exact ihChild_foldApps z (fun _ _ h => Expr.noConfusion h)
+             (policyParameterLocals np d ++ idx) x,
+       ihChildL_of_fieldsClass z Fs xs (d + 1) hFs⟩
+
 theorem familyIdx_directRec (np d : Nat) (f : Nat) (ls : List Level) (idx : List (Expr Nat)) :
     familyIdx np (foldApps (.const f ls) (policyParameterLocals np d ++ idx)) = idx := by
   rw [familyIdx_foldApps_const, List.drop_append_of_le_length (by rw [length_paramLocals]; exact Nat.le_refl _),
@@ -123,7 +137,7 @@ theorem ihOkF_walk (M Mt : Interp.{4}) (σ : Nat → Nat) (f ar np nq : Nat) (mo
       refine ⟨fun ho => ?_, ?_⟩
       · rcases hc with h0 | ⟨idx, rfl, hl, hidx⟩
         · rw [h0] at ho; cases ho
-        · rw [familyIdx_directRec]
+        · rw [ihAt_foldApps (fun _ _ h => Expr.noConfusion h), familyIdx_directRec]
           exact hR ys idx x hl hidx hx
       · have h1 : vcons x (push ys (push ps ρ0)) = push (ys ++ [x]) (push ps ρ0) := by rw [push_append]; rfl
         have hl : ys.length + 1 = (ys ++ [x]).length := by simp
@@ -145,6 +159,19 @@ structure RecGroup {E : ResolvedEnv} {r : Nat} {m : CheckedMember} (a : Recursor
   opq : ∀ ls, transparentBody E a.family.ref ls = none
   shapes : ∀ i : Fin a.constructors.length, ∃ fuel shapes, ShapesMatch a.family.ref shapes
     (a.constructorViews i).fields ∧ derivedMinor a i fuel shapes = a.minorTypes[i.val]?
+
+/-- `ihChildL` for an admitted group's constructor `j`, from `RecGroup`'s
+`FieldsClass` — the vacuous discharge at the `recCore_data` premise. -/
+theorem ihChildL_famDataOf_fieldsClass {E : ResolvedEnv} {r : Nat} {m : CheckedMember}
+    {M : Interp.{4}} (a : RecursorEliminationAdmitted E r m) (G : RecGroup a)
+    {σ : Nat → Nat} {ρp : Nat → PSet.{4}} {is : List PSet.{4}} {j : Nat}
+    {xs : List PSet.{4}} (hcf : CtorFits M σ (famDataOf a).ctors ρp is j xs) (z : PSet.{4}) :
+    ihChildL (famDataOf a).fref z (ctorFieldsOf (famDataOf a) j) xs := by
+  obtain ⟨c, hc, _, _⟩ := hcf
+  have hjk' : j < (famDataOf a).ctors.length := (List.getElem?_eq_some_iff.mp hc).1
+  have hjk : j < a.constructors.length := by rwa [famDataOf_ctors_length] at hjk'
+  rw [ctorFieldsOf_famDataOf a ⟨j, hjk⟩]
+  exact ihChildL_of_fieldsClass z ((a.constructorViews ⟨j, hjk⟩).fields) xs 0 (G.fields ⟨j, hjk⟩)
 
 theorem paramLocals_free (f np d : Nat) : ∀ e, e ∈ policyParameterLocals np d → occursConst f e = false := by
   intro e he
@@ -431,6 +458,7 @@ theorem recVal_mem_rec (P : Premises4) (μ : Nat → List Nat → PSet.{4}) {E :
     piLam (mkM P μ) (σOf vs) (recEnd (mkM P μ) (σOf vs) (famDataOf a)) ρ0 m.mtype ∈
       Ed (mkM P μ) (den (mkM P μ) (σOf vs) ρ0 m.mtype) := by
   refine recVal_mem_gen rfl a vs (famμ_of_lim P μ a hLim G vs) (fun h0 => absurd h0 hType) (fun h0 => absurd h0 hType)
+    (fun _ _ j xs hcf => ihChildL_famDataOf_fieldsClass a G hcf (dataVal j xs))
     (recCore (mkM P μ) (famDataOf a)) (fun _ _ _ => rfl) ?_
   intro ps mo ms is _ hpsl hisl hmo hms hisfit j xs hcf
   refine minor_ok_group P μ a G hLim vs hctorμ ps mo ms is hpsl hisl hmo hms hisfit _ ?_ j xs hcf
@@ -445,7 +473,9 @@ theorem recVal_mem_rec (P : Premises4) (μ : Nat → List Nat → PSet.{4}) {E :
     | isTrue h => exact absurd h hType
     | isFalse _ => exact Equiv.rfl
   have hlen : xs'.length = nfOf (famDataOf a) j' := by unfold nfOf; rw [hc]; exact hxs.length
-  exact mem_congr_left (recCore_data _ _ ms hzd hjk' hlen).symm hm
+  have hch := ihChildL_famDataOf_fieldsClass a G hcf' (dataVal j' xs')
+  exact mem_congr_left (recCore_data _ _ ms hzd hjk' hlen
+    (ihChildL_congr' hzd.symm _ _ hch)).symm hm
 
 /-- **The recursor of a recursive `Prop` group eliminating into `Prop` is an
 element of its type.** Its value is `∅`, the proof: by induction on the stage,
@@ -463,6 +493,7 @@ theorem recVal_mem_recP (P : Premises4) (μ : Nat → List Nat → PSet.{4}) {E 
       Ed (mkM P μ) (den (mkM P μ) (σOf vs) ρ0 m.mtype) := by
   refine recVal_mem_gen rfl a vs (famμ_of_lim P μ a hLim G vs)
     (fun _ hp => by rw [hpol] at hp; cases hp) (fun _ hp => by rw [hpol] at hp; cases hp)
+    (fun _ _ j xs hcf => ihChildL_famDataOf_fieldsClass a G hcf (dataVal j xs))
     (fun _ _ => pempty) (fun h0 => absurd hProp h0) ?_
   intro ps mo ms is hps hpsl hisl hmo hms hisfit j xs hcf
   refine minor_ok_group P μ a G hLim vs hctorμ ps mo ms is hpsl hisl hmo hms hisfit _ ?_ j xs hcf

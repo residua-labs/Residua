@@ -117,8 +117,10 @@ theorem nodeFam_recDataAgree : RecDataAgree (famDataOf node.a) (nodeFam node) wh
     cases Option.some.inj e2
     refine ⟨List.length_map _ _, rfl, fun k hk hk' => ?_⟩
     simp only [List.getElem_map]
-    exact occursConst_normField_of_shapes hFF _ _ _ (node.h14.analyzed ⟨j, hj⟩) (hsh ⟨j, hj⟩) _
-      (List.getElem_mem _)
+    exact ⟨occursConst_normField_of_shapes hFF _ _ _ (node.h14.analyzed ⟨j, hj⟩) (hsh ⟨j, hj⟩) _
+      (List.getElem_mem _),
+      ihDepth_normField_of_shapes hFF _ _ _ (node.h14.analyzed ⟨j, hj⟩) (hsh ⟨j, hj⟩) _
+      (List.getElem_mem _)⟩
 
 /-- The normalized constructors' fields are family-free or the family at its
 canonical instance applied to family-free arguments (`RecApp`). -/
