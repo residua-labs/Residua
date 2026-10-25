@@ -1,4 +1,7 @@
 import rcic.RcicLeanImportSeal
+-- BEGIN CC F3 MODEL DIRECT IMPORTS (closure_claim = 0)
+import rcic.RcicF3ModelSeal
+-- END CC F3 MODEL DIRECT IMPORTS
 -- BEGIN CC F3 DEFINITIONS IMPORT (closure_claim = 0)
 import rcic.RcicF3DefsSeal
 -- END CC F3 DEFINITIONS IMPORT
