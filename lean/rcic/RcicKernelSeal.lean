@@ -7670,6 +7670,10 @@ def sealedTheorems : List Name :=
     ``Rcic.Machine.TMemo.cex_certConvS_no_not_up,
     ``Rcic.Machine.TMemo.cex_sound_entry_wrong_elsewhere
   ]
+  -- BEGIN LAND-UNION (seal names added by the landed PR; content-keyed union)
+  ++ [
+  ]
+  -- END LAND-UNION
   -- END DEVIN KMEMO TYPED SEALED ROOTS
   -- END LAND-UNION
   -- END LAND-UNION
