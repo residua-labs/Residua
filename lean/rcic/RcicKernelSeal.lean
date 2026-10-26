@@ -22,6 +22,9 @@ import rcic.RcicRiskTierSeal
 -- BEGIN CC-CERTKERNEL IMPORT (closure_claim = 0)
 import rcic.RcicCertKernelSeal
 -- END CC-CERTKERNEL IMPORT
+-- BEGIN DEVIN KMEMO TYPED SEAL IMPORT (closure_claim = 0)
+import rcic.RcicMachineMemoTypedSeal
+-- END DEVIN KMEMO TYPED SEAL IMPORT
 -- BEGIN CHATGPT ROUTE C LR3 LANE SEALS DIRECT IMPORTS (closure_claim = 0)
 import rcic.RcicRouteCLR3InductiveCodesSeal
 import rcic.RcicRouteCLR3CandidateEnvironmentSeal
@@ -7618,6 +7621,56 @@ def sealedTheorems : List Name :=
     ``Rcic.Syn.EpsKIdxMismatchW,
     ``Rcic.Syn.not_epsReflSameTyInj_of_kMismatch
   ]
+  -- BEGIN DEVIN KMEMO TYPED SEALED ROOTS (closure_claim = 0)
+  ++ [
+    ``Rcic.Machine.TMemo.TTable.empty_sound,
+    ``Rcic.Machine.TMemo.TTable.bucket_sound,
+    ``Rcic.Machine.TMemo.TTable.push_sound,
+    ``Rcic.Machine.TMemo.Agrees.pure',
+    ``Rcic.Machine.TMemo.Agrees.bind,
+    ``Rcic.Machine.TMemo.Agrees.of_eq,
+    ``Rcic.Machine.TMemo.findTy_sound,
+    ``Rcic.Machine.TMemo.findAt_sound,
+    ``Rcic.Machine.TMemo.memoTy_agrees,
+    ``Rcic.Machine.TMemo.memoAt_agrees,
+    ``Rcic.Machine.TMemo.checkWithM_agrees,
+    ``Rcic.Machine.TMemo.tyAtWithM_agrees,
+    ``Rcic.Machine.TMemo.stepAtM_agrees,
+    ``Rcic.Machine.TMemo.appConvWithM_agrees,
+    ``Rcic.Machine.TMemo.litAtM_agrees,
+    ``Rcic.Machine.TMemo.irrAtM_agrees,
+    ``Rcic.Machine.TMemo.liftSpineWithM_agrees,
+    ``Rcic.Machine.TMemo.iotaStepWithM_agrees,
+    ``Rcic.Machine.TMemo.betaStepWithM_agrees,
+    ``Rcic.Machine.TMemo.iotaBetaStepM_agrees,
+    ``Rcic.Machine.TMemo.iotaMid?_eq,
+    ``Rcic.Machine.TMemo.iotaMidStepM_agrees,
+    ``Rcic.Machine.TMemo.iotaMidM_agrees,
+    ``Rcic.Machine.TMemo.domChainM_agrees,
+    ``Rcic.Machine.TMemo.piCongrM_agrees,
+    ``Rcic.Machine.TMemo.tyConv?_succ_eq,
+    ``Rcic.Machine.TMemo.convAt?_succ_eq,
+    ``Rcic.Machine.TMemo.tyMidM_agrees,
+    ``Rcic.Machine.TMemo.tyConvBodyM_agrees,
+    ``Rcic.Machine.TMemo.convStepM_agrees,
+    ``Rcic.Machine.TMemo.convFirstM_agrees,
+    ``Rcic.Machine.TMemo.convTailM_agrees,
+    ``Rcic.Machine.TMemo.convAtBodyM_agrees,
+    ``Rcic.Machine.TMemo.lvl_impl,
+    ``Rcic.Machine.TMemo.certWhnfM_agrees,
+    ``Rcic.Machine.TMemo.certStepT_agrees,
+    ``Rcic.Machine.TMemo.certStepMemo_eq,
+    ``Rcic.Machine.TMemo.certWhnfSMemo_eq,
+    ``Rcic.Machine.TMemo.certConvSMemo_eq,
+    ``Rcic.Machine.TMemo.certTyConvSMemo_eq,
+    ``Rcic.Machine.TMemo.certConvSMemo_sound,
+    ``Rcic.Machine.TMemo.cex_tyConv_ok_not_up,
+    ``Rcic.Machine.TMemo.cex_tyConv_no_not_up,
+    ``Rcic.Machine.TMemo.cex_certConvS_ok_not_up,
+    ``Rcic.Machine.TMemo.cex_certConvS_no_not_up,
+    ``Rcic.Machine.TMemo.cex_sound_entry_wrong_elsewhere
+  ]
+  -- END DEVIN KMEMO TYPED SEALED ROOTS
   -- END LAND-UNION
   -- END LAND-UNION
   -- END LAND-UNION
