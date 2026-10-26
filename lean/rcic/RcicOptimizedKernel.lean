@@ -887,10 +887,15 @@ def optStepRaw {E : ResolvedEnv} (qmap : QIndexMap E) (s : RawState) : StepOutco
   | _ + 1 =>
     match s.task with
     | .lookupDeclaration r ls =>
-        match inferOptCert qmap s.ambient.univs s.budget
-            s.ambient.ctx (.const r ls) with
-        | .ok ⟨T, _⟩ => .result (.accepted (.inferredType T))
-        | .no msg => .result (.refused msg)
+        -- Mirror `kernelStepRaw`: a nonempty list is refused before
+        -- resolution; `infer` is the arm that admits `param i`.
+        if ls = [] then
+          match inferOptCert qmap s.ambient.univs s.budget
+              s.ambient.ctx (.const r ls) with
+          | .ok ⟨T, _⟩ => .result (.accepted (.inferredType T))
+          | .no msg => .result (.refused msg)
+        else
+          .result (.refused ImportLevel.constLevelResidue)
     | .whnfAt A e =>
         match whnfOptCert qmap s.ambient.univs s.budget
             s.ambient.ctx e with

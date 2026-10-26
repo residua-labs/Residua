@@ -1120,6 +1120,7 @@ theorem RM025_lookupDeclaration_iff_eventual (amb : Ambient) (r : Nat)
     refine ⟨1, 1, ?_⟩
     apply runRawR_pos_eq_of_result _ (Nat.le_refl 1)
     simp only [kernelStepRaw, hok]
+    exact if_pos (by trivial)
 
 /-- Two-way eventuality characterization for `.syntaxEqual` (confirmed). -/
 theorem RM025_syntaxEqual_iff_eventual (amb : Ambient) (a b : Expr Nat) :

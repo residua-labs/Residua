@@ -11,6 +11,9 @@ import rcic.RcicF3BoundDefsSeal
 -- BEGIN FABLE F3D BOUND DEFINITIONS IMPORT (closure_claim = 0)
 import rcic.RcicF3DBoundDefsSeal
 -- END FABLE F3D BOUND DEFINITIONS IMPORT
+-- BEGIN FABLE-FAMAPP CLASS-B FAMILY-ROW IMPORT (closure_claim = 0)
+import rcic.RcicFamAppTwinSeal
+-- END FABLE-FAMAPP CLASS-B FAMILY-ROW IMPORT
 -- BEGIN CC-RISKEXPLORER TIER IMPORT (closure_claim = 0)
 import rcic.RcicRiskTierSeal
 -- END CC-RISKEXPLORER TIER IMPORT

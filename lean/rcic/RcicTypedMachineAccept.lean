@@ -114,31 +114,40 @@ def RM013T_lookupDeclaration_hasTy (s : RawState) (r : Nat)
       simp only [kernelStepRaw, htask, hb] at hacc
       exact nomatch hacc
   | succ b =>
-      simp only [kernelStepRaw, htask, hb, inferCert] at hacc
+      -- Nonempty `ls` is refused before `inferCert` (kernelStepRaw's own
+      -- guard). The `ls = []` arm is the arity-0 path; the inner dite on the
+      -- same condition contradicts `hlsOuter`, not `nomatch` — the admit
+      -- branch can still return `.ok`.
+      simp only [kernelStepRaw, htask, hb] at hacc
       split at hacc
-      · next T' _hty heq =>
-          have hT : T' = T := by
-            simp only [StepOutcome.result.injEq, RunResult.accepted.injEq,
-              AcceptedPayload.inferredType.injEq] at hacc
-            exact hacc
-          split at heq
-          · next hls =>
+      · next hlsOuter =>
+          simp only [inferCert] at hacc
+          split at hacc
+          · next T' _hty heq =>
+              have hT : T' = T := by
+                simp only [StepOutcome.result.injEq, RunResult.accepted.injEq,
+                  AcceptedPayload.inferredType.injEq] at hacc
+                exact hacc
               split at heq
-              · next m hm =>
+              · next hls =>
                   split at heq
-                  · next h0 =>
-                      simp only [Cert.ok.injEq] at heq
-                      have hTm : instantiateLevels ls m.mtype = T' := by
-                        cases heq; rfl
-                      have hlen : ls.length = m.arity := by
-                        subst hls; simp only [List.length_nil]; exact h0
-                      have hwf : levelsBounded s.ambient.univs ls = true := by
-                        subst hls; rfl
-                      exact (hTm.trans hT) ▸
-                        HasTyT.const s.ambient.ctx r ls m hm hlen hwf
+                  · next m hm =>
+                      split at heq
+                      · next h0 =>
+                          simp only [Cert.ok.injEq] at heq
+                          have hTm : instantiateLevels ls m.mtype = T' := by
+                            cases heq; rfl
+                          have hlen : ls.length = m.arity := by
+                            subst hls; simp only [List.length_nil]; exact h0
+                          have hwf : levelsBounded s.ambient.univs ls = true := by
+                            subst hls; rfl
+                          exact (hTm.trans hT) ▸
+                            HasTyT.const s.ambient.ctx r ls m hm hlen hwf
+                      · nomatch heq
                   · nomatch heq
-              · nomatch heq
-          · nomatch heq
+              · next hnot =>
+                  exact absurd hlsOuter hnot
+          · nomatch hacc
       · nomatch hacc
 
 /-! ## typed-machine rows — infer / check (R-3 clauses 2-3: the

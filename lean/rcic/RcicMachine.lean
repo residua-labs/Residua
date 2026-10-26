@@ -13,6 +13,7 @@ import rcic.RcicDeclarative
 import rcic.RcicDTMeta
 import rcic.RcicLevelDec
 import rcic.RcicParRedIota
+import rcic.RcicImportLevel
 
 namespace Rcic.Machine
 open Rcic.Declarative
@@ -344,9 +345,20 @@ def inferCert (E : ResolvedEnv) (n : Nat) :
               if h0 : (0 : Nat) = m.arity then
                 .ok ⟨instantiateLevels ls m.mtype,
                   .const Γ r ls m hm (hls ▸ h0 ▸ (rfl : ([] : List Level).length = 0)) (hwf_of_ls n ls hls)⟩
-              else .no "[rcic_infer_const_levels_out_of_slice]"
+              else .no ImportLevel.constLevelResidue
           | none => .no "[rcic_lookup_group_not_found]"
-        else .no "[rcic_infer_const_levels_out_of_slice]"
+        else if hadmit : ImportLevel.constLevelsAdmitted n ls = true then
+          -- `levelBounded` at `n > 0`, except exactly `.succ .zero`.
+          -- Arity 0 and `.succ .zero` stay the same residue, before lookup.
+          match hm : E.members r with
+          | some m =>
+              if hlen : ls.length = m.arity then
+                .ok ⟨instantiateLevels ls m.mtype,
+                  .const Γ r ls m hm hlen
+                    (ImportLevel.constLevels_hwf hadmit)⟩
+              else .no ImportLevel.constLevelResidue
+          | none => .no "[rcic_lookup_group_not_found]"
+        else .no ImportLevel.constLevelResidue
     | .pi A B =>
         match inferCert E n f Γ A with
         | .no msg => Cert.no msg
@@ -468,10 +480,15 @@ def kernelStepRaw (s : RawState) : StepOutcome :=
         | some A => .result (.accepted (.inferredType A))
         | none => .result (.refused "[rcic_pi_check_bvar_unbound]")
     | .lookupDeclaration r ls =>
-        match inferCert s.ambient.env s.ambient.univs s.budget
-            s.ambient.ctx (.const r ls) with
-        | .ok ⟨T, _⟩ => .result (.accepted (.inferredType T))
-        | .no msg => .result (.refused msg)
+        -- RM013: a nonempty list is still refused before resolution.
+        -- `infer` is the arm that admits `param i` with `i < univs`.
+        if ls = [] then
+          match inferCert s.ambient.env s.ambient.univs s.budget
+              s.ambient.ctx (.const r ls) with
+          | .ok ⟨T, _⟩ => .result (.accepted (.inferredType T))
+          | .no msg => .result (.refused msg)
+        else
+          .result (.refused ImportLevel.constLevelResidue)
     | .whnfAt A e =>
         match whnfCert s.ambient.env s.ambient.univs s.budget
             s.ambient.ctx e with
@@ -793,26 +810,36 @@ def RM013_lookupDeclaration_resolved (s : RawState) (r : Nat)
       simp only [kernelStepRaw, htask, hb] at hacc
       exact nomatch hacc
   | succ b =>
-      simp only [kernelStepRaw, htask, hb, inferCert] at hacc
+      -- Nonempty `ls` is refused before `inferCert`. The remaining
+      -- `ls = []` branch is the arity-0 arm; `hlsOuter` reduces the
+      -- inner `if hls : ls = []` before the member split.
+      simp only [kernelStepRaw, htask, hb] at hacc
       split at hacc
-      · next T' hty heq =>
-          have hT : T' = T := by
-            simp only [StepOutcome.result.injEq, RunResult.accepted.injEq,
-              AcceptedPayload.inferredType.injEq] at hacc
-            exact hacc
-          split at heq
-          · next hls =>
+      · next hlsOuter =>
+          simp only [inferCert] at hacc
+          split at hacc
+          · next T' hty heq =>
+              have hT : T' = T := by
+                simp only [StepOutcome.result.injEq, RunResult.accepted.injEq,
+                  AcceptedPayload.inferredType.injEq] at hacc
+                exact hacc
+              -- `hlsOuter` does not reduce this `dite`; split it.
+              -- The nonempty arm contradicts `hlsOuter`.
               split at heq
-              · next m hm =>
+              · next hls =>
                   split at heq
-                  · next h0 =>
-                      simp only [Cert.ok.injEq] at heq
-                      have hTm : instantiateLevels ls m.mtype = T' := by
-                        cases heq; rfl
-                      exact ⟨m, hls, hm, h0, (hTm.trans hT).symm⟩
+                  · next m hm =>
+                      split at heq
+                      · next h0 =>
+                          simp only [Cert.ok.injEq] at heq
+                          have hTm : instantiateLevels ls m.mtype = T' := by
+                            cases heq; rfl
+                          exact ⟨m, hls, hm, h0, (hTm.trans hT).symm⟩
+                      · nomatch heq
                   · nomatch heq
-              · nomatch heq
-          · nomatch heq
+              · next hnot =>
+                  exact absurd hlsOuter hnot
+          · nomatch hacc
       · nomatch hacc
 
 def RM013_lookupDeclaration_hasTy (s : RawState) (r : Nat)
