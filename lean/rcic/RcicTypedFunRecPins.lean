@@ -307,6 +307,7 @@ def wGroupAdmitted : RecursorEliminationAdmitted wSupEnv 6 wRecMember where
   selected := .uniformType uniformType_succ_zero
   recursorArity := rfl
   recursorType := rfl
+  recursorMclass := rfl
 
 /-! ## (2b) the derived minor and the ι schema -/
 

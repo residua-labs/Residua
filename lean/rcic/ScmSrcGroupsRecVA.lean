@@ -190,6 +190,7 @@ def aRecValueAt : RecursorEliminationAdmitted (envPre 143) 143 recValueAt where
   selected := .multipleProp (fun _ => rfl) (by decide)
   recursorArity := rfl
   recursorType := rfl
+  recursorMclass := rfl
 
 
 /-! ##### ValueAt clause literals

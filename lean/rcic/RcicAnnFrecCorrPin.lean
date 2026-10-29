@@ -234,6 +234,7 @@ def pfGroupAdm : RecursorEliminationAdmitted pfSupEnvT 12 pfRecT where
   selected := .uniformType uniformType_succ_zero
   recursorArity := rfl
   recursorType := rfl
+  recursorMclass := rfl
 
 /-- the group's census: `node` at `11` is the only `T`-constructor below `12`. -/
 theorem pfCensus : CtorCensus pfSupEnvT 10 12 := by

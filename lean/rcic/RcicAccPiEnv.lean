@@ -218,6 +218,7 @@ def accPGroupAdm : RecursorEliminationAdmitted accPSupEnvT 12 paRecT where
     (fun i => match i with | ⟨0, _⟩ => accPIntroSafe)
   recursorArity := rfl
   recursorType := rfl
+  recursorMclass := rfl
 
 theorem accPCensus : CtorCensus accPSupEnvT 10 12 := by
   refine ⟨by decide, fun c => ?_⟩

@@ -74,6 +74,7 @@ def svSumGroupAdm : RecursorEliminationAdmitted svSumPrefix 34 svSumRec where
   selected := .uniformType uniformType_succ_zero
   recursorArity := rfl
   recursorType := rfl
+  recursorMclass := rfl
 
 theorem svSumMinorMatch : MinorPremisesMatch svSumGroupAdm
   | ⟨0, _⟩ => ⟨[.nonrecursive], 8, rfl, rfl⟩

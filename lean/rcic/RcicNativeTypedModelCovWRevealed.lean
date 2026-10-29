@@ -246,6 +246,7 @@ private def covWRevPolicy : RecursorEliminationAdmitted covWRevCtorEnv 7 covWRev
       exact covWRevCtor_safe _ rfl rfl)
   recursorArity := rfl
   recursorType := rfl
+  recursorMclass := rfl
 
 private def covWRevDescriptor : IotaDescriptorClause covWRevCtorEnv covWRevPolicy where
   signatureOnly := rfl

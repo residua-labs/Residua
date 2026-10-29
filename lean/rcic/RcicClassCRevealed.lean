@@ -202,6 +202,7 @@ def riPolicy : RecursorEliminationAdmitted riCtorEnv 2 riRec where
       exact riCtor_safe _ rfl)
   recursorArity := rfl
   recursorType := rfl
+  recursorMclass := rfl
 
 def riDescriptor : IotaDescriptorClause riCtorEnv riPolicy where
   signatureOnly := rfl

@@ -69,4 +69,23 @@ theorem kernelSoundnessTier_of_consistentEmpty (h : PSet.RcicConsistentEmpty) :
     KernelSoundnessTier :=
   ⟨tierF1, tierF3_of_consistentEmpty h⟩
 
+/-- F3 at height 4, unconditional on `FamAppConvInjAll`: the same body as
+`TierF3` minus the family-application injectivity antecedent, which no landed
+or assembly proof consumes (`tierF3_of_partition` binds it as `_hF`).
+Additive — the landed `TierF3`/`KernelSoundnessTier` are unchanged. -/
+def TierF3Uncond : Prop :=
+  PSet.Premises4 → ∀ (K : Nat → Nat) (E : ResolvedEnv) (hW : EnvWfT E),
+    PSet.BoundG K hW → PSet.BoundDG K hW → PSet.AxiomFreeEnv' E → E.members 0 = some falseFamMember →
+    E.members 1 = some falseRecMemberU →
+    ∀ (n : Nat) (e : Expr Nat) (D : HasTyT E n [] e (.const 0 [])), PSet.LevelsBelow 4 K D → False
+
+/-- The Lean machine is sound and the height-4 theory is consistent,
+relative to `Premises4` only — no `FamAppConvInjAll`. -/
+def KernelSoundnessTierUncond : Prop := TierF1 ∧ TierF3Uncond
+
+/-- The conditional tier follows from the unconditional one: the dropped
+antecedent is dead code in every proof of the body. -/
+theorem tierF3_of_tierF3Uncond (h : TierF3Uncond) : TierF3 :=
+  fun _ => h
+
 end Rcic.Apex

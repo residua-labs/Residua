@@ -221,6 +221,7 @@ def natGroupAdmitted : RecursorEliminationAdmitted natEnvPrefix 3 natRecMemberU 
   selected := .uniformType uniformType_succ_zero
   recursorArity := rfl
   recursorType := rfl
+  recursorMclass := rfl
 
 theorem natMinorMatch : MinorPremisesMatch natGroupAdmitted := by
   intro i

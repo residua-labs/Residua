@@ -207,6 +207,7 @@ def drGroupAdmitted : RecursorEliminationAdmitted drMkEnv 3 drRecMember where
   selected := .uniformType uniformType_succ_zero
   recursorArity := rfl
   recursorType := rfl
+  recursorMclass := rfl
 
 theorem drCensus : CtorCensus drMkEnv 1 3 := by
   refine ⟨by decide, fun c => ?_⟩

@@ -365,6 +365,7 @@ def heqGroupAdm : RecursorEliminationAdmitted heqPrefixT 65 heqRecT where
       exact fun j => j.elim0)
   recursorArity := rfl
   recursorType := rfl
+  recursorMclass := rfl
 
 theorem heqCensus : CtorCensus heqPrefixT 63 65 := by
   refine ⟨by decide, fun c => ?_⟩

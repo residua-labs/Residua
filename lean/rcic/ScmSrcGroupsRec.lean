@@ -308,6 +308,7 @@ def aRecN : RecursorEliminationAdmitted (envPre 3) 3 recN where
   selected := .uniformType uniformType_succ_zero
   recursorArity := rfl
   recursorType := rfl
+  recursorMclass := rfl
 
 /-- `recN` is admitted at slot 3. -/
 def admRecN : IndGroupAdmitted (envPre 3) 3 recN :=
@@ -413,6 +414,7 @@ def aRecBytes : RecursorEliminationAdmitted (envPre 7) 7 recBytes where
   selected := .uniformType uniformType_succ_zero
   recursorArity := rfl
   recursorType := rfl
+  recursorMclass := rfl
 
 def admRecBytes : IndGroupAdmitted (envPre 7) 7 recBytes :=
   .recursor aRecBytes rfl
@@ -494,6 +496,7 @@ def aRecRefT : RecursorEliminationAdmitted (envPre 10) 10 recRefT where
   selected := .uniformType uniformType_succ_zero
   recursorArity := rfl
   recursorType := rfl
+  recursorMclass := rfl
 
 def admRecRefT : IndGroupAdmitted (envPre 10) 10 recRefT :=
   .recursor aRecRefT rfl
@@ -584,6 +587,7 @@ def aRecI : RecursorEliminationAdmitted (envPre 33) 33 recI where
   selected := .uniformType uniformType_succ_zero
   recursorArity := rfl
   recursorType := rfl
+  recursorMclass := rfl
 
 def admRecI : IndGroupAdmitted (envPre 33) 33 recI :=
   .recursor aRecI rfl
@@ -682,6 +686,7 @@ def aRecBL : RecursorEliminationAdmitted (envPre 37) 37 recBL where
   selected := .uniformType uniformType_succ_zero
   recursorArity := rfl
   recursorType := rfl
+  recursorMclass := rfl
 
 def admRecBL : IndGroupAdmitted (envPre 37) 37 recBL :=
   .recursor aRecBL rfl
@@ -780,6 +785,7 @@ def aRecFT : RecursorEliminationAdmitted (envPre 41) 41 recFT where
   selected := .uniformType uniformType_succ_zero
   recursorArity := rfl
   recursorType := rfl
+  recursorMclass := rfl
 
 def admRecFT : IndGroupAdmitted (envPre 41) 41 recFT :=
   .recursor aRecFT rfl
@@ -861,6 +867,7 @@ def aRecBCT : RecursorEliminationAdmitted (envPre 108) 108 recBCT where
   selected := .uniformType uniformType_succ_zero
   recursorArity := rfl
   recursorType := rfl
+  recursorMclass := rfl
 
 def admRecBCT : IndGroupAdmitted (envPre 108) 108 recBCT :=
   .recursor aRecBCT rfl
@@ -1005,6 +1012,7 @@ def aRecDA : RecursorEliminationAdmitted (envPre 29) 29 recDA where
   selected := .multipleProp (fun _ => rfl) (by decide)
   recursorArity := rfl
   recursorType := rfl
+  recursorMclass := rfl
 
 def admRecDA05 : RecursorAdmitted05 (envPre 29) 29 recDA where
   a := aRecDA
@@ -1119,6 +1127,7 @@ def aRecLt : RecursorEliminationAdmitted (envPre 45) 45 recLt where
   selected := .multipleProp (fun _ => rfl) (by decide)
   recursorArity := rfl
   recursorType := rfl
+  recursorMclass := rfl
 
 def admRecLt05 : RecursorAdmitted05 (envPre 45) 45 recLt where
   a := aRecLt
@@ -1238,6 +1247,7 @@ def aRecBC : RecursorEliminationAdmitted (envPre 49) 49 recBC where
   selected := .multipleProp (fun _ => rfl) (by decide)
   recursorArity := rfl
   recursorType := rfl
+  recursorMclass := rfl
 
 def admRecBC05 : RecursorAdmitted05 (envPre 49) 49 recBC where
   a := aRecBC
@@ -1334,6 +1344,7 @@ def aRecDM10 : RecursorEliminationAdmitted (envPre 53) 53 recDM10 where
   selected := .multipleProp (fun _ => rfl) (by decide)
   recursorArity := rfl
   recursorType := rfl
+  recursorMclass := rfl
 
 def admRecDM1005 : RecursorAdmitted05 (envPre 53) 53 recDM10 where
   a := aRecDM10
@@ -1430,6 +1441,7 @@ def aRecND : RecursorEliminationAdmitted (envPre 57) 57 recND where
   selected := .multipleProp (fun _ => rfl) (by decide)
   recursorArity := rfl
   recursorType := rfl
+  recursorMclass := rfl
 
 def admRecND05 : RecursorAdmitted05 (envPre 57) 57 recND where
   a := aRecND
@@ -1513,6 +1525,7 @@ def aRecNEA : RecursorEliminationAdmitted (envPre 60) 60 recNEA where
           (fun hM => absurd hM (by decide))))
   recursorArity := rfl
   recursorType := rfl
+  recursorMclass := rfl
 
 def admRecNEA05 : RecursorAdmitted05 (envPre 60) 60 recNEA where
   a := aRecNEA
@@ -1603,6 +1616,7 @@ def aRecIEA : RecursorEliminationAdmitted (envPre 64) 64 recIEA where
   selected := .multipleProp (fun _ => rfl) (by decide)
   recursorArity := rfl
   recursorType := rfl
+  recursorMclass := rfl
 
 def admRecIEA05 : RecursorAdmitted05 (envPre 64) 64 recIEA where
   a := aRecIEA
@@ -1699,6 +1713,7 @@ def aRecSL : RecursorEliminationAdmitted (envPre 68) 68 recSL where
   selected := .multipleProp (fun _ => rfl) (by decide)
   recursorArity := rfl
   recursorType := rfl
+  recursorMclass := rfl
 
 def admRecSL05 : RecursorAdmitted05 (envPre 68) 68 recSL where
   a := aRecSL
@@ -1795,6 +1810,7 @@ def aRecBLL : RecursorEliminationAdmitted (envPre 72) 72 recBLL where
   selected := .multipleProp (fun _ => rfl) (by decide)
   recursorArity := rfl
   recursorType := rfl
+  recursorMclass := rfl
 
 def admRecBLL05 : RecursorAdmitted05 (envPre 72) 72 recBLL where
   a := aRecBLL
@@ -1891,6 +1907,7 @@ def aRecFTL : RecursorEliminationAdmitted (envPre 76) 76 recFTL where
   selected := .multipleProp (fun _ => rfl) (by decide)
   recursorArity := rfl
   recursorType := rfl
+  recursorMclass := rfl
 
 def admRecFTL05 : RecursorAdmitted05 (envPre 76) 76 recFTL where
   a := aRecFTL
@@ -1987,6 +2004,7 @@ def aRecBLC : RecursorEliminationAdmitted (envPre 80) 80 recBLC where
   selected := .multipleProp (fun _ => rfl) (by decide)
   recursorArity := rfl
   recursorType := rfl
+  recursorMclass := rfl
 
 def admRecBLC05 : RecursorAdmitted05 (envPre 80) 80 recBLC where
   a := aRecBLC
@@ -2072,6 +2090,7 @@ def aRecSEA : RecursorEliminationAdmitted (envPre 83) 83 recSEA where
           (fun hM => absurd hM (by decide))))
   recursorArity := rfl
   recursorType := rfl
+  recursorMclass := rfl
 
 def admRecSEA05 : RecursorAdmitted05 (envPre 83) 83 recSEA where
   a := aRecSEA
@@ -2162,6 +2181,7 @@ def aRecFTE : RecursorEliminationAdmitted (envPre 87) 87 recFTE where
   selected := .multipleProp (fun _ => rfl) (by decide)
   recursorArity := rfl
   recursorType := rfl
+  recursorMclass := rfl
 
 def admRecFTE05 : RecursorAdmitted05 (envPre 87) 87 recFTE where
   a := aRecFTE
@@ -2258,6 +2278,7 @@ def aRecNthB : RecursorEliminationAdmitted (envPre 91) 91 recNthB where
   selected := .multipleProp (fun _ => rfl) (by decide)
   recursorArity := rfl
   recursorType := rfl
+  recursorMclass := rfl
 
 def admRecNthB05 : RecursorAdmitted05 (envPre 91) 91 recNthB where
   a := aRecNthB
@@ -2354,6 +2375,7 @@ def aRecNthF : RecursorEliminationAdmitted (envPre 95) 95 recNthF where
   selected := .multipleProp (fun _ => rfl) (by decide)
   recursorArity := rfl
   recursorType := rfl
+  recursorMclass := rfl
 
 def admRecNthF05 : RecursorAdmitted05 (envPre 95) 95 recNthF where
   a := aRecNthF
@@ -2450,6 +2472,7 @@ def aRecNEL : RecursorEliminationAdmitted (envPre 128) 128 recNEL where
   selected := .multipleProp (fun _ => rfl) (by decide)
   recursorArity := rfl
   recursorType := rfl
+  recursorMclass := rfl
 
 def admRecNEL05 : RecursorAdmitted05 (envPre 128) 128 recNEL where
   a := aRecNEL
@@ -2546,6 +2569,7 @@ def aRecNTB : RecursorEliminationAdmitted (envPre 132) 132 recNTB where
   selected := .multipleProp (fun _ => rfl) (by decide)
   recursorArity := rfl
   recursorType := rfl
+  recursorMclass := rfl
 
 def admRecNTB05 : RecursorAdmitted05 (envPre 132) 132 recNTB where
   a := aRecNTB
@@ -2746,6 +2770,7 @@ def aRecCCT : RecursorEliminationAdmitted (envPre 105) 105 recCCT where
   selected := .multipleProp (fun _ => rfl) (by decide)
   recursorArity := rfl
   recursorType := rfl
+  recursorMclass := rfl
 
 set_option maxHeartbeats 12800000 in
 def admRecCCT05 : RecursorAdmitted05 (envPre 105) 105 recCCT where

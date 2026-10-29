@@ -89,6 +89,7 @@ def svI64GroupAdm : RecursorEliminationAdmitted svI64Prefix 11 svI64Rec where
   selected := .uniformType uniformType_succ_zero
   recursorArity := rfl
   recursorType := rfl
+  recursorMclass := rfl
 
 theorem svI64MinorMatch : MinorPremisesMatch svI64GroupAdm
   | ⟨0, _⟩ => ⟨[.nonrecursive], 8, rfl, rfl⟩

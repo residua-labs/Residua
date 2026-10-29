@@ -535,6 +535,7 @@ def toothAdmGarbage : RecursorEliminationAdmitted (envPre 3) 3 toothRecM where
   selected := dRec3.1.selected
   recursorArity := dRec3.1.recursorArity
   recursorType := rfl
+  recursorMclass := rfl
 
 /-- TOOTH (3a): `MinorDomainsTyped` is not derivable from admission. The record above
     inhabits every admission field with `.const 99` minors, and `.const 99` names no

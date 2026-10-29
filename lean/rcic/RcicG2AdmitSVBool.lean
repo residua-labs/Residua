@@ -67,6 +67,7 @@ def svBoolGroupAdm : RecursorEliminationAdmitted svBoolPrefix 15 svBoolRec where
   selected := .uniformType uniformType_succ_zero
   recursorArity := rfl
   recursorType := rfl
+  recursorMclass := rfl
 
 theorem svBoolMinorMatch : MinorPremisesMatch svBoolGroupAdm
   | ⟨0, _⟩ => ⟨[], 0, rfl, rfl⟩

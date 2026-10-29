@@ -347,6 +347,7 @@ def piGroupAdmitted : RecursorEliminationAdmitted piMkEnv 4 piRecMember where
   selected := .uniformType uniformType_succ_zero
   recursorArity := by decide
   recursorType := by decide
+  recursorMclass := rfl
 
 /-! ## (3) admission's own derived equation is ill-typed -/
 

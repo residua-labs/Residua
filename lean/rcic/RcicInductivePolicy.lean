@@ -233,6 +233,12 @@ structure RecursorEliminationAdmitted (E : ResolvedEnv) (r : Nat)
     (∀ i, (constructorViews i).AllFieldsSafe) policy
   recursorArity : m.arity = policyRecursorArity family.member.arity policy
   recursorType : m.mtype = policyRecursorType family minorTypes policy
+  /-- Admission integrity: the member an eliminator admission is built for is
+  classed `.recursorM`. Pins the tag–mclass agreement `WalkRec` checks per
+  group cons — an anomalous `.recursor` admission on a differently-classed
+  member is unrepresentable, so `WalkRec hmem` becomes derivable from `hmem`
+  alone. -/
+  recursorMclass : m.mclass = .recursorM
 
 namespace EliminationSelection
 

@@ -74,6 +74,7 @@ def svStrGroupAdm : RecursorEliminationAdmitted svStrPrefix 23 svStrRec where
   selected := .uniformType uniformType_succ_zero
   recursorArity := rfl
   recursorType := rfl
+  recursorMclass := rfl
 
 theorem svStrMinorMatch : MinorPremisesMatch svStrGroupAdm
   | ⟨0, _⟩ => ⟨[], 8, rfl, rfl⟩

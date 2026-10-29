@@ -141,6 +141,7 @@ def cGroupAdm : RecursorEliminationAdmitted cPrefix 3 cRec where
   selected := .multipleProp (fun _ => rfl) (by decide)
   recursorArity := rfl
   recursorType := rfl
+  recursorMclass := rfl
 
 theorem cPolicy_propOnly : cGroupAdm.policy = .propOnly := rfl
 

@@ -217,6 +217,7 @@ def orGroupAdm : RecursorEliminationAdmitted orPrefix 3 orRecMember where
   selected := .multipleProp falseSort_prop (by decide)
   recursorArity := rfl
   recursorType := rfl
+  recursorMclass := rfl
 
 theorem orMinorMatch : MinorPremisesMatch orGroupAdm
   | ⟨0, _⟩ => ⟨[.nonrecursive], 8, rfl, rfl⟩

@@ -255,6 +255,7 @@ def fgGroupAdmitted : RecursorEliminationAdmitted fgMkEnv 4 fgRecMember where
   selected := .uniformType uniformType_succ_zero
   recursorArity := rfl
   recursorType := rfl
+  recursorMclass := rfl
 
 theorem fgCensus : CtorCensus fgMkEnv 2 4 := by
   refine ⟨by decide, fun c => ?_⟩

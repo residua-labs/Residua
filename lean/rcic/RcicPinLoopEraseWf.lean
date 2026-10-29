@@ -225,6 +225,7 @@ def pinLoopGroupAdm : RecursorEliminationAdmitted pinLoopPrefixT 62 pinLoopRecT 
       exact fun _ => .inl (fun _ => rfl))
   recursorArity := rfl
   recursorType := rfl
+  recursorMclass := rfl
 
 theorem pinLoopCensus : CtorCensus pinLoopPrefixT 60 62 := by
   refine ⟨by decide, fun c => ?_⟩

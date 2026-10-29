@@ -336,6 +336,7 @@ def paGroupAdm : RecursorEliminationAdmitted paSupEnvT 12 paRecT where
   selected := .uniformType uniformType_succ_zero
   recursorArity := rfl
   recursorType := rfl
+  recursorMclass := rfl
 
 /-- the group's census: `intro` at `11` is the only `AccT`-constructor
     below `12`. -/

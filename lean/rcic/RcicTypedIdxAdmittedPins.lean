@@ -149,6 +149,7 @@ def badGroupAdmitted : RecursorEliminationAdmitted badMkEnv 3 badRecMember where
   selected := .uniformType uniformType_succ_zero
   recursorArity := rfl
   recursorType := rfl
+  recursorMclass := rfl
 
 /-- the stored minor IS the derived one: the descriptor is canonical except for
     the field's closure failure. -/

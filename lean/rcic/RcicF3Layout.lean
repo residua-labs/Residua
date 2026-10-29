@@ -244,6 +244,20 @@ theorem walkRec_of_walkClass {S : ResolvedEnv} (np : Nat) : {E E' : ResolvedEnv}
       | family _ _ _ _ _ => trivial
       | constructor _ _ _ _ _ _ _ => trivial
 
+/-- With the admission-integrity pin (`RecursorEliminationAdmitted.recursorMclass`),
+`WalkRec` is derivable from the membership derivation alone: every
+`.recursor`-tagged admission was constructed for a `.recursorM`-classed
+member, so the per-cons check reduces to the record field. -/
+theorem walkRec_of_group {S : ResolvedEnv} : {E E' : ResolvedEnv} →
+    {ms : List (Nat × CheckedMember)} → (hw : GroupMembersT S E ms E') → WalkRec hw
+  | _, _, _, .nil _ => trivial
+  | _, _, _, .cons _ _ _ _ _ _ _ _ _ _ _ _ hadm _ _ _ _ _ hrest => by
+      refine ⟨?_, walkRec_of_group hrest⟩
+      cases hadm with
+      | recursor a _ _ _ _ _ _ => exact a.recursorMclass
+      | family _ _ _ _ _ => trivial
+      | constructor _ _ _ _ _ _ _ => trivial
+
 /-- The constructor phase of a group's walk: the `i`-th constructor sits at
 `f + 1 + i`, and the recursor right after the last. -/
 theorem walk_layout {S Ebase : ResolvedEnv} {f rr : Nat} {rm : CheckedMember} (hlay : FamilyLayout Ebase)

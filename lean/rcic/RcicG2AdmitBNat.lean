@@ -150,6 +150,7 @@ def bnGroupAdm : RecursorEliminationAdmitted bnPrefix 8 bnRecMember where
   selected := .uniformType uniformType_succ_zero
   recursorArity := rfl
   recursorType := rfl
+  recursorMclass := rfl
 
 theorem bnMinorMatch : MinorPremisesMatch bnGroupAdm
   | ⟨0, _⟩ => ⟨[], 8, rfl, rfl⟩

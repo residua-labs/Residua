@@ -74,6 +74,7 @@ def svBytesGroupAdm : RecursorEliminationAdmitted svBytesPrefix 27 svBytesRec wh
   selected := .uniformType uniformType_succ_zero
   recursorArity := rfl
   recursorType := rfl
+  recursorMclass := rfl
 
 theorem svBytesMinorMatch : MinorPremisesMatch svBytesGroupAdm
   | ⟨0, _⟩ => ⟨[], 8, rfl, rfl⟩

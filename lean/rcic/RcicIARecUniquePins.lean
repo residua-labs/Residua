@@ -48,6 +48,7 @@ def aRecNELSwapped : RecursorEliminationAdmitted (envPre 128) 128 recNELSwapped 
   selected := aRecNEL.selected
   recursorArity := aRecNEL.recursorArity
   recursorType := rfl
+  recursorMclass := rfl
 
 theorem recNEL_ne_swapped : recNEL.mtype ≠ recNELSwapped.mtype := by decide
 
@@ -125,6 +126,7 @@ def emptyAdm (v : PolicyFamilyView emptyFamEnv) (hv : v.ref = 0) (hl : v.resultL
   selected := .uniformType (hl ▸ uniformType_succ_zero)
   recursorArity := by rw [hm]; rfl
   recursorType := rfl
+  recursorMclass := rfl
 
 theorem emptyCensus : CtorCensus emptyFamEnv 0 1 := by
   refine ⟨Nat.le_refl _, fun c => ⟨?_, fun h => absurd h (by omega)⟩⟩

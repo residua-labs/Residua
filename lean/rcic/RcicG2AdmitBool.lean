@@ -130,6 +130,7 @@ def boolGroupAdm : RecursorEliminationAdmitted boolPrefix 3 boolRecMember where
   selected := .uniformType uniformType_succ_zero
   recursorArity := rfl
   recursorType := rfl
+  recursorMclass := rfl
 
 theorem boolMinorMatch : MinorPremisesMatch boolGroupAdm
   | ⟨0, _⟩ => ⟨[], 0, rfl, rfl⟩

@@ -60,6 +60,7 @@ def svPairGroupAdm : RecursorEliminationAdmitted svPairPrefix 30 svPairRec where
   selected := .uniformType uniformType_succ_zero
   recursorArity := rfl
   recursorType := rfl
+  recursorMclass := rfl
 
 theorem svPairMinorMatch : MinorPremisesMatch svPairGroupAdm
   | ⟨0, _⟩ => ⟨[.nonrecursive, .nonrecursive], 8, rfl, rfl⟩

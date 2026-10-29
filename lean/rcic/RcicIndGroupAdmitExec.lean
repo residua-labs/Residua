@@ -54,7 +54,7 @@ theorem foldApps_not_pi (f : Expr Nat) (xs : List (Expr Nat))
     | letE _ _ _ => cases h
     | lit _ => cases h)
 
-/-! ## Lit-free structural inference (sort / bvar / const / app) -/
+/-! ## Bounded structural inference (sort / bvar / const / app / lit) -/
 
 def levelWfB (n : Nat) (l : Level) : Bool :=
   match eval (fun _ => none) l with
@@ -100,11 +100,58 @@ structure SortHit (E : ResolvedEnv) (n : Nat) (Γ : LCtx) (e : Expr Nat) where
   bd : levelBounded n l = true
   ty : HasTy E n Γ e (.sort l)
 
+mutual
+def exprInfer (fuel : Nat) (E : ResolvedEnv) (n : Nat) (Γ : LCtx) (e : Expr Nat) :
+    Option (Σ T, HasTy E n Γ e T) :=
+  match fuel with
+  | 0 => none
+  | fuel + 1 =>
+    match e with
+    | .sort l => some ⟨.sort (.succ l), HasTy.sort Γ l⟩
+    | .bvar i =>
+        match h : lookupType Γ i with
+        | some A => some ⟨A, HasTy.bvar Γ i A h⟩
+        | none => none
+    | .const r ls =>
+        match hm : E.members r with
+        | some m =>
+            if har : ls.length = m.arity then
+              if hw : ls.all (levelWfB n) = true then
+                some ⟨instantiateLevels ls m.mtype,
+                  HasTy.const Γ r ls m hm har (levelsWf_of hw)⟩
+              else none
+            else none
+        | none => none
+    | .lit k =>
+        if k ≤ fuel then
+          match exprInfer fuel E n Γ (natExpand k) with
+          | some ⟨T, h⟩ => some ⟨T, HasTy.lit Γ k T h⟩
+          | none => none
+        else none
+    | .app f a =>
+        match exprInfer fuel E n Γ f with
+        | some ⟨.pi A B, hf⟩ =>
+            match exprCheck fuel E n Γ a A with
+            | some ha => some ⟨instantiate0 a B, HasTy.app Γ f a A B hf ha⟩
+            | none => none
+        | _ => none
+    | _ => none
+
+def exprCheck (fuel : Nat) (E : ResolvedEnv) (n : Nat) (Γ : LCtx) (e T : Expr Nat) :
+    Option (HasTy E n Γ e T) :=
+  match fuel with
+  | 0 => none
+  | fuel + 1 =>
+    match exprInfer fuel E n Γ e with
+    | some ⟨T', h⟩ => if he : T' = T then some (he ▸ h) else none
+    | none => none
+end
+
 def inferSort (fuel : Nat) (E : ResolvedEnv) (n : Nat) (Γ : LCtx) (e : Expr Nat) :
     Option (SortHit E n Γ e) :=
   match fuel with
   | 0 => none
-  | _ + 1 =>
+  | fuel + 1 =>
     match e with
     | .sort l =>
         let lvl := Level.succ l
@@ -132,6 +179,13 @@ def inferSort (fuel : Nat) (E : ResolvedEnv) (n : Nat) (Γ : LCtx) (e : Expr Nat
                 else none
             | _ => none
         | none => none
+    | .app f a =>
+        match exprInfer (fuel + 1) E n Γ (.app f a) with
+        | some ⟨.sort l, h⟩ =>
+            if hb : levelBounded n l = true then
+              some ⟨l, hb, h⟩
+            else none
+        | _ => none
     | _ => none
 
 def sortLevel {E : ResolvedEnv} {n : Nat} {Γ : LCtx} {e : Expr Nat}
@@ -176,47 +230,6 @@ def telOf (fuel : Nat) (E : ResolvedEnv) (n : Nat) (doms : List (Expr Nat)) :
             exact s.ty
     }
   else none
-
-mutual
-def exprInfer (fuel : Nat) (E : ResolvedEnv) (n : Nat) (Γ : LCtx) (e : Expr Nat) :
-    Option (Σ T, HasTy E n Γ e T) :=
-  match fuel with
-  | 0 => none
-  | fuel + 1 =>
-    match e with
-    | .sort l => some ⟨.sort (.succ l), HasTy.sort Γ l⟩
-    | .bvar i =>
-        match h : lookupType Γ i with
-        | some A => some ⟨A, HasTy.bvar Γ i A h⟩
-        | none => none
-    | .const r ls =>
-        match hm : E.members r with
-        | some m =>
-            if har : ls.length = m.arity then
-              if hw : ls.all (levelWfB n) = true then
-                some ⟨instantiateLevels ls m.mtype,
-                  HasTy.const Γ r ls m hm har (levelsWf_of hw)⟩
-              else none
-            else none
-        | none => none
-    | .app f a =>
-        match exprInfer fuel E n Γ f with
-        | some ⟨.pi A B, hf⟩ =>
-            match exprCheck fuel E n Γ a A with
-            | some ha => some ⟨instantiate0 a B, HasTy.app Γ f a A B hf ha⟩
-            | none => none
-        | _ => none
-    | _ => none
-
-def exprCheck (fuel : Nat) (E : ResolvedEnv) (n : Nat) (Γ : LCtx) (e T : Expr Nat) :
-    Option (HasTy E n Γ e T) :=
-  match fuel with
-  | 0 => none
-  | fuel + 1 =>
-    match exprInfer fuel E n Γ e with
-    | some ⟨T', h⟩ => if he : T' = T then some (he ▸ h) else none
-    | none => none
-end
 
 /-! ## Views -/
 
@@ -1150,6 +1163,7 @@ def buildRecAdmitted? (fuel : Nat) (E : ResolvedEnv)
                                     | none => none
                                     | some hit =>
                                         if hfams : fam.ref = f then
+                                          if hmc : rm.mclass = .recursorM then
                                           some {
                                             family := fam
                                             constructors := ms
@@ -1176,7 +1190,9 @@ def buildRecAdmitted? (fuel : Nat) (E : ResolvedEnv)
                                             selected := hit.sel
                                             recursorArity := har
                                             recursorType := hty
+                                            recursorMclass := hmc
                                           }
+                                          else none
                                         else none
                                   else none
                                 else none
@@ -1257,6 +1273,78 @@ def iotaClause? {E : ResolvedEnv} {r : Nat} {m : CheckedMember}
     }
   else none
 
+/-- Finish an actual rebuilt recursor admission against the complete environment
+table. The local-group guard remains in `buildRecAdmitted?`; its caller may use
+a different, complete table here to pay the census over `E`. -/
+def finishRecAdmitted? (fuel : Nat) (E : ResolvedEnv)
+    (censusTbl : List (Nat × CheckedMember))
+    (hnd : (censusTbl.map (·.1)).Nodup) (hE : E = foldEnv censusTbl)
+    (rr : Nat) (rm : CheckedMember) (a : RecursorEliminationAdmitted E rr rm) :
+    Option (IndGroupAdmitted E rr rm) :=
+  match hAt : shapesAt fuel a.constructorViews with
+  | none => none
+  | some sh =>
+      if hshB : (List.range a.constructors.length).all (fun j =>
+          if hj : j < a.constructors.length then
+            (fieldShapesFuel E fuel a.family.ref a.family.member.arity
+              a.family.parameters.length a.family.indices.length
+              a.family.parameters.length (a.constructorViews ⟨j, hj⟩).fields).isSome
+          else false) = true then
+        have hsh : ∀ i, shapesWitness fuel a.constructorViews sh i := by
+          intro i
+          have hb := List.all_eq_true.mp hshB i.val (List.mem_range.mpr i.isLt)
+          simp only [dif_pos i.isLt] at hb
+          cases hs : fieldShapesFuel E fuel a.family.ref a.family.member.arity
+              a.family.parameters.length a.family.indices.length
+              a.family.parameters.length (a.constructorViews i).fields with
+          | none =>
+              rw [hs] at hb
+              simp at hb
+          | some s =>
+              unfold shapesWitness
+              exact (shapesAt_apply hAt i hs).symm ▸ hs
+        if hmm : minorsMatchB a fuel sh = true then
+          if hbody : rm.body = none then
+            match iotaClause? a fuel sh hsh hbody with
+            | none => none
+            | some h14 =>
+                match hfresh : E.members rr with
+                | some _ => none
+                | none =>
+                  let fr := a.family.ref
+                  if hcens : ctorCensusB censusTbl fr rr = true then
+                    if hfu : (List.range a.constructors.length).all (fun j =>
+                        if hj : j < a.constructors.length then
+                          fieldUnivB (a.constructorViews ⟨j, hj⟩)
+                        else false) = true then
+                      if hfp : (List.range a.constructors.length).all (fun j =>
+                          if hj : j < a.constructors.length then
+                            ctorFieldsPermittedB (a.constructorViews ⟨j, hj⟩) fuel
+                          else false) = true then
+                        have h04 : CtorCensus E a.family.ref rr := by
+                          change CtorCensus E fr rr
+                          rw [hE]
+                          exact ctorCensusB_sound hnd hcens
+                        some (.recursor a hfresh h04
+                          (by
+                            intro i
+                            have hb := List.all_eq_true.mp hfu i.val (List.mem_range.mpr i.isLt)
+                            rw [dif_pos i.isLt] at hb
+                            exact fieldUnivOf _ hb)
+                          (by
+                            intro i
+                            have hb := List.all_eq_true.mp hfp i.val (List.mem_range.mpr i.isLt)
+                            rw [dif_pos i.isLt] at hb
+                            exact ctorFieldsPermitted_of_B _ fuel hb)
+                          (minorsMatch_of hsh hmm)
+                          h14)
+                      else none
+                    else none
+                  else none
+          else none
+        else none
+      else none
+
 def recAdmitted? (fuel : Nat) (E : ResolvedEnv) (prefixTbl : List (Nat × CheckedMember))
     (hnd : (prefixTbl.map (·.1)).Nodup) (hE : E = foldEnv prefixTbl)
     (f : Nat) (fm : CheckedMember) (ctors : List (Nat × CheckedMember))
@@ -1264,70 +1352,20 @@ def recAdmitted? (fuel : Nat) (E : ResolvedEnv) (prefixTbl : List (Nat × Checke
     Option (IndGroupAdmitted E rr rm) :=
   match buildRecAdmitted? fuel E prefixTbl hnd f fm ctors rr rm np with
   | none => none
-  | some a =>
-      match hAt : shapesAt fuel a.constructorViews with
-      | none => none
-      | some sh =>
-          if hshB : (List.range a.constructors.length).all (fun j =>
-              if hj : j < a.constructors.length then
-                (fieldShapesFuel E fuel a.family.ref a.family.member.arity
-                  a.family.parameters.length a.family.indices.length
-                  a.family.parameters.length (a.constructorViews ⟨j, hj⟩).fields).isSome
-              else false) = true then
-            have hsh : ∀ i, shapesWitness fuel a.constructorViews sh i := by
-              intro i
-              have hb := List.all_eq_true.mp hshB i.val (List.mem_range.mpr i.isLt)
-              simp only [dif_pos i.isLt] at hb
-              cases hs : fieldShapesFuel E fuel a.family.ref a.family.member.arity
-                  a.family.parameters.length a.family.indices.length
-                  a.family.parameters.length (a.constructorViews i).fields with
-              | none =>
-                  rw [hs] at hb
-                  simp at hb
-              | some s =>
-                  unfold shapesWitness
-                  exact (shapesAt_apply hAt i hs).symm ▸ hs
-            if hmm : minorsMatchB a fuel sh = true then
-              if hbody : rm.body = none then
-                match iotaClause? a fuel sh hsh hbody with
-                | none => none
-                | some h14 =>
-                    match hfresh : E.members rr with
-                    | some _ => none
-                    | none =>
-                      let fr := a.family.ref
-                      if hcens : ctorCensusB prefixTbl fr rr = true then
-                        if hfu : (List.range a.constructors.length).all (fun j =>
-                            if hj : j < a.constructors.length then
-                              fieldUnivB (a.constructorViews ⟨j, hj⟩)
-                            else false) = true then
-                          if hfp : (List.range a.constructors.length).all (fun j =>
-                              if hj : j < a.constructors.length then
-                                ctorFieldsPermittedB (a.constructorViews ⟨j, hj⟩) fuel
-                              else false) = true then
-                            have h04 : CtorCensus E a.family.ref rr := by
-                              change CtorCensus E fr rr
-                              rw [hE]
-                              exact ctorCensusB_sound hnd hcens
-                            some (.recursor a hfresh h04
-                              (by
-                                intro i
-                                have hb := List.all_eq_true.mp hfu i.val (List.mem_range.mpr i.isLt)
-                                rw [dif_pos i.isLt] at hb
-                                exact fieldUnivOf _ hb)
-                              (by
-                                intro i
-                                have hb := List.all_eq_true.mp hfp i.val (List.mem_range.mpr i.isLt)
-                                rw [dif_pos i.isLt] at hb
-                                exact ctorFieldsPermitted_of_B _ fuel hb)
-                              (minorsMatch_of hsh hmm)
-                              h14)
-                          else none
-                        else none
-                      else none
-              else none
-            else none
-          else none
+  | some a => finishRecAdmitted? fuel E prefixTbl hnd hE rr rm a
+
+/-- The original entry point still performs its local-table builder first and
+then the same finishing checks, with the original table as the census table. -/
+theorem recAdmitted?_shared_finish (fuel : Nat) (E : ResolvedEnv)
+    (prefixTbl : List (Nat × CheckedMember))
+    (hnd : (prefixTbl.map (·.1)).Nodup) (hE : E = foldEnv prefixTbl)
+    (f : Nat) (fm : CheckedMember) (ctors : List (Nat × CheckedMember))
+    (rr : Nat) (rm : CheckedMember) (np : Nat) :
+    recAdmitted? fuel E prefixTbl hnd hE f fm ctors rr rm np =
+      (buildRecAdmitted? fuel E prefixTbl hnd f fm ctors rr rm np).bind
+        (finishRecAdmitted? fuel E prefixTbl hnd hE rr rm) := by
+  unfold recAdmitted?
+  cases buildRecAdmitted? fuel E prefixTbl hnd f fm ctors rr rm np <;> rfl
 
 def chainAppend {S : ResolvedEnv} {fuel : Nat} :
     {E : ResolvedEnv} → {rest1 : List (Nat × CheckedMember)} → {E2 : ResolvedEnv} →

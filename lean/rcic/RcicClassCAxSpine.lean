@@ -90,6 +90,7 @@ def gPolicy : RecursorEliminationAdmitted riFamEnv 1 gRec where
   selected := .emptyProp (fun _ => rfl) rfl
   recursorArity := rfl
   recursorType := rfl
+  recursorMclass := rfl
 
 def gIotaClause : IotaDescriptorClause riFamEnv gPolicy where
   signatureOnly := rfl

@@ -188,6 +188,7 @@ private def covUHoPolicy : RecursorEliminationAdmitted covUHoCtorEnv 65 covUHoRe
                  exact covUHoCtor_safe _ rfl)
   recursorArity := rfl
   recursorType := rfl
+  recursorMclass := rfl
 
 private def covUHoSchema : Expr Nat :=
   .app (.app (.bvar 1) (.bvar 0))

@@ -957,6 +957,7 @@ def falseGroupAdmitted : RecursorEliminationAdmitted falsePrefix 1 falseRecMembe
   selected := .emptyProp falseSort_prop rfl
   recursorArity := rfl
   recursorType := rfl
+  recursorMclass := rfl
 
 theorem falseCensus : CtorCensus falsePrefix 0 1 := by
   refine ⟨by decide, fun c => ⟨?_, fun h => absurd h (by omega)⟩⟩
@@ -1229,6 +1230,7 @@ def trueGroupAdmitted : RecursorEliminationAdmitted truePrefix 2 trueRecMemberU 
   selected := .singletonProp falseSort_prop rfl (fun ⟨0, _⟩ j => j.elim0)
   recursorArity := rfl
   recursorType := rfl
+  recursorMclass := rfl
 
 
 theorem trueCensus : CtorCensus truePrefix 0 2 := census_famOne rfl rfl rfl
@@ -1763,6 +1765,7 @@ def structGroupAdmitted : RecursorEliminationAdmitted structPrefix 2 structRecMe
     | ⟨0, _⟩ => Or.inl structFieldLv_prop)
   recursorArity := rfl
   recursorType := rfl
+  recursorMclass := rfl
 
 theorem structMinorMatch : MinorPremisesMatch structGroupAdmitted := by
   intro i
@@ -2565,6 +2568,7 @@ def andGroupAdmitted : RecursorEliminationAdmitted andPrefix 2 andRecMemberU whe
     | ⟨1, _⟩ => Or.inl falseSort_prop)
   recursorArity := rfl
   recursorType := rfl
+  recursorMclass := rfl
 
 theorem andMinorMatch : MinorPremisesMatch andGroupAdmitted := by
   intro i

@@ -64,6 +64,7 @@ def svRecordGroupAdm : RecursorEliminationAdmitted svRecordPrefix 37 svRecordRec
   selected := .uniformType uniformType_succ_zero
   recursorArity := rfl
   recursorType := rfl
+  recursorMclass := rfl
 
 theorem svRecordMinorMatch : MinorPremisesMatch svRecordGroupAdm
   | ⟨0, _⟩ => ⟨[.nonrecursive, .nonrecursive], 8, rfl, rfl⟩

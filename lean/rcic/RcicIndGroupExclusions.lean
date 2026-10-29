@@ -14,32 +14,17 @@ member bytes, not a retyping:
 `EnvWf natEnvU` is `natEnvUWfAt`. Sort conversion is not proved.
 -/
 import rcic.RcicIndGroupAdmitted
+import rcic.RcicIndGroupCorpusPins
 import rcic.RcicIndGroupFixtureWf
 import rcic.RcicInvertFamily
 import rcic.RcicSrcEnvV1
 
 namespace Rcic.Declarative
 
-theorem uniformProp_zero : UniformProp .zero := by
-  intro _
-  simp [evalTotal]
-
 theorem not_uniformType_zero : ¬ UniformType .zero := by
   intro h
   have := h (fun _ => 0)
   simp [evalTotal] at this
-
-theorem not_uniformProp_succ_zero : ¬ UniformProp (.succ .zero) := by
-  intro h
-  have := h (fun _ => 0)
-  simp [evalTotal] at this
-
-theorem not_leN_ssz_sz : ¬ leN (.succ (.succ .zero)) (.succ .zero) := by
-  intro h
-  have hx : eval (fun _ => none) (.succ (.succ .zero)) = some 2 := by simp [eval]
-  have hy : eval (fun _ => none) (.succ .zero) = some 1 := by simp [eval]
-  have := h (fun _ => none) 2 1 hx hy
-  omega
 
 theorem policyPi_eq_sort {xs : List (Expr Nat)} {body : Expr Nat} {l : Level}
     (h : policyPi xs body = .sort l) : xs = [] ∧ body = .sort l := by
@@ -880,6 +865,7 @@ def group : RecursorEliminationAdmitted boolPrefix 3 recMember where
   selected := .multipleProp uniformProp_zero (by decide)
   recursorArity := rfl
   recursorType := rfl
+  recursorMclass := rfl
 
 theorem census : CtorCensus boolPrefix 0 3 := by
   refine ⟨by decide, fun c => ?_⟩
@@ -1164,6 +1150,7 @@ def group : RecursorEliminationAdmitted listPrefix 11 listURecMember where
   selected := .uniformType (uniformType_succ_param 0)
   recursorArity := rfl
   recursorType := rfl
+  recursorMclass := rfl
 
 theorem prefixMem (n : Nat) :
     listPrefix.members n =

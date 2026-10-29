@@ -164,6 +164,7 @@ def posGroupAdm : RecursorEliminationAdmitted posPrefix 4 posRecMember where
   selected := .uniformType uniformType_succ_zero
   recursorArity := rfl
   recursorType := rfl
+  recursorMclass := rfl
 
 theorem posMinorMatch : MinorPremisesMatch posGroupAdm
   | ⟨0, _⟩ => ⟨[], 0, rfl, rfl⟩

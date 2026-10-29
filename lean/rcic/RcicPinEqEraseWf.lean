@@ -328,6 +328,7 @@ def eqGroupAdm : RecursorEliminationAdmitted eqPrefixT 65 eqRecT where
       exact fun j => j.elim0)
   recursorArity := rfl
   recursorType := rfl
+  recursorMclass := rfl
 
 theorem eqCensus : CtorCensus eqPrefixT 63 65 := by
   refine ⟨by decide, fun c => ?_⟩

@@ -340,6 +340,7 @@ def ppaGroupAdm : RecursorEliminationAdmitted ppaSupEnvT 12 ppaRecT where
         omega))
   recursorArity := rfl
   recursorType := rfl
+  recursorMclass := rfl
 
 /-- the group's census: `intro` at `11` is the only `AccP`-constructor
     below `12`. -/

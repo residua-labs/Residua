@@ -485,6 +485,7 @@ def natGroupAdmittedB (cd : ContractSigData) :
   selected := .uniformType uniformType_succ_zero
   recursorArity := rfl
   recursorType := rfl
+  recursorMclass := rfl
 
 /-- `MinorPremisesMatch` at the shifted base: the empty-field constructor
 analyzes immediately; `succ`'s field is the symbolic-`fieldAnalyze` run of

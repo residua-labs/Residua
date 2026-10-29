@@ -327,6 +327,7 @@ def listGroupU : RecursorEliminationAdmitted listPrefixU 11 listURecMember where
   selected := .uniformType (uniformType_succ_param 0)
   recursorArity := rfl
   recursorType := rfl
+  recursorMclass := rfl
 
 theorem listCensusU : CtorCensus listPrefixU 8 11 := by
   refine ⟨by decide, fun c => ?_⟩

@@ -354,6 +354,7 @@ def vecGroupU : RecursorEliminationAdmitted vecPrefixU 7 vecRecMemberU where
   selected := .uniformType uniformType_succ_zero
   recursorArity := rfl
   recursorType := rfl
+  recursorMclass := rfl
 
 theorem vecCensusU : CtorCensus vecPrefixU 4 7 := by
   refine ⟨by decide, fun c => ?_⟩
