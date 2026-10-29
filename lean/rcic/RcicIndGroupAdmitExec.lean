@@ -54,7 +54,7 @@ theorem foldApps_not_pi (f : Expr Nat) (xs : List (Expr Nat))
     | letE _ _ _ => cases h
     | lit _ => cases h)
 
-/-! ## Bounded structural inference (sort / bvar / const / app / lit) -/
+/-! ## Bounded structural inference (sort / bvar / const / app / lit / pi / lam) -/
 
 def levelWfB (n : Nat) (l : Level) : Bool :=
   match eval (fun _ => none) l with
@@ -128,6 +128,22 @@ def exprInfer (fuel : Nat) (E : ResolvedEnv) (n : Nat) (Γ : LCtx) (e : Expr Nat
           | some ⟨T, h⟩ => some ⟨T, HasTy.lit Γ k T h⟩
           | none => none
         else none
+    | .pi A B =>
+        match exprInfer fuel E n Γ A with
+        | some ⟨.sort u, hA⟩ =>
+            match exprInfer fuel E n (LocalDecl.assumption A :: Γ) B with
+            | some ⟨.sort v, hB⟩ =>
+                some ⟨.sort (.imax u v), HasTy.pi Γ A u B v hA hB⟩
+            | _ => none
+        | _ => none
+    | .lam A body =>
+        match exprInfer fuel E n Γ A with
+        | some ⟨.sort u, hA⟩ =>
+            match exprInfer fuel E n (LocalDecl.assumption A :: Γ) body with
+            | some ⟨B, hb⟩ =>
+                some ⟨.pi A B, HasTy.lam Γ A u body B hA hb⟩
+            | none => none
+        | _ => none
     | .app f a =>
         match exprInfer fuel E n Γ f with
         | some ⟨.pi A B, hf⟩ =>
@@ -179,6 +195,13 @@ def inferSort (fuel : Nat) (E : ResolvedEnv) (n : Nat) (Γ : LCtx) (e : Expr Nat
                 else none
             | _ => none
         | none => none
+    | .pi A B =>
+        match exprInfer (fuel + 1) E n Γ (.pi A B) with
+        | some ⟨.sort l, h⟩ =>
+            if hb : levelBounded n l = true then
+              some ⟨l, hb, h⟩
+            else none
+        | _ => none
     | .app f a =>
         match exprInfer (fuel + 1) E n Γ (.app f a) with
         | some ⟨.sort l, h⟩ =>
@@ -187,6 +210,56 @@ def inferSort (fuel : Nat) (E : ResolvedEnv) (n : Nat) (Γ : LCtx) (e : Expr Nat
             else none
         | _ => none
     | _ => none
+
+/-! Telescope-only fallback for the existing literal-spine certificate.
+The preflight bounds every supported syntax branch and every literal before
+the certificate constructor runs. Old sort hits retain their actual value. -/
+
+def spineBounds : Nat → Expr Nat → Bool
+  | 0, _ => false
+  | fuel + 1, .lit k => decide (k ≤ fuel)
+  | _ + 1, .bvar _ => true
+  | _ + 1, .const _ [] => true
+  | fuel + 1, .app f a => spineBounds fuel f && spineBounds fuel a
+  | fuel + 1, .pi A B => spineBounds fuel A && spineBounds fuel B
+  | _ + 1, _ => false
+
+def inferBoundedSpineSort (fuel : Nat) (E : ResolvedEnv) (n : Nat)
+    (Γ : LCtx) (e : Expr Nat) : Option (SortHit E n Γ e) :=
+  if spineBounds fuel e then
+    match hz : E.members 1 with
+    | none => none
+    | some z =>
+        if hzm : sameMember z Rcic.Scm.SrcG.mZero = true then
+          match hs : E.members 2 with
+          | none => none
+          | some s =>
+              if hsm : sameMember s Rcic.Scm.SrcG.mSucc = true then
+                have h1 : E.members 1 = some Rcic.Scm.SrcG.mZero :=
+                  hz.trans (congrArg some (sameMember_eq hzm))
+                have h2 : E.members 2 = some Rcic.Scm.SrcG.mSucc :=
+                  hs.trans (congrArg some (sameMember_eq hsm))
+                match Rcic.Scm.SrcG.inferSpine (n := n) (Γ := Γ) h1 h2 e with
+                | some ⟨.sort l, ht⟩ =>
+                    if hb : levelBounded n l = true then some ⟨l, hb, ht⟩ else none
+                | _ => none
+              else none
+        else none
+  else none
+
+def inferSortTelescope (fuel : Nat) (E : ResolvedEnv) (n : Nat)
+    (Γ : LCtx) (e : Expr Nat) : Option (SortHit E n Γ e) :=
+  match inferSort fuel E n Γ e with
+  | some h => some h
+  | none => inferBoundedSpineSort fuel E n Γ e
+
+theorem inferSortTelescope_of_some {fuel : Nat} {E : ResolvedEnv} {n : Nat}
+    {Γ : LCtx} {e : Expr Nat} {h : SortHit E n Γ e}
+    (hs : inferSort fuel E n Γ e = some h) :
+    inferSortTelescope fuel E n Γ e = some h := by
+  unfold inferSortTelescope
+  rw [hs]
+
 
 def sortLevel {E : ResolvedEnv} {n : Nat} {Γ : LCtx} {e : Expr Nat}
     (o : Option (SortHit E n Γ e)) : Level :=
@@ -200,7 +273,7 @@ def sortLevel {E : ResolvedEnv} {n : Nat} {Γ : LCtx} {e : Expr Nat}
 def telOf (fuel : Nat) (E : ResolvedEnv) (n : Nat) (doms : List (Expr Nat)) :
     Option (PolicyTelescopeTyping E n doms) :=
   let inf (k : Nat) (hk : k < doms.length) :=
-    inferSort fuel E n (policyPrefixContext doms k) (doms[k]'hk)
+    inferSortTelescope fuel E n (policyPrefixContext doms k) (doms[k]'hk)
   if hall : (List.range doms.length).all (fun k =>
       if hk : k < doms.length then (inf k hk).isSome else false) = true then
     some {
@@ -391,9 +464,9 @@ def ctorViews (fuel : Nat) {E : ResolvedEnv} (fam : PolicyFamilyView E)
     Option ((i : Fin ms.length) → PolicyConstructorView E fam ms[i]) :=
   (ctorViewsFuel fuel fam ms).map fun vs i => ctorViewAt ms vs i
 
-/-- Hidden-data Prop (`k = 1`, fields not safe) is refused: the pins are
-UniformType or a field-free Prop singleton, and this checker does not invent
-`¬ AllFieldsSafe`. -/
+/-- Executable elimination selection. A Prop singleton with hidden data uses
+`propOnly`; `selectionOf` below reconstructs its negative field-safety premise
+from the same finite constructor views. -/
 def selectElimination? (u : Level) (k : Nat) (safe : Bool) : Option EliminationPolicy :=
   match classifyUniverse u with
   | .mixed => none
@@ -401,7 +474,7 @@ def selectElimination? (u : Level) (k : Nat) (safe : Bool) : Option EliminationP
   | .uniformProp =>
       if k = 0 then some .anySort
       else if k = 1 then
-        if safe then some .anySort else none
+        if safe then some .anySort else some .propOnly
       else some .propOnly
 
 def fieldSafeB {E : ResolvedEnv} {fam : PolicyFamilyView E} {m : CheckedMember}
@@ -448,6 +521,39 @@ theorem viewsSafe_of {E : ResolvedEnv} {fam : PolicyFamilyView E} {ms : List Che
   have hb := List.all_eq_true.mp h i.val (List.mem_range.mpr i.isLt)
   rw [dif_pos i.isLt] at hb
   exact ctorSafe_of (views i) hb
+
+theorem fieldSafe_complete {E : ResolvedEnv} {fam : PolicyFamilyView E} {m : CheckedMember}
+    (c : PolicyConstructorView E fam m) (j : Fin c.fields.length)
+    (h : c.FieldSafe j) : fieldSafeB c j = true := by
+  apply Bool.or_eq_true_iff.mpr
+  rcases h with hp | hi
+  · exact Or.inl ((levelUniformZero_iff _).mpr hp)
+  · exact Or.inr (by simpa only [decide_eq_true_eq] using hi)
+
+theorem ctorSafe_complete {E : ResolvedEnv} {fam : PolicyFamilyView E} {m : CheckedMember}
+    (c : PolicyConstructorView E fam m) (h : c.AllFieldsSafe) : ctorSafeB c = true := by
+  unfold ctorSafeB
+  apply List.all_eq_true.mpr
+  intro j hj
+  have hj' : j < c.fields.length := List.mem_range.mp hj
+  rw [dif_pos hj']
+  exact fieldSafe_complete c ⟨j, hj'⟩ (h ⟨j, hj'⟩)
+
+theorem viewsSafe_complete {E : ResolvedEnv} {fam : PolicyFamilyView E} {ms : List CheckedMember}
+    (views : (i : Fin ms.length) → PolicyConstructorView E fam ms[i])
+    (h : ∀ i, (views i).AllFieldsSafe) : viewsSafeB views = true := by
+  unfold viewsSafeB
+  apply List.all_eq_true.mpr
+  intro j hj
+  have hj' : j < ms.length := List.mem_range.mp hj
+  rw [dif_pos hj']
+  exact ctorSafe_complete (views ⟨j, hj'⟩) (h ⟨j, hj'⟩)
+
+theorem viewsUnsafe_of {E : ResolvedEnv} {fam : PolicyFamilyView E} {ms : List CheckedMember}
+    (views : (i : Fin ms.length) → PolicyConstructorView E fam ms[i])
+    (h : viewsSafeB views ≠ true) : ¬ (∀ i, (views i).AllFieldsSafe) := by
+  intro hsafe
+  exact h (viewsSafe_complete views hsafe)
 
 def fieldUnivB {E : ResolvedEnv} {fam : PolicyFamilyView E} {m : CheckedMember}
     (c : PolicyConstructorView E fam m) : Bool :=
@@ -1022,7 +1128,7 @@ theorem nparams_unique_of_rebuilt {E E' : ResolvedEnv}
   have hlen := checked_nparams_unique hk h
   omega
 
-abbrev admitFuel : Nat := 96
+abbrev admitFuel : Nat := 128
 
 inductive LevelProfile (u : Level) : Type where
   | prop (h : UniformProp u)
@@ -1109,6 +1215,10 @@ def selectionOf {E : ResolvedEnv} {fam : PolicyFamilyView E} {ms : List CheckedM
   | .uniformProp, .propOnly =>
       if hk : 1 < ms.length then
         some ⟨.multipleProp ((classifyUniverse_uniformProp_iff _).mp hc) hk⟩
+      else if hk1 : ms.length = 1 then
+        if hs : viewsSafeB views = true then none
+        else some ⟨.hiddenDataProp ((classifyUniverse_uniformProp_iff _).mp hc) hk1
+          (viewsUnsafe_of views hs)⟩
       else none
   | _, _ => none
 
@@ -1695,4 +1805,3 @@ kernel_rfl_theorem mutant_nparams :
     mutantNparams? splitBadNparams splitBadNparamsNd = true
 
 end Rcic.Scm.SrcG
-
