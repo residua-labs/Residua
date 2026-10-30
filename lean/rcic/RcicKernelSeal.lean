@@ -1,4 +1,13 @@
+-- BEGIN SOL-P1-STEPW-GROUP DIRECT IMPORT (closure_claim = 0)
+import rcic.RcicF3StepWGroupSeal
+-- END SOL-P1-STEPW-GROUP DIRECT IMPORT
 import rcic.RcicLeanImportSeal
+-- BEGIN SOL-P1-STEPW-REFUSAL DIRECT IMPORT (closure_claim = 0)
+import rcic.RcicF3StepWRefusalSeal
+-- END SOL-P1-STEPW-REFUSAL DIRECT IMPORT
+-- BEGIN SOL-P1-STEPW-OPEN DIRECT IMPORT (closure_claim = 0)
+import rcic.RcicF3StepWOpenSeal
+-- END SOL-P1-STEPW-OPEN DIRECT IMPORT
 -- BEGIN SOL-STEPAG-PENDA DIRECT IMPORT (closure_claim = 0)
 import rcic.RcicF3StepAGPendASeal
 -- END SOL-STEPAG-PENDA DIRECT IMPORT
