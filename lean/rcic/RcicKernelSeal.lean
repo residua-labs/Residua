@@ -733,6 +733,9 @@ zero-sorry. RF-003/004 carry INPUT-SHAPE hypotheses (store-resolution case
 conditions), never collision premises — the smuggled-axiom class the seal's
 name list makes inspectable: every registered statement is readable in full.
 -/
+-- BEGIN SOL-PENDA-MODEL IMPORT
+import rcic.RcicF3PendAModelSeal
+-- END SOL-PENDA-MODEL IMPORT
 import rcic.RcicTypedRef
 import rcic.RcicDeclarative
 import rcic.RcicSubstCalc
