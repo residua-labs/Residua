@@ -1,4 +1,7 @@
 import rcic.RcicLeanImportSeal
+-- BEGIN SOL-STEPAG-PENDA DIRECT IMPORT (closure_claim = 0)
+import rcic.RcicF3StepAGPendASeal
+-- END SOL-STEPAG-PENDA DIRECT IMPORT
 -- BEGIN CC F3 CONSISTENCY DIRECT IMPORTS (closure_claim = 0)
 import rcic.RcicF3CcSeal
 -- END CC F3 CONSISTENCY DIRECT IMPORTS
