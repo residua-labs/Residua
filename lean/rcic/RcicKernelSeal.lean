@@ -1739,6 +1739,7 @@ import rcic.RcicF3FamKTBridgeSeal
 -- END FABLE-F3W KTW IMPORT
 -- BEGIN SOL-STEPAG-BOUNDED SEAL IMPORT (closure_claim = 0)
 import rcic.RcicF3StepAGBoundedSeal
+import rcic.RcicF3PendAProducerSeal
 -- END SOL-STEPAG-BOUNDED SEAL IMPORT
 open Lean
 -- END GLM-SR2 REDEXAP IMPORT
