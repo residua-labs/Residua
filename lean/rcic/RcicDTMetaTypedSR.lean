@@ -354,9 +354,9 @@ def envWfT_bodyTypedRaw {E : ResolvedEnv} (hW : EnvWfT E) :
       HasTyT E 0 [] b m.mtype ×' m.arity = 0 :=
   match hW with
   | .empty => fun r m b hm hb => by simp only [emptyEnv] at hm; cases hm
-  | .axiom E r₀ A u hE hfresh _ _ _ =>
+  | .axiom (arity := arity) E r₀ A u hE hfresh _ _ _ =>
       fun r m b hm hb => by
-        have hext := members_extend_preserved (m := ⟨.axiomM, 0, A, none⟩) hfresh
+        have hext := members_extend_preserved (m := ⟨.axiomM, arity, A, none⟩) hfresh
         by_cases hrr : r = r₀
         · subst hrr
           simp only [extendEnv, if_pos rfl] at hm

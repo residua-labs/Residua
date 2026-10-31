@@ -1285,12 +1285,12 @@ def enrichGroupMembersT {S : ResolvedEnv} :
 noncomputable def enrichEnvWfT :
     {E : ResolvedEnv} → EnvWfT E → EnvWfP E
   | _, .empty => .empty
-  | _, .axiom E r A u hE hfresh hA _ _ =>
+  | _, .axiom (arity := arity) E r A u hE hfresh hA _ _ =>
       let hEP := enrichEnvWfT hE
       let hclE := envClosed_of_envWfT hE
       let hmE := memberSortP_of_envWfP hEP
       let hAP := enrichHasTyT hclE (envExt_refl E) hmE
-        (letCtxConvP_of_envWfT hE) (.nil E 0) hA
+        (letCtxConvP_of_envWfT hE) (.nil E arity) hA
       .axiom E r A u hEP hfresh hAP
   | _, .definition E r A v u hE hfresh hA hv _ _ _ _ =>
       let hEP := enrichEnvWfT hE

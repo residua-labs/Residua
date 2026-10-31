@@ -56,11 +56,11 @@ theorem srDelta_defAdm_assumpPref : {E : ResolvedEnv} → (hEnv : EnvWfT E) →
     (htr : transparent m.mclass = true) →
     ((enrichEnvWfT hEnv).defAdm hres hbody htr).hv.AssumpPref
   | _, .empty, _, _, _, h, _, _ => Option.noConfusion h
-  | _, .axiom E r' A u hE hfresh hA hcl hlvl, r, m, b, h, hb, htr => by
+  | _, .axiom (arity := arity) E r' A u hE hfresh hA hcl hlvl, r, m, b, h, hb, htr => by
       cases hdec : Nat.decEq r r' with
       | isTrue hr =>
           subst hr
-          have hm : ⟨.axiomM, 0, A, none⟩ = m :=
+          have hm : ⟨.axiomM, arity, A, none⟩ = m :=
             Option.some.inj ((members_extend_self E r _).symm.trans h)
           subst hm
           exact Bool.noConfusion htr

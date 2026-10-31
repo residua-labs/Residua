@@ -15,9 +15,10 @@ provisional member lookupable.
 
 `EnvWfT` is the environment judgment the typed root lands with. It stands next to `EnvWf` as
 `RcicTypedJ` stands next to the untyped judgment.
-* The singleton steps (04 §6) type their members in the typed judgment at level context `0`, with no
-  level parameter: the polymorphic model (R-TypedRules (6); 00 §20.6, members with a body have
-  arity `0`).
+* Bodyless axiom steps type their stored type at the member's declared universe arity, preserving
+  its parameters. The implicit arity is inferred from the supplied typing; old monomorphic calls
+  infer `0`. Definitions, theorems, and opaque declarations still have arity `0` (R-TypedRules (6);
+  00 §20.6, members with a body have arity `0`).
 * An inductive group is ONE step (`group`). Its members come in 04 §4 order: the family, the
   constructors, the recursor. Each is admitted by `EnvWf.indMember`'s checks and L-K1's
   `IndGroupAdmitted` against the group built so far, with its stored type typed in the typed judgment
@@ -160,10 +161,13 @@ inductive GroupMembersT (S : ResolvedEnv) : ResolvedEnv → List (Nat × Checked
 /-- R-CIC's environment judgment on the typed judgment (04 §6–§7). -/
 inductive EnvWfT : ResolvedEnv → Type
   | empty : EnvWfT emptyEnv
-  | axiom (E : ResolvedEnv) (r : Nat) (A : Expr Nat) (u : Level)
-      (hE : EnvWfT E) (hfresh : E.members r = none) (hA : HasTyT E 0 [] A (.sort u))
-      (hcl : ∀ k, lift k 1 A = A) (hlvl : exprLevelsBounded 0 A = true) :
-      EnvWfT (extendEnv E r ⟨.axiomM, 0, A, none⟩)
+  /-- Universe-polymorphic bodyless declaration. The implicit arity is inferred
+      from `hA`; existing monomorphic calls still infer `0`. The stored type is
+      checked at exactly that arity, closed in locals, and level-bounded. -/
+  | axiom {arity : Nat} (E : ResolvedEnv) (r : Nat) (A : Expr Nat) (u : Level)
+      (hE : EnvWfT E) (hfresh : E.members r = none) (hA : HasTyT E arity [] A (.sort u))
+      (hcl : ∀ k, lift k 1 A = A) (hlvl : exprLevelsBounded arity A = true) :
+      EnvWfT (extendEnv E r ⟨.axiomM, arity, A, none⟩)
   | definition (E : ResolvedEnv) (r : Nat) (A v : Expr Nat) (u : Level)
       (hE : EnvWfT E) (hfresh : E.members r = none)
       (hA : HasTyT E 0 [] A (.sort u)) (hv : HasTyT E 0 [] v A)

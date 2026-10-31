@@ -89,8 +89,8 @@ theorem envWfA_memberTy : {E : ResolvedEnvA} → EnvWfA I E →
     ∀ (r : Nat) (m : CheckedMemberA), E.members r = some m →
       ∃ u, Nonempty (HasTyA E I m.arity [] m.mtypeA (.sort u))
   | _, .empty => fun _ _ h => Option.noConfusion h
-  | _, .axiomM E r A u hE hfresh hA _ _ => fun r' m' hm' => by
-      have hpre := prefixA_extend E r ⟨.axiomM, 0, A, none, 0, none⟩ hfresh
+  | _, .axiomM (arity := arity) E r A u hE hfresh hA _ _ => fun r' m' hm' => by
+      have hpre := prefixA_extend E r ⟨.axiomM, arity, A, none, 0, none⟩ hfresh
       by_cases hr : r' = r
       · rw [hr, members_extendEnvA_self] at hm'
         cases hm'
@@ -210,8 +210,8 @@ theorem envWfA_memberBody : {E : ResolvedEnvA} → EnvWfA I E →
     ∀ (r : Nat) (m : CheckedMemberA) (b : ExprA), E.members r = some m → m.bodyA = some b →
       Nonempty (HasTyA E I m.arity [] b m.mtypeA)
   | _, .empty => fun _ _ _ h => Option.noConfusion h
-  | _, .axiomM E r A _ hE hfresh _ _ _ => fun r' m' b hm' hb => by
-      have hpre := prefixA_extend E r ⟨.axiomM, 0, A, none, 0, none⟩ hfresh
+  | _, .axiomM (arity := arity) E r A _ hE hfresh _ _ _ => fun r' m' b hm' hb => by
+      have hpre := prefixA_extend E r ⟨.axiomM, arity, A, none, 0, none⟩ hfresh
       by_cases hr : r' = r
       · rw [hr, members_extendEnvA_self] at hm'
         cases hm'

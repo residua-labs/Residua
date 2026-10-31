@@ -87,9 +87,9 @@ def familyArity_of_envWfT : {E : ResolvedEnv} → EnvWfT E → FamilyArity E
   | _, .empty => by
       intro r m h
       cases h
-  | _, .axiom E r A _ hE .. =>
+  | _, .axiom (arity := arity) E r A _ hE .. =>
       familyArity_extend_nonfamily (familyArity_of_envWfT hE)
-        r ⟨.axiomM, 0, A, none⟩ (by intro h; cases h)
+        r ⟨.axiomM, arity, A, none⟩ (by intro h; cases h)
   | _, .definition E r A v _ hE .. =>
       familyArity_extend_nonfamily (familyArity_of_envWfT hE)
         r ⟨.definitionM, 0, A, some v⟩ (by intro h; cases h)

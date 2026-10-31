@@ -3497,7 +3497,7 @@ theorem envWfT_body_arity_zero {E : ResolvedEnv} (hW : EnvWfT E) :
     ∀ r m b, E.members r = some m → m.body = some b → m.arity = 0 := by
   induction hW with
   | empty => intro _ _ _ hm _; exact Option.noConfusion hm
-  | @«axiom» E₀ r₀ _ _ _ _ _ _ _ ih =>
+  | @«axiom» _ E₀ r₀ _ _ _ _ _ _ _ ih =>
       intro r m b hm hb
       by_cases hrr : r = r₀
       · subst hrr; rw [members_extend_eq] at hm; cases hm; cases hb
@@ -4077,10 +4077,10 @@ theorem envWfT_deltaConst_sub (hW : EnvWfT E)
       E₁.members r = some m → m.body = some b → LRTermDSubKClosedCtxBi E n [] b b m.mtype
   | _, .empty, _, _, _, _, hm, _ => by
       simp only [emptyEnv] at hm; cases hm
-  | _, .axiom E₁ r₀ A _ hE₁ hfresh _ _ _, hext, r, m, b, hm, hb => by
+  | _, .axiom (arity := arity) E₁ r₀ A _ hE₁ hfresh _ _ _, hext, r, m, b, hm, hb => by
       have hext₀ : ∀ r' m', E₁.members r' = some m' → E.members r' = some m' :=
         fun r' m' hm' => hext r' m'
-          (members_extend_preserved (m := ⟨.axiomM, 0, A, none⟩) hfresh r' m' hm')
+          (members_extend_preserved (m := ⟨.axiomM, arity, A, none⟩) hfresh r' m' hm')
       by_cases hrr : r = r₀
       · subst hrr
         simp only [extendEnv, if_pos rfl] at hm

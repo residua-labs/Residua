@@ -74,8 +74,8 @@ def groupμ (P : Premises4) {S : ResolvedEnv} : {E E' : ResolvedEnv} →
 /-- The table of an admitted environment. -/
 def envμ (P : Premises4) : {E : ResolvedEnv} → EnvWfT E → Nat → List Nat → PSet.{4}
   | _, .empty => fun _ _ => pempty
-  | _, .axiom _ r A _ hE _ _ _ _ =>
-      upd (envμ P hE) r (memberVal P (envμ P hE) ⟨.axiomM, 0, A, none⟩)
+  | _, .axiom (arity := arity) _ r A _ hE _ _ _ _ =>
+      upd (envμ P hE) r (memberVal P (envμ P hE) ⟨.axiomM, arity, A, none⟩)
   | _, .definition _ r A v _ hE _ _ _ _ _ _ _ =>
       upd (envμ P hE) r (memberVal P (envμ P hE) ⟨.definitionM, 0, A, some v⟩)
   | _, .thm _ r A p hE _ _ _ _ _ _ _ =>
@@ -178,9 +178,9 @@ theorem refsOK_singleton {E : ResolvedEnv} {n : Nat} {A b T : Expr Nat} {k : Mem
 theorem faithful_envμ (P : Premises4) : {E : ResolvedEnv} → (hW : EnvWfT E) →
     Faithful P (envμ P hW) E ∧ RefsClosed E
   | _, .empty => ⟨fun _ _ h => (Option.noConfusion h), fun _ _ h => (Option.noConfusion h)⟩
-  | _, .axiom E r A u hE hfresh hA _ _ => by
+  | _, .axiom (arity := arity) E r A u hE hfresh hA _ _ => by
       obtain ⟨hF, hR⟩ := faithful_envμ P hE
-      have hm : RefsOK E ⟨.axiomM, 0, A, none⟩ :=
+      have hm : RefsOK E ⟨.axiomM, arity, A, none⟩ :=
         ⟨fun r' hr' => hasTyT_denRefs hA r' hr', fun b hb => by cases hb⟩
       exact ⟨faithful_step P hF hR hfresh hm, refsClosed_step hR hfresh hm⟩
   | _, .definition E r A v u hE hfresh hA hv _ _ _ _ => by

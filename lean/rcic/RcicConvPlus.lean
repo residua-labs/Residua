@@ -638,9 +638,9 @@ inductive GroupMembersP : ResolvedEnv → List (Nat × CheckedMember) → Resolv
 /-- the enriched environment: `EnvWfT`'s steps with every admission derivation enriched. -/
 inductive EnvWfP : ResolvedEnv → Type
   | empty : EnvWfP emptyEnv
-  | axiom (E : ResolvedEnv) (r : Nat) (A : Expr Nat) (u : Level) (hE : EnvWfP E)
-      (hfresh : E.members r = none) (hA : TyP E 0 [] A (.sort u)) :
-      EnvWfP (extendEnv E r ⟨.axiomM, 0, A, none⟩)
+  | axiom {arity : Nat} (E : ResolvedEnv) (r : Nat) (A : Expr Nat) (u : Level) (hE : EnvWfP E)
+      (hfresh : E.members r = none) (hA : TyP E arity [] A (.sort u)) :
+      EnvWfP (extendEnv E r ⟨.axiomM, arity, A, none⟩)
   | definition (E : ResolvedEnv) (r : Nat) (A v : Expr Nat) (u : Level) (hE : EnvWfP E)
       (hfresh : E.members r = none) (hA : TyP E 0 [] A (.sort u)) (hv : TyP E 0 [] v A) :
       EnvWfP (extendEnv E r ⟨.definitionM, 0, A, some v⟩)
@@ -681,8 +681,8 @@ def EnvWfP.admW : {E : ResolvedEnv} → EnvWfP E → Nat → Nat
 
 /-- a fresh member's admission weight exceeds its type derivation's weight, weighed before it. This is
     the inequality `S1` §3.3's const row consumes. -/
-theorem admW_axiom_gt {E : ResolvedEnv} {r : Nat} {A : Expr Nat} {u : Level} (hE : EnvWfP E)
-    (hfresh : E.members r = none) (hA : TyP E 0 [] A (.sort u)) :
+theorem admW_axiom_gt {arity : Nat} {E : ResolvedEnv} {r : Nat} {A : Expr Nat} {u : Level} (hE : EnvWfP E)
+    (hfresh : E.members r = none) (hA : TyP E arity [] A (.sort u)) :
     hA.wt hE.admW < (EnvWfP.axiom E r A u hE hfresh hA).admW r := by
   show _ < setW hE.admW r (1 + hA.wt hE.admW) r
   rw [setW_self]; omega
@@ -694,8 +694,8 @@ theorem admW_definition_gt {E : ResolvedEnv} {r : Nat} {A v : Expr Nat} {u : Lev
   rw [setW_self]; omega
 
 /-- an old member keeps its weight. -/
-theorem admW_axiom_old {E : ResolvedEnv} {r c : Nat} {A : Expr Nat} {u : Level} (hE : EnvWfP E)
-    (hfresh : E.members r = none) (hA : TyP E 0 [] A (.sort u)) (hc : c ≠ r) :
+theorem admW_axiom_old {arity : Nat} {E : ResolvedEnv} {r c : Nat} {A : Expr Nat} {u : Level} (hE : EnvWfP E)
+    (hfresh : E.members r = none) (hA : TyP E arity [] A (.sort u)) (hc : c ≠ r) :
     (EnvWfP.axiom E r A u hE hfresh hA).admW c = hE.admW c :=
   setW_ne hE.admW _ hc
 

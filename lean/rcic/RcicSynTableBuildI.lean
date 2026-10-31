@@ -188,9 +188,9 @@ noncomputable def tableOfI {E : ResolvedEnv} (hEnv : EnvWfT E) : List CRule :=
 
 theorem tableOfI_empty : tableOfI .empty = [] := rfl
 
-theorem tableOfI_axiom {E : ResolvedEnv} {r : Nat} {A : Expr Nat} {u : Level}
-    {hE : EnvWfT E} {hfresh : E.members r = none} {hA : HasTyT E 0 [] A (.sort u)}
-    {hcl : ∀ k, lift k 1 A = A} {hlvl : exprLevelsBounded 0 A = true} :
+theorem tableOfI_axiom {arity : Nat} {E : ResolvedEnv} {r : Nat} {A : Expr Nat} {u : Level}
+    {hE : EnvWfT E} {hfresh : E.members r = none} {hA : HasTyT E arity [] A (.sort u)}
+    {hcl : ∀ k, lift k 1 A = A} {hlvl : exprLevelsBounded arity A = true} :
     tableOfI (.axiom E r A u hE hfresh hA hcl hlvl) = tableOfI hE := by
   simp [tableOfI, buildTableSyntaxI, List.map_map]
 

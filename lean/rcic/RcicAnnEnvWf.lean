@@ -58,11 +58,11 @@ open Rcic.Declarative
     or with its derived recursor too (`groupRec`, M2-f (5a)). -/
 inductive EnvWfA (I : IotaIfaceA) : ResolvedEnvA → Type
   | empty : EnvWfA I emptyEnvA
-  | axiomM (E : ResolvedEnvA) (r : Nat) (A : ExprA) (u : Level)
+  | axiomM {arity : Nat} (E : ResolvedEnvA) (r : Nat) (A : ExprA) (u : Level)
       (hE : EnvWfA I E) (hfresh : E.members r = none)
-      (hA : HasTyA E I 0 [] A (.sort u))
-      (hcl : ∀ k, liftA k 1 A = A) (hlvl : exprLevelsBoundedA 0 A = true) :
-      EnvWfA I (extendEnvA E r ⟨.axiomM, 0, A, none, 0, none⟩)
+      (hA : HasTyA E I arity [] A (.sort u))
+      (hcl : ∀ k, liftA k 1 A = A) (hlvl : exprLevelsBoundedA arity A = true) :
+      EnvWfA I (extendEnvA E r ⟨.axiomM, arity, A, none, 0, none⟩)
   | definitionM (E : ResolvedEnvA) (r : Nat) (A v : ExprA) (u : Level)
       (hE : EnvWfA I E) (hfresh : E.members r = none)
       (hA : HasTyA E I 0 [] A (.sort u)) (hv : HasTyA E I 0 [] v A)
@@ -830,7 +830,7 @@ theorem envSemAt_of_envWfA (hE : EnvClosedA E) (hEL : EnvLevelsA E) (hI : IotaLi
     (hFam : EnvSemFamStepA E I n ρ₀) (hCtor : EnvSemCtorStepA E I n ρ₀) (hRec : EnvSemRecStepA E I n ρ₀) :
     {E₀ : ResolvedEnvA} → EnvWfA I E₀ → PrefixA E₀ E → CtorClosedA E₀ E → EnvSemAt E I n ρ₀ (domA E₀)
   | _, .empty, _, _ => fun _ _ hD _ => hD.elim fun _ hm => Option.noConfusion hm
-  | _, .axiomM E₀ r A u hW hfresh hA _ _, hpre, hclo => by
+  | _, .axiomM (arity := arity) E₀ r A u hW hfresh hA _ _, hpre, hclo => by
       have hpre₀ : PrefixA E₀ E := prefixA_trans (prefixA_extend E₀ r _ hfresh) hpre
       have ih := envSemAt_of_envWfA hE hEL hI hIS hIL hEN hNC hR hρ hFam hCtor hRec hW hpre₀
         (ctorClosedA_extend_pred (fun h => MemberClass.noConfusion h) hclo)
@@ -838,15 +838,21 @@ theorem envSemAt_of_envWfA (hE : EnvClosedA E) (hEL : EnvLevelsA E) (hI : IotaLi
       intro r' m' hD hres'
       by_cases hr : r' = r
       · rw [hr] at hres' ⊢
-        have hm : E.members r = some ⟨.axiomM, 0, A, none, 0, none⟩ :=
+        have hm : E.members r = some ⟨.axiomM, arity, A, none, 0, none⟩ :=
           hpre r _ (members_extendEnvA_self E₀ r _)
         rw [hm] at hres'
         cases hres'
-        obtain ⟨k₀, hT⟩ := fundArmA_nil (fundHasTyPrefixA hpre₀ harms.1 harms.2
-          (hasTyA_arity0 (envWfA_levels hW) hIL hA))
-        exact envSemClauseA_rigid hE hI hR hm rfl (Or.inl rfl)
+        apply envSemClauseA_rigidPoly hE hI hR hm rfl
           (fun h => MemberClass.noConfusion h) (fun h => MemberClass.noConfusion h)
-          (fun h => MemberClass.noConfusion h) hT
+          (fun h => MemberClass.noConfusion h)
+        · intro ls hlen hwf
+          exact fundArmA_nil (fundHasTyPrefixA hpre₀ harms.1 harms.2
+            (hasTyA_instLevels (envWfA_levels hW) hIL hwf hlen hA))
+        · intro ls ls' hlen hlen' hwf hwf' heq
+          obtain ⟨hc⟩ := convA_levelIrr_wf (envWfA_closed hW) hI
+            (iotaRecHeadTypedA_prefix hpre₀ hR) (envWfA_levels hW) hIL
+            hwf hwf' hlen hlen' heq CtxWfA.nil hA
+          exact ⟨convEnvA hpre₀ hc⟩
       · obtain ⟨m₀, hm₀⟩ := hD
         rw [members_extendEnvA_ne E₀ r _ hr] at hm₀
         exact ih r' m' ⟨m₀, hm₀⟩ hres'

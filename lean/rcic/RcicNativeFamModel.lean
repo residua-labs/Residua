@@ -3363,9 +3363,9 @@ theorem familyNoBody_of_envWfT : {E : ResolvedEnv} → EnvWfT E → FamilyNoBody
   | _, .empty => by
       intro r m h
       cases h
-  | _, .axiom E r A _ hE .. =>
+  | _, .axiom (arity := arity) E r A _ hE .. =>
       familyNoBody_extend_nonfamily (familyNoBody_of_envWfT hE)
-        r ⟨.axiomM, 0, A, none⟩ (by intro h; cases h)
+        r ⟨.axiomM, arity, A, none⟩ (by intro h; cases h)
   | _, .definition E r A v _ hE .. =>
       familyNoBody_extend_nonfamily (familyNoBody_of_envWfT hE)
         r ⟨.definitionM, 0, A, some v⟩ (by intro h; cases h)
@@ -7157,9 +7157,9 @@ theorem ctorNoBody_of_envWfT : {E : ResolvedEnv} → EnvWfT E → CtorNoBody E
   | _, .empty => by
       intro r m h
       cases h
-  | _, .axiom E r A _ hE .. =>
+  | _, .axiom (arity := arity) E r A _ hE .. =>
       ctorNoBody_extend_nonctor (ctorNoBody_of_envWfT hE)
-        r ⟨.axiomM, 0, A, none⟩ (by intro h; cases h)
+        r ⟨.axiomM, arity, A, none⟩ (by intro h; cases h)
   | _, .definition E r A v _ hE .. =>
       ctorNoBody_extend_nonctor (ctorNoBody_of_envWfT hE)
         r ⟨.definitionM, 0, A, some v⟩ (by intro h; cases h)

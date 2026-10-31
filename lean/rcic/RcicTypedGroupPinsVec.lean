@@ -1194,20 +1194,20 @@ theorem envWfT_constsIn {E : ResolvedEnv} (hW : EnvWfT E) :
     intro r m hm
     cases hm
   · -- axiom
-    rename_i E r A u hE hfresh hA hcl hlvl ih
+    rename_i arity E r A u hE hfresh hA hcl hlvl ih
     intro r' m' hm'
-    show ConstsIn (extendEnv E r ⟨.axiomM, 0, A, none⟩) m'.mtype
+    show ConstsIn (extendEnv E r ⟨.axiomM, arity, A, none⟩) m'.mtype
     by_cases hr : r' = r
     · subst r'
-      have hm : (extendEnv E r ⟨.axiomM, 0, A, none⟩).members r =
-          some ⟨.axiomM, 0, A, none⟩ := if_pos rfl
+      have hm : (extendEnv E r ⟨.axiomM, arity, A, none⟩).members r =
+          some ⟨.axiomM, arity, A, none⟩ := if_pos rfl
       rw [hm] at hm'
       cases hm'
       exact constsIn_mono (extendEnv_envSub hfresh) (hasTyT_constsIn hA)
     · have hE' : E.members r' = some m' := by
-        have h : (extendEnv E r ⟨.axiomM, 0, A, none⟩).members r' =
+        have h : (extendEnv E r ⟨.axiomM, arity, A, none⟩).members r' =
             E.members r' := by
-          show (if r' = r then some ⟨.axiomM, 0, A, none⟩ else E.members r') =
+          show (if r' = r then some ⟨.axiomM, arity, A, none⟩ else E.members r') =
             E.members r'
           rw [if_neg hr]
         rw [← h]; exact hm'

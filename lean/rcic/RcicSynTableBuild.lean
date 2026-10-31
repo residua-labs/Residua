@@ -48,9 +48,9 @@ inductive RuleOrigin : {E : ResolvedEnv} → EnvWfT E → Type
       {hclA : ∀ k, lift k 1 A = A} {hclv : ∀ k, lift k 1 v = v}
       {hlvlA : exprLevelsBounded 0 A = true} {hlvlv : exprLevelsBounded 0 v = true} :
       RuleOrigin (.definition E r A v u hE hfresh hA hv hclA hclv hlvlA hlvlv)
-  | underAxiom {E : ResolvedEnv} {r : Nat} {A : Expr Nat} {u : Level}
-      {hE : EnvWfT E} {hfresh : E.members r = none} {hA : HasTyT E 0 [] A (.sort u)}
-      {hcl : ∀ k, lift k 1 A = A} {hlvl : exprLevelsBounded 0 A = true}
+  | underAxiom {arity : Nat} {E : ResolvedEnv} {r : Nat} {A : Expr Nat} {u : Level}
+      {hE : EnvWfT E} {hfresh : E.members r = none} {hA : HasTyT E arity [] A (.sort u)}
+      {hcl : ∀ k, lift k 1 A = A} {hlvl : exprLevelsBounded arity A = true}
       (p : RuleOrigin hE) :
       RuleOrigin (.axiom E r A u hE hfresh hA hcl hlvl)
   | underDefinition {E : ResolvedEnv} {r : Nat} {A v : Expr Nat} {u : Level}
@@ -128,9 +128,9 @@ noncomputable def tableOf {E : ResolvedEnv} (hEnv : EnvWfT E) : List CRule :=
 
 theorem tableOf_empty : tableOf .empty = [] := rfl
 
-theorem tableOf_axiom {E : ResolvedEnv} {r : Nat} {A : Expr Nat} {u : Level}
-    {hE : EnvWfT E} {hfresh : E.members r = none} {hA : HasTyT E 0 [] A (.sort u)}
-    {hcl : ∀ k, lift k 1 A = A} {hlvl : exprLevelsBounded 0 A = true} :
+theorem tableOf_axiom {arity : Nat} {E : ResolvedEnv} {r : Nat} {A : Expr Nat} {u : Level}
+    {hE : EnvWfT E} {hfresh : E.members r = none} {hA : HasTyT E arity [] A (.sort u)}
+    {hcl : ∀ k, lift k 1 A = A} {hlvl : exprLevelsBounded arity A = true} :
     tableOf (.axiom E r A u hE hfresh hA hcl hlvl) = tableOf hE := by
   simp [tableOf, buildTableSyntax, List.map_map]
 
@@ -288,11 +288,11 @@ theorem deltaRule_lookup : {E : ResolvedEnv} → (hEnv : EnvWfT E) →
     ∃ e ∈ buildTableSyntax hEnv,
       e.rule = deltaRule r ((enrichEnvWfT hEnv).defAdm hres hbody htr).hv
   | _, .empty, _, _, _, h, _, _ => Option.noConfusion h
-  | _, .axiom E r' A u hE hfresh hA hcl hlvl, r, m, b, h, hb, htr => by
+  | _, .axiom (arity := arity) E r' A u hE hfresh hA hcl hlvl, r, m, b, h, hb, htr => by
       cases hdec : Nat.decEq r r' with
       | isTrue hr =>
           subst hr
-          have hm : ⟨.axiomM, 0, A, none⟩ = m :=
+          have hm : ⟨.axiomM, arity, A, none⟩ = m :=
             Option.some.inj ((members_extend_self E r _).symm.trans h)
           subst hm
           exact Bool.noConfusion htr

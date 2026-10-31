@@ -984,14 +984,14 @@ theorem envWfT_locate_inductive {f : Nat} {fm : CheckedMember} :
   | empty =>
       intro _ hp _
       simp [emptyEnv] at hp
-  | «axiom» E₀ r₀ A u hE hfresh hA hcl hlvl ih =>
+  | @«axiom» arity E₀ r₀ A u hE hfresh hA hcl hlvl ih =>
       intro hI hp hc
       by_cases hfr : f = r₀
       · subst hfr
         rw [members_extend_eq] at hp
         obtain rfl := Option.some.inj hp
         exact MemberClass.noConfusion hc
-      · rw [members_extend_ne E₀ r₀ ⟨.axiomM, 0, A, none⟩ f hfr] at hp
+      · rw [members_extend_ne E₀ r₀ ⟨.axiomM, arity, A, none⟩ f hfr] at hp
         obtain ⟨E₁, ctors, rr, rm, hg, hsub, hfn, hbody, hmems⟩ := ih hI hp hc
         exact ⟨E₁, ctors, rr, rm, hg,
           fun r m h => members_extend_preserved hfresh r m (hsub r m h), hfn, hbody,

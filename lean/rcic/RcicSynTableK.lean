@@ -224,9 +224,9 @@ noncomputable def tableOfK : {E : ResolvedEnv} → EnvWfT E → List CRule
 
 theorem tableOfK_empty : tableOfK .empty = [] := rfl
 
-theorem tableOfK_axiom {E : ResolvedEnv} {r : Nat} {A : Expr Nat} {u : Level}
-    {hE : EnvWfT E} {hfresh : E.members r = none} {hA : HasTyT E 0 [] A (.sort u)}
-    {hcl : ∀ k, lift k 1 A = A} {hlvl : exprLevelsBounded 0 A = true} :
+theorem tableOfK_axiom {arity : Nat} {E : ResolvedEnv} {r : Nat} {A : Expr Nat} {u : Level}
+    {hE : EnvWfT E} {hfresh : E.members r = none} {hA : HasTyT E arity [] A (.sort u)}
+    {hcl : ∀ k, lift k 1 A = A} {hlvl : exprLevelsBounded arity A = true} :
     tableOfK (.axiom E r A u hE hfresh hA hcl hlvl) = tableOfK hE := rfl
 
 theorem tableOfK_definition {E : ResolvedEnv} {r : Nat} {A v : Expr Nat}

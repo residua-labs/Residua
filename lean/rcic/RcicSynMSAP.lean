@@ -126,21 +126,21 @@ theorem enrichEnvWfT_typeAdm_ap :
     ∀ {r : Nat} {m : CheckedMember} (hres : E.members r = some m),
       ((enrichEnvWfT hEnv).typeAdm hres).hT.AssumpPref
   | _, .empty, _, _, hres => Option.noConfusion hres
-  | _, .axiom E r' A u hE hfresh hA hcl hlvl, rq, mq, hres => by
+  | _, .axiom (arity := arity) E r' A u hE hfresh hA hcl hlvl, rq, mq, hres => by
       have hhmE : (memberSortP_of_envWfP (enrichEnvWfT hE)).AssumpPref :=
         memberSortP_of_envWfP_ap _ (fun h' => enrichEnvWfT_typeAdm_ap hE h')
       have hAP : (enrichHasTyT (envClosed_of_envWfT hE) (envExt_refl E)
           (memberSortP_of_envWfP (enrichEnvWfT hE)) (letCtxConvP_of_envWfT hE)
-          (.nil E 0) hA).AssumpPref :=
+          (.nil E arity) hA).AssumpPref :=
         assumpPref_enrichHasTyT (envClosed_of_envWfT hE) (envExt_refl E) hhmE
-          (letCtxConvP_ap (cvWalkHyp_of_envWfT hE)) (.nil E 0) hA trivial
+          (letCtxConvP_ap (cvWalkHyp_of_envWfT hE)) (.nil E arity) hA trivial
       refine decEq_casesOn_hT_ap _ _ _ _ ?_ ?_
       · intro hne _
         exact enrichEnvWfT_typeAdm_ap hE _
       · intro heq _
         subst heq
-        have hmmeq : ⟨.axiomM, 0, A, none⟩ = mq :=
-          Option.some.inj ((members_extend_self _ rq ⟨.axiomM, 0, A, none⟩).symm.trans hres)
+        have hmmeq : ⟨.axiomM, arity, A, none⟩ = mq :=
+          Option.some.inj ((members_extend_self _ rq ⟨.axiomM, arity, A, none⟩).symm.trans hres)
         subst hmmeq
         exact hAP
   | _, .definition E r' A v u hE hfresh hA hv hclA hclv hlvlA hlvlv, rq, mq, hres => by

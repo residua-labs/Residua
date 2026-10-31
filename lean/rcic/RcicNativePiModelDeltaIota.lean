@@ -1444,7 +1444,7 @@ theorem envWfT_member_body_closed {E : ResolvedEnv} (hW : EnvWfT E) :
       DeltaConst E r m b ∧ exprClosedAt 0 b = true := by
   induction hW with
   | empty => intro _ _ _ hm _; exact Option.noConfusion hm
-  | @«axiom» E₀ r₀ A _ _ hfresh _ _ _ ih =>
+  | @«axiom» _ E₀ r₀ A _ _ hfresh _ _ _ ih =>
       intro r m b hm hb
       by_cases hrr : r = r₀
       · subst hrr

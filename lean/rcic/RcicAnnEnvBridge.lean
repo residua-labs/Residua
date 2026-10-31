@@ -17,10 +17,10 @@ the copy admits (`annEnvA_of_envWfT`), so the rows hold over it (`sortConvCharT_
   interfaces that agree on the environment's terms (`hasTyIfaceA`). The concrete ι reads only members
   that the redex and its recursor's type name, so it agrees between an admitted environment and any
   extension (`iotaFnA_prefix`).
-* LEVELS (§3). The copy's singleton members have no level parameter (`exprLevelsBoundedA 0`). Annotation
-  copies binder levels from the derivation, and those may name parameters out of scope. Weakening the
-  level context and instantiating every parameter to `zero` closes them (`closeLevelsA`), without moving
-  the erasure of a closed member.
+* LEVELS (§3). A bodyless axiom retains its declared universe parameters; bodyful singleton members
+  have arity `0`. Annotation may introduce additional binder-level parameters. The closing list
+  `closeLs` preserves the declared prefix and instantiates only additional parameters to `zero`,
+  leaving the erasure of the stored member type unchanged.
 * THE BRIDGE (§5), by induction on `EnvWfT`, at every interface that agrees with the annotation's own.
   Each singleton is annotated by M3-c's annotation in the copy built so far, its levels are closed, and
   its typings are moved to the extension's interface. A group cannot occur.
@@ -653,6 +653,182 @@ def closeLevelsA (hEL : EnvLevelsA E) (hIL : IotaLevelsA I) (M : Nat) {e A : Exp
   hasTyA_instLevels hEL hIL (levelsBounded_zeros M) (List.length_replicate _ _)
     (hasTyA_lvlWk (Nat.zero_le M) h)
 
+
+theorem levelsBounded_canonA (a : Nat) : levelsBounded a (canonLevelsA a) = true := by
+  have : ∀ (xs : List Nat), (∀ i ∈ xs, i < a) → levelsBounded a (xs.map Level.param) = true := by
+    intro xs
+    induction xs with
+    | nil => intro _; rfl
+    | cons i xs ih =>
+        intro h
+        simp only [List.map_cons, levelsBounded, Bool.and_eq_true]
+        exact ⟨by simp [levelBounded, h i (List.mem_cons_self _ _)],
+          ih (fun j hj => h j (List.mem_cons_of_mem _ hj))⟩
+  exact this _ (fun i hi => List.mem_range.mp hi)
+
+/-- the canonical list is the identity on every level. -/
+theorem instLevel_canonA (a : Nat) : (l : Level) → instLevel (canonLevelsA a) l = l
+  | .zero => rfl
+  | .succ l => congrArg Level.succ (instLevel_canonA a l)
+  | .max x y => by
+      show Level.max (instLevel _ x) (instLevel _ y) = _
+      rw [instLevel_canonA a x, instLevel_canonA a y]
+  | .imax x y => by
+      show Level.imax (instLevel _ x) (instLevel _ y) = _
+      rw [instLevel_canonA a x, instLevel_canonA a y]
+  | .param i => by
+      rw [instLevel_param]
+      by_cases h : i < a
+      · simp [canonLevelsA, h]
+      · have : (canonLevelsA a)[i]? = none := by
+          simp only [canonLevelsA, List.getElem?_map, List.getElem?_range]
+          simp [h, Nat.le_of_not_lt h]
+        rw [this]; rfl
+
+theorem instantiateLevels_canonA (a : Nat) : (e : Expr Nat) → instantiateLevels (canonLevelsA a) e = e
+  | .bvar _ => rfl
+  | .sort l => by simp only [instantiateLevels, instLevel_canonA]
+  | .const r ms => by
+      simp only [instantiateLevels]
+      congr 1
+      conv => rhs; rw [← List.map_id ms]
+      exact List.map_congr_left (fun l _ => instLevel_canonA a l)
+  | .app f x => by simp only [instantiateLevels, instantiateLevels_canonA a f, instantiateLevels_canonA a x]
+  | .lam x b => by simp only [instantiateLevels, instantiateLevels_canonA a x, instantiateLevels_canonA a b]
+  | .pi x b => by simp only [instantiateLevels, instantiateLevels_canonA a x, instantiateLevels_canonA a b]
+  | .letE x v b => by
+      simp only [instantiateLevels, instantiateLevels_canonA a x, instantiateLevels_canonA a v,
+        instantiateLevels_canonA a b]
+  | .lit _ => rfl
+
+theorem levelsBounded_append (k : Nat) : (xs ys : List Level) →
+    levelsBounded k (xs ++ ys) = (levelsBounded k xs && levelsBounded k ys)
+  | [], _ => by simp [levelsBounded]
+  | x :: xs, ys => by
+      show (levelBounded k x && levelsBounded k (xs ++ ys)) = _
+      rw [levelsBounded_append k xs ys]
+      simp only [levelsBounded, Bool.and_assoc]
+
+theorem levelsBounded_replicate_zero (k M : Nat) : levelsBounded k (List.replicate M Level.zero) = true := by
+  induction M with
+  | zero => rfl
+  | succ M ih => simp only [List.replicate, levelsBounded, ih]; rfl
+
+/-- the closing level list at arity `a`: the family's parameters stay, the next `M` go to `zero`. -/
+def closeLs (a M : Nat) : List Level := canonLevelsA a ++ List.replicate M .zero
+
+theorem closeLs_length (a M : Nat) : (closeLs a M).length = a + M := by
+  simp [closeLs, canonLevelsA]
+
+theorem closeLs_get_lt {a M i : Nat} (h : i < a) : (closeLs a M)[i]? = some (.param i) := by
+  have hl : i < (canonLevelsA a).length := by simp [canonLevelsA]; exact h
+  rw [closeLs, List.getElem?_append_left hl]
+  simp [canonLevelsA, h]
+
+theorem closeLs_get_ge {a M i : Nat} (h1 : a ≤ i) (h2 : i < a + M) :
+    (closeLs a M)[i]? = some .zero := by
+  have hl : (canonLevelsA a).length ≤ i := by simp [canonLevelsA]; exact h1
+  rw [closeLs, List.getElem?_append_right hl, List.getElem?_replicate]
+  simp only [canonLevelsA, List.length_map, List.length_range]
+  rw [if_pos (by omega)]
+
+theorem levelBounded_inst_closeLs {a M : Nat} : (l : Level) → levelBounded (a + M) l = true →
+    levelBounded a (instLevel (closeLs a M) l) = true
+  | .zero, _ => rfl
+  | .succ l, h => levelBounded_inst_closeLs l h
+  | .max x y, h => by
+      simp only [levelBounded, Bool.and_eq_true] at h
+      show (levelBounded a (instLevel _ x) && levelBounded a (instLevel _ y)) = true
+      simp only [Bool.and_eq_true]
+      exact ⟨levelBounded_inst_closeLs x h.1, levelBounded_inst_closeLs y h.2⟩
+  | .imax x y, h => by
+      simp only [levelBounded, Bool.and_eq_true] at h
+      show (levelBounded a (instLevel _ x) && levelBounded a (instLevel _ y)) = true
+      simp only [Bool.and_eq_true]
+      exact ⟨levelBounded_inst_closeLs x h.1, levelBounded_inst_closeLs y h.2⟩
+  | .param i, h => by
+      simp only [levelBounded, decide_eq_true_eq] at h
+      rw [instLevel_param]
+      by_cases hi : i < a
+      · rw [closeLs_get_lt hi]; simp [levelBounded, hi]
+      · rw [closeLs_get_ge (by omega) h]; rfl
+
+theorem levelsBounded_inst_closeLs {a M : Nat} : (ls : List Level) → levelsBounded (a + M) ls = true →
+    levelsBounded a (ls.map (instLevel (closeLs a M))) = true
+  | [], _ => rfl
+  | l :: ls, h => by
+      simp only [levelsBounded, Bool.and_eq_true, List.map] at h ⊢
+      exact ⟨levelBounded_inst_closeLs l h.1, levelsBounded_inst_closeLs ls h.2⟩
+
+theorem exprLevelsBoundedA_inst_closeLs {a M : Nat} : (e : ExprA) → exprLevelsBoundedA (a + M) e = true →
+    exprLevelsBoundedA a (instantiateLevelsA (closeLs a M) e) = true
+  | .bvar _, _ => rfl
+  | .sort l, h => levelBounded_inst_closeLs l h
+  | .const _ ms, h => levelsBounded_inst_closeLs ms h
+  | .app f x, h => by
+      simp only [exprLevelsBoundedA, instantiateLevelsA, Bool.and_eq_true] at h ⊢
+      exact ⟨exprLevelsBoundedA_inst_closeLs f h.1, exprLevelsBoundedA_inst_closeLs x h.2⟩
+  | .lam x u b, h => by
+      simp only [exprLevelsBoundedA, instantiateLevelsA, Bool.and_eq_true] at h ⊢
+      exact ⟨⟨exprLevelsBoundedA_inst_closeLs x h.1.1, levelBounded_inst_closeLs u h.1.2⟩,
+        exprLevelsBoundedA_inst_closeLs b h.2⟩
+  | .pi x u b v, h => by
+      simp only [exprLevelsBoundedA, instantiateLevelsA, Bool.and_eq_true] at h ⊢
+      exact ⟨⟨⟨exprLevelsBoundedA_inst_closeLs x h.1.1.1, levelBounded_inst_closeLs u h.1.1.2⟩,
+        exprLevelsBoundedA_inst_closeLs b h.1.2⟩, levelBounded_inst_closeLs v h.2⟩
+  | .letE x w b, h => by
+      simp only [exprLevelsBoundedA, instantiateLevelsA, Bool.and_eq_true] at h ⊢
+      exact ⟨⟨exprLevelsBoundedA_inst_closeLs x h.1.1, exprLevelsBoundedA_inst_closeLs w h.1.2⟩,
+        exprLevelsBoundedA_inst_closeLs b h.2⟩
+  | .lit _, _ => rfl
+
+theorem levelsBounded_closeLs (a M : Nat) : levelsBounded a (closeLs a M) = true := by
+  rw [closeLs, levelsBounded_append, levelsBounded_canonA, levelsBounded_replicate_zero]; rfl
+
+/-- the family's own parameters are fixed by the closing list. -/
+theorem instLevel_closeLs_of_bounded {a M : Nat} : (l : Level) → levelBounded a l = true →
+    instLevel (closeLs a M) l = l
+  | .zero, _ => rfl
+  | .succ l, h => congrArg Level.succ (instLevel_closeLs_of_bounded l h)
+  | .max x y, h => by
+      simp only [levelBounded, Bool.and_eq_true] at h
+      show Level.max (instLevel _ x) (instLevel _ y) = _
+      rw [instLevel_closeLs_of_bounded x h.1, instLevel_closeLs_of_bounded y h.2]
+  | .imax x y, h => by
+      simp only [levelBounded, Bool.and_eq_true] at h
+      show Level.imax (instLevel _ x) (instLevel _ y) = _
+      rw [instLevel_closeLs_of_bounded x h.1, instLevel_closeLs_of_bounded y h.2]
+  | .param i, h => by
+      simp only [levelBounded, decide_eq_true_eq] at h
+      rw [instLevel_param, closeLs_get_lt h]; rfl
+
+/-- on `main`'s syntax, a term within the family's arity is fixed by the closing list. -/
+theorem instantiateLevels_closeLs {a M : Nat} (e : Expr Nat) (h : exprLevelsBounded a e = true) :
+    instantiateLevels (closeLs a M) e = e := by
+  rw [instantiateLevels_take a _ e h]
+  have ht : (closeLs a M).take a = canonLevelsA a := by
+    rw [closeLs, List.take_left' (by simp [canonLevelsA])]
+  rw [ht]
+  exact instantiateLevels_canonA a e
+
+variable {E : ResolvedEnvA} {I : IotaIfaceA}
+
+/-- a typing closed: the level context weakened to `a + M`, instantiated at the closing list. -/
+def closeTyA (hEL : EnvLevelsA E) (hIL : IotaLevelsA I) (a M : Nat) {Γ : LCtxA} {e A : ExprA}
+    (h : HasTyA E I a Γ e A) :
+    HasTyA E I a (instCtxA (closeLs a M) Γ) (instantiateLevelsA (closeLs a M) e)
+      (instantiateLevelsA (closeLs a M) A) :=
+  hasTyA_instLevels hEL hIL (levelsBounded_closeLs a M) (closeLs_length a M)
+    (hasTyA_lvlWk (Nat.le_add_right a M) h)
+
+def closeConvA (hEL : EnvLevelsA E) (hIL : IotaLevelsA I) (a M : Nat) {Γ : LCtxA} {x y A : ExprA}
+    (h : ConvA E I a Γ x y A) :
+    ConvA E I a (instCtxA (closeLs a M) Γ) (instantiateLevelsA (closeLs a M) x)
+      (instantiateLevelsA (closeLs a M) y) (instantiateLevelsA (closeLs a M) A) :=
+  convA_instLevels hEL hIL (levelsBounded_closeLs a M) (closeLs_length a M)
+    (convA_lvlWk (Nat.le_add_right a M) h)
+
+
 end Levels
 
 /-! ## (4) erasure facts the bridge reads -/
@@ -782,18 +958,22 @@ theorem annEnvA_of_bridged {EA : ResolvedEnvA} (hno : NoGroupEnvA EA)
 
 variable {E : ResolvedEnvA}
 
-/-- a closed type of the typed judgment annotates to a closed type of the copy with no level
-    parameter. -/
-theorem annotateClosedType (C : AnnEnvA E) (hn : EnvNormEraseA E) {A : Expr Nat} {u : Level}
-    (hA : HasTyT (eraseEnv E) 0 [] A (.sort u)) (hlvl : exprLevelsBounded 0 A = true) :
-    ∃ (AA : ExprA) (ls : List Level), erase AA = A ∧ exprLevelsBoundedA 0 AA = true ∧
-      Nonempty (HasTyA E (iotaIfaceA E) 0 [] AA (.sort (instLevel ls u))) := by
+/-- A locally closed type annotates at its own universe arity. The existing
+    prefix-preserving closing list fixes its declared parameters and closes only
+    the additional levels introduced by annotations. -/
+theorem annotateClosedType (C : AnnEnvA E) (hn : EnvNormEraseA E) {arity : Nat}
+    {A : Expr Nat} {u : Level}
+    (hA : HasTyT (eraseEnv E) arity [] A (.sort u)) (hlvl : exprLevelsBounded arity A = true) :
+    ∃ (AA : ExprA) (ls : List Level), erase AA = A ∧ exprLevelsBoundedA arity AA = true ∧
+      Nonempty (HasTyA E (iotaIfaceA E) arity [] AA (.sort (instLevel ls u))) := by
   obtain ⟨AA, TA, hAe, hTe, ⟨t⟩⟩ := annHasTyT' C hn hA CtxWfA.nil rfl
   obtain rfl := erase_eq_sort hTe
-  refine ⟨instantiateLevelsA (List.replicate (lvlBoundA AA) .zero) AA,
-    List.replicate (lvlBoundA AA) .zero, ?_, ?_, ⟨closeLevelsA C.hEL C.hIL _ t⟩⟩
-  · rw [erase_instantiateLevelsA, hAe, instantiateLevels_closed _ _ hlvl]
-  · exact exprLevelsBoundedA_inst_zeros AA (exprLevelsBoundedA_lvlBoundA AA)
+  refine ⟨instantiateLevelsA (closeLs arity (lvlBoundA AA)) AA,
+    closeLs arity (lvlBoundA AA), ?_, ?_, ⟨closeTyA C.hEL C.hIL arity _ t⟩⟩
+  · rw [erase_instantiateLevelsA, hAe, instantiateLevels_closeLs _ hlvl]
+  · exact exprLevelsBoundedA_inst_closeLs AA
+      (exprLevelsBoundedA_mono (Nat.le_add_left (lvlBoundA AA) arity) AA
+        (exprLevelsBoundedA_lvlBoundA AA))
 
 /-- a closed value of a closed type annotates, at one closing of levels, with the type. -/
 theorem annotateClosedValue (C : AnnEnvA E) (hn : EnvNormEraseA E) {A v : Expr Nat} {u : Level}
@@ -830,16 +1010,16 @@ theorem ifaceAgree_step {I : IotaIfaceA} {EA : ResolvedEnvA} (hW : EnvWfA I EA) 
     at every interface that agrees with the extension's own on its terms. -/
 theorem bridgeStep_axiom {EA : ResolvedEnvA} (C : AnnEnvA EA) (hn : EnvNormEraseA EA)
     (hW : ∀ J, IfaceAgreeA EA (iotaIfaceA EA) J → Nonempty (EnvWfA J EA)) {r : Nat} {A : Expr Nat}
-    {u : Level} (hfresh : (eraseEnv EA).members r = none) (hA : HasTyT (eraseEnv EA) 0 [] A (.sort u))
-    (hcl : ∀ k, lift k 1 A = A) (hlvl : exprLevelsBounded 0 A = true) :
+    {arity : Nat} {u : Level} (hfresh : (eraseEnv EA).members r = none) (hA : HasTyT (eraseEnv EA) arity [] A (.sort u))
+    (hcl : ∀ k, lift k 1 A = A) (hlvl : exprLevelsBounded arity A = true) :
     ∃ mA : CheckedMemberA, mA.mclass = .axiomM ∧
-      eraseEnv (extendEnvA EA r mA) = extendEnv (eraseEnv EA) r ⟨.axiomM, 0, A, none⟩ ∧
+      eraseEnv (extendEnvA EA r mA) = extendEnv (eraseEnv EA) r ⟨.axiomM, arity, A, none⟩ ∧
       ∀ J, IfaceAgreeA (extendEnvA EA r mA) (iotaIfaceA (extendEnvA EA r mA)) J →
         Nonempty (EnvWfA J (extendEnvA EA r mA)) := by
   obtain ⟨AA, ls, hAe, hlvlA, ⟨tA⟩⟩ := annotateClosedType C hn hA hlvl
   have hcl' : ∀ k, liftA k 1 AA = AA := fun k => liftA_eq_of_erase AA k (by rw [hAe]; exact hcl k)
   have hfr := members_none_of_erase hfresh
-  refine ⟨⟨.axiomM, 0, AA, none, 0, none⟩, rfl, ?_, fun J hJ => ?_⟩
+  refine ⟨⟨.axiomM, arity, AA, none, 0, none⟩, rfl, ?_, fun J hJ => ?_⟩
   · rw [eraseEnv_extend, eraseMember]; simp only [hAe, Option.map_none']
   · obtain ⟨hW0⟩ := hW _ (IfaceAgreeA.refl _ _)
     have hag := ifaceAgree_step hW0 hfr hJ

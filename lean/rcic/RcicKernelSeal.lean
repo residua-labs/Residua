@@ -11,6 +11,12 @@ import rcic.RcicF3StepWRefusalSeal
 -- BEGIN SOL-P1-STEPW-OPEN DIRECT IMPORT (closure_claim = 0)
 import rcic.RcicF3StepWOpenSeal
 -- END SOL-P1-STEPW-OPEN DIRECT IMPORT
+-- BEGIN SOL-POLY-AXIOM-TABLE DIRECT IMPORT (closure_claim = 0)
+import rcic.RcicPolyAxiomTableSeal
+-- END SOL-POLY-AXIOM-TABLE DIRECT IMPORT
+-- BEGIN SOL-F3-AX3-BOUNDARY DIRECT IMPORT (closure_claim = 0)
+import rcic.RcicF3Ax3BoundarySeal
+-- END SOL-F3-AX3-BOUNDARY DIRECT IMPORT
 -- BEGIN SOL-STEPAG-PENDA DIRECT IMPORT (closure_claim = 0)
 import rcic.RcicF3StepAGPendASeal
 -- END SOL-STEPAG-PENDA DIRECT IMPORT

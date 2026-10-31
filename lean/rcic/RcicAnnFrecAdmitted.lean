@@ -158,9 +158,9 @@ theorem envWfA_bodiesSelf {I : IotaIfaceA} :
       ∀ r m b, EA.members r = some m → m.bodyA = some b → ConstsInA (domA EA) b
   | _, .empty => fun r _ _ hr => by
       rw [show emptyEnvA.members r = none from rfl] at hr; exact Option.noConfusion hr
-  | _, .axiomM E r A u hE hfresh hA hcl hlvl =>
+  | _, .axiomM (arity := arity) E r A u hE hfresh hA hcl hlvl =>
       bodiesSelf_extend (envWfA_bodiesSelf hE) (fun b' hb => by
-        rw [show (⟨.axiomM, 0, A, none, 0, none⟩ : CheckedMemberA).bodyA = none from rfl] at hb
+        rw [show (⟨.axiomM, arity, A, none, 0, none⟩ : CheckedMemberA).bodyA = none from rfl] at hb
         exact Option.noConfusion hb)
   | _, .definitionM E r A v u hE hfresh hA hv hclA hclv hlvlA hlvlv =>
       bodiesSelf_extend (envWfA_bodiesSelf hE) (fun b' hb => by

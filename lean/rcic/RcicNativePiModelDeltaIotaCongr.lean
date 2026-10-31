@@ -4979,10 +4979,10 @@ theorem envWfT_deltaConst_semSub {E : ResolvedEnv} {n : Nat} (hW : EnvWfT E)
       E₁.members r = some m → m.body = some b → LRTermDSubKClosedCtxSemBi E n [] b b m.mtype
   | _, .empty, _, _, _, _, hm, _ => by
       simp only [emptyEnv] at hm; cases hm
-  | _, .axiom E₁ r₀ A _ hE₁ hfresh _ _ _, hext, r, m, b, hm, hb => by
+  | _, .axiom (arity := arity) E₁ r₀ A _ hE₁ hfresh _ _ _, hext, r, m, b, hm, hb => by
       have hext₀ : ∀ r' m', E₁.members r' = some m' → E.members r' = some m' :=
         fun r' m' hm' => hext r' m'
-          (members_extend_preserved (m := ⟨.axiomM, 0, A, none⟩) hfresh r' m' hm')
+          (members_extend_preserved (m := ⟨.axiomM, arity, A, none⟩) hfresh r' m' hm')
       by_cases hrr : r = r₀
       · subst hrr
         simp only [extendEnv, if_pos rfl] at hm
@@ -15767,10 +15767,10 @@ theorem envWfT_deltaConst_majSemSub {E : ResolvedEnv} {n : Nat} (hW : EnvWfT E)
       E₁.members r = some m → m.body = some b → LRTermMajSemBi E n [] b b m.mtype
   | _, .empty, _, _, _, _, hm, _ => by
       simp only [emptyEnv] at hm; cases hm
-  | _, .axiom E₁ r₀ A _ hE₁ hfresh _ _ _, hext, r, m, b, hm, hb => by
+  | _, .axiom (arity := arity) E₁ r₀ A _ hE₁ hfresh _ _ _, hext, r, m, b, hm, hb => by
       have hext₀ : ∀ r' m', E₁.members r' = some m' → E.members r' = some m' :=
         fun r' m' hm' => hext r' m'
-          (members_extend_preserved (m := ⟨.axiomM, 0, A, none⟩) hfresh r' m' hm')
+          (members_extend_preserved (m := ⟨.axiomM, arity, A, none⟩) hfresh r' m' hm')
       by_cases hrr : r = r₀
       · subst hrr
         simp only [extendEnv, if_pos rfl] at hm
@@ -17016,10 +17016,10 @@ theorem envWfT_deltaConst_majSemSub_of_typedSubst0 {E : ResolvedEnv} {n : Nat} (
       E₁.members r = some m → m.body = some b → LRTermMajSemBi E n [] b b m.mtype
   | _, .empty, _, _, _, _, hm, _ => by
       simp only [emptyEnv] at hm; cases hm
-  | _, .axiom E₁ r₀ A _ hE₁ hfresh _ _ _, hext, r, m, b, hm, hb => by
+  | _, .axiom (arity := arity) E₁ r₀ A _ hE₁ hfresh _ _ _, hext, r, m, b, hm, hb => by
       have hext₀ : ∀ r' m', E₁.members r' = some m' → E.members r' = some m' :=
         fun r' m' hm' => hext r' m'
-          (members_extend_preserved (m := ⟨.axiomM, 0, A, none⟩) hfresh r' m' hm')
+          (members_extend_preserved (m := ⟨.axiomM, arity, A, none⟩) hfresh r' m' hm')
       by_cases hrr : r = r₀
       · subst hrr
         simp only [extendEnv, if_pos rfl] at hm

@@ -299,9 +299,9 @@ structure GInvSteps (P : Premises4) (K : Nat → Nat) (Cl Bd : ∀ {E : Resolved
 `Cl` (`hax`). -/
 theorem gInv_of_steps (P : Premises4) (K : Nat → Nat) (Cl Bd : ∀ {E : ResolvedEnv}, EnvWfT E → Prop)
     (S : GInvSteps P K Cl Bd)
-    (hax : ∀ (E : ResolvedEnv) (r : Nat) (A : Expr Nat) (u : Level) (hE : EnvWfT E)
-      (hfresh : E.members r = none) (hA : HasTyT E 0 [] A (.sort u)) (hcl : ∀ k, Rcic.Declarative.lift k 1 A = A)
-      (hlvl : exprLevelsBounded 0 A = true), ¬ Cl (EnvWfT.axiom E r A u hE hfresh hA hcl hlvl)) :
+    (hax : ∀ {arity : Nat} (E : ResolvedEnv) (r : Nat) (A : Expr Nat) (u : Level) (hE : EnvWfT E)
+      (hfresh : E.members r = none) (hA : HasTyT E arity [] A (.sort u)) (hcl : ∀ k, Rcic.Declarative.lift k 1 A = A)
+      (hlvl : exprLevelsBounded arity A = true), ¬ Cl (EnvWfT.axiom E r A u hE hfresh hA hcl hlvl)) :
     {E : ResolvedEnv} → (hW : EnvWfT E) → Cl hW → Bd hW → GInv P K hW
   | _, .empty, _, _ => fun _ _ _ _ =>
       ⟨fun _ _ h => (Option.noConfusion h), fun _ _ _ _ h => (Option.noConfusion h)⟩
@@ -327,9 +327,9 @@ invariant, the recursor at 1 has no closed term), the target `RcicConsistentEmpt
 theorem rcicConsistentEmpty_of_cover (P : Premises4)
     (Cl : ∀ {E : ResolvedEnv}, EnvWfT E → Prop) (Bd : (Nat → Nat) → ∀ {E : ResolvedEnv}, EnvWfT E → Prop)
     (S : ∀ K : Nat → Nat, GInvSteps P K Cl (Bd K))
-    (hax : ∀ (E : ResolvedEnv) (r : Nat) (A : Expr Nat) (u : Level) (hE : EnvWfT E)
-      (hfresh : E.members r = none) (hA : HasTyT E 0 [] A (.sort u)) (hcl : ∀ k, Rcic.Declarative.lift k 1 A = A)
-      (hlvl : exprLevelsBounded 0 A = true), ¬ Cl (EnvWfT.axiom E r A u hE hfresh hA hcl hlvl))
+    (hax : ∀ {arity : Nat} (E : ResolvedEnv) (r : Nat) (A : Expr Nat) (u : Level) (hE : EnvWfT E)
+      (hfresh : E.members r = none) (hA : HasTyT E arity [] A (.sort u)) (hcl : ∀ k, Rcic.Declarative.lift k 1 A = A)
+      (hlvl : exprLevelsBounded arity A = true), ¬ Cl (EnvWfT.axiom E r A u hE hfresh hA hcl hlvl))
     (hCover : ∀ (E : ResolvedEnv) (hW : EnvWfT E), AxiomFreeEnv' E → E.members 0 = some falseFamMember →
       E.members 1 = some falseRecMemberU → Cl hW)
     (hBound : ∀ (E : ResolvedEnv) (hW : EnvWfT E) (n : Nat) (e : Expr Nat) (h : HasTyT E n [] e (.const 0 [])),

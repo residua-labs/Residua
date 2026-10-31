@@ -174,10 +174,10 @@ def envWfT_mtypeSortTyped {E : ResolvedEnv} (hW : EnvWfT E) :
     EnvMembersSortTypedT E :=
   match hW with
   | .empty => fun r m hm => by simp only [emptyEnv] at hm; cases hm
-  | .axiom E r₀ A u hE hfresh hA hcl hlvl =>
+  | .axiom (arity := arity) E r₀ A u hE hfresh hA hcl hlvl =>
       fun r m hm => by
         have hext := members_extend_preserved
-          (m := ⟨.axiomM, 0, A, none⟩) hfresh
+          (m := ⟨.axiomM, arity, A, none⟩) hfresh
         by_cases hrr : r = r₀
         · subst hrr
           simp only [extendEnv, if_pos rfl] at hm

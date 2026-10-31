@@ -1405,8 +1405,8 @@ theorem stepRank_le_of_base {E : ResolvedEnv} (hE : EnvWfT E)
     base, so its constants are base members, ranked at most the base's
     depth; the new member is ranked one past it. -/
 theorem stepRank_le_of_new {E : ResolvedEnv} (hE : EnvWfT E) {r₀ : Nat}
-    (hfresh : E.members r₀ = none) {A : Expr Nat} {u : Level}
-    (hA : HasTyT E 0 [] A (.sort u)) {r' : Nat}
+    (hfresh : E.members r₀ = none) {arity : Nat} {A : Expr Nat} {u : Level}
+    (hA : HasTyT E arity [] A (.sort u)) {r' : Nat}
     (ho : occursConst r' A = true) :
     stepRank E hE.rank hE.depth r' ≤ stepRank E hE.rank hE.depth r₀ := by
   obtain ⟨m', hm'⟩ := member_of_occursConst A (hasTyT_constsIn hA) ho

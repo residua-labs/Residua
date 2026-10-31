@@ -1511,8 +1511,8 @@ theorem envConstsArity_of_envWfT {E : ResolvedEnv} : EnvWfT E → EnvConstsArity
   | .empty => by
       intro _ _ _ hm _
       simp [emptyEnv] at hm
-  | .axiom E r A _ hE hfresh _ _ _ =>
-      envConstsArity_extend_member r ⟨.axiomM, 0, A, none⟩ hfresh
+  | .axiom (arity := arity) E r A _ hE hfresh _ _ _ =>
+      envConstsArity_extend_member r ⟨.axiomM, arity, A, none⟩ hfresh
         (envConstsArity_of_envWfT hE) (fun _ hb => by cases hb)
   | .definition E r A v _ hE hfresh _ hv _ _ _ _ =>
       envConstsArity_extend_member r ⟨.definitionM, 0, A, some v⟩ hfresh

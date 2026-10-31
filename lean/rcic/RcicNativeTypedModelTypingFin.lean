@@ -3514,7 +3514,7 @@ theorem envWfT_member_mtype_closed {E : ResolvedEnv} (hW : EnvWfT E) :
     ∀ r m, E.members r = some m → exprClosedAt 0 m.mtype = true := by
   induction hW with
   | empty => intro _ _ hm; exact Option.noConfusion hm
-  | @«axiom» E₀ r₀ A _ _ _ hA _ _ ih =>
+  | @«axiom» _ E₀ r₀ A _ _ _ hA _ _ ih =>
       intro r m hm
       by_cases hrr : r = r₀
       · subst hrr; rw [members_extend_eq] at hm; injection hm with hm; subst hm
