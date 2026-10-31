@@ -26,7 +26,14 @@ def sealedTheorems : List Name := [
   ``Rcic.F3.StepWOpen.hyp_iff_all_openArm,
   ``Rcic.F3.StepWOpen.global_nonvacuity_iff,
   ``Rcic.F3.StepWOpen.Counterexample,
-  ``Rcic.F3.StepWOpen.counterexample_refutes_hyp
+  ``Rcic.F3.StepWOpen.counterexample_refutes_hyp,
+  ``Rcic.F3.StepWOpen.diagonal_sortExcursion,
+  ``Rcic.F3.StepWOpen.noExcursion_refuted,
+  ``Rcic.F3.StepWOpen.ctorEnvironment_before_rec,
+  ``Rcic.F3.StepWOpen.walk_entry_double_typed_before_rec,
+  ``Rcic.F3.StepWOpen.prefix_iota_members_old,
+  ``Rcic.F3.StepWOpen.derivedIota_before_rec_iff,
+  ``Rcic.F3.StepWOpen.freshFamily_typing_does_not_restrict
 ]
 
 def allowedAxioms : List Name := [``propext, ``Quot.sound]

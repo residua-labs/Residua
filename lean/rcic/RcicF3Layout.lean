@@ -108,12 +108,12 @@ def RecForFam (E : ResolvedEnv) : Prop :=
     ∃ r rm, E.members r = some rm ∧ rm.mclass = .recursorM ∧ memberFamRef rm = some g
 
 /-- The recursor node of a group step, with the scanned data. -/
-theorem group_node {E E' : ResolvedEnv} {f rr : Nat} {fm rm : CheckedMember}
+def groupNode {E E' : ResolvedEnv} {f rr : Nat} {fm rm : CheckedMember}
     {ctors : List (Nat × CheckedMember)} (hE : EnvWfT E) (hfam : fm.mclass = .inductiveM)
     (hctors : ∀ c ∈ ctors, c.2.mclass = .constructorM) (hrec : rm.mclass = .recursorM)
     (hmem : GroupMembersT (extendEnv E f fm) E ((f, fm) :: ctors ++ [(rr, rm)]) E') :
-    ∃ node : RecNode E E' f rr rm, scanRec hmem = some (famDataOf node.a) := by
-  refine group_rec_node (familyLayout_of_envWfT hE) hrec hmem ?_ (fun _ _ h => Or.inl h) (fun _ _ h => h) ?_
+    {node : RecNode E E' f rr rm // scanRec hmem = some (famDataOf node.a)} := by
+  refine groupRecNode (familyLayout_of_envWfT hE) hrec hmem ?_ (fun _ _ h => Or.inl h) (fun _ _ h => h) ?_
     (List.mem_cons_of_mem _ (List.mem_append_right _ (List.mem_singleton_self _)))
   · intro c hc
     rcases List.mem_cons.mp hc with rfl | hc
@@ -127,6 +127,15 @@ theorem group_node {E E' : ResolvedEnv} {f rr : Nat} {fm rm : CheckedMember}
     · rcases List.mem_append.mp hc with hc | hc
       · rw [hctors c hc] at hk; cases hk
       · rw [List.mem_singleton] at hc; subst hc; exact ⟨rfl, rfl⟩
+
+/-- Existing propositional interface for the constructive group node. -/
+theorem group_node {E E' : ResolvedEnv} {f rr : Nat} {fm rm : CheckedMember}
+    {ctors : List (Nat × CheckedMember)} (hE : EnvWfT E) (hfam : fm.mclass = .inductiveM)
+    (hctors : ∀ c ∈ ctors, c.2.mclass = .constructorM) (hrec : rm.mclass = .recursorM)
+    (hmem : GroupMembersT (extendEnv E f fm) E ((f, fm) :: ctors ++ [(rr, rm)]) E') :
+    ∃ node : RecNode E E' f rr rm, scanRec hmem = some (famDataOf node.a) := by
+  let result := groupNode hE hfam hctors hrec hmem
+  exact ⟨result.val, result.property⟩
 
 theorem walk_ctorFam {S : ResolvedEnv} : {E E' : ResolvedEnv} → {ms : List (Nat × CheckedMember)} →
     GroupMembersT S E ms E' → ∀ r m, (r, m) ∈ ms → m.mclass = .constructorM → ∀ g, memberFamRef m = some g →

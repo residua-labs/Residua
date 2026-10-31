@@ -1,3 +1,6 @@
+-- BEGIN SOL-P1-STEPWD-APEX SEAL IMPORT (closure_claim = 0)
+import rcic.RcicF3StepWDApexSeal
+-- END SOL-P1-STEPWD-APEX SEAL IMPORT
 -- BEGIN SOL-P1-STEPW-GROUP DIRECT IMPORT (closure_claim = 0)
 import rcic.RcicF3StepWGroupSeal
 -- END SOL-P1-STEPW-GROUP DIRECT IMPORT
@@ -745,6 +748,9 @@ name list makes inspectable: every registered statement is readable in full.
 -- BEGIN SOL-PENDA-MODEL IMPORT
 import rcic.RcicF3PendAModelSeal
 -- END SOL-PENDA-MODEL IMPORT
+-- BEGIN SOL-P1-STEPW-APEX SEAL IMPORT (closure_claim = 0)
+import rcic.RcicF3StepWApexSeal
+-- END SOL-P1-STEPW-APEX SEAL IMPORT
 import rcic.RcicTypedRef
 import rcic.RcicDeclarative
 import rcic.RcicSubstCalc

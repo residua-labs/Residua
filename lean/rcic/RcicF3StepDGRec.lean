@@ -615,21 +615,23 @@ constructor view's parameter prefix is the family's), the `Prop`-corner
 clause, and `CtorsBelowRec`. -/
 
 /-- **The step of a group in the raw roles, bounded.** -/
-theorem gInv_groupRawD (P : Premises4) (K : Nat → Nat) {E E' : ResolvedEnv} {f rr : Nat}
+theorem gInv_groupRawD_atNode (P : Premises4) (K : Nat → Nat) {E E' : ResolvedEnv} {f rr : Nat}
     {fm rm : CheckedMember} {ctors : List (Nat × CheckedMember)} (hE : EnvWfT E)
     (hfam : fm.mclass = .inductiveM) (hctors : ∀ c ∈ ctors, c.2.mclass = .constructorM)
     (hrec : rm.mclass = .recursorM)
     (hmem : GroupMembersT (extendEnv E f fm) E ((f, fm) :: ctors ++ [(rr, rm)]) E')
-    (hsh : ∀ node : RecNode E E' f rr rm, NoFunRec node)
-    (hpar : ∀ node : RecNode E E' f rr rm, ∀ i : Fin node.a.constructors.length,
+    (node : RecNode E E' f rr rm)
+    (hs : scanRec hmem = some (famDataOf node.a))
+    (hsh : NoFunRec node)
+    (hpar : ∀ i : Fin node.a.constructors.length,
       (node.a.constructorViews i).parameters = node.a.family.parameters)
-    (hprop : ∀ node : RecNode E E' f rr rm, UniformProp node.a.family.resultLevel →
+    (hprop : UniformProp node.a.family.resultLevel →
       node.a.policy = .anySort → ∀ i : Fin node.a.constructors.length,
       (∀ T, T ∈ (node.a.constructorViews i).fields → occursConst node.a.family.ref T = false) ∧
       (∀ k, k < (node.a.constructorViews i).fields.length →
         posOf (.bvar ((node.a.constructorViews i).fields.length - 1 - k))
           (node.a.constructorViews i).resultIndices = none))
-    (hCB : ∀ node : RecNode E E' f rr rm, CtorsBelowRec K node)
+    (hCB : CtorsBelowRec K node)
     (hAg : ∀ node : RecNode E E' f rr rm, WalkAgree (AgreeAt node.a.family.parameters.length) hmem)
     (hB : BoundG K (EnvWfT.group E f fm ctors rr rm E' hE hfam hctors hrec hmem))
     (hD : BoundDG K (EnvWfT.group E f fm ctors rr rm E' hE hfam hctors hrec hmem))
@@ -644,7 +646,6 @@ theorem gInv_groupRawD (P : Premises4) (K : Nat → Nat) {E E' : ResolvedEnv} {f
   have hWR : WalkRec hmem := walkRec_of_group hmem
   obtain ⟨hL, hrr⟩ := group_layout_of_walkRec hE hfam hctors hrec hmem hWR
   intro ctx hctx μ hF
-  obtain ⟨node, hs⟩ := group_node hE hfam hctors hrec hmem
   obtain ⟨hf0, _, hf', hr', _⟩ := group_refs hmem hL hrr
   have hlen := node_ctors_length node hrr
   have hsubE : ∀ r m, E.members r = some m → E'.members r = some m := groupMembersT_preserve hmem
@@ -694,7 +695,7 @@ theorem gInv_groupRawD (P : Premises4) (K : Nat → Nat) {E E' : ResolvedEnv} {f
     rw [node.fam]; exact famFreeBodies_node hE hf0 hmem node
   -- the stage data, by the order
   have D : DStage P K node μ :=
-    dStage_of hE hfam hctors hrec hmem node (hsh node) (hpar node) hBG (fun i => hDG node i) IH ctx hctxE μ hFE hlim
+    dStage_of hE hfam hctors hrec hmem node (hsh) (hpar) hBG (fun i => hDG node i) IH ctx hctxE μ hFE hlim
   have hBfd : FamBounded (famDataOf node.a) node.a.family.member.arity := famBounded_node node hTF
   -- the family's soundness in the raw roles, at every instance
   have hfmS : MemberSound P μ K f fm :=
@@ -737,14 +738,14 @@ theorem gInv_groupRawD (P : Premises4) (K : Nat → Nat) {E E' : ResolvedEnv} {f
       ShapesMatch f shapes (node.a.constructorViews i).fields := fun i fuel shapes hU hpol hfs =>
     shapesMatch_of_direct (famFreeBodies_node hE hf0 hmem node) hopq _ 0 _
       (recFieldsDirect_of_free (lsF := []) (np := 0) (nq := 0) _ 0
-        (fun T hT => by rw [← node.fam]; exact (hprop node hU hpol i).1 T hT)) shapes hfs
+        (fun T hT => by rw [← node.fam]; exact (hprop hU hpol i).1 T hT)) shapes hfs
   have hnrec : UniformProp node.a.family.resultLevel → node.a.policy = .anySort →
       ∀ (i : Fin node.a.constructors.length) fuel shapes, fieldShapesFuel node.E0 fuel node.a.family.ref
         node.a.family.member.arity node.a.family.parameters.length node.a.family.indices.length
         node.a.family.parameters.length (node.a.constructorViews i).fields = some shapes →
         ∀ s, s ∈ shapes → s = .nonrecursive := by
     intro hU hpol i fuel shapes hfs s hs
-    have hnf := (hprop node hU hpol i).1
+    have hnf := (hprop hU hpol i).1
     rw [node.fam] at hnf hfs
     obtain ⟨_, hm⟩ := hsh' i fuel shapes hU hpol hfs
     obtain ⟨k, hk1, hk2⟩ := List.mem_iff_getElem.mp hs
@@ -769,12 +770,12 @@ theorem gInv_groupRawD (P : Premises4) (K : Nat → Nat) {E E' : ResolvedEnv} {f
     exact h
   -- ι at the group's recursor
   have hIrr : ∀ Efin, (∀ r m, E'.members r = some m → Efin.members r = some m) → IotaAt P μ K Efin rr :=
-    fun Efin hsubF => iota_at_D P hG hsubF hr' hFF hopq' (hsh node) hlvC (fun hU hpol i => by
+    fun Efin hsubF => iota_at_D P hG hsubF hr' hFF hopq' (hsh) hlvC (fun hU hpol i => by
       obtain ⟨shapes, fuel, hfs, hdm⟩ := node.h12 i
       have hmt := derivedMinor_nonrec node.a i fuel shapes (hnrec hU hpol i fuel shapes hfs)
         (fieldShapesFuel_length _ _ _ _ _ _ _ _ _ hfs)
       rw [hdm] at hmt
-      exact ⟨fun T hT => (hprop node hU hpol i).1 T hT, (hprop node hU hpol i).2,
+      exact ⟨fun T hT => (hprop hU hpol i).1 T hT, (hprop hU hpol i).2,
         ⟨_, hmt⟩, hPT hU hpol i⟩)
   -- every recursor of the extended environment
   have hIall : ∀ Efin, (∀ r m, E'.members r = some m → Efin.members r = some m) →
@@ -805,8 +806,8 @@ theorem gInv_groupRawD (P : Premises4) (K : Nat → Nat) {E E' : ResolvedEnv} {f
           exact recVal_mem_recPDB D hlim hBfd _ hbnd (hagR _ hbnd) (groupFaithB_ctorAt P hG _) (hU _) hpol
       | anySort =>
           exact rec_member_soundB P hG hcl hlvl hrb (hnrec hU hpol)
-            (fun hU' hpol' i => ⟨(hprop node hU' hpol' i).2, hPT hU' hpol' i⟩)
-            (fun i T hT => (hprop node hU hpol i).1 T hT)
+            (fun hU' hpol' i => ⟨(hprop hU' hpol' i).2, hPT hU' hpol' i⟩)
+            (fun i T hT => (hprop hU hpol i).1 T hT)
     · intro σ ls ρ hlen hls
       refine ⟨?_, fun b hb => by rw [hrb] at hb; cases hb⟩
       rw [den_inst_canon (mkM P μ) σ ls ρ rm.mtype hcl (hlen ▸ hlvl)]
@@ -880,7 +881,7 @@ theorem gInv_groupRawD (P : Premises4) (K : Nat → Nat) {E E' : ResolvedEnv} {f
     · rw [(node.a.constructorViews i).storedType, (node.a.constructorViews i).arity]
       rfl
     · intro vs hvl hbd
-      exact famB_raw D hlim vs (fun v hv => Nat.le_trans (hbd v hv) (hCB node i))
+      exact famB_raw D hlim vs (fun v hv => Nat.le_trans (hbd v hv) (hCB i))
         (hvl.trans (node.a.constructorViews i).arity)
     · intro vs hvl hbd zs hz
       obtain ⟨u, d, hd⟩ := hB1 node i vs (hvl.trans (node.a.constructorViews i).arity) hbd
@@ -951,6 +952,35 @@ theorem gInv_groupRawD (P : Premises4) (K : Nat → Nat) {E E' : ResolvedEnv} {f
         · rw [hctors c h] at hk; cases hk
         · rw [List.mem_singleton] at h; exact h
   exact ⟨hAll, fun Efin hsubF r m h hk => hIall Efin hsubF r m h hk⟩
+
+/-- Existing all-node interface, derived from the selected-node producer. -/
+theorem gInv_groupRawD (P : Premises4) (K : Nat → Nat) {E E' : ResolvedEnv} {f rr : Nat}
+    {fm rm : CheckedMember} {ctors : List (Nat × CheckedMember)} (hE : EnvWfT E)
+    (hfam : fm.mclass = .inductiveM) (hctors : ∀ c ∈ ctors, c.2.mclass = .constructorM)
+    (hrec : rm.mclass = .recursorM)
+    (hmem : GroupMembersT (extendEnv E f fm) E ((f, fm) :: ctors ++ [(rr, rm)]) E')
+    (hsh : ∀ node : RecNode E E' f rr rm, NoFunRec node)
+    (hpar : ∀ node : RecNode E E' f rr rm, ∀ i : Fin node.a.constructors.length,
+      (node.a.constructorViews i).parameters = node.a.family.parameters)
+    (hprop : ∀ node : RecNode E E' f rr rm, UniformProp node.a.family.resultLevel →
+      node.a.policy = .anySort → ∀ i : Fin node.a.constructors.length,
+      (∀ T, T ∈ (node.a.constructorViews i).fields → occursConst node.a.family.ref T = false) ∧
+      (∀ k, k < (node.a.constructorViews i).fields.length →
+        posOf (.bvar ((node.a.constructorViews i).fields.length - 1 - k))
+          (node.a.constructorViews i).resultIndices = none))
+    (hCB : ∀ node : RecNode E E' f rr rm, CtorsBelowRec K node)
+    (hAg : ∀ node : RecNode E E' f rr rm, WalkAgree (AgreeAt node.a.family.parameters.length) hmem)
+    (hB : BoundG K (EnvWfT.group E f fm ctors rr rm E' hE hfam hctors hrec hmem))
+    (hD : BoundDG K (EnvWfT.group E f fm ctors rr rm E' hE hfam hctors hrec hmem))
+    (IH : GInv P K hE) :
+    ∀ ctx : Nat → Role,
+      (∀ r, Dom E' r → ctx r = envCtx (EnvWfT.group E f fm ctors rr rm E' hE hfam hctors hrec hmem) r) →
+      ∀ μ, FaithfulR P μ ctx E' →
+      AllSound P μ K E' ∧ ∀ Efin, (∀ r m, E'.members r = some m → Efin.members r = some m) →
+        ∀ r m, E'.members r = some m → m.mclass = .recursorM → IotaAt P μ K Efin r := by
+  obtain ⟨node, hs⟩ := group_node hE hfam hctors hrec hmem
+  exact gInv_groupRawD_atNode P K hE hfam hctors hrec hmem node hs
+    (hsh node) (hpar node) (hprop node) (hCB node) hAg hB hD IH
 
 /-! ## §7 `StepDG` under the checked side condition
 
