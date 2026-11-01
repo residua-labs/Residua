@@ -980,7 +980,7 @@ private theorem s19ComputedBudgets :
     s19qH0.wt AwVec < domViewCtorTl.wt AwVec ∧
     s19qT0.wt AwVec < domViewRes.wt AwVec ∧
     s19qMajor.wt AwVec < s19hL.wt AwVec ∧ s19qRec.wt AwVec < s19hR.wt AwVec ∧
-    s19cβ.wt AwVec < s19qRecT.wt AwVec := by decide
+    s19cβ.wt AwVec < s19qRecT.wt AwVec := by decide!
 
 /-- kernel-verified weights of the two iota legs — the fused decide's
     first two projections, reused as literals by every bound below

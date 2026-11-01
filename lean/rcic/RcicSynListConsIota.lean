@@ -1011,7 +1011,7 @@ private theorem s18ComputedBudgets :
         ∧ pDMt2.wt AwList < s18Nι)))
     ∧ (∀ v ∈ s18DeclViews, ∀ a ∈ v.2.2.atoms AwList, a < s18Nι)
     ∧ (AwList 11 < s18Nι ∧ AwList 10 < s18Nι) := by
-  decide
+  decide!
 
 /-- every stored derivation's weight is strictly below `s18Nι` — the §5 bound,
     kernel-computed on the real derivations. -/
