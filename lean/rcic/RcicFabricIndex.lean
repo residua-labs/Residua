@@ -1,6 +1,7 @@
 import Lean
 import rcic.RcicFabricQ
 import rcic.RcicFabricPatch
+import rcic.RcicEnv
 
 /-!
 # Agent proof fabric — the per-declaration fact index (C2) as a producer
@@ -85,45 +86,71 @@ def sortNames (xs : Array Name) : Array Name :=
 def union (a b : Array Name) : Array Name :=
   b.foldl (fun acc x => if acc.contains x then acc else acc.push x) a
 
-/-- Axiom closure of `root`, iterative post-order over the constant graph so that deep dependency
-chains cannot exhaust the stack. The memo is shared by every query. A child is pushed whenever it is
-not yet finished, except when it is an ancestor still being expanded (a cycle, possible only through
-unsafe/partial implementations); such a back edge contributes nothing, which is the visited-set
-semantics of `CollectAxioms`. A child pushed above its parent is always finished before the parent. -/
+/-- Axiom closure of `root`: Tarjan's strongly connected components over the constant graph,
+iteratively (explicit frame stack) so deep dependency chains cannot exhaust the stack. The memo is
+shared by every query and holds only **completed** closures: a node is memoized exactly when its whole
+SCC is, and every member of an SCC gets the same closure (the union of its members' own axiom and of
+the closures of every successor outside the SCC, all of which are already memoized). Cycles are
+ordinary: an inductive type refers to its constructors and they refer back to it. A node on the
+current DFS stack is never given a closure early, so no query order can record a partial one.
+Cost is linear in the newly explored part of the graph. A constant absent from `env` contributes
+nothing. -/
 def axiomsOf (env : Environment) (root : Name) : StateM AxMemo (Array Name) := do
-  if let some r := (← get)[root]? then return r
-  let mut stack : Array (Name × Bool) := #[(root, false)]
-  let mut expanding : Std.HashSet Name := {}
-  while stack.size > 0 do
-    let (c, expanded) := stack.back!
-    if (← get).contains c then
-      stack := stack.pop
+  if (← get).contains root then return (← get).getD root #[]
+  let mut idx : Std.HashMap Name Nat := {}
+  let mut low : Std.HashMap Name Nat := {}
+  let mut onT : Std.HashSet Name := {}
+  let mut tstack : Array Name := #[]
+  -- frame: (node, its successors, next successor to look at)
+  let mut frames : Array (Name × Array Name × Nat) := #[]
+  let mut pending : Option Name := some root
+  let mut counter := 0
+  while pending.isSome || frames.size > 0 do
+    if let some c := pending then
+      pending := none
+      match env.find? c with
+      | none => pure ()
+      | some ci =>
+          idx := idx.insert c counter
+          low := low.insert c counter
+          counter := counter + 1
+          tstack := tstack.push c
+          onT := onT.insert c
+          frames := frames.push (c, followed ci, 0)
       continue
-    match env.find? c with
-    | none =>
-        modify (·.insert c #[])
-        stack := stack.pop
-    | some ci =>
-        let kids := followed ci
-        if !expanded then
-          if expanding.contains c then
-            -- a second copy of a constant already being expanded below: drop it
-            stack := stack.pop
-            continue
-          stack := stack.set! (stack.size - 1) (c, true)
-          expanding := expanding.insert c
-          for k in kids do
-            if !(← get).contains k && !expanding.contains k then
-              stack := stack.push (k, false)
-        else
-          -- read the children's closures without keeping a second reference to the memo, so that
-          -- the insertion below updates the table in place instead of copying it
-          let mut acc : Array Name := match ci with | .axiomInfo _ => #[c] | _ => #[]
-          for k in kids do
-            acc := union acc ((← get).getD k #[])
-          modify (·.insert c (sortNames acc))
-          expanding := expanding.erase c
-          stack := stack.pop
+    let (c, kids, i) := frames.back!
+    if i < kids.size then
+      frames := frames.set! (frames.size - 1) (c, kids, i + 1)
+      let k := kids[i]!
+      if (← get).contains k || (env.find? k).isNone then continue
+      if let some ik := idx[k]? then
+        -- already discovered in this query: a back/cross edge matters only while `k` is still open
+        if onT.contains k then low := low.insert c (min (low.getD c 0) ik)
+      else
+        pending := some k
+    else
+      frames := frames.pop
+      let lc := low.getD c 0
+      if lc == idx.getD c 0 then
+        -- `c` roots an SCC: pop its members and close them together
+        let mut members : Array Name := #[]
+        repeat
+          let m := tstack.back!
+          tstack := tstack.pop
+          onT := onT.erase m
+          members := members.push m
+          if m == c then break
+        let mut acc : Array Name := #[]
+        for m in members do
+          if let some ci := env.find? m then
+            if let .axiomInfo _ := ci then acc := union acc #[m]
+            for k in followed ci do
+              if let some r := (← get)[k]? then acc := union acc r
+        let closed := sortNames acc
+        for m in members do
+          modify (·.insert m closed)
+      if let some (p, _, _) := frames.back? then
+        low := low.insert p (min (low.getD p 0) lc)
   return (← get).getD root #[]
 
 /-! ## Edge view (slice 2 reads it; slice 1 only emits it) -/
@@ -596,5 +623,61 @@ def cliMain (args : List String) : IO UInt32 := do
   h.flush
   IO.eprintln s!"done: {names.size} records, {nStmtErr} stmt refusals, {nBodyErr} body refusals, {nEdges} edges, axioms-checked {nAxChecked}"
   return 0
+
+/-! ## Regression: the memoized closure equals a fresh `CollectAxioms`, for every query order
+
+An inductive type and its constructors refer to each other, so cycles in the constant graph are
+ordinary. These checks run at elaboration time and fail the module build if a memoized result differs
+from `Lean.collectAxioms` computed fresh, whichever member of a cycle is queried first. -/
+
+section Regression
+
+theorem fabricTestAx : (1 = 1) = True := propext ⟨fun _ => trivial, fun _ => rfl⟩
+
+/-- Self-referential inductive: the constructor `step` mentions the type and an axiom user. -/
+inductive FabricTestInd : Nat → Type
+  | base : FabricTestInd 0
+  | step (n : Nat) (h : fabricTestAx = fabricTestAx) (t : FabricTestInd n) : FabricTestInd (n + 1)
+
+mutual
+inductive FabricTestEven : Nat → Type
+  | zero : FabricTestEven 0
+  | succ (n : Nat) (t : FabricTestOdd n) : FabricTestEven (n + 1)
+inductive FabricTestOdd : Nat → Type
+  | succ (n : Nat) (h : fabricTestAx = fabricTestAx) (t : FabricTestEven n) : FabricTestOdd (n + 1)
+end
+
+open Lean Elab Command in
+/-- For every first-queried constant of `names` (fresh memo) and for the forward and the reverse
+sequential order over one shared memo, every answer equals a fresh `CollectAxioms`. -/
+def checkMemoAgainstFresh (names : List Name) : CommandElabM Unit := do
+  let env ← getEnv
+  let fresh (n : Name) : Array Name :=
+    sortNames ((((CollectAxioms.collect n).run env).run {}).2.axioms)
+  let run (order : List Name) : CommandElabM Unit := do
+    let mut memo : AxMemo := {}
+    for n in order do
+      let (a, m) := (axiomsOf env n).run memo
+      memo := m
+      unless a == fresh n do
+        throwError "[fabric_index_axiom_mismatch] {n}: memo {a} fresh {fresh n} (order {order})"
+  for n in names do run (n :: names)
+  run names
+  run names.reverse
+
+open Lean Elab Command in
+run_cmd do
+  let fam (t : Name) (cs : List Name) : List Name := t :: (t ++ `rec) :: cs
+  checkMemoAgainstFresh (fam ``FabricTestInd [``FabricTestInd.base, ``FabricTestInd.step])
+  checkMemoAgainstFresh
+    (fam ``FabricTestEven [``FabricTestEven.zero, ``FabricTestEven.succ]
+      ++ fam ``FabricTestOdd [``FabricTestOdd.succ])
+  checkMemoAgainstFresh
+    (fam ``Rcic.Declarative.EnvWf
+      [``Rcic.Declarative.EnvWf.empty, ``Rcic.Declarative.EnvWf.axiom, ``Rcic.Declarative.EnvWf.definition])
+  -- the reported failing pair, explicitly: the child queried after (and before) the parent
+  checkMemoAgainstFresh [``Rcic.Declarative.EnvWf, ``Rcic.Declarative.EnvWf.empty]
+
+end Regression
 
 end Rcic.Fabric.Index
