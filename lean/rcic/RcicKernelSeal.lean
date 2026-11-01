@@ -4,6 +4,9 @@ import rcic.RcicF3StepWDApexSeal
 -- BEGIN SOL-P1-STEPW-GROUP DIRECT IMPORT (closure_claim = 0)
 import rcic.RcicF3StepWGroupSeal
 -- END SOL-P1-STEPW-GROUP DIRECT IMPORT
+-- BEGIN CC-FABRIC SLICE 1 DIRECT IMPORTS (agent proof fabric, ADR draft #7925; closure_claim = 0)
+import rcic.RcicFabricSeal
+-- END CC-FABRIC SLICE 1 DIRECT IMPORTS
 import rcic.RcicLeanImportSeal
 -- BEGIN SOL-P1-STEPW-REFUSAL DIRECT IMPORT (closure_claim = 0)
 import rcic.RcicF3StepWRefusalSeal
