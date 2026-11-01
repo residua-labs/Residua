@@ -1,3 +1,7 @@
+-- BEGIN SOL-ASOUND-G1 DIRECT IMPORT (closure_claim = 0)
+import rcic.RcicF3RouteRemainingRootSeal
+-- END SOL-ASOUND-G1 DIRECT IMPORT
+
 -- BEGIN CHATGPT-RCIC-A-READER-CLOSURE DIRECT IMPORT (closure_claim = 0)
 import rcic.RcicF3AReaderClosureSeal
 -- END CHATGPT-RCIC-A-READER-CLOSURE DIRECT IMPORT
