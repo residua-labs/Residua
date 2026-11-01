@@ -555,6 +555,24 @@ theorem viewsUnsafe_of {E : ResolvedEnv} {fam : PolicyFamilyView E} {ms : List C
   intro hsafe
   exact h (viewsSafe_complete views hsafe)
 
+/-- Checked field-level order: preserve the fast syntactic fragment and
+    use existing semantic level equality for max(a,b) = b. -/
+def fieldLevelLeB (a b : Level) : Bool :=
+  Rcic.Scm.SrcG.leNB a b || decEqN (.max a b) b
+
+theorem fieldLevelLeB_sound {a b : Level} (h : fieldLevelLeB a b = true) : leN a b := by
+  cases hold : Rcic.Scm.SrcG.leNB a b with
+  | true => exact Rcic.Scm.SrcG.leN_of_leNB hold
+  | false =>
+    have hmax : decEqN (.max a b) b = true := by
+      simpa [fieldLevelLeB, hold] using h
+    have heq := decEqN_sound (.max a b) b hmax
+    intro ρ x y hx hy
+    have hm := heq ρ
+    simp only [eval, hx, hy, Option.bind_some, Option.map_some] at hm
+    have hxy : max x y = y := Option.some.inj hm
+    exact Nat.le_trans (Nat.le_max_left x y) (Nat.le_of_eq hxy)
+
 def fieldUnivB {E : ResolvedEnv} {fam : PolicyFamilyView E} {m : CheckedMember}
     (c : PolicyConstructorView E fam m) : Bool :=
   match classifyUniverse fam.resultLevel with
@@ -562,7 +580,7 @@ def fieldUnivB {E : ResolvedEnv} {fam : PolicyFamilyView E} {m : CheckedMember}
   | .uniformType =>
       (List.range c.fields.length).all fun j =>
         if hj : j < c.fields.length then
-          leNB (c.fieldLevel ⟨j, hj⟩) fam.resultLevel
+          fieldLevelLeB (c.fieldLevel ⟨j, hj⟩) fam.resultLevel
         else false
   | .mixed => false
 
@@ -1010,8 +1028,12 @@ def fieldUnivOf {E : ResolvedEnv} {fam : PolicyFamilyView E} {m : CheckedMember}
       exact Or.inl ((classifyUniverse_uniformProp_iff _).mp hc)
   | uniformType =>
       rw [hc] at h
-      exact fieldUniverseAdmitted_type_of_B c
-        ((classifyUniverse_uniformType_iff _).mp hc) h
+      intro j
+      refine Or.inr ⟨((classifyUniverse_uniformType_iff _).mp hc), ?_⟩
+      rw [List.all_eq_true] at h
+      have hb := h j.val (List.mem_range.mpr j.isLt)
+      rw [dif_pos j.isLt] at hb
+      exact fieldLevelLeB_sound hb
   | mixed => simp [hc] at h
 
 /-! ## Slot table facts used only inside admission payloads -/
@@ -1771,6 +1793,8 @@ def mutantNparams? (tbl : List (Nat × CheckedMember))
       if hpre : (preSlots.map (·.1)).Nodup then
         (findNp? admitFuel preSlots hpre p.f p.fm p.ctors p.rm Cmp.split).isSome
       else false
+
+#print axioms fieldLevelLeB_sound
 
 end Rcic.Declarative
 

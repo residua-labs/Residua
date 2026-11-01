@@ -47,7 +47,8 @@ takes such steps (`checkC`) and gives it to the test as `convChecker`.
 
 What it does not do: η, ζ, a let-bound variable's value; congruence under a λ, a Π or a let between
 two terms (`convAt?` relates such terms only when equal as written or after head steps), and two sorts
-as terms; and the parts of a step (a δ body, a β argument) are typed as written.
+as terms. A δ body first uses syntactic typing, then checked semantic sort-level
+conversion under fixed Pi domains; a β argument remains typed as written.
 -/
 
 namespace Rcic.Declarative
@@ -88,6 +89,44 @@ def liftSpine (E : ResolvedEnv) (n : Nat) (Γ : LCtx) :
       | none => none
   | _, _, _, _, _ :: _ => none
 
+/-- Lift already-certified codomain conversions under an unchanged Pi domain. -/
+def sortPiCod (E : ResolvedEnv) (n : Nat) (Γ : LCtx) (A : Expr Nat) (u : Level)
+    (hA : HasTyT E n Γ A (.sort u)) :
+    {B B' : Expr Nat} → TyConvT E n (.assumption A :: Γ) B B' →
+    TyConvT E n Γ (.pi A B) (.pi A B')
+  | _, _, .refl _ B => .refl Γ (.pi A B)
+  | _, _, .of _ X Y v c => .of Γ _ _ _ (.pi Γ A A X Y u v (.refl Γ A (.sort u) hA) c)
+  | _, _, .trans _ _ _ _ c₁ c₂ =>
+    .trans Γ _ _ _ (sortPiCod E n Γ A u hA c₁) (sortPiCod E n Γ A u hA c₂)
+
+/-- A finite certified helper for structural Pi types with equal domains and
+    semantically equal sort levels; no new typing or conversion rule. -/
+def sortPiConv? (E : ResolvedEnv) (n : Nat) :
+    Nat → (Γ : LCtx) → (A B : Expr Nat) → Option (TyConvT E n Γ A B)
+  | 0, Γ, A, B => if h : A = B then some (h ▸ .refl Γ A) else none
+  | fuel+1, Γ, A, B =>
+    if h : A = B then some (h ▸ .refl Γ A)
+    else match A, B with
+    | .sort u, .sort v =>
+      if heq : decEqN u v = true then
+        some (.of Γ _ _ _ (.sorts Γ u v (decEqN_sound u v heq)))
+      else none
+    | .pi A₁ B₁, .pi A₂ B₂ =>
+      if hd : A₁ = A₂ then
+        match checkT E n Γ A₁, sortPiConv? E n fuel (.assumption A₁ :: Γ) B₁ B₂ with
+        | some ⟨.sort u, hA⟩, some c =>
+          some (by cases hd; exact sortPiCod E n Γ A₁ u hA c)
+        | _, _ => none
+      else none
+    | _, _ => none
+
+def synCheckLevels? (E : ResolvedEnv) (n : Nat) (Γ : LCtx) (e T : Expr Nat) :
+    Option (HasTyT E n Γ e T) :=
+  match checkT E n Γ e with
+  | some ⟨A, d⟩ =>
+    (sortPiConv? E n (piCount A + piCount T + 1) Γ A T).map (hasTyT_of_tyConv d)
+  | none => none
+
 /-- one head step with its conversion: δ at a transparent constant, β at a λ applied to an argument. -/
 def headStep? (E : ResolvedEnv) (n : Nat) (Γ : LCtx) :
     (hd : Expr Nat) → (args : List (Expr Nat)) → Option (Σ T e', ConvT E n Γ (foldApps hd args) e' T)
@@ -99,7 +138,8 @@ def headStep? (E : ResolvedEnv) (n : Nat) (Γ : LCtx) :
             | some b =>
                 if hlen : ls.length = m.arity then
                   if hwf : levelsBounded n ls = true then
-                    match synCheck E n Γ (instantiateLevels ls b) (instantiateLevels ls m.mtype) with
+                    match (synCheck E n Γ (instantiateLevels ls b) (instantiateLevels ls m.mtype) <|>
+                        synCheckLevels? E n Γ (instantiateLevels ls b) (instantiateLevels ls m.mtype)) with
                     | some hb =>
                         (liftSpine E n Γ _ _ _ (.delta Γ r ls m b hres hbody htr hlen hwf hb) args).map
                           fun p => ⟨p.1, _, p.2⟩
@@ -397,12 +437,7 @@ where
   codChain (E : ResolvedEnv) (n : Nat) (Γ : LCtx) (A : Expr Nat) (u : Level)
       (hA : HasTyT E n Γ A (.sort u)) :
       {B B' : Expr Nat} → TyConvT E n (.assumption A :: Γ) B B' → Option (TyConvT E n Γ (.pi A B) (.pi A B'))
-    | _, _, .refl _ B => some (.refl Γ (.pi A B))
-    | _, _, .of _ X Y v c => some (.of Γ _ _ _ (.pi Γ A A X Y u v (.refl Γ A (.sort u) hA) c))
-    | _, _, .trans _ _ _ _ c₁ c₂ =>
-        match codChain E n Γ A u hA c₁, codChain E n Γ A u hA c₂ with
-        | some d₁, some d₂ => some (.trans Γ _ _ _ d₁ d₂)
-        | _, _ => none
+    | _, _, c => some (sortPiCod E n Γ A u hA c)
   /-- each domain step under the fixed codomain, the codomain typed under the step's source —
       again by `checkWith`: a codomain that only converts to a sort still yields the step. -/
   domChain (E : ResolvedEnv) (n fuel : Nat)
@@ -512,6 +547,10 @@ def convChecker (fuel : Nat) : CheckerT where
   conv E n Γ A B := tyConv? E n fuel Γ A B
   levelLe u s := geq s u 0
   levelLe_sound _ _ h := leN_of_geq h
+
+#print axioms sortPiCod
+#print axioms sortPiConv?
+#print axioms synCheckLevels?
 
 end Rcic.Declarative
 
