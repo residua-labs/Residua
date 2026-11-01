@@ -62,7 +62,7 @@ theorem natLt_produced (x : Nat) :
   acc_produced Nat.lt x (Nat.lt_wfRel.wf.apply x)
 
 
-def wSig : RecSig PUnit where
+def wSig : RecSig.{0, 0} PUnit.{1} where
   Sh := Fn2Sh
   Field := PiW.Field
   depth := fun _ _ => 1

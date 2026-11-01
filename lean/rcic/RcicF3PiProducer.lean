@@ -4,15 +4,16 @@ import rcic.RcicF3PiField
 arguments. Raw syntax/StepAG integration is not asserted. `closure_claim = 0`. -/
 set_option autoImplicit false
 namespace Rcic.F3.PSet
-universe u
+universe u v
 
 /-- A strictly positive indexed semantic signature. Nonrecursive data is
-part of the shape; recursive fields retain their dependent telescopes. -/
-structure RecSig (I : Type u) where
+part of the shape; recursive fields retain their dependent telescopes.
+Index labels may live in a larger universe than the small branch data. -/
+structure RecSig (I : Type v) where
   Sh : Type u
   Field : Sh → Type u
   depth : (s : Sh) → Field s → Nat
-  tel : (s : Sh) → (k : Field s) → RecTel I (depth s k)
+  tel : (s : Sh) → (k : Field s) → RecTel.{u, v} I (depth s k)
   out : Sh → I
   code : (s : Sh) → (Field s → PSet.{u}) → PSet.{u}
   tag : PSet.{u} → I → Prop
@@ -20,7 +21,7 @@ structure RecSig (I : Type u) where
   code_tag : ∀ s f, tag (code s f) (out s)
   code_congr : ∀ s f g, (∀ k, Equiv (f k) (g k)) → Equiv (code s f) (code s g)
 
-def RecSig.toPiSig {I : Type u} (S : RecSig I) : PiSig.{u} where
+def RecSig.toPiSig {I : Type v} (S : RecSig.{u, v} I) : PiSig.{u} where
   Sh := S.Sh
   Field := S.Field
   depth := S.depth
@@ -30,24 +31,24 @@ def RecSig.toPiSig {I : Type u} (S : RecSig I) : PiSig.{u} where
   code_congr := fun s _ _ h => S.code_congr s _ _ (fun k => (S.tel s k).encode_congr _ _ (h k))
   ok_congr := fun _ _ _ h hf k p => S.tag_congr _ _ (h k p) _ (hf k p)
 
-def RecSig.family {I : Type u} (S : RecSig I) (i : I) : PSet.{u} :=
+def RecSig.family {I : Type v} (S : RecSig.{u, v} I) (i : I) : PSet.{u} :=
   sep (fun z => S.tag z i) (gSet S.toPiSig.toGSig)
 
 /-- A local, explicit representation of all recursive children. This is
 DATA, not a global choice principle or a closure hypothesis. -/
-structure RecSig.Args {I : Type u} (S : RecSig I) (s : S.Sh) where
+structure RecSig.Args {I : Type v} (S : RecSig.{u, v} I) (s : S.Sh) where
   trees : (k : S.Field s) → (S.tel s k).tel.Value (fun _ => GT S.toPiSig.toGSig)
   valid : ∀ k, (S.tel s k).tel.All (fun _ w => ValidW S.toPiSig.toGSig w) (trees k)
   indexed : ∀ k p, S.tag
     (decG S.toPiSig.toGSig ((S.tel s k).tel.flatten (trees k) p)) ((S.tel s k).result p)
 
-def RecSig.Args.values {I : Type u} {S : RecSig I} {s : S.Sh} (a : S.Args s) :
+def RecSig.Args.values {I : Type v} {S : RecSig.{u, v} I} {s : S.Sh} (a : S.Args s) :
     (k : S.Field s) → PiTel.Value.{u, u + 1} (S.tel s k).tel (fun _ => PSet.{u}) :=
   fun k => (S.tel s k).tel.unflatten
     (fun p => decG S.toPiSig.toGSig ((S.tel s k).tel.flatten (a.trees k) p))
 
 /-- Exact product relation of the represented children, including indices. -/
-theorem RecSig.Args.related {I : Type u} {S : RecSig I} {s : S.Sh} (a : S.Args s)
+theorem RecSig.Args.related {I : Type v} {S : RecSig.{u, v} I} {s : S.Sh} (a : S.Args s)
     (k : S.Field s) : (S.tel s k).Rel S.family (a.values k) := by
   apply (PiTel.all_iff _ _ _).mpr
   intro p
@@ -58,7 +59,7 @@ theorem RecSig.Args.related {I : Type u} {S : RecSig I} {s : S.Sh} (a : S.Args s
 /-- The producer composes field interpretation and guarded W construction.
 Every supplied field is its represented total graph; the conclusion pays
 both input product typing and output family membership. -/
-theorem RecSig.produce {I : Type u} (S : RecSig I) (s : S.Sh) (a : S.Args s)
+theorem RecSig.produce {I : Type v} (S : RecSig.{u, v} I) (s : S.Sh) (a : S.Args s)
     (f : S.Field s → PSet.{u})
     (hf : ∀ k, Equiv (f k) ((S.tel s k).encode (a.values k))) :
     (∀ k, f k ∈ (S.tel s k).denote S.family) ∧
@@ -97,7 +98,7 @@ theorem PiSig.induction_mem (S : PiSig.{u}) (Q : PSet.{u} → Prop)
 The only ambient data is the landed F3 Choice premise at this universe;
 it is explicit, not an added axiom. No tree representation or closure
 premise is demanded of the caller. -/
-theorem RecSig.produce_of_mem {I : Type u} (ch : Choice.{u}) (S : RecSig I)
+theorem RecSig.produce_of_mem {I : Type v} (ch : Choice.{u}) (S : RecSig.{u, v} I)
     (s : S.Sh) (f : S.Field s → PSet.{u})
     (hf : ∀ k, f k ∈ (S.tel s k).denote S.family) :
     S.code s f ∈ S.family (S.out s) := by

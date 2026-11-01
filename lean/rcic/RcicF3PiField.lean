@@ -4,8 +4,9 @@ import rcic.RcicF3KTWSpecPhi
 /-!
 # Dependent recursive fields: set interpretation and logical relation
 
-A `RecTel I m` has `m` dependent Pi binders and a recursive result index
-in `I`. Domains are arbitrary small sets; quotient branch addresses make
+A `RecTel.{u, v} I m` has `m` dependent Pi binders and a recursive result index
+in `I`. The index universe is independent of the branch-set universe;
+labels are not recursive branch addresses. Domains are arbitrary small sets; quotient branch addresses make
 all graph encodings functional without selecting representatives.
 
 This module interprets semantic telescopes. It does not extract a
@@ -17,7 +18,7 @@ set_option autoImplicit false
 
 namespace Rcic.F3.PSet
 
-universe u
+universe u v
 
 /-- Extend a quotient-indexed family to all set arguments, with empty
 fibre outside the domain. No representative is selected. -/
@@ -62,46 +63,46 @@ theorem classFiber_mono (A : PSet.{u}) {B C : FBr A → PSet.{u}}
     h _ _ (mem_congr_right hib.symm hzb)⟩
 
 /-- An arbitrary finite dependent telescope ending at a recursive index. -/
-inductive RecTel (I : Type u) : Nat → Type (u + 1) where
+inductive RecTel (I : Type v) : Nat → Type (max (u + 1) v) where
   | ret (i : I) : RecTel I 0
   | pi {m : Nat} (A : PSet.{u}) (B : FBr A → RecTel I m) : RecTel I (m + 1)
 
 /-- The underlying dependent branch telescope. -/
-def RecTel.tel {I : Type u} : {m : Nat} → RecTel I m → PiTel.{u} m
+def RecTel.tel {I : Type v} : {m : Nat} → RecTel.{u, v} I m → PiTel.{u} m
   | _, .ret _ => .nil
   | _, .pi A B => .cons (FBr A) (fun q => (B q).tel)
 
 /-- Interpret every binder as a dependent product and each result as the
 specified fibre of `X`. Later domains may depend on previous arguments. -/
-def RecTel.denote {I : Type u} : {m : Nat} → RecTel I m →
+def RecTel.denote {I : Type v} : {m : Nat} → RecTel.{u, v} I m →
     (I → PSet.{u}) → PSet.{u}
   | _, .ret i, X => X i
   | _, .pi A B, X => piSet A (classFiber A (fun q => (B q).denote X))
 
 /-- Result index at a complete dependent path. -/
-def RecTel.result {I : Type u} : {m : Nat} → (t : RecTel I m) → t.tel.Path → I
+def RecTel.result {I : Type v} : {m : Nat} → (t : RecTel.{u, v} I m) → t.tel.Path → I
   | _, .ret i, _ => i
   | _, .pi _ B, p => (B p.1).result p.2
 
 /-- Encode a nested assignment by nested extensional graphs. -/
-def RecTel.encode {I : Type u} : {m : Nat} → (t : RecTel I m) →
+def RecTel.encode {I : Type v} : {m : Nat} → (t : RecTel.{u, v} I m) →
     PiTel.Value.{u, u + 1} t.tel (fun _ => PSet.{u}) → PSet.{u}
   | _, .ret _, f => f
   | _, .pi A B, f => graphOf A (fun q => (B q).encode (f q))
 
 /-- Canonical readback of all child values, without a choice function. -/
-def RecTel.read {I : Type u} : {m : Nat} → (t : RecTel I m) → PSet.{u} →
+def RecTel.read {I : Type v} : {m : Nat} → (t : RecTel.{u, v} I m) → PSet.{u} →
     PiTel.Value.{u, u + 1} t.tel (fun _ => PSet.{u})
   | _, .ret _, f => f
   | _, .pi A B, f => fun q => (B q).read (childOf A f q)
 
 /-- Logical relation between a nested field and its recursive-result fibres. -/
-def RecTel.Rel {I : Type u} {m : Nat} (t : RecTel I m) (X : I → PSet.{u})
+def RecTel.Rel {I : Type v} {m : Nat} (t : RecTel.{u, v} I m) (X : I → PSet.{u})
     (f : PiTel.Value.{u, u + 1} t.tel (fun _ => PSet.{u})) : Prop :=
   PiTel.All.{u, u + 1} t.tel (fun p z => z ∈ X (t.result p)) f
 
 /-- A related nested assignment encodes a member of its dependent product. -/
-theorem RecTel.encode_mem {I : Type u} {m : Nat} (t : RecTel I m)
+theorem RecTel.encode_mem {I : Type v} {m : Nat} (t : RecTel.{u, v} I m)
     (X : I → PSet.{u}) (f : PiTel.Value.{u, u + 1} t.tel (fun _ => PSet.{u}))
     (hf : t.Rel X f) : t.encode f ∈ t.denote X := by
   induction t with
@@ -114,7 +115,7 @@ theorem RecTel.encode_mem {I : Type u} {m : Nat} (t : RecTel I m)
 
 /-- Membership supplies the canonical child relation AND graph readback.
 The graph conjunct rules out junk fields, including on empty domains. -/
-theorem RecTel.read_spec {I : Type u} {m : Nat} (t : RecTel I m)
+theorem RecTel.read_spec {I : Type v} {m : Nat} (t : RecTel.{u, v} I m)
     (X : I → PSet.{u}) {f : PSet.{u}} (hf : f ∈ t.denote X) :
     t.Rel X (t.read f) ∧ Equiv f (t.encode (t.read f)) := by
   induction t generalizing f with
@@ -132,14 +133,14 @@ theorem RecTel.read_spec {I : Type u} {m : Nat} (t : RecTel I m)
 
 /-- Exact membership criterion. Testing only children is insufficient:
 the field must also be its total functional graph. -/
-theorem RecTel.mem_iff {I : Type u} {m : Nat} (t : RecTel I m)
+theorem RecTel.mem_iff {I : Type v} {m : Nat} (t : RecTel.{u, v} I m)
     (X : I → PSet.{u}) (f : PSet.{u}) :
     f ∈ t.denote X ↔ t.Rel X (t.read f) ∧ Equiv f (t.encode (t.read f)) :=
   ⟨t.read_spec X, fun h => mem_congr_left h.2.symm (t.encode_mem X _ h.1)⟩
 
 /-- Inhabitation of the product is exactly inhabitation of the nested
 logical relation; canonical readback proves the forward direction. -/
-theorem RecTel.inhabited_iff {I : Type u} {m : Nat} (t : RecTel I m)
+theorem RecTel.inhabited_iff {I : Type v} {m : Nat} (t : RecTel.{u, v} I m)
     (X : I → PSet.{u}) :
     (∃ f, f ∈ t.denote X) ↔ ∃ g, t.Rel X g := by
   constructor
@@ -147,7 +148,7 @@ theorem RecTel.inhabited_iff {I : Type u} {m : Nat} (t : RecTel I m)
   · intro ⟨g, hg⟩; exact ⟨t.encode g, t.encode_mem X g hg⟩
 
 /-- Equivalent leaves encode equivalent fields at arbitrary depth. -/
-theorem RecTel.encode_congr {I : Type u} {m : Nat} (t : RecTel I m)
+theorem RecTel.encode_congr {I : Type v} {m : Nat} (t : RecTel.{u, v} I m)
     (f g : PiTel.Value.{u, u + 1} t.tel (fun _ => PSet.{u}))
     (h : ∀ p, Equiv (t.tel.flatten f p) (t.tel.flatten g p)) :
     Equiv (t.encode f) (t.encode g) := by
@@ -156,7 +157,7 @@ theorem RecTel.encode_congr {I : Type u} {m : Nat} (t : RecTel I m)
   | pi A B ih => exact graphOf_congr (fun q => ih q (f q) (g q) (fun p => h ⟨q, p⟩))
 
 /-- Product interpretation is monotone in every recursive result fibre. -/
-theorem RecTel.denote_mono {I : Type u} {m : Nat} (t : RecTel I m)
+theorem RecTel.denote_mono {I : Type v} {m : Nat} (t : RecTel.{u, v} I m)
     (X Y : I → PSet.{u}) (h : ∀ i, Sub (X i) (Y i)) :
     Sub (t.denote X) (t.denote Y) := by
   induction t with

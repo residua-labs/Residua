@@ -28,7 +28,7 @@ theorem proofOf (p : Prop) (q : FBr (proofDom p)) : p :=
   Quotient.inductionOn q (fun i => i.down)
 
 /-- The recursive result depends on the first of two dependent arguments. -/
-def accTel (R : Nat → Nat → Prop) (x : Nat) : RecTel Nat 2 :=
+def accTel (R : Nat → Nat → Prop) (x : Nat) : RecTel.{0, 0} Nat 2 :=
   .pi fnDom (fun q => .pi (proofDom (R (natOf q) x)) (fun _ => .ret (natOf q)))
 
 /-- Accessibility constructs every child in the dependent field. -/
@@ -51,20 +51,20 @@ theorem accNatLt_product (x : Nat) :
   exact ⟨_, (accTel Nat.lt x).encode_mem _ _ (acc_related Nat.lt x h)⟩
 
 /-- One genuinely infinitely branching recursive W field. -/
-def wTel : RecTel PUnit 1 := .pi fnDom (fun _ => .ret .unit)
+def wTel : RecTel.{0, 0} PUnit.{1} 1 := .pi fnDom (fun _ => .ret .unit)
 
 /-- The children have unbounded finite heights. -/
 def wAssignment : PiTel.Value.{0, 1} wTel.tel (fun _ => PSet.{0}) :=
   fun q => decG PiW.sig.toGSig (PiW.embed (fnDepth q))
 
-/-- All children survive in the W family, including the unbounded assignment. -/
+/-- The specific unbounded assignment belongs to its W field product. -/
 theorem w_product : wTel.encode wAssignment ∈ wTel.denote (fun _ => gSet PiW.sig.toGSig) := by
   apply wTel.encode_mem
   intro q
   exact ⟨⟨PiW.embed (fnDepth q), PiW.embed_valid _⟩, Equiv.refl _⟩
 
 /-- Three dependent binders with a result varying in two arguments. -/
-def nestedTel : RecTel Nat 3 :=
+def nestedTel : RecTel.{0, 0} Nat 3 :=
   .pi fnDom (fun q => .pi (proofDom (natOf q < natOf q + 1))
     (fun _ => .pi fnDom (fun r => .ret (natOf q + natOf r))))
 
@@ -85,7 +85,7 @@ theorem wrong_index_refused :
 /-- Empty-domain child tests alone are vacuous; the total-graph conjunct
 still refuses a nonempty junk field. -/
 theorem empty_children_not_sufficient :
-    let t : RecTel Nat 1 := .pi pempty (fun _ => .ret 0)
+    let t : RecTel.{0, 0} Nat 1 := .pi pempty (fun _ => .ret 0)
     t.Rel (fun _ => pempty) (t.read junk₁) ∧
       junk₁ ∉ t.denote (fun _ => pempty) := by
   constructor
