@@ -1825,6 +1825,7 @@ import rcic.RcicF3PendAProducerSeal
 -- END SOL-STEPAG-BOUNDED SEAL IMPORT
 -- BEGIN SOL-PENDA-REPAIR-M1 IMPORT (closure_claim = 0)
 import rcic.RcicF3PendARepairSeal
+import rcic.RcicF3ARefusalSurfaceSeal
 -- END SOL-PENDA-REPAIR-M1 IMPORT
 
 open Lean
