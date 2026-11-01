@@ -844,7 +844,6 @@ def sealedTheoremsRaw : String := " ".intercalate [
   "Rcic.Declarative.UnequalPropTree.ownParam_typed.eq_1",
   "Rcic.F3.PSet.UnequalPropTreeBounds.leafBound",
   "Rcic.F3.PSet.UnequalPropTreeBounds.Witness",
-  "Rcic.F3.PSet.UnequalPropTreeBounds.ctorInfo.match_1",
   "Rcic.F3.PSet.UnequalPropTreeBounds.walkClass",
   "Rcic.F3.PSet.UnequalPropTreeBounds.bound",
   "Rcic.F3.PSet.UnequalPropTreeBounds.wft.proof_2",
