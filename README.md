@@ -1,5 +1,7 @@
 # Residua
 
+English | [中文](README.zh-CN.md)
+
 Residua is infrastructure for using another party's computation or proof without trusting that party. Results are
 identified by the content address (q) of what they are, not by who produced them or which toolchain version built them,
 and they are admitted only by mechanical checking, over a network of formally defined semantics.
