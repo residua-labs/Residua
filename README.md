@@ -96,3 +96,7 @@ Residua is the project. `rsd` is the language and the toolchain.
 `raisin` stays internal.
 
 closure_claim = 0
+
+## Research project and acknowledgements
+
+Residua is a research project. It builds on many other projects; [ACKNOWLEDGEMENTS.md](ACKNOWLEDGEMENTS.md) lists the code we ported, the tools we used as test oracles, and the designs we studied. If you find your work used without credit, please open an issue or use private vulnerability reporting; we will add the credit and fix the release.

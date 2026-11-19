@@ -78,3 +78,7 @@ Residua 的设计是计算和证明一体：在它的语言 rsd 中，程序和�
 Residua 是项目。`rsd` 是语言和工具链。`raisin` 留在内部。
 
 closure_claim = 0
+
+## 研究项目与致谢
+
+Residua 是一个研究项目，建立在许多其他项目之上；[ACKNOWLEDGEMENTS.zh-CN.md](ACKNOWLEDGEMENTS.zh-CN.md) 列出了我们移植过的代码、用作测试参照的工具，以及研究过的设计。如果你发现自己的工作被使用却没有致谢，请开 issue 或使用私密漏洞报告；我们会补上致谢并修正发布。
