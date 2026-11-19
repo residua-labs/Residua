@@ -46,3 +46,29 @@ Wall-time ratios, residua / Koka:
 Compiler's own cost (Linux, CPU executables built from the seed): self-bootstrap from the seed 1161.7 s (peak 3.6 GiB);
 rsdc compiling itself 118.96 s (0.67 GiB); rsc compiling itself 301.23 s (2.0 GiB); the largest test source: emit 0.06 s,
 lower 2.76 s; deriv: emit 0.15 s, lower 4.69 s.
+
+## Other languages (0.1)
+
+The same six programs, taken unmodified from Koka's `test/bench` (the suite of the Perceus paper, PLDI 2021; tag v3.2.9) and
+from Lean 4.14.0's `tests/bench`, measured on the same machine type (three fresh t2d-standard-4 VMs, median of 5, pinned core,
+every cited VM pair within 10 percent, every cell's output checked before timing). The residua column is the like-for-like
+row of each program. Ratio = residua wall / language wall (below 1 = residua faster).
+
+| ratio | cpp | rust | ocaml | haskell | java | swift | lean |
+|---|---|---|---|---|---|---|---|
+| rbtree | 0.926 | 0.245 | 0.712 | 0.406 | 0.456 | 0.082 | 0.358 |
+| rbtree-ck | - | 0.116 | 0.532 | 0.079 | 0.225 | 0.166 | 0.421 |
+| nqueens | 0.790 | 0.320 | 0.601 | 0.087 | 0.572 | 0.189 | - |
+| cfold | 0.436 | 0.205 | 0.379 | 0.422 | - | 0.168 | 0.696 |
+| deriv | 0.543 | 0.203 | 0.623 | 0.335 | 0.234 | 0.284 | 0.649 |
+| binarytrees | 2.168 | 0.408 | 0.751 | 1.240 | 1.362 | 0.161 | 0.881 |
+
+| geomean residua/lang | C++ | OCaml | Haskell | Java | Swift | Lean 4.14 |
+|---|---:|---:|---:|---:|---:|---:|
+| 0.1 | 0.822 | 0.586 | 0.281 | 0.451 | 0.164 | 0.570 |
+
+The Rust column (geomean 0.232) is residua's own straightforward ports (Box/Rc, not tuned), not from the published suite,
+and is not comparable with the suite columns. Empty cells: rbtree-ck/C++ is killed at the 12.5 GiB cap (the upstream
+program deep-copies the map per checkpoint); cfold/Java overflows the default thread stack; Lean's suite has no nqueens.
+Toolchains: cpp = g++ 13.3.0 -O3 -pthread; rust = rustc 1.100.0 (0ef1bc386) -C opt-level=3 -C codegen-units=1; ocaml = ocamlopt 4.14.2 flambda=true -O3 (vm5+vm6; vm3 ran 4.14.1 flambda=false and its ocaml cells are kept as third-run evidence only); haskell = GHC 9.4.7 -O2; java = OpenJDK 21.0.13.1 default GC; lean = Lean 4.14.0 (commit 410fab728470) lean -c + leanc -O3; swift = swiftc 6.0.3 RELEASE -O. Reference columns depend only on the machine type and these pins; they are measured once per pin and
+reused by later versions.

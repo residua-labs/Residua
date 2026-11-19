@@ -42,3 +42,25 @@
 
 编译器自身的开销（Linux，用种子构建的 CPU 可执行文件）：从种子自举 1161.7 秒（峰值 3.6 GiB）；rsdc 编译自己 118.96 秒（0.67 GiB）；
 rsc 编译自己 301.23 秒（2.0 GiB）；最大的测试源文件：生成 0.06 秒、降级 2.76 秒；deriv：生成 0.15 秒、降级 4.69 秒。
+
+## 其他语言（0.1）
+
+同样的 6 个程序，原样取自 Koka 的 `test/bench`（Perceus 论文 PLDI 2021 使用的套件，v3.2.9）和 Lean 4.14.0 的 `tests/bench`，在同一机型上测量
+（三台全新 t2d-standard-4，5 次中位数，固定核心；引用的每两台机器相差不到 10%；计时前核对每格输出）。residua 列用每个程序的同等移植行。
+比值 = residua 用时 / 该语言用时（小于 1 表示 residua 更快）。
+
+| ratio | cpp | rust | ocaml | haskell | java | swift | lean |
+|---|---|---|---|---|---|---|---|
+| rbtree | 0.926 | 0.245 | 0.712 | 0.406 | 0.456 | 0.082 | 0.358 |
+| rbtree-ck | - | 0.116 | 0.532 | 0.079 | 0.225 | 0.166 | 0.421 |
+| nqueens | 0.790 | 0.320 | 0.601 | 0.087 | 0.572 | 0.189 | - |
+| cfold | 0.436 | 0.205 | 0.379 | 0.422 | - | 0.168 | 0.696 |
+| deriv | 0.543 | 0.203 | 0.623 | 0.335 | 0.234 | 0.284 | 0.649 |
+| binarytrees | 2.168 | 0.408 | 0.751 | 1.240 | 1.362 | 0.161 | 0.881 |
+
+| 几何平均 residua/语言 | C++ | OCaml | Haskell | Java | Swift | Lean 4.14 |
+|---|---:|---:|---:|---:|---:|---:|
+| 0.1 | 0.822 | 0.586 | 0.281 | 0.451 | 0.164 | 0.570 |
+
+Rust 列（几何平均 0.232）是 residua 自己写的朴素移植（Box/Rc，未调优），不是公开套件里的程序，不能和套件各列比较。空格：rbtree-ck/C++ 在 12.5 GiB
+上限被杀（上游程序每个检查点整体复制 map）；cfold/Java 默认线程栈溢出；Lean 的套件没有 nqueens。工具链：cpp = g++ 13.3.0 -O3 -pthread; rust = rustc 1.100.0 (0ef1bc386) -C opt-level=3 -C codegen-units=1; ocaml = ocamlopt 4.14.2 flambda=true -O3 (vm5+vm6; vm3 ran 4.14.1 flambda=false and its ocaml cells are kept as third-run evidence only); haskell = GHC 9.4.7 -O2; java = OpenJDK 21.0.13.1 default GC; lean = Lean 4.14.0 (commit 410fab728470) lean -c + leanc -O3; swift = swiftc 6.0.3 RELEASE -O。参照列只取决于机型和这些钉值，每组钉值测一次，之后版本复用。
