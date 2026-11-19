@@ -1,0 +1,140 @@
+-- LRC: maximum index, free indices and occurrence of an index.
+-- A port of Lean 4.14.0 src/lean/Lean/Compiler/IR/FreeVars.lean, cited as FreeVars:LINE.
+-- closure_claim = 0.
+-- absent: Collector skip collect collectVar collectJP seq collectArg collectArray collectArgs collectParam collectParams collectAlts collectIndex withIndex withVar withJP insertParams withParams visitVar visitJP visitArg visitArgs visitParams
+--   (the combinators of Lean's collector style and the per-form visitors; each traversal below does their work in one function)
+import Lib.Lrc.Set
+import Lib.Lrc.Ir
+
+namespace Lrc
+
+/-! ## The variables an expression or an instruction reads
+
+Lean spells these out once per traversal (FreeVars:41 collectExpr, :119, :174); here one function
+per form serves all three. -/
+
+-- the arguments of an expression: variables and `argIrr`
+def exprArgs (e : N) : List Int :=
+  if e.op == opReuse then intAt 0 e.ys :: e.ys.drop 2
+  else if e.op == opLit || e.op == opLitStr then []
+  else e.ys
+
+-- the variables an instruction other than `vdecl`, `jdecl`, `case`, `jmp` and `ret` reads:
+-- set x y, setTag x, sset x y, inc x, dec x, del x; mdata reads none
+def insUses (n : N) : List Int :=
+  if n.op == opSet then n.a :: n.ys
+  else if n.op == opSSet then [n.a, intAt 0 n.ys]
+  else if n.op == opSetTag || n.op == opInc || n.op == opDec || n.op == opDel then [n.a]
+  else []
+
+-- the variables of a binder list x, ty, x, ty, ...
+def bindVars : List Int → List Nat
+  | x :: _ :: rest => x.toNat :: bindVars rest
+  | _ => []
+
+def paramVars : List Param → List Nat
+  | [] => []
+  | p :: ps => p.x :: paramVars ps
+
+/-! ## MaxIndex (FreeVars:11): the largest index used; fresh names start above it. -/
+
+def maxOf (m : Nat) (x : Int) : Nat := if x > (m : Int) then x.toNat else m
+
+def maxArgs : List Int → Nat → Nat
+  | [], m => m
+  | y :: ys, m => maxArgs ys (maxOf m y)
+
+def maxNats : List Nat → Nat → Nat
+  | [], m => m
+  | x :: xs, m => maxNats xs (if x > m then x else m)
+
+mutual
+-- FreeVars:59 collectFnBody
+partial def maxIndexGo (n : N) (m : Nat) : Nat :=
+  if n.op == opVDecl then
+    maxIndexGo (bodyOf n) (maxArgs (exprArgs (vdeclExpr n)) (maxNats (bindVars (vdeclBinds n)) m))
+  else if n.op == opJDecl then
+    let m := maxOf m n.a
+    let m := maxIndexGo (jdeclBody n) m
+    maxIndexGo (bodyOf n) (maxNats (paramVars (jdeclParams n)) m)
+  else if n.op == opCase then maxIndexAlts (caseAlts n) (maxOf m n.a)
+  else if n.op == opJmp then maxArgs (jmpArgs n) (maxOf m n.a)
+  else if n.op == opRet then maxArgs (retArgs n) m
+  else if n.op == opUnreachable then m
+  else maxIndexGo (bodyOf n) (maxArgs (insUses n) m)
+partial def maxIndexAlts : List N → Nat → Nat
+  | [], m => m
+  | alt :: alts, m => maxIndexAlts alts (maxIndexGo (altBody alt) m)
+end
+
+-- FreeVars:81 FnBody.maxIndex
+def maxIndex (b : N) : Nat := maxIndexGo b 0
+
+-- FreeVars:84 Decl.maxIndex (FreeVars:75 collectDecl)
+def declMaxIndex (d : Decl) : Nat :=
+  let m := maxNats (paramVars d.xs) 0
+  if d.ext then m else maxIndexGo d.body m
+
+/-! ## FreeIndices (FreeVars:87): an index is free in a body when no `vdecl` or `jdecl` of the body
+binds it. `bv` is the bound set, `fv` the result so far. -/
+
+def freeIdx (x : Int) (bv : VSet) (fv : VSet) : VSet :=
+  if x < 0 || vsContains bv x.toNat then fv else vsInsert fv x.toNat
+
+def freeArgs : List Int → VSet → VSet → VSet
+  | [], _, fv => fv
+  | y :: ys, bv, fv => freeArgs ys bv (freeIdx y bv fv)
+
+mutual
+-- FreeVars:154 collectFnBody
+partial def freeGo (n : N) (bv : VSet) (fv : VSet) : VSet :=
+  if n.op == opVDecl then
+    let fv := freeArgs (exprArgs (vdeclExpr n)) bv fv
+    freeGo (bodyOf n) (vsInsertAll bv (bindVars (vdeclBinds n))) fv
+  else if n.op == opJDecl then
+    let fv := freeGo (jdeclBody n) (vsInsertAll bv (paramVars (jdeclParams n))) fv
+    freeGo (bodyOf n) (vsInsert bv (jdeclId n)) fv
+  else if n.op == opCase then freeAlts (caseAlts n) bv (freeIdx n.a bv fv)
+  else if n.op == opJmp then freeArgs (jmpArgs n) bv (freeIdx n.a bv fv)
+  else if n.op == opRet then freeArgs (retArgs n) bv fv
+  else if n.op == opUnreachable then fv
+  else freeGo (bodyOf n) bv (freeArgs (insUses n) bv fv)
+partial def freeAlts : List N → VSet → VSet → VSet
+  | [], _, fv => fv
+  | alt :: alts, bv, fv => freeAlts alts bv (freeGo (altBody alt) bv fv)
+end
+
+-- FreeVars:172 FnBody.collectFreeIndices
+def collectFreeIndices (b : N) (vs : VSet) : VSet := freeGo b vsEmpty vs
+
+-- FreeVars:175 FnBody.freeIndices
+def freeIndices (b : N) : VSet := collectFreeIndices b vsEmpty
+
+/-! ## HasIndex (FreeVars:178): does the index occur in the body. A binder is not an occurrence. -/
+
+def hasIdxArgs (w : Nat) : List Int → Bool
+  | [] => false
+  | y :: ys => y == (w : Int) || hasIdxArgs w ys
+
+-- FreeVars:196 visitExpr
+def exprHasVar (e : N) (x : Nat) : Bool := hasIdxArgs x (exprArgs e)
+
+mutual
+-- FreeVars:211 visitFnBody
+partial def hasIdxGo (w : Nat) (n : N) : Bool :=
+  if n.op == opVDecl then exprHasVar (vdeclExpr n) w || hasIdxGo w (bodyOf n)
+  else if n.op == opJDecl then hasIdxGo w (jdeclBody n) || hasIdxGo w (bodyOf n)
+  else if n.op == opCase then n.a == (w : Int) || hasIdxAlts w (caseAlts n)
+  else if n.op == opJmp then n.a == (w : Int) || hasIdxArgs w (jmpArgs n)
+  else if n.op == opRet then hasIdxArgs w (retArgs n)
+  else if n.op == opUnreachable then false
+  else hasIdxArgs w (insUses n) || hasIdxGo w (bodyOf n)
+partial def hasIdxAlts (w : Nat) : List N → Bool
+  | [] => false
+  | alt :: alts => hasIdxGo w (altBody alt) || hasIdxAlts w alts
+end
+
+-- FreeVars:229 FnBody.hasFreeVar
+def hasFreeVar (b : N) (x : Nat) : Bool := hasIdxGo x b
+
+end Lrc

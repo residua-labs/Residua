@@ -1,0 +1,807 @@
+-- semantics/Wasm0/Sem.rsd: the formal semantics of wasm0, the wasm subset the chain emits, hole 15 unit 2.
+-- closure_claim = 0.
+--
+-- Source of the semantics: the WebAssembly Core Specification, release 2.0, chapter 4 (Execution):
+-- 4.2 runtime structure (values, stack, labels, frames), 4.4.1 numeric instructions, 4.4.4
+-- parametric instructions, 4.4.5 variable instructions, 4.4.7 memory instructions, 4.4.8 control
+-- instructions (block, loop, if, br, br_if, br_table, return, call, call_indirect), 4.4.9 blocks
+-- and calls; and the legacy exception-handling proposal for try, catch_all and throw (the
+-- emitter writes opcodes 6, 25 and 8: lib/lrc/Emit.rsd wTryI64, wCatchAll, wThrow). Oracles:
+-- WasmCert-Coq and the specification's reference interpreter (WebAssembly/spec interpreter/).
+--
+-- r2 (swe-wasm0r2, owner "可以" 2026-11-18): the fixed profile is the WebAssembly 1.0 (MVP)
+-- integer core — every i32 and i64 numeric instruction of the MVP, the parametric, variable,
+-- memory and control instructions — so that later emitter optimizations do not force
+-- revisions. Extensions beyond the MVP, only because lib/lrc/Emit.rsd writes them today:
+-- try, catch_all, throw (the legacy exception proposal). The MVP numeric profile is closed:
+-- const, add sub mul div_s div_u rem_s rem_u, and or xor shl shr_s shr_u rotl rotr,
+-- clz ctz popcnt, eqz, eq ne lt_s lt_u gt_s gt_u le_s le_u ge_s ge_u (each on i32 and on i64),
+-- i32.wrap_i64, i64.extend_i32_s, i64.extend_i32_u. No floats, no SIMD, no other post-MVP form.
+--
+-- The subset is what lib/lrc/Emit.rsd writes (its `w*` names and the RscBase helpers it calls:
+-- local.get, local.set, i64.const, call, and the loads and stores of the object layout): i64
+-- arithmetic, comparison and bit operations, i32.eqz, i32.wrap_i64, i64.extend_i32_u, i64.ctz,
+-- loads and stores of 8, 16, 32 and 64 bits, select, block, loop, if with an empty, one-i64 or
+-- one-i32 result, br, br_if, return, call, unreachable, try/catch_all with one exception tag
+-- and no payload, throw. The rest of the profile is present but not yet reached by the emitter:
+-- the i32 numeric forms, the rotations, clz, popcnt, i64.extend_i32_s, the i32 loads and stores,
+-- memory.size, memory.grow, br_table, call_indirect, global.get, global.set.
+--
+-- Values are i32 and i64, kept as natural numbers below 2^32 and 2^64. Memory is a sparse byte map
+-- with a fixed size; an access outside it traps. Globals are a mutable value list on the store,
+-- a table maps call_indirect indices to function indices. The instructions are given here as a
+-- syntax tree; the byte decoder of the subset is a separate definition (the binary format,
+-- spec chapter 5).
+--
+-- The definition is a total, fueled definitional interpreter: every recursive call spends a step.
+-- Check: lean semantics/Wasm0/Sem.rsd
+namespace Wasm0
+
+inductive Val where
+  | i32 (n : Nat)
+  | i64 (n : Nat)
+  deriving BEq, Inhabited, Repr
+
+def m32 : Nat := 4294967296
+def m64 : Nat := 18446744073709551616
+
+-- the signed reading of an i32 or an i64 (spec 4.3.1 signed_N), and back
+def s32 (n : Nat) : Int := if n < m32 / 2 then (n : Int) else (n : Int) - (m32 : Int)
+def u32 (i : Int) : Nat := (i % (m32 : Int)).toNat
+def s64 (n : Nat) : Int := if n < m64 / 2 then (n : Int) else (n : Int) - (m64 : Int)
+def u64 (i : Int) : Nat := (i % (m64 : Int)).toNat
+
+-- the binary and comparison operators the MVP defines identically on both integer widths
+-- (spec 4.4.1 ibinop and irelop); the evaluator is per width
+inductive BinOp where
+  | add | sub | mul | divS | divU | remS | remU | and | or | xor | shl | shrS | shrU | rotl | rotr
+  deriving BEq, Inhabited, Repr
+
+inductive RelOp where
+  | eq | ne | ltS | ltU | gtS | gtU | leS | leU | geS | geU
+  deriving BEq, Inhabited, Repr
+
+-- the block types the MVP allows and the emitter writes: empty (0x40), one i64 (0x7e) or one
+-- i32 (0x7f). Each declares how many results the block leaves
+inductive BlockTy where
+  | empty
+  | i64
+  | i32
+  deriving BEq, Inhabited, Repr
+
+def BlockTy.arity : BlockTy → Nat
+  | .empty => 0
+  | .i64 => 1
+  | .i32 => 1
+
+inductive Instr where
+  | unreachable
+  | nop
+  | drop
+  | select
+  | block (bt : BlockTy) (body : List Instr)
+  | loop (bt : BlockTy) (body : List Instr)
+  | ifElse (bt : BlockTy) (th : List Instr) (el : List Instr)
+  | br (depth : Nat)
+  | brIf (depth : Nat)
+  | brTable (targets : List Nat) (default : Nat)
+  | ret
+  | call (f : Nat)
+  -- the expected callee signature, as the MVP's type index resolves it
+  | callIndirect (params results : Nat)
+  | localGet (i : Nat)
+  | localSet (i : Nat)
+  | localTee (i : Nat)
+  | globalGet (i : Nat)
+  | globalSet (i : Nat)
+  | i64Const (v : Int)
+  | i32Const (v : Int)
+  | bin (op : BinOp)
+  | bin32 (op : BinOp)
+  | rel (op : RelOp)
+  | rel32 (op : RelOp)
+  | eqz64
+  | eqz32
+  | clz64
+  | ctz64
+  | popcnt64
+  | clz32
+  | ctz32
+  | popcnt32
+  | wrap
+  | extendU
+  | extendS
+  -- loads and stores: width in bytes, signed extension for loads, static offset
+  | load (width : Nat) (signed : Bool) (offset : Nat)
+  | load32 (width : Nat) (signed : Bool) (offset : Nat)
+  | store (width : Nat) (offset : Nat)
+  | store32 (width : Nat) (offset : Nat)
+  | memSize
+  | memGrow
+  | tryCatchAll (bt : BlockTy) (body : List Instr) (handler : List Instr)
+  | throw
+  deriving Inhabited, Repr
+
+structure Func where
+  params : Nat
+  results : Nat
+  nlocals : Nat
+  body : List Instr
+  deriving Inhabited
+
+structure Module where
+  funcs : List Func
+  memBytes : Nat
+  table : List Nat := []
+  globals : List Val := []
+  deriving Inhabited
+
+structure Store where
+  mem : List (Nat × Nat)
+  memBytes : Nat
+  globals : List Val := []
+  deriving Inhabited
+
+-- how a sequence of instructions ends (spec 4.4.8: a branch to a label, a return, a trap; and the
+-- exception proposal's throw)
+inductive Res where
+  | normal (stack : List Val) (locals : List Val) (st : Store)
+  | branch (depth : Nat) (stack : List Val) (locals : List Val) (st : Store)
+  | returned (stack : List Val) (st : Store)
+  | thrown (st : Store)
+  | trap (why : String)
+  deriving Inhabited
+
+def listSet : List α → Nat → α → List α
+  | [], _, _ => []
+  | _ :: xs, 0, v => v :: xs
+  | x :: xs, i + 1, v => x :: listSet xs i v
+
+def readByte (st : Store) (a : Nat) : Nat := (st.mem.lookup a).getD 0
+
+def readLE (st : Store) (a : Nat) : Nat → Nat
+  | 0 => 0
+  | w + 1 => readByte st a + 256 * readLE st (a + 1) w
+
+def writeLE (st : Store) (a v : Nat) : Nat → Store
+  | 0 => st
+  | w + 1 => writeLE { st with mem := (a, v % 256) :: st.mem.filter (fun p => p.1 != a) } (a + 1) (v / 256) w
+
+def boolI32 (b : Bool) : Val := .i32 (if b then 1 else 0)
+
+-- bit helpers for the unary ops (spec 4.4.1 iunop): the bit length of a, bounded by fuel w
+def bitLenAux : Nat → Nat → Nat
+  | 0, _ => 0
+  | n + 1, a => if a == 0 then 0 else 1 + bitLenAux n (a / 2)
+
+def clz64 (a : Nat) : Nat := 64 - bitLenAux 64 a
+def clz32 (a : Nat) : Nat := 32 - bitLenAux 32 a
+
+def ctzAux : Nat → Nat → Nat
+  | 0, _ => 0
+  | n + 1, a => if a % 2 == 0 then 1 + ctzAux n (a / 2) else 0
+
+def ctz64 (a : Nat) : Nat := ctzAux 64 a
+def ctz32 (a : Nat) : Nat := ctzAux 32 a
+
+def popAux : Nat → Nat → Nat
+  | 0, _ => 0
+  | n + 1, a => a % 2 + popAux n (a / 2)
+
+def popcnt64 (a : Nat) : Nat := popAux 64 a
+def popcnt32 (a : Nat) : Nat := popAux 32 a
+
+-- spec 4.4.1 ibinop on i64: div/rem trap on 0, div_s also on INT64_MIN / -1; the signed
+-- shifts and divides read the operands as two's complement; the shift count is mod 64
+def binOp (op : BinOp) (a b : Nat) : Option Nat :=
+  match op with
+  | .add => some ((a + b) % m64)
+  | .sub => some ((a + m64 - b) % m64)
+  | .mul => some ((a * b) % m64)
+  | .divU => if b == 0 then none else some (a / b)
+  | .divS =>
+    if b == 0 then none
+    else if s64 a == -(m64 / 2 : Nat) && s64 b == -1 then none
+    else some (u64 (Int.tdiv (s64 a) (s64 b)))
+  | .remS => if b == 0 then none else some (u64 (Int.tmod (s64 a) (s64 b)))
+  | .remU => if b == 0 then none else some (a % b)
+  | .and => some (Nat.land a b)
+  | .or => some (Nat.lor a b)
+  | .xor => some (Nat.xor a b)
+  | .shl => some ((a * 2 ^ (b % 64)) % m64)
+  -- shr_s shifts in the sign bit: the floor of the signed value over 2^k
+  | .shrS => some (u64 (Int.ediv (s64 a) (2 ^ (b % 64))))
+  | .shrU => some (a / 2 ^ (b % 64))
+  -- the rotations keep the low k bits' and the high (64 - k) bits' sum below 2^64
+  | .rotl => some ((a * 2 ^ (b % 64) % m64 + a / 2 ^ (64 - b % 64)) % m64)
+  | .rotr => some ((a / 2 ^ (b % 64) + a * 2 ^ (64 - b % 64) % m64) % m64)
+
+-- the same operators on i32 (spec 4.4.1; INT32_MIN / -1 overflows div_s too)
+def binOp32 (op : BinOp) (a b : Nat) : Option Nat :=
+  match op with
+  | .add => some ((a + b) % m32)
+  | .sub => some ((a + m32 - b) % m32)
+  | .mul => some ((a * b) % m32)
+  | .divU => if b == 0 then none else some (a / b)
+  | .divS =>
+    if b == 0 then none
+    else if s32 a == -(m32 / 2 : Nat) && s32 b == -1 then none
+    else some (u32 (Int.tdiv (s32 a) (s32 b)))
+  | .remS => if b == 0 then none else some (u32 (Int.tmod (s32 a) (s32 b)))
+  | .remU => if b == 0 then none else some (a % b)
+  | .and => some (Nat.land a b)
+  | .or => some (Nat.lor a b)
+  | .xor => some (Nat.xor a b)
+  | .shl => some ((a * 2 ^ (b % 32)) % m32)
+  | .shrS => some (u32 (Int.ediv (s32 a) (2 ^ (b % 32))))
+  | .shrU => some (a / 2 ^ (b % 32))
+  | .rotl => some ((a * 2 ^ (b % 32) % m32 + a / 2 ^ (32 - b % 32)) % m32)
+  | .rotr => some ((a / 2 ^ (b % 32) + a * 2 ^ (32 - b % 32) % m32) % m32)
+
+-- spec 4.4.1 irelop on i64 and on i32; each answers an i32
+def relOp (op : RelOp) (a b : Nat) : Bool :=
+  match op with
+  | .eq => a == b
+  | .ne => a != b
+  | .ltS => s64 a < s64 b
+  | .ltU => a < b
+  | .gtS => s64 a > s64 b
+  | .gtU => a > b
+  | .leS => s64 a ≤ s64 b
+  | .leU => a ≤ b
+  | .geS => s64 a ≥ s64 b
+  | .geU => a ≥ b
+
+def relOp32 (op : RelOp) (a b : Nat) : Bool :=
+  match op with
+  | .eq => a == b
+  | .ne => a != b
+  | .ltS => s32 a < s32 b
+  | .ltU => a < b
+  | .gtS => s32 a > s32 b
+  | .gtU => a > b
+  | .leS => s32 a ≤ s32 b
+  | .leU => a ≤ b
+  | .geS => s32 a ≥ s32 b
+  | .geU => a ≥ b
+
+-- sign extension of a w-byte value to i64 or to i32
+def signExt (w v : Nat) : Nat :=
+  let top := 2 ^ (8 * w - 1)
+  if v < top then v else (v + m64 - 2 ^ (8 * w)) % m64
+
+def signExt32 (w v : Nat) : Nat :=
+  let top := 2 ^ (8 * w - 1)
+  if v < top then v else (v + m32 - 2 ^ (8 * w)) % m32
+
+-- the interpreter: `steps` bounds the work; `stack` is the operand stack (top first)
+def exec (m : Module) : Nat → List Instr → List Val → List Val → Store → Res
+  | 0, _, _, _, _ => .trap "steps"
+  | _, [], stack, locals, st => .normal stack locals st
+  | k + 1, i :: is, stack, locals, st =>
+    let next (stack' : List Val) (locals' : List Val) (st' : Store) : Res := exec m k is stack' locals' st'
+    match i with
+    | .unreachable => .trap "unreachable"
+    | .nop => next stack locals st
+    | .drop => match stack with
+      | _ :: s => next s locals st
+      | [] => .trap "stack"
+    -- select keeps v1 on c != 0 and v2 on c = 0 (spec 4.4.4 parametric select); validation
+    -- requires val1 and val2 to share a type, which is a refusal here
+    | .select => match stack with
+      | .i32 c :: v2 :: v1 :: s =>
+        match v1, v2 with
+        | .i64 _, .i64 _ | .i32 _, .i32 _ => next ((if c != 0 then v1 else v2) :: s) locals st
+        | _, _ => .trap "type"
+      | _ => .trap "type"
+    | .i64Const v => next (.i64 (u64 v) :: stack) locals st
+    | .i32Const v => next (.i32 ((v % (m32 : Int)).toNat) :: stack) locals st
+    | .localGet n => match locals.get? n with
+      | some v => next (v :: stack) locals st
+      | none => .trap "local"
+    | .localSet n => match stack with
+      | v :: s => next s (listSet locals n v) st
+      | [] => .trap "stack"
+    | .localTee n => match stack with
+      | v :: s => next (v :: s) (listSet locals n v) st
+      | [] => .trap "stack"
+    | .globalGet n => match st.globals.get? n with
+      | some v => next (v :: stack) locals st
+      | none => .trap "global"
+    | .globalSet n => match stack with
+      | v :: s =>
+        if n < st.globals.length then next s locals { st with globals := listSet st.globals n v }
+        else .trap "global"
+      | [] => .trap "stack"
+    | .bin op => match stack with
+      | .i64 b :: .i64 a :: s => match binOp op a b with
+        | some r => next (.i64 r :: s) locals st
+        | none => .trap "integer divide by zero or overflow"
+      | _ => .trap "type"
+    | .bin32 op => match stack with
+      | .i32 b :: .i32 a :: s => match binOp32 op a b with
+        | some r => next (.i32 r :: s) locals st
+        | none => .trap "integer divide by zero or overflow"
+      | _ => .trap "type"
+    | .rel op => match stack with
+      | .i64 b :: .i64 a :: s => next (boolI32 (relOp op a b) :: s) locals st
+      | _ => .trap "type"
+    | .rel32 op => match stack with
+      | .i32 b :: .i32 a :: s => next (boolI32 (relOp32 op a b) :: s) locals st
+      | _ => .trap "type"
+    | .eqz64 => match stack with
+      | .i64 a :: s => next (boolI32 (a == 0) :: s) locals st
+      | _ => .trap "type"
+    | .eqz32 => match stack with
+      | .i32 a :: s => next (boolI32 (a == 0) :: s) locals st
+      | _ => .trap "type"
+    | .clz64 => match stack with
+      | .i64 a :: s => next (.i64 (clz64 a) :: s) locals st
+      | _ => .trap "type"
+    | .ctz64 => match stack with
+      | .i64 a :: s => next (.i64 (ctz64 a) :: s) locals st
+      | _ => .trap "type"
+    | .popcnt64 => match stack with
+      | .i64 a :: s => next (.i64 (popcnt64 a) :: s) locals st
+      | _ => .trap "type"
+    | .clz32 => match stack with
+      | .i32 a :: s => next (.i32 (clz32 a) :: s) locals st
+      | _ => .trap "type"
+    | .ctz32 => match stack with
+      | .i32 a :: s => next (.i32 (ctz32 a) :: s) locals st
+      | _ => .trap "type"
+    | .popcnt32 => match stack with
+      | .i32 a :: s => next (.i32 (popcnt32 a) :: s) locals st
+      | _ => .trap "type"
+    | .wrap => match stack with
+      | .i64 a :: s => next (.i32 (a % m32) :: s) locals st
+      | _ => .trap "type"
+    | .extendU => match stack with
+      | .i32 a :: s => next (.i64 a :: s) locals st
+      | _ => .trap "type"
+    | .extendS => match stack with
+      | .i32 a :: s => next (.i64 (u64 (s32 a)) :: s) locals st
+      | _ => .trap "type"
+    | .load w sgn off => match stack with
+      | .i32 a :: s =>
+        let ea := a + off
+        if ea + w > st.memBytes then .trap "out of bounds memory access"
+        else
+          let v := readLE st ea w
+          next (.i64 (if sgn then signExt w v else v) :: s) locals st
+      | _ => .trap "type"
+    | .load32 w sgn off => match stack with
+      | .i32 a :: s =>
+        let ea := a + off
+        if ea + w > st.memBytes then .trap "out of bounds memory access"
+        else
+          let v := readLE st ea w
+          next (.i32 (if sgn then signExt32 w v else v) :: s) locals st
+      | _ => .trap "type"
+    | .store w off => match stack with
+      | .i64 v :: .i32 a :: s =>
+        let ea := a + off
+        if ea + w > st.memBytes then .trap "out of bounds memory access"
+        else next s locals (writeLE st ea v w)
+      | _ => .trap "type"
+    | .store32 w off => match stack with
+      | .i32 v :: .i32 a :: s =>
+        let ea := a + off
+        if ea + w > st.memBytes then .trap "out of bounds memory access"
+        else next s locals (writeLE st ea v w)
+      | _ => .trap "type"
+    -- memory.size answers the size in 65536-byte pages; memory.grow pops an i32 delta, answers
+    -- the old size and grows the memory, or answers -1 over the MVP's 65536-page maximum
+    | .memSize => next (.i32 (st.memBytes / 65536) :: stack) locals st
+    | .memGrow => match stack with
+      | .i32 d :: s =>
+        let old := st.memBytes / 65536
+        if old + d > 65536 then next (.i32 (m32 - 1) :: s) locals st
+        else next (.i32 old :: s) locals { st with memBytes := st.memBytes + d * 65536 }
+      | _ => .trap "type"
+    | .block bt body =>
+      match exec m k body [] locals st with
+      | .normal s' l' st' => next (s'.take bt.arity ++ stack) l' st'
+      | .branch 0 s' l' st' => next (s'.take bt.arity ++ stack) l' st'
+      | .branch (d + 1) s' l' st' => .branch d s' l' st'
+      | r => r
+    | .loop bt body =>
+      match exec m k body [] locals st with
+      | .normal s' l' st' => next (s'.take bt.arity ++ stack) l' st'
+      -- a branch to a loop's label restarts the loop (spec 4.4.8 loop: the label's arity is 0)
+      | .branch 0 _ l' st' => exec m k (.loop bt body :: is) stack l' st'
+      | .branch (d + 1) s' l' st' => .branch d s' l' st'
+      | r => r
+    | .ifElse bt th el => match stack with
+      | .i32 c :: s => exec m k (.block bt (if c != 0 then th else el) :: is) s locals st
+      | _ => .trap "type"
+    | .br d => .branch d stack locals st
+    | .brIf d => match stack with
+      | .i32 c :: s => if c != 0 then .branch d s locals st else next s locals st
+      | _ => .trap "type"
+    -- br_table chooses the depth by the i32 index, the last label on overflow (spec 4.4.8)
+    | .brTable ts dflt => match stack with
+      | .i32 i :: s => .branch (ts.getD i dflt) s locals st
+      | _ => .trap "type"
+    | .ret => .returned stack st
+    | .throw => .thrown st
+    | .tryCatchAll bt body handler =>
+      match exec m k body [] locals st with
+      | .normal s' l' st' => next (s'.take bt.arity ++ stack) l' st'
+      | .branch 0 s' l' st' => next (s'.take bt.arity ++ stack) l' st'
+      | .branch (d + 1) s' l' st' => .branch d s' l' st'
+      | .thrown st' => exec m k (.block bt handler :: is) stack locals st'
+      | r => r
+    | .call f => match m.funcs.get? f with
+      | none => .trap "call of an unknown function"
+      | some fn =>
+        if stack.length < fn.params then .trap "stack" else
+        let args := (stack.take fn.params).reverse
+        let locals0 := args ++ List.replicate fn.nlocals (.i64 0)
+        match exec m k fn.body [] locals0 st with
+        | .normal s' _ st' => next (s'.take fn.results ++ stack.drop fn.params) locals st'
+        | .returned s' st' => next (s'.take fn.results ++ stack.drop fn.params) locals st'
+        | .branch _ s' _ st' => next (s'.take fn.results ++ stack.drop fn.params) locals st'
+        | r => r
+    -- call_indirect (spec 4.4.8): the i32 top indexes the table; the callee's signature must
+    -- match the instruction's, else the call traps
+    | .callIndirect p r => match stack with
+      | .i32 i :: s =>
+        match m.table.get? i with
+        | none => .trap "undefined element"
+        | some f => match m.funcs.get? f with
+          | none => .trap "undefined element"
+          | some fn =>
+            if fn.params != p || fn.results != r then .trap "indirect call type mismatch"
+            else if s.length < fn.params then .trap "stack" else
+            let args := (s.take fn.params).reverse
+            let locals0 := args ++ List.replicate fn.nlocals (.i64 0)
+            match exec m k fn.body [] locals0 st with
+            | .normal s' _ st' => next (s'.take fn.results ++ s.drop fn.params) locals st'
+            | .returned s' st' => next (s'.take fn.results ++ s.drop fn.params) locals st'
+            | .branch _ s' _ st' => next (s'.take fn.results ++ s.drop fn.params) locals st'
+            | r => r
+      | _ => .trap "type"
+
+-- Invoke function f with arguments (spec 4.5.5 invocation): the results, top of stack first, and the memory.
+inductive Outcome where
+  | values (vs : List Val) (st : Store)
+  | uncaught
+  | trapped (why : String)
+  deriving Inhabited
+
+def invoke (m : Module) (f : Nat) (args : List Val) (steps : Nat) (st : Store) : Outcome :=
+  match exec m steps [.call f] args.reverse [] st with
+  | .normal s _ st' => .values s st'
+  | .returned s st' => .values s st'
+  | .branch _ s _ st' => .values s st'
+  | .thrown _ => .uncaught
+  | .trap w => .trapped w
+
+def store0 (m : Module) : Store := { mem := [], memBytes := m.memBytes, globals := m.globals }
+
+end Wasm0
+
+/-! ## Controls (executable; checked by `#guard`) -/
+namespace Wasm0.Controls
+open Wasm0
+
+def trapWhy : Outcome → Option String
+  | .trapped w => some w
+  | _ => none
+
+def topI64 : Outcome → Option Int
+  | .values (.i64 n :: _) _ => some (s64 n)
+  | _ => none
+
+def topI32 : Outcome → Option Nat
+  | .values (.i32 n :: _) _ => some n
+  | _ => none
+
+def topI64u : Outcome → Option Nat
+  | .values (.i64 n :: _) _ => some n
+  | _ => none
+
+def stk : Outcome → Option (List Val)
+  | .values s _ => some s
+  | _ => none
+
+def isUncaught : Outcome → Bool
+  | .uncaught => true
+  | _ => false
+
+-- f0 (a, b) = a * b + 1
+def mul1 : Func := ⟨2, 1, 0, [.localGet 0, .localGet 1, .bin .mul, .i64Const 1, .bin .add]⟩
+-- f1 (n): a loop that counts n down to 0 and sums n + ... + 1 in local 1
+def sumTo : Func := ⟨1, 1, 1, [.block .empty [.loop .empty [
+             .localGet 0, .eqz64, .brIf 1,
+             .localGet 1, .localGet 0, .bin .add, .localSet 1,
+             .localGet 0, .i64Const 1, .bin .sub, .localSet 0,
+             .br 0]],
+           .localGet 1]⟩
+-- f2 (a): store a at address 16, load it back as 32 bits signed
+def memRt : Func := ⟨1, 1, 0, [.i32Const 16, .localGet 0, .store 8 0, .i32Const 16, .load 4 true 0]⟩
+-- f3 (a): try { if a == 0 then throw; a } catch_all { 99 }
+def tryF : Func := ⟨1, 1, 0, [.tryCatchAll .i64 [.localGet 0, .eqz64, .ifElse .empty [.throw] [], .localGet 0] [.i64Const 99]]⟩
+-- f4 (a, b) = a / b signed: traps on division by zero
+def divF : Func := ⟨2, 1, 0, [.localGet 0, .localGet 1, .bin .divS]⟩
+-- f5 (a) = f0 (a, a) through a call
+def callF : Func := ⟨1, 1, 0, [.localGet 0, .localGet 0, .call 0]⟩
+-- f6 (a, k) = a i64.shr_s k: sign extends; the count reads mod 64
+def shrF : Func := ⟨2, 1, 0, [.localGet 0, .localGet 1, .bin .shrS]⟩
+-- f7 (a, b) = a i64.rem_u b: unsigned remainder, a trap on divisor 0
+def remUF : Func := ⟨2, 1, 0, [.localGet 0, .localGet 1, .bin .remU]⟩
+-- f8 (a, b) = a i64.ge_u b: the unsigned reading (an i32 answer)
+def geUF : Func := ⟨2, 1, 0, [.localGet 0, .localGet 1, .rel .geU]⟩
+-- f9 (v1, v2, c) = select: keeps v1 on c != 0 and v2 on c = 0
+def selF : Func := ⟨3, 1, 0, [.localGet 0, .localGet 1, .localGet 2, .select]⟩
+-- f10 (a) = i64.ctz a: 0 has 64 trailing zeros
+def ctzF : Func := ⟨1, 1, 0, [.localGet 0, .ctz64]⟩
+-- f11 (c, a) = if (result i32) c then a i64.ge_u 10 else i32.const 0: the wIsArr shape
+-- (lib/lrc/Emit.rsd wIfI32, block type 0x7f)
+def ifI32F : Func := ⟨2, 1, 0, [.localGet 0, .ifElse .i32 [.localGet 1, .i64Const 10, .rel .geU] [.i32Const 0]]⟩
+-- f12 (): i64 and i32 to select trap "type" (validation's same-type rule as an execution refusal)
+def selBadF : Func := ⟨0, 1, 0, [.i64Const 1, .i32Const 2, .i32Const 1, .select]⟩
+-- f13 (a, b, c) = select over i32s
+def sel32F : Func := ⟨3, 1, 0, [.localGet 0, .localGet 1, .localGet 2, .select]⟩
+-- f14 (): a bare block of type i32
+def blk32F : Func := ⟨0, 1, 0, [.block .i32 [.i32Const 42]]⟩
+
+def mod0 : Module := { funcs := [mul1, sumTo, memRt, tryF, divF, callF], memBytes := 65536 }
+-- the r2 additions, kept apart so the r1 module still flattens in Air.Wasm0Flat
+def mod1 : Module := { funcs := [shrF, remUF, geUF, selF, ctzF, ifI32F, selBadF, sel32F, blk32F],
+                       memBytes := 65536 }
+
+-- one-call modules for the profile battery: `cv body params` runs f0(args) on a 64 KiB module
+def cmod (body : List Instr) (params nlocals mb : Nat) (table : List Nat := []) (globals : List Val := [])
+    : Module :=
+  { funcs := [⟨params, 1, nlocals, body⟩], memBytes := mb, table := table, globals := globals }
+
+def cv (body : List Instr) (args : List Val) (params : Nat := 2) : Outcome :=
+  let m := cmod body params 0 65536
+  invoke m 0 args 1000 (store0 m)
+
+def cvm (body : List Instr) (args : List Val) (mb : Nat) : Outcome :=
+  let m := cmod body (args.length) 0 mb
+  invoke m 0 args 1000 (store0 m)
+
+def cvg (body : List Instr) (args : List Val) (globals : List Val) : Outcome :=
+  let m := cmod body (args.length) 0 65536 [] globals
+  invoke m 0 args 1000 (store0 m)
+
+-- i64 binops (spec 4.4.1): the rows the spec's own numeric tests check, on both widths
+def bin2 (op : BinOp) (a b : Int) : Outcome :=
+  cv [.localGet 0, .localGet 1, .bin op] [.i64 (u64 a), .i64 (u64 b)]
+def bin2s (op : BinOp) (a b : Int) : Outcome :=
+  cv [.localGet 0, .localGet 1, .bin32 op] [.i32 (u32 a), .i32 (u32 b)]
+def rel2 (op : RelOp) (a b : Int) : Outcome :=
+  cv [.localGet 0, .localGet 1, .rel op] [.i64 (u64 a), .i64 (u64 b)]
+def rel2s (op : RelOp) (a b : Int) : Outcome :=
+  cv [.localGet 0, .localGet 1, .rel32 op] [.i32 (u32 a), .i32 (u32 b)]
+def una (i : Instr) (a : Int) : Outcome :=
+  cv [.localGet 0, i] [.i64 (u64 a)] (params := 1)
+def unas (i : Instr) (a : Int) : Outcome :=
+  cv [.localGet 0, i] [.i32 (u32 a)] (params := 1)
+
+-- ===== the MVP integer core, per group (spec 4.4.1, 4.4.4, 4.4.5, 4.4.7, 4.4.8) =====
+
+-- i64 arithmetic and bits
+#guard topI64u (bin2 .add 40 2) == some 42
+#guard topI64u (bin2 .add (m64 - 1) 1) == some 0
+#guard topI64u (bin2 .sub 5 7) == some (m64 - 2)
+#guard topI64u (bin2 .mul 6 7) == some 42
+#guard topI64u (bin2 .mul (m64 / 2) 2) == some 0
+#guard topI64 (bin2 .divS (-9) 2) == some (-4)
+#guard topI64 (bin2 .divS (-1) (-1)) == some 1
+#guard trapWhy (bin2 .divS 1 0) == some "integer divide by zero or overflow"
+#guard trapWhy (bin2 .divS (-9223372036854775808) (-1)) == some "integer divide by zero or overflow"
+#guard topI64u (bin2 .divU (m64 - 1) 2) == some (m64 / 2 - 1)
+#guard trapWhy (bin2 .divU 1 0) == some "integer divide by zero or overflow"
+#guard topI64 (bin2 .remS (-9) 2) == some (-1)
+#guard topI64 (bin2 .remS (-9223372036854775808) (-1)) == some 0
+#guard topI64u (bin2 .remU 10 3) == some 1
+#guard topI64u (bin2 .remU (m64 - 1) 10) == some 5
+#guard trapWhy (bin2 .remU 10 0) == some "integer divide by zero or overflow"
+#guard topI64u (bin2 .and 0xF0F0 0x0FF0) == some 0x00F0
+#guard topI64u (bin2 .or 0xF0F0 0x0FF0) == some 0xFFF0
+#guard topI64u (bin2 .xor 0xF0F0 0x0FF0) == some 0xFF00
+#guard topI64u (bin2 .shl 1 63) == some (m64 / 2)
+#guard topI64u (bin2 .shl 1 64) == some 1
+#guard topI64 (bin2 .shrS (-16) 2) == some (-4)
+#guard topI64 (bin2 .shrS (-1) 63) == some (-1)
+#guard topI64u (bin2 .shrS 16 2) == some 4
+#guard topI64u (bin2 .shrU (m64 - 1) 1) == some (m64 / 2 - 1)
+#guard topI64u (bin2 .rotl (m64 / 2 + 1) 1) == some 3
+#guard topI64u (bin2 .rotr 3 1) == some (m64 / 2 + 1)
+#guard topI64u (bin2 .rotl 7 64) == some 7
+-- i64 unops (eqz answers an i32)
+#guard topI32 (una .eqz64 0) == some 1
+#guard topI32 (una .eqz64 5) == some 0
+#guard topI64u (una .clz64 0) == some 64
+#guard topI64u (una .clz64 1) == some 63
+#guard topI64u (una .clz64 (m64 / 2)) == some 0
+#guard topI64u (una .ctz64 0) == some 64
+#guard topI64u (una .ctz64 8) == some 3
+#guard topI64u (una .ctz64 (m64 - 1)) == some 0
+#guard topI64u (una .popcnt64 0) == some 0
+#guard topI64u (una .popcnt64 (m64 - 1)) == some 64
+#guard topI64u (una .popcnt64 0xF0F0) == some 8
+-- i64 comparisons (answer i32)
+#guard topI32 (rel2 .eq 5 5) == some 1
+#guard topI32 (rel2 .ne 5 5) == some 0
+#guard topI32 (rel2 .ltS (-1) 0) == some 1
+#guard topI32 (rel2 .ltS 0 (-1)) == some 0
+#guard topI32 (rel2 .ltU (m64 - 1) 0) == some 0
+#guard topI32 (rel2 .ltU 0 1) == some 1
+#guard topI32 (rel2 .gtS 0 (-1)) == some 1
+#guard topI32 (rel2 .gtU (m64 - 1) 0) == some 1
+#guard topI32 (rel2 .leS (-1) (-1)) == some 1
+#guard topI32 (rel2 .leS 0 (-1)) == some 0
+#guard topI32 (rel2 .leU 5 5) == some 1
+#guard topI32 (rel2 .leU (m64 - 1) 0) == some 0
+#guard topI32 (rel2 .geS (-1) (-2)) == some 1
+#guard topI32 (rel2 .geU (m64 - 1) 0) == some 1
+#guard topI32 (rel2 .geU 0 (m64 - 1)) == some 0
+-- i32 arithmetic and bits (spec 4.4.1 on the 32-bit width)
+#guard topI32 (bin2s .add (m32 - 1) 1) == some 0
+#guard topI32 (bin2s .sub 3 5) == some (m32 - 2)
+#guard topI32 (bin2s .mul 6 7) == some 42
+#guard topI32 (bin2s .divS (-9) 2) == some (u32 (-4))
+#guard topI32 (bin2s .divS (-2147483648) (-1)) == none
+#guard trapWhy (bin2s .divS (-2147483648) (-1)) == some "integer divide by zero or overflow"
+#guard topI32 (bin2s .divU (m32 - 1) 2) == some (m32 / 2 - 1)
+#guard topI32 (bin2s .remS (-9) 2) == some (u32 (-1))
+#guard topI32 (bin2s .remS (-2147483648) (-1)) == some 0
+#guard topI32 (bin2s .remU (m32 - 1) 10) == some ((m32 - 1) % 10)
+#guard trapWhy (bin2s .remU 1 0) == some "integer divide by zero or overflow"
+#guard trapWhy (bin2s .divU 1 0) == some "integer divide by zero or overflow"
+#guard topI32 (bin2s .and 0xF0F0 0x0FF0) == some 0x00F0
+#guard topI32 (bin2s .or 0xF0F0 0x0FF0) == some 0xFFF0
+#guard topI32 (bin2s .xor 0xF0F0 0x0FF0) == some 0xFF00
+#guard topI32 (bin2s .shl 1 31) == some (m32 / 2)
+#guard topI32 (bin2s .shl 1 32) == some 1
+#guard topI32 (bin2s .shrS (-16) 2) == some (u32 (-4))
+#guard topI32 (bin2s .shrS (-1) 31) == some (m32 - 1)
+#guard topI32 (bin2s .shrU (m32 - 1) 1) == some (m32 / 2 - 1)
+#guard topI32 (bin2s .rotl (m32 / 2 + 1) 1) == some 3
+#guard topI32 (bin2s .rotr 3 1) == some (m32 / 2 + 1)
+#guard topI32 (bin2s .rotl 7 32) == some 7
+-- i32 unops and comparisons
+#guard topI32 (unas .eqz32 0) == some 1
+#guard topI32 (unas .eqz32 3) == some 0
+#guard topI32 (unas .clz32 0) == some 32
+#guard topI32 (unas .clz32 1) == some 31
+#guard topI32 (unas .ctz32 0) == some 32
+#guard topI32 (unas .ctz32 8) == some 3
+#guard topI32 (unas .popcnt32 (m32 - 1)) == some 32
+#guard topI32 (unas .popcnt32 0xF0F0) == some 8
+#guard topI32 (rel2s .eq 5 5) == some 1
+#guard topI32 (rel2s .ne 5 5) == some 0
+#guard topI32 (rel2s .ltS (-1) 0) == some 1
+#guard topI32 (rel2s .ltU (m32 - 1) 0) == some 0
+#guard topI32 (rel2s .gtS 0 (-1)) == some 1
+#guard topI32 (rel2s .gtU (m32 - 1) 0) == some 1
+#guard topI32 (rel2s .leS (-1) (-1)) == some 1
+#guard topI32 (rel2s .leS 0 (-1)) == some 0
+#guard topI32 (rel2s .leU 5 5) == some 1
+#guard topI32 (rel2s .leU (m32 - 1) 0) == some 0
+#guard topI32 (rel2s .geS (-1) (-2)) == some 1
+#guard topI32 (rel2s .geU (m32 - 1) 0) == some 1
+-- conversions (spec 4.4.1 cvtop)
+#guard topI32 (una .wrap (m64 - 1)) == some (m32 - 1)
+#guard topI32 (una .wrap 0) == some 0
+#guard topI64u (unas .extendU (m32 - 1)) == some (m32 - 1)
+#guard topI64 (unas .extendS (-1)) == some (-1)
+#guard topI64 (unas .extendS (-2147483648)) == some (-2147483648)
+#guard topI64u (unas .extendS 1) == some 1
+-- parametric (spec 4.4.4): drop and select
+#guard topI64 (cv [.localGet 0, .drop, .i64Const 9] [.i64 3] (params := 1)) == some 9
+#guard topI64 (cv [.localGet 0, .localGet 1, .localGet 2, .select] [.i64 11, .i64 22, .i32 1] (params := 3)) == some 11
+#guard topI64 (cv [.localGet 0, .localGet 1, .localGet 2, .select] [.i64 11, .i64 22, .i32 0] (params := 3)) == some 22
+#guard topI32 (cv [.localGet 0, .localGet 1, .localGet 2, .select] [.i32 7, .i32 8, .i32 2] (params := 3)) == some 7
+#guard trapWhy (cv [.i64Const 1, .i32Const 2, .i32Const 1, .select] [] (params := 0)) == some "type"
+#guard trapWhy (cv [.select] [] (params := 0)) == some "type"
+-- variable (spec 4.4.5): locals and globals
+#guard topI64 (cv [.localGet 0, .localGet 1, .localSet 2, .localGet 2] [.i64 4, .i64 5, .i64 0] (params := 3)) == some 5
+#guard topI64 (cv [.localGet 0, .localTee 1, .localGet 1] [.i64 9, .i64 0]) == some 9
+#guard trapWhy (cv [.localGet 7] [.i64 1] (params := 1)) == some "local"
+#guard topI64u (cvg [.globalGet 0] [] [.i64 17]) == some 17
+#guard topI64u (cvg [.globalGet 1] [] [.i64 17, .i32 3]) == none
+#guard topI32 (cvg [.globalGet 1] [] [.i64 17, .i32 3]) == some 3
+#guard topI64u (cvg [.i64Const 30, .globalSet 1, .globalGet 1] [] [.i64 17, .i64 0]) == some 30
+#guard trapWhy (cvg [.i64Const 30, .globalSet 5] [] [.i64 17]) == some "global"
+-- memory (spec 4.4.7): every width and sign; size and grow in pages
+#guard topI64u (cvm [.i32Const 8, .localGet 0, .store 8 0, .i32Const 8, .load 8 false 0] [.i64 (u64 (-1))] 65536) == some (m64 - 1)
+#guard topI64 (cvm [.i32Const 8, .localGet 0, .store 8 0, .i32Const 8, .load 4 true 0] [.i64 (u64 (-1))] 65536) == some (-1)
+#guard topI64u (cvm [.i32Const 8, .localGet 0, .store 8 0, .i32Const 8, .load 1 false 0] [.i64 0x80] 65536) == some 0x80
+#guard topI64 (cvm [.i32Const 8, .localGet 0, .store 8 0, .i32Const 8, .load 1 true 0] [.i64 0x80] 65536) == some (-128)
+#guard topI64 (cvm [.i32Const 8, .localGet 0, .store 8 0, .i32Const 8, .load 2 true 0] [.i64 0x8000] 65536) == some (-32768)
+#guard topI64u (cvm [.i32Const 8, .localGet 0, .store 8 0, .i32Const 8, .load 2 false 4] [.i64 (u64 (-1))] 65536) == some 0xFFFF
+#guard topI64 (cvm [.i32Const 8, .localGet 0, .store 8 0, .i32Const 8, .load 4 true 4] [.i64 (u64 (-1))] 65536) == some (-1)
+#guard topI64u (cvm [.i32Const 8, .localGet 0, .store 8 0, .i32Const 8, .load 4 false 4] [.i64 (u64 (-1))] 65536) == some (m32 - 1)
+#guard topI64u (cvm [.i32Const 8, .localGet 0, .store 1 0, .i32Const 8, .load 1 false 0] [.i64 0x1FF] 65536) == some 0xFF
+#guard topI64u (cvm [.i32Const 8, .localGet 0, .store 2 0, .i32Const 8, .load 2 false 0] [.i64 0x1FFFF] 65536) == some 0xFFFF
+#guard topI64u (cvm [.i32Const 8, .localGet 0, .store 4 0, .i32Const 8, .load 4 false 0] [.i64 0x1FFFFFFFF] 65536) == some (m32 - 1)
+#guard topI32 (cvm [.i32Const 8, .localGet 0, .store32 4 0, .i32Const 8, .load32 4 false 0] [.i32 (m32 - 1)] 65536) == some (m32 - 1)
+#guard topI32 (cvm [.i32Const 8, .localGet 0, .store32 4 0, .i32Const 8, .load32 1 true 0] [.i32 0x80] 65536) == some (m32 - 128)
+#guard topI32 (cvm [.i32Const 8, .localGet 0, .store32 4 0, .i32Const 8, .load32 2 true 0] [.i32 0x8000] 65536) == some (m32 - 32768)
+#guard topI32 (cvm [.i32Const 8, .localGet 0, .store32 1 0, .i32Const 8, .load32 1 false 0] [.i32 0x1FF] 65536) == some 0xFF
+#guard topI32 (cvm [.i32Const 8, .localGet 0, .store32 2 0, .i32Const 8, .load32 2 false 0] [.i32 0x1FFFF] 65536) == some 0xFFFF
+#guard trapWhy (cvm [.i32Const 8, .localGet 0, .store 8 0] [.i64 1] 10) == some "out of bounds memory access"
+#guard trapWhy (cvm [.i32Const 8, .load 8 false 0] [] 10) == some "out of bounds memory access"
+#guard trapWhy (cvm [.i32Const 8, .localGet 0, .store32 4 0] [.i32 1] 10) == some "out of bounds memory access"
+#guard trapWhy (cvm [.i64Const 0, .i32Const 8, .store 8 0] [] 65536) == some "type"
+#guard topI32 (cvm [.memSize] [] 65536) == some 1
+#guard topI32 (cvm [.memSize] [] 131072) == some 2
+#guard topI32 (cvm [.i32Const 1, .memGrow, .memSize] [] 65536) == some 2
+#guard topI32 (cvm [.i32Const 1, .memGrow] [] 65536) == some 1
+#guard topI32 (cvm [.i32Const 65536, .memGrow] [] 65536) == some (m32 - 1)
+-- control (spec 4.4.8): block, loop, if, br, br_if, br_table, return, call, call_indirect
+#guard topI64 (cv [.block .i64 [.i64Const 7]] [] (params := 0)) == some 7
+#guard topI32 (cv [.block .i32 [.i32Const 7]] [] (params := 0)) == some 7
+#guard topI64 (cv [.block .empty [.i64Const 7, .drop]] [] (params := 0)) == none
+#guard topI64 (cv [.loop .i64 [.i64Const 9, .br 1]] [] (params := 0)) == some 9
+#guard topI64 (cv [.loop .empty [.i64Const 1, .br 0]] [] (params := 0)) == none
+#guard trapWhy (cv [.loop .empty [.br 0]] [] (params := 0)) == some "steps"
+#guard topI64 (cv [.i32Const 1, .ifElse .i64 [.i64Const 1] [.i64Const 2]] [] (params := 0)) == some 1
+#guard topI64 (cv [.i32Const 0, .ifElse .i64 [.i64Const 1] [.i64Const 2]] [] (params := 0)) == some 2
+#guard topI32 (cv [.i32Const 0, .ifElse .i32 [.i32Const 1] [.i32Const 2]] [] (params := 0)) == some 2
+#guard trapWhy (cv [.i64Const 1, .ifElse .empty [] []] [] (params := 0)) == some "type"
+#guard topI64 (cv [.block .empty [.br 0], .i64Const 5] [] (params := 0)) == some 5
+#guard topI64 (cv [.block .i64 [.i64Const 5, .br 0]] [] (params := 0)) == some 5
+#guard topI64 (cv [.block .empty [.i64Const 7]] [] (params := 0)) == none
+#guard stk (cv [.block .i64 [.i64Const 7, .i64Const 8]] [] (params := 0)) == some [.i64 8]
+#guard trapWhy (cv [.block .empty [.i32Const 0, .brIf 0, .unreachable], .i64Const 5] [] (params := 0)) == some "unreachable"
+#guard topI64 (cv [.block .empty [.i32Const 1, .brIf 0, .unreachable], .i64Const 5] [] (params := 0)) == some 5
+-- br_table: index in range picks its label; past the table the default (the last label)
+#guard topI64 (cv [.block .empty [.block .empty [.i32Const 0, .brTable [1, 0] 0], .i64Const 5, .ret], .i64Const 9] [] (params := 0)) == some 9
+#guard topI64 (cv [.block .empty [.block .empty [.i32Const 0, .brTable [0, 1] 1], .i64Const 5, .ret]] [] (params := 0)) == some 5
+#guard topI64 (cv [.block .empty [.block .empty [.i32Const 9, .brTable [1] 1], .i64Const 5, .ret], .i64Const 9] [] (params := 0)) == some 9
+#guard topI64 (cv [.i64Const 4, .ret, .i64Const 5] [] (params := 0)) == some 4
+#guard topI64 (invoke mod0 0 [.i64 6, .i64 7] 100 (store0 mod0)) == some 43
+#guard topI64 (invoke mod0 1 [.i64 10] 1000 (store0 mod0)) == some 55
+#guard topI64 (invoke mod0 2 [.i64 (u64 (-5))] 100 (store0 mod0)) == some (-5)
+#guard topI64 (invoke mod0 3 [.i64 0] 100 (store0 mod0)) == some 99
+#guard topI64 (invoke mod0 3 [.i64 8] 100 (store0 mod0)) == some 8
+#guard (trapWhy (invoke mod0 4 [.i64 1, .i64 0] 100 (store0 mod0))).isSome
+#guard topI64 (invoke mod0 4 [.i64 (u64 (-9)), .i64 2] 100 (store0 mod0)) == some (-4)
+#guard topI64 (invoke mod0 5 [.i64 3] 100 (store0 mod0)) == some 10
+#guard trapWhy (invoke mod0 1 [.i64 10] 5 (store0 mod0)) == some "steps"
+#guard topI64 (invoke mod1 0 [.i64 (u64 (-16)), .i64 2] 100 (store0 mod1)) == some (-4)
+#guard topI64 (invoke mod1 1 [.i64 (m64 - 1), .i64 10] 100 (store0 mod1)) == some 5
+#guard trapWhy (invoke mod1 1 [.i64 10, .i64 0] 100 (store0 mod1)) == some "integer divide by zero or overflow"
+#guard topI32 (invoke mod1 2 [.i64 (m64 - 1), .i64 0] 100 (store0 mod1)) == some 1
+#guard topI64 (invoke mod1 3 [.i64 11, .i64 22, .i32 1] 100 (store0 mod1)) == some 11
+#guard topI64 (invoke mod1 4 [.i64 (m64 / 2)] 100 (store0 mod1)) == some 63
+#guard topI32 (invoke mod1 5 [.i32 1, .i64 20] 100 (store0 mod1)) == some 1
+#guard topI32 (invoke mod1 5 [.i32 0, .i64 20] 100 (store0 mod1)) == some 0
+#guard topI32 (invoke mod1 5 [.i32 1, .i64 5] 100 (store0 mod1)) == some 0
+#guard trapWhy (invoke mod1 6 [] 100 (store0 mod1)) == some "type"
+#guard topI32 (invoke mod1 7 [.i32 7, .i32 8, .i32 1] 100 (store0 mod1)) == some 7
+#guard topI32 (invoke mod1 8 [] 100 (store0 mod1)) == some 42
+#guard topI64 (cv [.call 0] [.i64 3] (params := 1)) == none
+#guard trapWhy (cv [.call 9] [] (params := 0)) == some "call of an unknown function"
+-- call_indirect (spec 4.4.8): the i32 index chooses the callee from the table; the callee's
+-- signature must equal the instruction's, and an index off the table traps
+def modI : Module := { funcs := [⟨1, 1, 0, [.localGet 0, .i64Const 1, .bin .add]⟩,
+                                 ⟨0, 1, 0, [.i64Const 77]⟩,
+                                 ⟨2, 1, 0, [.localGet 0, .localGet 1, .callIndirect 1 1]⟩,
+                                 ⟨1, 1, 0, [.localGet 0, .callIndirect 0 1]⟩],
+                       memBytes := 65536, table := [0, 1] }
+#guard topI64 (invoke modI 2 [.i64 41, .i32 0] 200 (store0 modI)) == some 42
+#guard topI64 (invoke modI 3 [.i32 1] 200 (store0 modI)) == some 77
+#guard trapWhy (invoke modI 2 [.i64 0, .i32 9] 200 (store0 modI)) == some "undefined element"
+#guard trapWhy (invoke modI 2 [.i64 0, .i32 1] 200 (store0 modI)) == some "indirect call type mismatch"
+#guard trapWhy (invoke modI 3 [.i32 0] 200 (store0 modI)) == some "indirect call type mismatch"
+-- unreachable and nop
+#guard trapWhy (cv [.unreachable] [] (params := 0)) == some "unreachable"
+#guard topI64 (cv [.nop, .i64Const 4] [] (params := 0)) == some 4
+-- extensions beyond the MVP (emitted today): try, catch_all, throw
+#guard topI64 (cv [.tryCatchAll .i64 [.throw] [.i64Const 99]] [] (params := 0)) == some 99
+#guard topI64 (cv [.tryCatchAll .i64 [.i64Const 5] [.i64Const 99]] [] (params := 0)) == some 5
+#guard isUncaught (cv [.throw] [] (params := 0))
+
+end Wasm0.Controls
+
+#print axioms Wasm0.exec
+#print axioms Wasm0.invoke

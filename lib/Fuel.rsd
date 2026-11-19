@@ -1,0 +1,45 @@
+-- One semantic remaining budget, shared by named spenders. There is no
+-- traversal or evaluator here: a walker calls step at its own spending point.
+-- q is the complete preimage, not an assumed-injective digest.
+-- closure_claim = 0.
+namespace Lib.Fuel
+
+inductive Residue where
+  | budgetExhausted
+
+def residueName : Residue -> String
+  | Residue.budgetExhausted => "nf_budget_exhausted"
+
+structure Request where
+  spender : String
+  nodeQ : List Int
+
+structure State where
+  remaining : Nat
+
+structure Key where
+  spender : String
+  nodeQ : List Int
+  remaining : Nat
+
+structure Result where
+  state : State
+  residue : Option Residue
+
+def q (r : Request) (s : State) : Key :=
+  { spender := r.spender, nodeQ := r.nodeQ, remaining := s.remaining }
+
+def sigma (s : State) : State := s
+
+def decision (s : State) : Result :=
+  match s.remaining with
+  | 0 => { state := s, residue := some Residue.budgetExhausted }
+  | n + 1 => { state := { remaining := n }, residue := none }
+
+def residue? (r : Request) (s : State) : Option Residue := (decision s).residue
+
+def admit (r : Request) (s : State) : Bool := (residue? r (sigma s)).isNone
+
+def step (r : Request) (s : State) : Result := decision s
+
+end Lib.Fuel

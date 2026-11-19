@@ -1,0 +1,223 @@
+namespace Web.Server
+open Lean
+
+-- One shard owns every connection and operation below. No cross-shard pointers.
+structure Connection where
+  handle : Nat
+  http : Http.State := {}
+  output : ByteArray := ByteArray.empty
+  closing : Bool := false
+  -- A static request waits on one readFile completion; fileId is its submission id once issued.
+  file : Option Request := none
+  fileId : Nat := 0
+
+structure State where
+  net : Net.State := {}
+  connections : List Connection := []
+  listener : Nat := 0
+  port : Nat := 0
+  requests : Nat := 0
+  protocolRefusals : Nat := 0
+
+-- Device configuration is the fixed r1 actuator configuration. The application
+-- admission limits are smaller; they do not change the device declaration.
+def netConfig : Net.Config := {}
+def httpLimits : Http.Limits := { bodyBytes := 65536, bufferBytes := 131072 }
+def connectionCap : Nat := 64
+def outputCap : Nat := 262144
+
+def assets : List Asset := [⟨"/index.txt","text/plain; charset=utf-8","residua static asset\n".toUTF8⟩]
+def handler := workloadApplication assets 65536
+
+-- Static targets are read from the asset root at each request (WORKLOAD.md, FILE-READ-0.md).
+def fileAssets : List (String × String × String) := [("/index.txt","index.txt","text/plain; charset=utf-8")]
+def fileAsset? (r : Request) : Option (String × String × String) :=
+  if r.method == "GET" || r.method == "HEAD" then
+    fileAssets.find? (fun (target,_,_) => target == (r.target.splitOn "?").head!)
+  else none
+
+-- The payloads retain the nested component cause and its batch position.
+-- The String API below is only a compatibility view of this single decision.
+inductive Residue where
+  | actionBudget | outputCap
+  | response (cause : Http.Residue)
+  | listenFailed | connectionsCap | acceptFailed | unknownConnection | writeResult | fileReadOrder
+  | completion (failure : Net.Completions.Failure)
+  | schedule (fault : Net.Wire.Fault)
+  deriving BEq, Repr
+
+def residueName : Residue → String
+  | .actionBudget => "server_action_budget"
+  | .outputCap => "server_output_cap"
+  | .response cause => Http.residueName cause
+  | .listenFailed => "server_listen_failed"
+  | .connectionsCap => "server_connections_cap"
+  | .acceptFailed => "server_accept_failed"
+  | .unknownConnection => "server_unknown_connection"
+  | .writeResult => "server_write_result"
+  | .fileReadOrder => "server_file_read_order"
+  | .completion failure => Net.Completions.residueName failure.residue
+  | .schedule (.wire cause) => "server_schedule:" ++ Net.Wire.residueName cause
+  | .schedule (.admission failure) => "server_schedule:" ++ Net.residueName failure.residue
+
+def actionsCore (sy : Http.Syntax) : Nat → Connection → List Http.Action → Except Residue (Connection × Nat × Nat)
+  | 0, _, _ => .error .actionBudget
+  | _+1, c, [] => .ok (c,0,0)
+  | fuel+1, c, a::rest => do
+    match a with
+    | .send bytes =>
+      if c.output.size + bytes.size > outputCap then throw .outputCap
+      actionsCore sy fuel {c with output := c.output ++ bytes} rest
+    | .close => actionsCore sy fuel {c with closing := true} rest
+    | .refuse _ =>
+      let (c,n,e) ← actionsCore sy fuel {c with closing := true} rest
+      return (c,n,e+1)
+    | .handler request =>
+      if (fileAsset? request).isSome then
+        -- The protocol core emits a handler action last and then waits for its response.
+        if !rest.isEmpty then throw .fileReadOrder
+        return ({c with file := some request},0,0)
+      let t ← (Web.Http.runNF sy httpLimits c.http (.respond (handler request))).mapError Residue.response
+      let (c,n,e) ← actionsCore sy fuel {c with http := t.state} (t.actions ++ rest)
+      return (c,n+1,e)
+
+def eventCore (sy : Http.Syntax) (c : Connection) (e : Http.Event) : Except Residue (Connection × Nat × Nat) := do
+  match Web.Http.runNF sy httpLimits c.http e with
+  | .error _ => return ({c with closing := true},0,1)
+  | .ok t => actionsCore sy 512 {c with http := t.state} t.actions
+
+def consumeCore (sy : Http.Syntax) (s : State) (r : Net.Completions.Completion) : Except Residue State := do
+  if r.op == .listen then
+    if r.status != .success then throw .listenFailed
+    return {s with listener := r.handle, port := r.result}
+  if r.op == .accept then
+    if r.status == .success then
+      if s.connections.length >= connectionCap then throw .connectionsCap
+      return {s with connections := s.connections ++ [⟨r.handle,{},ByteArray.empty,false,none,0⟩]}
+    -- A listener error is terminal: no automatic accept retry after uncertainty.
+    throw .acceptFailed
+  if r.op == .readFile then
+    match s.connections.find? (fun c => c.fileId == r.id) with
+    | none => return s -- its connection closed while the read was outstanding
+    | some c =>
+      match c.file with
+      | none => return s
+      | some request =>
+        let response := match fileAsset? request, r.status with
+          | some (target,_,contentType), .success =>
+              staticFile [⟨target,contentType,r.payload⟩] {request with target}
+          | _, _ => textResponse 500 "Internal Server Error\n"
+        let t ← (Web.Http.runNF sy httpLimits c.http (.respond response)).mapError Residue.response
+        let (c,n,e) ← actionsCore sy 512 {c with http := t.state, file := none, fileId := 0} t.actions
+        let connections := s.connections.map (fun old => if old.handle == c.handle then c else old)
+        return {s with connections, requests := s.requests+n+1, protocolRefusals := s.protocolRefusals+e}
+  let c ← match s.connections.find? (·.handle == r.handle) with
+    | some c => pure c
+    | none =>
+      -- A terminal close can be reaped before a late operation on its tombstone.
+      if r.status == .cancelled then return s
+      throw .unknownConnection
+  if r.op == .close then
+    return {s with connections := s.connections.filter (·.handle != r.handle)}
+  let (c,n,e) ← if r.status == .osError || r.status == .cancelled then
+      pure ({c with output := ByteArray.empty, closing := true},0,0)
+    else if r.op == .read then
+      eventCore sy c (if r.status == .eof then .eof else .receive r.payload)
+    else
+      if r.status != .success || r.result > c.output.size then throw .writeResult
+      pure ({c with output := c.output.extract r.result c.output.size},0,0)
+  return {s with connections := s.connections.map (fun old => if old.handle == c.handle then c else old), requests := s.requests+n, protocolRefusals := s.protocolRefusals+e}
+
+-- Completion validation finishes before an application sees any payload.
+def completeCore (sy : Http.Syntax) (s : State) (rs : List Net.Completions.Completion) : Except Residue State := do
+  let net ← (Web.Net.Completions.runNF ⟨netConfig,s.net,rs⟩).mapError Residue.completion
+  let mut next := {s with net}
+  for r in rs do next ← consumeCore sy next r
+  return next
+
+structure Scheduled where
+  state : State
+  submissions : List Net.Submission
+
+-- Capacity backpressure postpones an unissued operation. No physical operation
+-- is retried here: a submission is created once and only completions advance it.
+def scheduleCore (s : State) : Except Residue Scheduled := do
+  let mut state := s
+  let mut batch : List Net.Submission := []
+  let mut choices : List (Option Nat × Net.Submission) := []
+  for c in s.connections do
+    if c.fileId == 0 && !c.closing then
+      if let some (_,name,_) := c.file.bind fileAsset? then
+        let read : Net.Submission := {id := 0, op := .readFile, argument := netConfig.maxPayload, payload := name.toUTF8}
+        choices := choices ++ [(some c.handle, read)]
+    let op := if !c.output.isEmpty then Net.Operation.write else if c.closing then .close else .read
+    -- No read while a file read is outstanding, so pipelined requests keep their order.
+    if !(op == .read && c.file.isSome) &&
+        !Net.pendingOn s.net c.handle op && !Net.pendingOn s.net c.handle .close then
+      choices := choices ++ [(none, { id := 0, op, handle := c.handle, argument := if op == .read then netConfig.maxPayload else 0, payload := if op == .write then c.output.extract 0 netConfig.maxPayload else ByteArray.empty })]
+  if s.listener == 0 then
+    if Net.pendingCount s.net .listen == 0 then
+      choices := choices ++ [(none, {id := 0,op := .listen, argument := 0})]
+  else if s.connections.length + Net.pendingCount s.net .accept < connectionCap &&
+      !Net.pendingOn s.net s.listener .accept then
+    choices := choices ++ [(none, {id := 0,op := .accept,handle := s.listener})]
+  for (owner, choice) in choices do
+    if batch.length < netConfig.maxBatch then
+      let r := {choice with id := state.net.lastId+1}
+      -- Validate the entire prospective wire batch against the original state.
+      match Net.Wire.submit ⟨netConfig,s.net,batch ++ [r]⟩ with
+      | .ok encoded =>
+        batch := batch ++ [r]
+        state := {state with net := encoded.next}
+        if let some h := owner then
+          state := {state with connections := state.connections.map (fun c =>
+            if c.handle == h then {c with fileId := r.id} else c)}
+      | .error (.admission ⟨_, .pending⟩) | .error (.admission ⟨_, .buffered⟩) | .error (.admission ⟨_, .batchBytes⟩) => pure ()
+      | .error other => throw (.schedule other)
+  return ⟨state,batch⟩
+-- Indexed outputs prevent adapters from accepting an output for another verb.
+inductive Input where
+  | actions (sy : Http.Syntax) (fuel : Nat) (connection : Connection) (items : List Http.Action)
+  | event (sy : Http.Syntax) (connection : Connection) (item : Http.Event)
+  | consume (sy : Http.Syntax) (state : State) (reply : Net.Completions.Completion)
+  | complete (sy : Http.Syntax) (state : State) (replies : List Net.Completions.Completion)
+  | schedule (state : State)
+
+def Output : Input → Type
+  | .actions .. | .event .. => Connection × Nat × Nat
+  | .consume .. | .complete .. => State
+  | .schedule .. => Scheduled
+
+def runNF (i : Input) : Except Residue (Output i) :=
+  match i with
+  | .actions sy fuel c items => actionsCore sy fuel c items
+  | .event sy c item => eventCore sy c item
+  | .consume sy s reply => consumeCore sy s reply
+  | .complete sy s replies => completeCore sy s replies
+  | .schedule s => scheduleCore s
+
+def residue? (i : Input) : Option Residue :=
+  match runNF i with
+  | .error cause => some cause
+  | .ok _ => none
+
+def admissible (i : Input) : Bool := (residue? i).isNone
+
+def actions (sy : Http.Syntax) (fuel : Nat) (c : Connection) (items : List Http.Action) :
+    Except String (Connection × Nat × Nat) :=
+  (runNF (.actions sy fuel c items)).mapError residueName
+
+def event (sy : Http.Syntax) (c : Connection) (item : Http.Event) :
+    Except String (Connection × Nat × Nat) :=
+  (runNF (.event sy c item)).mapError residueName
+
+def consume (sy : Http.Syntax) (s : State) (r : Net.Completions.Completion) : Except String State :=
+  (runNF (.consume sy s r)).mapError residueName
+
+def complete (sy : Http.Syntax) (s : State) (rs : List Net.Completions.Completion) : Except String State :=
+  (runNF (.complete sy s rs)).mapError residueName
+
+def schedule (s : State) : Except String Scheduled :=
+  (runNF (.schedule s)).mapError residueName
+
+end Web.Server

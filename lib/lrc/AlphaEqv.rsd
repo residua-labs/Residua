@@ -1,0 +1,87 @@
+-- LRC: equality of bodies up to the names of bound variables.
+-- A port of Lean 4.14.0 src/lean/Lean/Compiler/IR/Basic.lean lines 512-600, cited as Basic:LINE.
+-- `rho` renames indices of the left body to indices of the right one.
+-- closure_claim = 0.
+import Lib.Lrc.NormIds
+
+namespace Lrc
+
+-- Basic:519 VarId.alphaEqv, Basic:526 Arg.alphaEqv: an irrelevant argument equals only itself
+def aeqArg (rho : IMap) (v1 v2 : Int) : Bool :=
+  if v1 < 0 || v2 < 0 then v1 == v2
+  else
+    let y := imFind rho v1.toNat
+    if y >= 0 then y == v2 else v1 == v2
+
+-- Basic:533 args.alphaEqv
+def aeqArgs (rho : IMap) : List Int → List Int → Bool
+  | [], [] => true
+  | a :: as, b :: bs => aeqArg rho a b && aeqArgs rho as bs
+  | _, _ => false
+
+-- Basic:538 Expr.alphaEqv. The integer fields hold constructor information, indices of fields,
+-- the function or operator and literals; all are compared as they are. In a `reuse` the second
+-- element of the list is the updtHeader flag, not a variable.
+def aeqExpr (rho : IMap) (e1 e2 : N) : Bool :=
+  e1.op == e2.op && e1.a == e2.a && e1.b == e2.b && e1.c == e2.c && e1.d == e2.d && e1.s == e2.s &&
+    (e1.op != opLitStr || litBytes e1 == litBytes e2) &&
+    (if e1.op == opReuse then
+      aeqArg rho (intAt 0 e1.ys) (intAt 0 e2.ys) && intAt 1 e1.ys == intAt 1 e2.ys && aeqArgs rho (e1.ys.drop 2) (e2.ys.drop 2)
+     else aeqArgs rho e1.ys e2.ys)
+
+-- Basic:556 addVarRename
+def aeqRename (rho : IMap) (x1 x2 : Nat) : IMap := if x1 == x2 then rho else imInsert rho x1 x2
+
+structure RenameR where
+  ok : Bool
+  rho : IMap
+  deriving Inhabited
+
+-- binder lists x, ty, x, ty, ...: the same length and types (Basic:575 compares the type of a vdecl)
+def aeqBinds : List Int → List Int → IMap → RenameR
+  | [], [], rho => { ok := true, rho := rho }
+  | x1 :: t1 :: r1, x2 :: t2 :: r2, rho =>
+    if t1 == t2 then aeqBinds r1 r2 (aeqRename rho x1.toNat x2.toNat) else { ok := false, rho := rho }
+  | _, _, rho => { ok := false, rho := rho }
+
+-- Basic:559 addParamRename, Basic:565 addParamsRename
+def aeqParams : List Param → List Param → IMap → RenameR
+  | [], [], rho => { ok := true, rho := rho }
+  | p1 :: r1, p2 :: r2, rho =>
+    if p1.ty == p2.ty && p1.borrow == p2.borrow then aeqParams r1 r2 (aeqRename rho p1.x p2.x)
+    else { ok := false, rho := rho }
+  | _, _, rho => { ok := false, rho := rho }
+
+mutual
+-- Basic:574 FnBody.alphaEqv
+partial def aeqBody (rho : IMap) (b1 b2 : N) : Bool :=
+  if b1.op != b2.op then false
+  else if b1.op == opVDecl then
+    let r := aeqBinds (vdeclBinds b1) (vdeclBinds b2) rho
+    -- the expressions are compared before the binders are renamed
+    r.ok && aeqExpr rho (vdeclExpr b1) (vdeclExpr b2) && aeqBody r.rho (bodyOf b1) (bodyOf b2)
+  else if b1.op == opJDecl then
+    let r := aeqParams (jdeclParams b1) (jdeclParams b2) rho
+    r.ok && aeqBody r.rho (jdeclBody b1) (jdeclBody b2)
+      && aeqBody (aeqRename rho (jdeclId b1) (jdeclId b2)) (bodyOf b1) (bodyOf b2)
+  else if b1.op == opCase then aeqArg rho b1.a b2.a && aeqAlts rho (caseAlts b1) (caseAlts b2)
+  -- Basic:593: the join point of a jmp is compared as it is, not through rho
+  else if b1.op == opJmp then b1.a == b2.a && aeqArgs rho b1.ys b2.ys
+  else if b1.op == opRet then aeqArgs rho b1.ys b2.ys
+  else if b1.op == opUnreachable then true
+  else if b1.op == opMData then b1.a == b2.a && b1.b == b2.b && aeqBody rho (bodyOf b1) (bodyOf b2)
+  -- set, setTag, sset, inc, dec, del: x in field a, the other fields as they are, one argument list
+  else aeqArg rho b1.a b2.a && b1.b == b2.b && b1.c == b2.c && b1.d == b2.d && aeqArgs rho b1.ys b2.ys
+    && aeqBody rho (bodyOf b1) (bodyOf b2)
+partial def aeqAlts (rho : IMap) : List N → List N → Bool
+  | [], [] => true
+  | a1 :: r1, a2 :: r2 =>
+    a1.op == a2.op && a1.a == a2.a && a1.b == a2.b && a1.c == a2.c && a1.d == a2.d
+      && aeqBody rho (altBody a1) (altBody a2) && aeqAlts rho r1 r2
+  | _, _ => false
+end
+
+-- Basic:598 FnBody.beq
+def bodyEq (b1 b2 : N) : Bool := aeqBody imEmpty b1 b2
+
+end Lrc

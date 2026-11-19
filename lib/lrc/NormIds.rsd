@@ -1,0 +1,170 @@
+-- LRC: unique indices, renumbering, and renaming of variable occurrences.
+-- A port of Lean 4.14.0 src/lean/Lean/Compiler/IR/NormIds.lean, cited as NormIds:LINE.
+-- closure_claim = 0.
+-- absent: M checkParams checkDecl normVar normJP normArg normArgs N withVar withJP mapArg mapArgs FnBody.mapVars
+--   (the reader and state monads and their per-form wrappers, folded into `normGo`, `renExpr` and `mapVarsGo`)
+import Lib.Lrc.FreeVars
+
+namespace Lrc
+
+/-! ## UniqueIds (NormIds:9): every variable, parameter and join point is bound once. -/
+
+structure UniqR where
+  ok : Bool
+  seen : VSet
+  deriving Inhabited
+
+-- NormIds:13 checkId
+def uniqId (x : Nat) (r : UniqR) : UniqR :=
+  if !r.ok then r
+  else if vsContains r.seen x then { ok := false, seen := r.seen }
+  else { ok := true, seen := vsInsert r.seen x }
+
+def uniqIds : List Nat → UniqR → UniqR
+  | [], r => r
+  | x :: xs, r => uniqIds xs (uniqId x r)
+
+mutual
+-- NormIds:21 checkFnBody
+partial def uniqGo (n : N) (r : UniqR) : UniqR :=
+  if !r.ok then r
+  else if n.op == opVDecl then uniqGo (bodyOf n) (uniqIds (bindVars (vdeclBinds n)) r)
+  else if n.op == opJDecl then
+    uniqGo (bodyOf n) (uniqIds (paramVars (jdeclParams n)) (uniqId (jdeclId n) r))
+  else if n.op == opCase then uniqAlts (caseAlts n) r
+  else if isTerminal n then r
+  else uniqGo (bodyOf n) r
+partial def uniqAlts : List N → UniqR → UniqR
+  | [], r => r
+  | alt :: alts, r => uniqAlts alts (uniqGo (altBody alt) r)
+end
+
+-- NormIds:34 Decl.uniqueIds
+def declUniqueIds (d : Decl) : Bool :=
+  let r := uniqIds (paramVars d.xs) { ok := true, seen := vsEmpty }
+  if d.ext then r.ok else (uniqGo d.body r).ok
+
+/-! ## Renaming occurrences by a map (NormIds:41 normIndex): an index the map lacks stays. -/
+
+def renIdx (m : IMap) (x : Int) : Int :=
+  if x < 0 then x
+  else
+    let y := imFind m x.toNat
+    if y == (irrIdx : Int) then argIrr else if y >= 0 then y else x
+
+def renArgs (m : IMap) : List Int → List Int
+  | [] => []
+  | y :: ys => renIdx m y :: renArgs m ys
+
+-- NormIds:59 normExpr, NormIds:137 MapVars.mapExpr
+def renExpr (m : IMap) (e : N) : N :=
+  if e.op == opReuse then { e with ys := renIdx m (intAt 0 e.ys) :: intAt 1 e.ys :: renArgs m (e.ys.drop 2) }
+  else if e.op == opLit || e.op == opLitStr then e
+  else { e with ys := renArgs m e.ys }
+
+-- the instruction's own variable occurrences renamed; its rest is left alone
+-- (set, setTag, sset, inc, dec, del carry x in field a and an argument list; mdata carries neither)
+def renIns (m : IMap) (n : N) : N :=
+  if n.op == opMData then n else { n with a := renIdx m n.a, ys := renArgs m n.ys }
+
+/-! ## NormalizeIds (NormIds:37): rename every bound index to 1, 2, 3, ... in the order of binding. -/
+
+structure NormR where
+  next : Nat
+  node : N
+  deriving Inhabited
+
+-- fresh indices for a binder list x, ty, x, ty, ...: the renamed binders, the map and the counter
+structure BindR where
+  next : Nat
+  m : IMap
+  binds : List Int
+  deriving Inhabited
+
+def normBinds : List Int → Nat → IMap → BindR
+  | x :: ty :: rest, next, m =>
+    let r := normBinds rest (next + 1) (imInsert m x.toNat next)
+    { next := r.next, m := r.m, binds := (next : Int) :: ty :: r.binds }
+  | _, next, m => { next := next, m := m, binds := [] }
+
+-- NormIds:84 withParams
+structure ParamR where
+  next : Nat
+  m : IMap
+  xs : List Param
+  deriving Inhabited
+
+def normParams : List Param → Nat → IMap → ParamR
+  | [], next, m => { next := next, m := m, xs := [] }
+  | p :: ps, next, m =>
+    let r := normParams ps (next + 1) (imInsert m p.x next)
+    { next := r.next, m := r.m, xs := { p with x := next } :: r.xs }
+
+structure AltsR where
+  next : Nat
+  alts : List N
+  deriving Inhabited
+
+mutual
+-- NormIds:94 normFnBody
+partial def normGo (n : N) (m : IMap) (next : Nat) : NormR :=
+  if n.op == opVDecl then
+    let e := renExpr m (vdeclExpr n)
+    let b := normBinds (vdeclBinds n) next m
+    let r := normGo (bodyOf n) b.m b.next
+    { next := r.next, node := { n with a := intAt 0 b.binds, ys := b.binds.drop 2, kids := [e, r.node] } }
+  else if n.op == opJDecl then
+    let ps := normParams (jdeclParams n) next m
+    let v := normGo (jdeclBody n) ps.m ps.next
+    let j := v.next
+    let r := normGo (bodyOf n) (imInsert m (jdeclId n) j) (j + 1)
+    { next := r.next, node := { n with a := (j : Int), ys := paramsTo ps.xs, kids := [v.node, r.node] } }
+  else if n.op == opCase then
+    let r := normAlts (caseAlts n) m next
+    { next := r.next, node := { n with a := renIdx m n.a, kids := r.alts } }
+  else if n.op == opJmp then { next := next, node := { n with a := renIdx m n.a, ys := renArgs m n.ys } }
+  else if n.op == opRet then { next := next, node := { n with ys := renArgs m n.ys } }
+  else if n.op == opUnreachable then { next := next, node := n }
+  else
+    let r := normGo (bodyOf n) m next
+    { next := r.next, node := setBody (renIns m n) r.node }
+partial def normAlts : List N → IMap → Nat → AltsR
+  | [], _, next => { next := next, alts := [] }
+  | alt :: alts, m, next =>
+    let b := normGo (altBody alt) m next
+    let r := normAlts alts m b.next
+    { next := r.next, alts := altSetBody alt b.node :: r.alts }
+end
+
+-- NormIds:115 normDecl, NormIds:123 Decl.normalizeIds. The counter starts at 1.
+-- Lean leaves the declaration's own parameter list as it was (NormIds:117, where the renamed list
+-- is discarded), which is the identity when the parameters are 1, 2, ... in order, as the IR's producer
+-- numbers them. The port stores the renamed list, the same result on such a declaration.
+def declNormalizeIds (d : Decl) : Decl :=
+  if d.ext then d
+  else
+    let ps := normParams d.xs 1 imEmpty
+    { d with xs := ps.xs, body := (normGo d.body ps.m ps.next).node }
+
+/-! ## MapVars (NormIds:128): rename variable occurrences. Binders and join point indices stay;
+the body must not shadow a renamed variable. -/
+
+mutual
+-- NormIds:152 mapFnBody
+partial def mapVarsGo (m : IMap) (n : N) : N :=
+  if n.op == opVDecl then { n with kids := [renExpr m (vdeclExpr n), mapVarsGo m (bodyOf n)] }
+  else if n.op == opJDecl then { n with kids := [mapVarsGo m (jdeclBody n), mapVarsGo m (bodyOf n)] }
+  else if n.op == opCase then { n with a := renIdx m n.a, kids := mapVarsAlts m (caseAlts n) }
+  else if n.op == opJmp then { n with ys := renArgs m n.ys }
+  else if n.op == opRet then { n with ys := renArgs m n.ys }
+  else if n.op == opUnreachable then n
+  else setBody (renIns m n) (mapVarsGo m (bodyOf n))
+partial def mapVarsAlts (m : IMap) : List N → List N
+  | [] => []
+  | alt :: alts => altSetBody alt (mapVarsGo m (altBody alt)) :: mapVarsAlts m alts
+end
+
+-- NormIds:174 FnBody.replaceVar: replace x with y in b
+def replaceVar (x y : Nat) (b : N) : N := mapVarsGo (imInsert imEmpty x y) b
+
+end Lrc

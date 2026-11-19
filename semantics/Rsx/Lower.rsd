@@ -1,0 +1,1568 @@
+/-
+RSX LOWER — the reference lowering rsx → scm (hole 14, plan/PHASE1-BOUNDARY.md §14,
+"lower: rsx -> scm (erasure, then defunctionalization, then fuel)"), its `#guard`
+controls, and the per-construct adequacy statements.
+
+Pipeline (each stage a total, executable, fueled definition; `Rsx.Lower.lowerF`):
+
+  1. erasure       `Expr Nat → LExpr`   types, type formers and proofs become `□`
+                                         (`LExpr.box`); binder types are dropped;
+                                         transparent constants are unfolded (δ) and
+                                         their bodies erased in the empty context.
+  2. defunctionalization `LExpr → DExpr × List Code`  every λ becomes a first-order
+                                         closure record `clo ℓ [captured]` and every
+                                         application an `apply` node; `Code ℓ` is the
+                                         λ's body over `arg :: captured` (flat closures).
+  3. fuel          `run : List Code → Nat → …`  the first-order `apply` loop of the
+                                         defunctionalized program, made total by fuel
+                                         (fuel-out is `none`, never a value).
+  4. emission      `DVal → BootExpr S G t`  the value is emitted at the requested scm
+                                         type `t` (literal → `litI`, constructor →
+                                         `inj ⟨ref⟩ (list fields)`, erased fields
+                                         dropped); anything not representable at `t`
+                                         is the refusing expression `unwrapSome noneE`
+                                         (evaluates to `none`).
+
+`Rsx.lower E : Expr Nat → BootExpr S [] t` is `lowerF E 0 defaultFuel t`.
+
+Partial definitions (step 5, semantics/Rsx/Partial.rsd): erasure takes a global table
+`gi`; a partial constant becomes `LExpr.glob i` / `DExpr.glob i`, resolved by `run` from
+code entry `i` at one fuel tick per resolution, never inlined. The total lowering passes
+`noGlobals`, so it never produces `glob` (`Rsx.Partial.lowerPF_nil`).
+
+Sources (PREAMBLE item 7: ported, not invented):
+- Erasure: P. Letouzey, "A New Extraction for Coq", TYPES 2002, LNCS 2646 — the `□`
+  translation of the logical and type-level parts of CIC terms (the informative test:
+  a term is erased when its type is an arity or its type's type is `Prop`).
+  M. Sozeau, S. Boulier, Y. Forster, N. Tabareau, T. Winterhalter, "Coq Coq Correct!
+  Verification of Type Checking and Erasure for Coq, in Coq", POPL 2020 — MetaCoq's
+  `erase` (same test, `tBox`) and its correctness observation on first-order values,
+  which is the shape of `Rsx.adequacyStatement` (Adequacy.rsd). Lean 4.14's own code generator
+  makes the same cut: `src/library/compiler/erase_irrelevant.cpp` (types and proofs to
+  the neutral value, binder types dropped) and, in the LCNF pipeline,
+  `src/Lean/Compiler/LCNF/ToLCNF.lean` (`isProof` / type formers → `.erased`).
+- Defunctionalization: J. C. Reynolds, "Definitional Interpreters for Higher-Order
+  Programming Languages", Proc. ACM Annual Conference 1972 (repr. HOSC 11(4), 1998),
+  §8: each functional value becomes a record tagged by the λ it came from, carrying its
+  free variables, and application becomes a call of one `apply` that dispatches on the
+  tag. O. Danvy, L. R. Nielsen, "Defunctionalization at Work", PPDP 2001 (the
+  correspondence with closure conversion; flat closures: the record holds exactly the
+  λ's free variables, in first-occurrence order).
+- Fuel: the totalization rsdc uses for every definition (a leading fuel `Nat`), and
+  evalLF's own call-only fuel (N6c, `Residua/Bootstrap/Semantics.lean`).
+
+Scope notes (facts, each witnessed by a control below; reports/rsxlower/GAPS.md):
+- the statement Adequacy.rsd carried until 2026-11-18 (now `adequacyStatementWeak`) is
+  provable for EVERY `lower`: its fuels are existential and both `eval … 0 …` and
+  `scmValOf E 0 …` are `none` (`Rsx.adequacyStatement_vacuous`). The official
+  `Rsx.adequacyStatement` is now the strong form: rsx value fixed, scm fuel existential,
+  lowering fuel eventual, and the scm value is `some w`.
+- `BootExpr` is intrinsically typed with no recursive type and homogeneous lists, so a
+  constructor value whose fields mix literals and constructors, or whose depth exceeds
+  the requested type, has no scm term of that type; `valFits` names the representable
+  values and the strong statement assumes it (control `gap_heterogeneous`).
+- `scmValOf` keeps proof fields; erasure drops them (`relevantSpine` premise).
+- a value of a Prop inductive (`True.intro : True`) is data for `DataTy` and `scmValOf`,
+  and erasure maps it to `□`: the step-4 statement (`adequacyStatementNoRoot`) is false
+  for this lowering (`lowerF_not_adequate_noRoot`); the statement on main assumes
+  `irrelevant E n [] v = false` (session 7).
+- literals beyond i64 refuse (`litI` range), while `scmValOf` returns `.int t`
+  (control `gap_i64`).
+- `lower` needs the environment `E` (δ bodies, constructor classes); the strong
+  statement quantifies a lowering family `Rsx.Lowering S` that reads `E`, `n`, its fuel
+  and the requested type, so `Rsx.lower E` is the family member at `n = 0`,
+  `F = defaultFuel`.
+
+Recipe (inner loop, one file plus its imports):
+
+    { echo "import Residua.Bootstrap.Semantics";
+      cat semantics/Rsx/Core.rsd semantics/Rsx/Norm.rsd
+          semantics/Rsx/Adequacy.rsd semantics/Rsx/Lower.rsd; } > /tmp/rsx-lower.lean \
+      && cd lean/rsd-cert && lake build Residua.Bootstrap.Semantics \
+      && lake env lean /tmp/rsx-lower.lean
+
+Expected: exit 0; every `#guard` passes; `#print axioms` lists nothing beyond
+`propext`, `Quot.sound`.
+
+closure_claim = 0.
+-/
+
+namespace Rsx
+namespace Lower
+
+open Residua.Bootstrap.IR Residua.Bootstrap.Semantics
+open Residua.Bootstrap.EvalBootSeparators (inI64Range)
+
+/-! ## Stage 1: erasure (Letouzey 2002; MetaCoq `erase`; Lean `erase_irrelevant`) -/
+
+/-- erased λ-terms: de Bruijn, untyped; `box` is Letouzey's `□`. Constants left after
+    δ are constructors (`ctor`) or rigid heads (`rigid`: axioms, opaques, recursors). -/
+inductive LExpr : Type
+  | bvar : Nat → LExpr
+  | box : LExpr
+  | lit : Nat → LExpr
+  | ctor : Nat → LExpr
+  | rigid : Nat → LExpr
+  | app : LExpr → LExpr → LExpr
+  | lam : LExpr → LExpr
+  | letE : LExpr → LExpr → LExpr
+  /-- a reference to global `i` of the program's partial definitions (Partial.rsd), resolved
+      at run time, never inlined: its body may call itself. The total lowering has none. -/
+  | glob : Nat → LExpr
+  deriving DecidableEq, Repr
+
+/- The relevance test is `Rsx.irrelevant` (Adequacy.rsd): Letouzey's informative test
+   read off the certified syntactic checker `inferT` — `e` is erased when its type is an
+   arity or the type of its type is `Prop`; a term the checker cannot type is kept
+   (erasure only ever errs toward keeping). It lives in Adequacy.rsd because the
+   statement's proof-free side condition `relevantSpine` reads the same test. -/
+
+def isCtor (E : ResolvedEnv) (r : Nat) : Bool :=
+  match E.members r with
+  | some m => decide (m.mclass = .constructorM)
+  | none => false
+
+/-- erasure, parametric in the relevance test `irr` (the reference instance is
+    `irrelevant E n`; the controls plant a wrong one) and in the global table `gi`
+    (`gi r = some i`: constant `r` is the `i`-th partial definition, erased to `glob i`
+    and resolved at run time; the total lowering passes `noGlobals`). Fuel bounds depth
+    plus δ. -/
+def eraseWith (irr : LCtx → Expr Nat → Bool) (gi : Nat → Option Nat) (E : ResolvedEnv) :
+    Nat → LCtx → Expr Nat → Option LExpr
+  | 0, _, _ => none
+  | _ + 1, _, .sort _ => some .box
+  | _ + 1, _, .pi _ _ => some .box
+  | _ + 1, _, .lit k => some (.lit k)
+  | _ + 1, Γ, .bvar i => if irr Γ (.bvar i) then some .box else some (.bvar i)
+  | f + 1, Γ, .const r ls =>
+      if irr Γ (.const r ls) then some .box
+      else
+        match gi r with
+        | some i => some (.glob i)
+        | none =>
+            match transparentBody E r ls with
+            | some b => eraseWith irr gi E f [] b
+            | none => some (if isCtor E r then .ctor r else .rigid r)
+  | f + 1, Γ, .app g a =>
+      if irr Γ (.app g a) then some .box
+      else
+        match eraseWith irr gi E f Γ g, eraseWith irr gi E f Γ a with
+        | some g', some a' => some (.app g' a')
+        | _, _ => none
+  | f + 1, Γ, .lam A b =>
+      if irr Γ (.lam A b) then some .box
+      else (eraseWith irr gi E f (.assumption A :: Γ) b).map .lam
+  | f + 1, Γ, .letE A v b =>
+      if irr Γ (.letE A v b) then some .box
+      else
+        match eraseWith irr gi E f Γ v, eraseWith irr gi E f (.letBinding A v :: Γ) b with
+        | some v', some b' => some (.letE v' b')
+        | _, _ => none
+
+/-- the empty global table: the total lowering has no partial definitions. -/
+def noGlobals : Nat → Option Nat := fun _ => none
+
+def erase (E : ResolvedEnv) (n : Nat) : Nat → LCtx → Expr Nat → Option LExpr :=
+  eraseWith (irrelevant E n) noGlobals E
+
+/-! ## Stage 2: defunctionalization (Reynolds 1972 §8; Danvy–Nielsen 2001) -/
+
+/-- the defunctionalized first-order language: `clo ℓ xs` builds the record of λ `ℓ`
+    from the environment slots `xs`; `apply` is Reynolds' single dispatch. -/
+inductive DExpr : Type
+  | var : Nat → DExpr
+  | box : DExpr
+  | lit : Nat → DExpr
+  | ctor : Nat → DExpr
+  | rigid : Nat → DExpr
+  | clo : Nat → List Nat → DExpr
+  | apply : DExpr → DExpr → DExpr
+  | letE : DExpr → DExpr → DExpr
+  /-- global `ℓ`: run the closed code entry `ℓ` (a partial definition's body) in the empty
+      environment; one fuel tick per resolution (the compiler-inserted fuel). -/
+  | glob : Nat → DExpr
+  deriving DecidableEq, Repr
+
+/-- the body of λ `ℓ`, over the environment `arg :: captured` (`ncap` captured slots). -/
+structure Code where
+  ncap : Nat
+  body : DExpr
+  deriving DecidableEq, Repr
+
+def addUniq (xs : List Nat) (x : Nat) : List Nat :=
+  if xs.contains x then xs else xs ++ [x]
+
+def unionL (xs ys : List Nat) : List Nat := ys.foldl addUniq xs
+
+/-- free de Bruijn indices `≥ c`, shifted down by `c`, in first-occurrence order. -/
+def freeVars (c : Nat) : LExpr → List Nat
+  | .bvar i => if c ≤ i then [i - c] else []
+  | .app f a => unionL (freeVars c f) (freeVars c a)
+  | .lam b => freeVars (c + 1) b
+  | .letE v b => unionL (freeVars c v) (freeVars (c + 1) b)
+  | _ => []
+
+def idxOf (x : Nat) : List Nat → Option Nat
+  | [] => none
+  | y :: ys => if x = y then some 0 else (idxOf x ys).map (· + 1)
+
+/-- renaming under a `let`: slot 0 is the bound value. -/
+def liftRen (ρ : Nat → Nat) : Nat → Nat
+  | 0 => 0
+  | i + 1 => ρ i + 1
+
+/-- renaming inside a λ body: slot 0 is the argument, slot `1 + k` the `k`-th captured
+    variable; a variable not captured maps past the environment (lookup fails). -/
+def capRen (fs : List Nat) : Nat → Nat
+  | 0 => 0
+  | i + 1 => (idxOf i fs).getD fs.length + 1
+
+/-- closure conversion + defunctionalization, parametric in the λ-body renaming `cr`
+    (reference `capRen`). Labels are positions in the code table, inner λs first. -/
+def convWith (cr : List Nat → Nat → Nat) (ρ : Nat → Nat) (code : List Code) :
+    LExpr → DExpr × List Code
+  | .bvar i => (.var (ρ i), code)
+  | .box => (.box, code)
+  | .lit k => (.lit k, code)
+  | .ctor r => (.ctor r, code)
+  | .rigid r => (.rigid r, code)
+  | .glob i => (.glob i, code)
+  | .app f a =>
+      let p := convWith cr ρ code f
+      let q := convWith cr ρ p.2 a
+      (.apply p.1 q.1, q.2)
+  | .lam b =>
+      let fs := freeVars 1 b
+      let p := convWith cr (cr fs) code b
+      (.clo p.2.length (fs.map ρ), p.2 ++ [{ ncap := fs.length, body := p.1 }])
+  | .letE v b =>
+      let p := convWith cr ρ code v
+      let q := convWith cr (liftRen ρ) p.2 b
+      (.letE p.1 q.1, q.2)
+
+def defunc (l : LExpr) : DExpr × List Code := convWith capRen id [] l
+
+/-! ## Stage 3: fuel (the defunctionalized `apply` loop, totalized) -/
+
+/-- first-order values: no meta-level functions anywhere. -/
+inductive DVal : Type
+  | box : DVal
+  | lit : Nat → DVal
+  | ctor : Nat → List DVal → DVal
+  | rigid : Nat → List DVal → DVal
+  | clo : Nat → List DVal → DVal
+
+/-- the environment machine of the defunctionalized program, parametric in how `apply`
+    binds the argument (reference: `a :: captured`). Fuel-out is `none`. -/
+def runWith (bind : DVal → List DVal → List DVal) (code : List Code) :
+    Nat → List DVal → DExpr → Option DVal
+  | 0, _, _ => none
+  | _ + 1, env, .var i => env.get? i
+  | _ + 1, _, .box => some .box
+  | _ + 1, _, .lit k => some (.lit k)
+  | _ + 1, _, .ctor r => some (.ctor r [])
+  | _ + 1, _, .rigid r => some (.rigid r [])
+  | _ + 1, env, .clo l caps => (caps.mapM (fun i => env.get? i)).map (.clo l)
+  | f + 1, _, .glob l =>
+      match code.get? l with
+      | some c => runWith bind code f [] c.body
+      | none => none
+  | f + 1, env, .apply g a =>
+      match runWith bind code f env g, runWith bind code f env a with
+      | some (.clo l caps), some av =>
+          match code.get? l with
+          | some c => runWith bind code f (bind av caps) c.body
+          | none => none
+      | some (.ctor r args), some av => some (.ctor r (args ++ [av]))
+      | some (.rigid r args), some av => some (.rigid r (args ++ [av]))
+      | some .box, some _ => some .box
+      | _, _ => none
+  | f + 1, env, .letE v b =>
+      match runWith bind code f env v with
+      | some vv => runWith bind code f (vv :: env) b
+      | none => none
+
+def bindArg (a : DVal) (caps : List DVal) : List DVal := a :: caps
+
+def run (code : List Code) : Nat → List DVal → DExpr → Option DVal :=
+  runWith bindArg code
+
+/-! ## Stage 4: emission into the scm IR (`BootExpr`, evalLF's input) -/
+
+/-- the refusing scm term at every type: `unwrapSome noneE` evaluates to `none`. -/
+def refuse {S : SigTable} {G : Ctx} {t : BootTy} : BootExpr S G t := .unwrapSome .noneE
+
+def listOf {S : SigTable} {G : Ctx} {τ : BootTy} :
+    List (BootExpr S G τ) → BootExpr S G (.list τ)
+  | [] => .emptyList
+  | e :: es => .listAppend (.listSingleton e) (listOf es)
+
+/-- constructor fields after erasure: `□` fields (parameters, proofs) are dropped, as
+    Lean's constructor layout drops irrelevant fields. -/
+def relevantArgs (args : List DVal) : List DVal :=
+  args.filter (fun v => match v with | .box => false | _ => true)
+
+/-- emission at the requested type, parametric in the field selection (reference
+    `relevantArgs`). Convention (the one `scmValOf` fixes): literal `k` ↦ `.int k`;
+    constructor `r` ↦ summand `r` of a sum whose summand `r` is `list τ`. -/
+def emitWith (fields : List DVal → List DVal) {S : SigTable} {G : Ctx} :
+    Nat → (t : BootTy) → DVal → BootExpr S G t
+  | 0, _, _ => refuse
+  | _ + 1, .i64, .lit k =>
+      if inI64Range (Int.ofNat k) then .litI (Int.ofNat k) else refuse
+  | f + 1, .sum ts, .ctor r args =>
+      if h : r < ts.length then
+        match hτ : ts.get ⟨r, h⟩ with
+        | .list τ =>
+            .inj ⟨r, h⟩ (cast (congrArg (BootExpr S G) hτ.symm)
+              (listOf ((fields args).map (emitWith fields f τ))))
+        | _ => refuse
+      else refuse
+  | _ + 1, _, _ => refuse
+
+def emit {S : SigTable} {G : Ctx} : Nat → (t : BootTy) → DVal → BootExpr S G t :=
+  emitWith relevantArgs
+
+/-! ## The lowering -/
+
+/-- the four stages composed; every stage is a parameter so a planted mutant is the
+    same composition with one stage replaced. -/
+def pipeline {S : SigTable} (eraseS : Nat → LCtx → Expr Nat → Option LExpr)
+    (defuncS : LExpr → DExpr × List Code)
+    (runS : List Code → Nat → List DVal → DExpr → Option DVal)
+    (emitS : Nat → (t : BootTy) → DVal → BootExpr S [] t)
+    (F : Nat) (t : BootTy) (e : Expr Nat) : BootExpr S [] t :=
+  match eraseS F [] e with
+  | none => refuse
+  | some l =>
+      match runS (defuncS l).2 F [] (defuncS l).1 with
+      | some v => emitS F t v
+      | none => refuse
+
+/-- the reference lowering at universe context `n` and fuel `F`. -/
+def lowerF (E : ResolvedEnv) (n F : Nat) {S : SigTable} (t : BootTy) (e : Expr Nat) :
+    BootExpr S [] t :=
+  pipeline (erase E n) defunc run emit F t e
+
+def defaultFuel : Nat := 10000
+
+end Lower
+
+/-- `Rsx.lower`: the reference lowering rsx → scm with the brief's signature
+    (`E` supplies δ bodies and constructor classes). -/
+def lower (E : ResolvedEnv) {S : Residua.Bootstrap.IR.SigTable} {t : Residua.Bootstrap.IR.BootTy}
+    (e : Expr Nat) : Residua.Bootstrap.IR.BootExpr S [] t :=
+  Lower.lowerF E 0 Lower.defaultFuel t e
+
+namespace Lower
+
+open Residua.Bootstrap.IR Residua.Bootstrap.Semantics
+open Residua.Bootstrap.EvalBootSeparators (inI64Range)
+
+/-! ## Adequacy statements
+
+The hole-14 statement is `Rsx.adequacyStatement` (Adequacy.rsd, strong form since
+2026-11-18): rsx value `w` fixed, scm fuel existential, lowering fuel eventual. Its
+side conditions `relevantSpine`, `valFits` and the vacuity control for the weak form
+(`Rsx.adequacyStatement_vacuous`) live there too. The reference instance is the family
+`fun E n F t e => lowerF E n F t e`; `Rsx.lower E` is its member at `n = 0`,
+`F = defaultFuel`. -/
+
+/-- the old (weak) form for `Rsx.lower`: it holds, and says nothing (every lowering
+    meets it, `Rsx.adequacyStatement_vacuous`). -/
+theorem lower_adequacyStatementWeak (E : ResolvedEnv) {S : SigTable} {t : BootTy}
+    (progs : Programs S S) : adequacyStatementWeak (Rsx.lower E (S := S) (t := t)) progs :=
+  adequacyStatement_vacuous _ progs
+
+/-- adequacy of `Rsx.Lower.lowerF` at one closed term (the body of
+    `Rsx.adequacyStatement` at `e`). -/
+def Good {S : SigTable} (progs : Programs S S) (E : ResolvedEnv) (n : Nat)
+    (e : Expr Nat) : Prop :=
+  ∀ (lf fv : Nat) (T v : Expr Nat) (t : BootTy) (w : Val),
+    BodiesTyped E n →
+    inferT E n [] e = some T → DataTy E T →
+    norm E lf e = some v → scmValOf E fv v = some w →
+    relevantSpine E n fv v = true → irrelevant E n [] v = false → valFits fv t w = true →
+    (inferT E n [] v).isSome = true →
+    ∃ F₀, ∀ F, F₀ ≤ F →
+      ∃ lf', Residua.Bootstrap.Semantics.eval lawsA progs lf' [] (lowerF E n F (S := S) t e)
+        = some w
+
+/-! ### One statement per `Expr` constructor (8/8). Proved: bvar, sort, pi, lam, lit.
+    Stated (Prop objects, no `sorry`): const (δ and constructor heads), app (β and
+    constructor spines), letE (ζ). The const case is split below: its head half
+    (`adeqConstHead`, no transparent body) is proved; its δ half `AdeqConstDelta` is open. -/
+
+def AdeqBvar {S : SigTable} (progs : Programs S S) : Prop :=
+  ∀ E n i, Good progs E n (.bvar i)
+def AdeqSort {S : SigTable} (progs : Programs S S) : Prop :=
+  ∀ E n l, Good progs E n (.sort l)
+def AdeqConst {S : SigTable} (progs : Programs S S) : Prop :=
+  ∀ E n r ls, Good progs E n (.const r ls)
+def AdeqApp {S : SigTable} (progs : Programs S S) : Prop :=
+  ∀ E n f a, Good progs E n (.app f a)
+def AdeqLam {S : SigTable} (progs : Programs S S) : Prop :=
+  ∀ E n A b, Good progs E n (.lam A b)
+def AdeqPi {S : SigTable} (progs : Programs S S) : Prop :=
+  ∀ E n A B, Good progs E n (.pi A B)
+def AdeqLetE {S : SigTable} (progs : Programs S S) : Prop :=
+  ∀ E n A v b, Good progs E n (.letE A v b)
+def AdeqLit {S : SigTable} (progs : Programs S S) : Prop :=
+  ∀ E n k, Good progs E n (.lit k)
+
+/-- the eight per-construct statements together give the hole-14 statement
+    `Rsx.adequacyStatement` for the reference family `Rsx.Lower.lowerF` (case split on
+    the term). -/
+theorem adequacy_of_constructs {S : SigTable} (progs : Programs S S)
+    (hb : AdeqBvar progs) (hs : AdeqSort progs) (hc : AdeqConst progs)
+    (ha : AdeqApp progs) (hl : AdeqLam progs) (hp : AdeqPi progs)
+    (hz : AdeqLetE progs) (hn : AdeqLit progs) :
+    adequacyStatement (fun E n F t e => lowerF E n F (S := S) t e) progs := by
+  intro E n lf fv e T v t w
+  cases e with
+  | bvar i => exact hb E n i lf fv T v t w
+  | sort l => exact hs E n l lf fv T v t w
+  | const r ls => exact hc E n r ls lf fv T v t w
+  | app f a => exact ha E n f a lf fv T v t w
+  | lam A b => exact hl E n A b lf fv T v t w
+  | pi A B => exact hp E n A B lf fv T v t w
+  | letE A x b => exact hz E n A x b lf fv T v t w
+  | lit k => exact hn E n k lf fv T v t w
+
+/-! ### The direct cases -/
+
+theorem norm_bvar_val {E : ResolvedEnv} {lf i : Nat} {v : Expr Nat}
+    (h : norm E lf (.bvar i) = some v) : v = .bvar i := by
+  match lf, h with
+  | 0, h => exact Option.noConfusion h
+  | 1, h => exact Option.noConfusion h
+  | j + 2, h =>
+      have h2 : norm E (j + 2) (.bvar i) = some (.bvar i) := rfl
+      rw [h2] at h
+      exact (Option.some.inj h).symm
+
+theorem norm_sort_val {E : ResolvedEnv} {lf : Nat} {l : Level} {v : Expr Nat}
+    (h : norm E lf (.sort l) = some v) : v = .sort l := by
+  match lf, h with
+  | 0, h => exact Option.noConfusion h
+  | 1, h => exact Option.noConfusion h
+  | j + 2, h =>
+      have h2 : norm E (j + 2) (.sort l) = some (.sort l) := rfl
+      rw [h2] at h
+      exact (Option.some.inj h).symm
+
+theorem norm_lit_val {E : ResolvedEnv} {lf k : Nat} {v : Expr Nat}
+    (h : norm E lf (.lit k) = some v) : v = .lit k := by
+  match lf, h with
+  | 0, h => exact Option.noConfusion h
+  | 1, h => exact Option.noConfusion h
+  | j + 2, h =>
+      have h2 : norm E (j + 2) (.lit k) = some (.lit k) := rfl
+      rw [h2] at h
+      exact (Option.some.inj h).symm
+
+theorem norm_pi_val {E : ResolvedEnv} {lf : Nat} {A B v : Expr Nat}
+    (h : norm E lf (.pi A B) = some v) : ∃ A' B', v = .pi A' B' := by
+  match lf, h with
+  | 0, h => exact Option.noConfusion h
+  | 1, h => exact Option.noConfusion h
+  | j + 2, h =>
+      have h2 : norm E (j + 2) (.pi A B) =
+          (match norm E (j + 1) A, norm E (j + 1) B with
+           | some A', some B' => some (.pi A' B')
+           | _, _ => none) := rfl
+      rw [h2] at h
+      split at h
+      · exact ⟨_, _, (Option.some.inj h).symm⟩
+      · exact Option.noConfusion h
+
+theorem norm_lam_val {E : ResolvedEnv} {lf : Nat} {A b v : Expr Nat}
+    (h : norm E lf (.lam A b) = some v) : ∃ A' b', v = .lam A' b' := by
+  match lf, h with
+  | 0, h => exact Option.noConfusion h
+  | 1, h => exact Option.noConfusion h
+  | j + 2, h =>
+      have h2 : norm E (j + 2) (.lam A b) =
+          (match norm E (j + 1) A, norm E (j + 1) b with
+           | some A', some b' => some (.lam A' b')
+           | _, _ => none) := rfl
+      rw [h2] at h
+      split at h
+      · exact ⟨_, _, (Option.some.inj h).symm⟩
+      · exact Option.noConfusion h
+
+theorem scmValOf_bvar (E : ResolvedEnv) (fv i : Nat) : scmValOf E fv (.bvar i) = none := by
+  cases fv <;> rfl
+
+theorem scmValOf_sort (E : ResolvedEnv) (fv : Nat) (l : Level) :
+    scmValOf E fv (.sort l) = none := by
+  cases fv <;> rfl
+
+theorem scmValOf_pi (E : ResolvedEnv) (fv : Nat) (A B : Expr Nat) :
+    scmValOf E fv (.pi A B) = none := by
+  cases fv <;> rfl
+
+theorem scmValOf_lam (E : ResolvedEnv) (fv : Nat) (A b : Expr Nat) :
+    scmValOf E fv (.lam A b) = none := by
+  cases fv <;> rfl
+
+theorem adeqBvar {S : SigTable} (progs : Programs S S) : AdeqBvar progs := by
+  intro E n i lf fv T v t w _ _ _ hn hs _ _ _ _
+  rw [norm_bvar_val hn, scmValOf_bvar] at hs
+  exact Option.noConfusion hs
+
+theorem adeqSort {S : SigTable} (progs : Programs S S) : AdeqSort progs := by
+  intro E n l lf fv T v t w _ _ _ hn hs _ _ _ _
+  rw [norm_sort_val hn, scmValOf_sort] at hs
+  exact Option.noConfusion hs
+
+theorem adeqPi {S : SigTable} (progs : Programs S S) : AdeqPi progs := by
+  intro E n A B lf fv T v t w _ _ _ hn hs _ _ _ _
+  obtain ⟨A', B', hv⟩ := norm_pi_val hn
+  rw [hv, scmValOf_pi] at hs
+  exact Option.noConfusion hs
+
+theorem adeqLam {S : SigTable} (progs : Programs S S) : AdeqLam progs := by
+  intro E n A b lf fv T v t w _ _ _ hn hs _ _ _ _
+  obtain ⟨A', b', hv⟩ := norm_lam_val hn
+  rw [hv, scmValOf_lam] at hs
+  exact Option.noConfusion hs
+
+/-- the lowering of a literal, by computation through the four stages, at every
+    positive lowering fuel. -/
+theorem lowerF_lit (E : ResolvedEnv) (n k F : Nat) {S : SigTable} :
+    lowerF E n (F + 1) (S := S) .i64 (.lit k) =
+      (if inI64Range (Int.ofNat k) then .litI (Int.ofNat k) else refuse) := rfl
+
+theorem eval_litI {S : SigTable} (progs : Programs S S) (x : Int)
+    (hx : inI64Range x = true) :
+    Residua.Bootstrap.Semantics.eval lawsA progs 1 [] (BootExpr.litI (S := S) (G := []) x)
+      = some (.int x) := by
+  simp [Residua.Bootstrap.Semantics.eval, hx]
+
+theorem adeqLit {S : SigTable} (progs : Programs S S) : AdeqLit progs := by
+  intro E n k lf fv T v t w _ _ _ hn hs _ _ hf _
+  rw [norm_lit_val hn] at hs
+  cases fv with
+  | zero => exact Option.noConfusion hs
+  | succ m =>
+      have hs2 : scmValOf E (m + 1) (.lit k) = some (.int (Int.ofNat k)) := rfl
+      rw [hs2] at hs
+      cases hs
+      cases t
+      case i64 =>
+          have hk : inI64Range (Int.ofNat k) = true := hf
+          refine ⟨1, fun F hF => ⟨1, ?_⟩⟩
+          obtain ⟨F', rfl⟩ : ∃ F', F = F' + 1 := ⟨F - 1, by omega⟩
+          rw [lowerF_lit, if_pos hk]
+          exact eval_litI progs _ hk
+      all_goals cases hf
+
+/-- positive control at the concrete term on which Adequacy.rsd refutes the two mutants
+    (`lit 0 : N` in `adqEnv`, value `.int 0`, scm type `i64`): the reference family
+    meets the strong statement there. -/
+theorem lit0_good {S : SigTable} (progs : Programs S S) :
+    ∃ F₀, ∀ F, F₀ ≤ F → ∃ lf', Residua.Bootstrap.Semantics.eval lawsA progs lf' []
+      (lowerF adqEnv 0 F (S := S) .i64 (.lit 0)) = some (.int 0) :=
+  adeqLit progs adqEnv 0 0 2 1 _ (.lit 0) .i64 (.int 0) adqBodiesTyped adqLit0Infer adqLit0Data adqLit0Norm
+    adqLit0Val adqLit0Rel adqLit0Root adqLit0Fits adqLit0VInfer
+
+/-! ### Fuel monotonicity of the erase and run stages
+
+The strong statement's lowering fuel is eventual (`∀ F ≥ F₀`); these lemmas are what the
+open cases (const, app, letE) use to move a successful stage result to a larger fuel. -/
+
+theorem eraseWith_mono (irr : LCtx → Expr Nat → Bool) (gi : Nat → Option Nat)
+    (E : ResolvedEnv) :
+    ∀ (F F' : Nat) (Γ : LCtx) (e : Expr Nat) (l : LExpr), F ≤ F' →
+      eraseWith irr gi E F Γ e = some l → eraseWith irr gi E F' Γ e = some l := by
+  intro F
+  induction F with
+  | zero => intro F' Γ e l _ h; exact Option.noConfusion h
+  | succ F ih =>
+    intro F' Γ e l hF h
+    obtain ⟨F'', rfl⟩ : ∃ F'', F' = F'' + 1 := ⟨F' - 1, by omega⟩
+    have hF' : F ≤ F'' := by omega
+    cases e with
+    | sort _ => exact h
+    | pi _ _ => exact h
+    | lit _ => exact h
+    | bvar _ => exact h
+    | const r ls =>
+        simp only [eraseWith] at h ⊢
+        cases hi : irr Γ (.const r ls)
+        · simp only [hi, Bool.false_eq_true, if_false] at h ⊢
+          cases hg : gi r with
+          | some i => rw [hg] at h; exact h
+          | none =>
+            rw [hg] at h
+            cases hb : transparentBody E r ls with
+            | none => rw [hb] at h; exact h
+            | some b => rw [hb] at h; exact ih _ _ _ _ hF' h
+        · simp only [hi, if_true] at h ⊢; exact h
+    | app g a =>
+        simp only [eraseWith] at h ⊢
+        cases hi : irr Γ (.app g a)
+        · simp only [hi, Bool.false_eq_true, if_false] at h ⊢
+          cases hg : eraseWith irr gi E F Γ g with
+          | none => rw [hg] at h; exact Option.noConfusion h
+          | some g' =>
+            cases ha : eraseWith irr gi E F Γ a with
+            | none => rw [hg, ha] at h; exact Option.noConfusion h
+            | some a' =>
+              rw [hg, ha] at h
+              rw [ih _ _ _ _ hF' hg, ih _ _ _ _ hF' ha]
+              exact h
+        · simp only [hi, if_true] at h ⊢; exact h
+    | lam A b =>
+        simp only [eraseWith] at h ⊢
+        cases hi : irr Γ (.lam A b)
+        · simp only [hi, Bool.false_eq_true, if_false] at h ⊢
+          cases hb : eraseWith irr gi E F (.assumption A :: Γ) b with
+          | none => rw [hb] at h; exact Option.noConfusion h
+          | some b' => rw [hb] at h; rw [ih _ _ _ _ hF' hb]; exact h
+        · simp only [hi, if_true] at h ⊢; exact h
+    | letE A v b =>
+        simp only [eraseWith] at h ⊢
+        cases hi : irr Γ (.letE A v b)
+        · simp only [hi, Bool.false_eq_true, if_false] at h ⊢
+          cases hv : eraseWith irr gi E F Γ v with
+          | none => rw [hv] at h; exact Option.noConfusion h
+          | some v' =>
+            cases hb : eraseWith irr gi E F (.letBinding A v :: Γ) b with
+            | none => rw [hv, hb] at h; exact Option.noConfusion h
+            | some b' =>
+              rw [hv, hb] at h
+              rw [ih _ _ _ _ hF' hv, ih _ _ _ _ hF' hb]
+              exact h
+        · simp only [hi, if_true] at h ⊢; exact h
+
+theorem erase_mono (E : ResolvedEnv) (n F F' : Nat) (Γ : LCtx) (e : Expr Nat) (l : LExpr)
+    (hF : F ≤ F') (h : erase E n F Γ e = some l) : erase E n F' Γ e = some l :=
+  eraseWith_mono (irrelevant E n) noGlobals E F F' Γ e l hF h
+
+theorem runWith_mono (bind : DVal → List DVal → List DVal) (code : List Code) :
+    ∀ (F F' : Nat) (env : List DVal) (d : DExpr) (v : DVal), F ≤ F' →
+      runWith bind code F env d = some v → runWith bind code F' env d = some v := by
+  intro F
+  induction F with
+  | zero => intro F' env d v _ h; exact Option.noConfusion h
+  | succ F ih =>
+    intro F' env d v hF h
+    obtain ⟨F'', rfl⟩ : ∃ F'', F' = F'' + 1 := ⟨F' - 1, by omega⟩
+    have hF' : F ≤ F'' := by omega
+    cases d with
+    | var _ => exact h
+    | box => exact h
+    | lit _ => exact h
+    | ctor _ => exact h
+    | rigid _ => exact h
+    | clo _ _ => exact h
+    | glob l =>
+        change (match code.get? l with
+          | some c => runWith bind code F [] c.body
+          | none => none) = some v at h
+        change (match code.get? l with
+          | some c => runWith bind code F'' [] c.body
+          | none => none) = some v
+        cases hc : code.get? l with
+        | none => rw [hc] at h; exact Option.noConfusion h
+        | some c => rw [hc] at h; exact ih _ _ _ _ hF' h
+    | apply g a =>
+        simp only [runWith] at h ⊢
+        cases hg : runWith bind code F env g with
+        | none => rw [hg] at h; exact Option.noConfusion h
+        | some gv =>
+          cases ha : runWith bind code F env a with
+          | none => rw [hg, ha] at h; cases gv <;> exact Option.noConfusion h
+          | some av =>
+            rw [hg, ha] at h
+            rw [ih _ _ _ _ hF' hg, ih _ _ _ _ hF' ha]
+            cases gv with
+            | clo l caps =>
+                change (match code.get? l with
+                  | some c => runWith bind code F (bind av caps) c.body
+                  | none => none) = some v at h
+                change (match code.get? l with
+                  | some c => runWith bind code F'' (bind av caps) c.body
+                  | none => none) = some v
+                cases hc : code.get? l with
+                | none => rw [hc] at h; exact Option.noConfusion h
+                | some c => rw [hc] at h; exact ih _ _ _ _ hF' h
+            | _ => exact h
+    | letE x b =>
+        simp only [runWith] at h ⊢
+        cases hx : runWith bind code F env x with
+        | none => rw [hx] at h; exact Option.noConfusion h
+        | some xv => rw [hx] at h; rw [ih _ _ _ _ hF' hx]; exact ih _ _ _ _ hF' h
+
+theorem run_mono (code : List Code) (F F' : Nat) (env : List DVal) (d : DExpr) (v : DVal)
+    (hF : F ≤ F') (h : run code F env d = some v) : run code F' env d = some v :=
+  runWith_mono bindArg code F F' env d v hF h
+
+/-! ### Emission and the whole lowering keep a successful result at every larger fuel
+
+`emitWith` fails only by emitting `refuse` where its fuel runs out, and every node it
+emits is evaluated (it emits no branching construct), so if evalLF of the emitted term
+gives a value, the term emitted at a larger fuel gives the same value
+(`emitWith_evalStable`). With `erase_mono` and `run_mono` this gives
+`lowerF_evalStable`: a value evalLF gets from the lowering at fuel `F` it gets, at the
+same scm fuel, from the lowering at every `F' ≥ F`. So for the reference family the
+statement's eventual lowering fuel follows from a single one
+(`lowerF_eventual_of_exists`, `good_of_exists`), and `FuelStable` separates it from a
+lowering whose output depends on the fuel (`fuelParity_not_fuelStable`). -/
+
+theorem eval_refuse_ne {S : SigTable} {G : Ctx} {t : BootTy} (progs : Programs S S)
+    (lf : Nat) (env : EnvV) (w : Val) :
+    Residua.Bootstrap.Semantics.eval lawsA progs lf env (refuse (S := S) (G := G) (t := t))
+      ≠ some w := by
+  intro h
+  have h2 : Residua.Bootstrap.Semantics.eval lawsA progs lf env
+      (refuse (S := S) (G := G) (t := t)) = none := eval_refuse progs lf env
+  rw [h2] at h
+  exact Option.noConfusion h
+
+theorem eval_cast_eq {S : SigTable} {G : Ctx} {t t' : BootTy} (progs : Programs S S)
+    (lf : Nat) (env : EnvV) (h : t = t') (x : BootExpr S G t) :
+    Residua.Bootstrap.Semantics.eval lawsA progs lf env (cast (congrArg (BootExpr S G) h) x)
+      = Residua.Bootstrap.Semantics.eval lawsA progs lf env x := by
+  subst h; rfl
+
+/-- a list of emitted elements: if every element's value is kept when its emitter is
+    replaced, the list's value is kept. -/
+theorem eval_listOf_map {S : SigTable} {G : Ctx} {τ : BootTy} (progs : Programs S S)
+    (lf : Nat) (env : EnvV) (g g' : DVal → BootExpr S G τ) :
+    ∀ (xs : List DVal) (w : Val),
+      (∀ x, x ∈ xs → ∀ u, Residua.Bootstrap.Semantics.eval lawsA progs lf env (g x) = some u →
+        Residua.Bootstrap.Semantics.eval lawsA progs lf env (g' x) = some u) →
+      Residua.Bootstrap.Semantics.eval lawsA progs lf env (listOf (xs.map g)) = some w →
+      Residua.Bootstrap.Semantics.eval lawsA progs lf env (listOf (xs.map g')) = some w
+  | [], _, _, h => h
+  | x :: xs, w, hg, h => by
+    cases lf with
+    | zero => rw [eval_fuel0] at h; exact Option.noConfusion h
+    | succ m =>
+      change Residua.Bootstrap.Semantics.eval lawsA progs (m + 1) env
+        (BootExpr.listAppend (BootExpr.listSingleton (g x)) (listOf (xs.map g))) = some w at h
+      change Residua.Bootstrap.Semantics.eval lawsA progs (m + 1) env
+        (BootExpr.listAppend (BootExpr.listSingleton (g' x)) (listOf (xs.map g'))) = some w
+      simp only [Residua.Bootstrap.Semantics.eval] at h ⊢
+      cases hx : Residua.Bootstrap.Semantics.eval lawsA progs (m + 1) env (g x) with
+      | none => rw [hx] at h; exact Option.noConfusion h
+      | some xv =>
+        cases hr : Residua.Bootstrap.Semantics.eval lawsA progs (m + 1) env
+            (listOf (xs.map g)) with
+        | none => rw [hx, hr] at h; exact Option.noConfusion h
+        | some rv =>
+          rw [hg x (List.mem_cons_self x xs) xv hx,
+            eval_listOf_map progs (m + 1) env g g' xs rv
+              (fun y hy => hg y (List.mem_cons_of_mem x hy)) hr]
+          rw [hx, hr] at h
+          exact h
+
+theorem emitWith_evalStable (fields : List DVal → List DVal) {S : SigTable} {G : Ctx}
+    (progs : Programs S S) (lf : Nat) (env : EnvV) :
+    ∀ (f f' : Nat) (t : BootTy) (v : DVal) (w : Val), f ≤ f' →
+      Residua.Bootstrap.Semantics.eval lawsA progs lf env
+        (emitWith fields (S := S) (G := G) f t v) = some w →
+      Residua.Bootstrap.Semantics.eval lawsA progs lf env
+        (emitWith fields (S := S) (G := G) f' t v) = some w := by
+  intro f
+  induction f with
+  | zero =>
+    intro f' t v w _ h
+    have h0 : emitWith fields (S := S) (G := G) 0 t v = refuse := by
+      cases t <;> cases v <;> rfl
+    rw [h0] at h
+    exact absurd h (eval_refuse_ne progs lf env w)
+  | succ f ih =>
+    intro f' t v w hf h
+    obtain ⟨f'', rfl⟩ : ∃ f'', f' = f'' + 1 := ⟨f' - 1, by omega⟩
+    have hf' : f ≤ f'' := by omega
+    cases t <;> cases v <;> try exact h
+    rename_i ts r args
+    simp only [emitWith] at h ⊢
+    by_cases hr : r < ts.length
+    · rw [dif_pos hr] at h ⊢
+      split
+      · rename_i τ' hτ'
+        split at h
+        · rename_i τ hτ
+          have hττ : τ' = τ := by rw [hτ] at hτ'; exact (BootTy.list.inj hτ').symm
+          subst hττ
+          cases lf with
+          | zero => rw [eval_fuel0] at h; exact Option.noConfusion h
+          | succ m =>
+            simp only [Residua.Bootstrap.Semantics.eval] at h ⊢
+            rw [eval_cast_eq progs (m + 1) env hτ.symm] at h ⊢
+            cases hl : Residua.Bootstrap.Semantics.eval lawsA progs (m + 1) env
+                (listOf ((fields args).map (emitWith fields (S := S) (G := G) f τ'))) with
+            | none => rw [hl] at h; exact Option.noConfusion h
+            | some lv =>
+              rw [eval_listOf_map progs (m + 1) env _ _ (fields args) lv
+                (fun x _ u hu => ih f'' τ' x u hf' hu) hl]
+              rw [hl] at h
+              exact h
+        · exact absurd h (eval_refuse_ne progs lf env w)
+      · split at h
+        · rename_i hn τ hτ
+          exact absurd hτ (hn τ)
+        · exact absurd h (eval_refuse_ne progs lf env w)
+    · rw [dif_neg hr] at h
+      exact absurd h (eval_refuse_ne progs lf env w)
+
+theorem lowerF_evalStable {S : SigTable} (progs : Programs S S) (E : ResolvedEnv)
+    (n F F' : Nat) (t : BootTy) (e : Expr Nat) (lf : Nat) (w : Val) (hF : F ≤ F')
+    (h : Residua.Bootstrap.Semantics.eval lawsA progs lf [] (lowerF E n F (S := S) t e)
+      = some w) :
+    Residua.Bootstrap.Semantics.eval lawsA progs lf [] (lowerF E n F' (S := S) t e)
+      = some w := by
+  unfold lowerF pipeline at h ⊢
+  cases he : erase E n F [] e with
+  | none =>
+    simp only [he] at h
+    exact absurd h (eval_refuse_ne progs lf [] w)
+  | some l =>
+    simp only [he] at h
+    simp only [erase_mono E n F F' [] e l hF he]
+    cases hr : run (defunc l).2 F [] (defunc l).1 with
+    | none =>
+      simp only [hr] at h
+      exact absurd h (eval_refuse_ne progs lf [] w)
+    | some v =>
+      simp only [hr] at h
+      simp only [run_mono _ F F' [] _ v hF hr]
+      exact emitWith_evalStable relevantArgs progs lf [] F F' t v w hF h
+
+/-- for the reference family, one lowering fuel that works gives the statement's
+    eventual one. -/
+theorem lowerF_eventual_of_exists {S : SigTable} (progs : Programs S S) (E : ResolvedEnv)
+    (n : Nat) (t : BootTy) (e : Expr Nat) (w : Val)
+    (h : ∃ F lf, Residua.Bootstrap.Semantics.eval lawsA progs lf [] (lowerF E n F (S := S) t e)
+      = some w) :
+    ∃ F₀, ∀ F, F₀ ≤ F → ∃ lf,
+      Residua.Bootstrap.Semantics.eval lawsA progs lf [] (lowerF E n F (S := S) t e) = some w := by
+  obtain ⟨F, lf, h⟩ := h
+  exact ⟨F, fun F' hF => ⟨lf, lowerF_evalStable progs E n F F' t e lf w hF h⟩⟩
+
+/-- `Good` (the per-term body of the statement) from a single lowering fuel: the form the
+    open const/app/letE cases can be proved in. -/
+theorem good_of_exists {S : SigTable} (progs : Programs S S) (E : ResolvedEnv) (n : Nat)
+    (e : Expr Nat)
+    (h : ∀ (lf fv : Nat) (T v : Expr Nat) (t : BootTy) (w : Val),
+      BodiesTyped E n →
+      inferT E n [] e = some T → DataTy E T →
+      norm E lf e = some v → scmValOf E fv v = some w →
+      relevantSpine E n fv v = true → irrelevant E n [] v = false → valFits fv t w = true →
+      (inferT E n [] v).isSome = true →
+      ∃ F lf', Residua.Bootstrap.Semantics.eval lawsA progs lf' [] (lowerF E n F (S := S) t e)
+        = some w) :
+    Good progs E n e := by
+  intro lf fv T v t w h0 h1 h2 h3 h4 h5 h7 h6 h8
+  exact lowerF_eventual_of_exists progs E n t e w (h lf fv T v t w h0 h1 h2 h3 h4 h5 h7 h6 h8)
+
+/-! ### The const case, split: heads proved, δ stated
+
+`AdeqConst` follows from `AdeqConstHead` (a constant with no transparent body:
+constructor, axiom, opaque, recursor; `norm` leaves it, erasure keeps it as `ctor`/`rigid`)
+and `AdeqConstDelta` (a transparent constant: its value is its unfolded body's, so the case
+needs the erasure/run simulation the app and letE cases need; stated, open). -/
+
+def AdeqConstHead {S : SigTable} (progs : Programs S S) : Prop :=
+  ∀ E n r ls, transparentBody E r ls = none → Good progs E n (.const r ls)
+def AdeqConstDelta {S : SigTable} (progs : Programs S S) : Prop :=
+  ∀ E n r ls b, transparentBody E r ls = some b → Good progs E n (.const r ls)
+
+theorem adeqConst_of_split {S : SigTable} (progs : Programs S S)
+    (hh : AdeqConstHead progs) (hd : AdeqConstDelta progs) : AdeqConst progs := by
+  intro E n r ls
+  cases hb : transparentBody E r ls with
+  | none => exact hh E n r ls hb
+  | some b => exact hd E n r ls b hb
+
+theorem norm_const_head {E : ResolvedEnv} {lf r : Nat} {ls : List Level} {v : Expr Nat}
+    (hb : transparentBody E r ls = none) (h : norm E lf (.const r ls) = some v) :
+    v = .const r ls := by
+  have key : ∀ k, whnfFuel E k (.const r ls) = some (.const r ls) →
+      norm E (k + 1) (.const r ls) = some (.const r ls) := by
+    intro k hk
+    rw [norm, hk]
+    try rfl
+  match lf, h with
+  | 0, h => exact Option.noConfusion h
+  | 1, h => exact Option.noConfusion h
+  | j + 2, h =>
+      have hw : whnfFuel E (j + 1) (.const r ls) = some (.const r ls) := by
+        change (match transparentBody E r ls with
+          | some body => whnfFuel E j (foldApps body [])
+          | none => some (.const r ls)) = some (.const r ls)
+        rw [hb]
+      have h2 : norm E (j + 2) (.const r ls) = some (.const r ls) := key (j + 1) hw
+      rw [h2] at h
+      exact (Option.some.inj h).symm
+
+theorem list_get?_some {α : Type} : ∀ (ts : List α) (r : Nat) (x : α),
+    ts.get? r = some x → ∃ h : r < ts.length, ts.get ⟨r, h⟩ = x
+  | [], _, _, h => Option.noConfusion h
+  | _ :: _, 0, _, h => ⟨Nat.zero_lt_succ _, Option.some.inj h⟩
+  | _ :: ys, k + 1, x, h =>
+      let ⟨hk, he⟩ := list_get?_some ys k x h
+      ⟨Nat.succ_lt_succ hk, he⟩
+
+/-- the head case: a constant with no transparent body whose value is data is a nullary
+    constructor, erased to `ctor r`, run to `ctor r []`, emitted as summand `r` with no
+    fields; evalLF gives `.inj r (.list [])` at scm fuel 1, from lowering fuel 1 on. -/
+theorem adeqConstHead {S : SigTable} (progs : Programs S S) : AdeqConstHead progs := by
+  intro E n r ls hb lf fv T v t w _ _ _ hn hs _ hroot hf _
+  have hv := norm_const_head hb hn
+  subst hv
+  cases fv with
+  | zero => exact Option.noConfusion hs
+  | succ m =>
+    have hs' : (match E.members r with
+        | some mm => if mm.mclass = .constructorM then some (Val.inj r (.list [])) else none
+        | none => none) = some w := hs
+    cases hm : E.members r with
+    | none => rw [hm] at hs'; exact Option.noConfusion hs'
+    | some mm =>
+      rw [hm] at hs'
+      by_cases hc : mm.mclass = .constructorM
+      · simp [hc] at hs'
+        subst hs'
+        cases t with
+        | sum ts =>
+          have hf' : (match ts.get? r with
+              | some (.list τ) => ([] : List Val).all (valFits m τ)
+              | _ => false) = true := hf
+          split at hf'
+          · rename_i τ hg
+            obtain ⟨hlt, hget⟩ := list_get?_some ts r _ hg
+            have hctor : isCtor E r = true := by simp [isCtor, hm, hc]
+            refine ⟨1, fun F hF => ⟨1, ?_⟩⟩
+            obtain ⟨F', rfl⟩ : ∃ F', F = F' + 1 := ⟨F - 1, by omega⟩
+            have he : erase E n (F' + 1) [] (.const r ls) = some (.ctor r) := by
+              simp only [erase, eraseWith, hroot, Bool.false_eq_true, if_false, noGlobals, hb,
+                hctor, if_true]
+            have hlow : lowerF E n (F' + 1) (S := S) (.sum ts) (.const r ls) =
+                emit (F' + 1) (.sum ts) (.ctor r []) := by
+              unfold lowerF pipeline
+              rw [he]
+              rfl
+            rw [hlow]
+            simp only [emit, emitWith]
+            rw [dif_pos hlt]
+            split
+            · rename_i τ' hτ'
+              simp only [Residua.Bootstrap.Semantics.eval]
+              rw [eval_cast_eq progs _ [] hτ'.symm]
+              simp [Residua.Bootstrap.Semantics.eval, relevantArgs, listOf]
+            · rename_i hne
+              exact absurd hget (hne τ)
+          · exact Bool.noConfusion hf'
+        | _ => cases hf
+      · simp [hc] at hs'
+
+/-- a lowering keeps every value evalLF gets from it when its fuel grows. -/
+def FuelStable {S : SigTable} (low : Lowering S) (progs : Programs S S) : Prop :=
+  ∀ (E : ResolvedEnv) (n F F' : Nat) (t : BootTy) (e : Expr Nat) (lf : Nat) (w : Val),
+    F ≤ F' →
+    Residua.Bootstrap.Semantics.eval lawsA progs lf [] (low E n F t e) = some w →
+    Residua.Bootstrap.Semantics.eval lawsA progs lf [] (low E n F' t e) = some w
+
+theorem lowerF_fuelStable {S : SigTable} (progs : Programs S S) :
+    FuelStable (fun E n F t e => lowerF E n F (S := S) t e) progs :=
+  fun E n F F' t e lf w hF h => lowerF_evalStable progs E n F F' t e lf w hF h
+
+/-- mutant: the output reads the lowering fuel (its parity). -/
+def fuelParity {S : SigTable} : Lowering S := fun _ _ F t _ =>
+  match t with
+  | .i64 => .litI ((F % 2 : Nat) : Int)
+  | _ => refuse
+
+theorem fuelParity_not_fuelStable {S : SigTable} (progs : Programs S S) :
+    ¬ FuelStable (fuelParity (S := S)) progs := by
+  intro h
+  have h0 : Residua.Bootstrap.Semantics.eval lawsA progs 1 []
+      (fuelParity (S := S) adqEnv 0 0 .i64 (.lit 0)) = some (.int 0) :=
+    eval_litI progs 0 (by decide)
+  have h1 := h adqEnv 0 0 1 .i64 (.lit 0) 1 (.int 0) (by decide) h0
+  have h2 : Residua.Bootstrap.Semantics.eval lawsA progs 1 []
+      (fuelParity (S := S) adqEnv 0 1 .i64 (.lit 0)) = some (.int 1) :=
+    eval_litI progs 1 (by decide)
+  rw [h2] at h1
+  exact absurd (Val.int.inj (Option.some.inj h1)) (by decide)
+
+/-! ## Controls (`#guard`): a closed environment and small closed data-typed terms
+
+Members (05 §3 order for Nat, as `natExpand` requires: 0 `N`, 1 `zero`, 2 `succ`):
+0 N, 1 zero, 2 succ, 4 True : Prop, 5 True.intro, 6 Bool, 7 false, 8 true,
+9 P, 10 P.mk : N → N → P, 11 two := succ (succ zero), 12 addTwo := λ x. succ (succ x),
+13 ax : N (axiom), 14 thm : True (theorem). -/
+
+def cN : Expr Nat := .const 0 []
+def cZero : Expr Nat := .const 1 []
+def cSucc : Expr Nat := .const 2 []
+def cTrue : Expr Nat := .const 4 []
+def cIntro : Expr Nat := .const 5 []
+def cMk : Expr Nat := .const 10 []
+
+def ctlEnv : ResolvedEnv where
+  members := fun r =>
+    match r with
+    | 0 => some ⟨.inductiveM, 0, .sort (.succ .zero), none⟩
+    | 1 => some ⟨.constructorM, 0, cN, none⟩
+    | 2 => some ⟨.constructorM, 0, .pi cN cN, none⟩
+    | 4 => some ⟨.inductiveM, 0, .sort .zero, none⟩
+    | 5 => some ⟨.constructorM, 0, cTrue, none⟩
+    | 6 => some ⟨.inductiveM, 0, .sort (.succ .zero), none⟩
+    | 7 => some ⟨.constructorM, 0, .const 6 [], none⟩
+    | 8 => some ⟨.constructorM, 0, .const 6 [], none⟩
+    | 9 => some ⟨.inductiveM, 0, .sort (.succ .zero), none⟩
+    | 10 => some ⟨.constructorM, 0, .pi cN (.pi cN (.const 9 [])), none⟩
+    | 11 => some ⟨.definitionM, 0, cN, some (.app cSucc (.app cSucc cZero))⟩
+    | 12 => some ⟨.definitionM, 0, .pi cN cN,
+              some (.lam cN (.app cSucc (.app cSucc (.bvar 0))))⟩
+    | 13 => some ⟨.axiomM, 0, cN, none⟩
+    | 14 => some ⟨.theoremM, 0, cTrue, some cIntro⟩
+    | _ => none
+
+/-- scm sum type with `k` summands, each `list τ`. -/
+def sumL (k : Nat) (τ : BootTy) : BootTy := .sum (List.replicate k (.list τ))
+
+def tyNat1 : BootTy := sumL 3 .i64
+def tyNat2 : BootTy := sumL 3 tyNat1
+def tyNat3 : BootTy := sumL 3 tyNat2
+
+def optValEq : Option Val → Option Val → Bool
+  | some a, some b => valEq a b
+  | none, none => true
+  | _, _ => false
+
+/-- the value side: `scmValOf (norm t)`. -/
+def obs (E : ResolvedEnv) (e : Expr Nat) : Option Val :=
+  match norm E 64 e with
+  | some v => scmValOf E 64 v
+  | none => none
+
+/-- the scm side: `evalLF` of a lowered term (empty program table). -/
+def runLowered {t : BootTy} (b : BootExpr [] [] t) : Option Val :=
+  Residua.Bootstrap.Semantics.eval lawsA .nil 64 [] b
+
+/-- positive control: the value side is data, and evalLF of the lowering equals it. -/
+def agrees (low : (t : BootTy) → Expr Nat → BootExpr [] [] t) (E : ResolvedEnv)
+    (t : BootTy) (e : Expr Nat) : Bool :=
+  (obs E e).isSome && optValEq (runLowered (low t e)) (obs E e)
+
+def ref (t : BootTy) (e : Expr Nat) : BootExpr [] [] t := Rsx.lower ctlEnv (t := t) e
+
+-- the terms
+def g01 : Expr Nat := .lit 5
+def g02 : Expr Nat := cZero
+def g03 : Expr Nat := .app cSucc (.lit 4)
+def g04 : Expr Nat := .app (.lam cN (.app cSucc (.bvar 0))) (.lit 4)              -- β
+def g05 : Expr Nat := .letE cN (.lit 7) (.app cSucc (.bvar 0))                     -- ζ
+def g06 : Expr Nat := .const 11 []                                                 -- δ
+def g07 : Expr Nat := .app (.lam cTrue (.lit 3)) cIntro                            -- proof arg erased
+def g08 : Expr Nat :=                                                              -- type arg erased
+  .app (.app (.lam (.sort (.succ .zero)) (.lam (.bvar 0) (.bvar 0))) cN) (.lit 9)
+def g09 : Expr Nat :=                                                              -- higher order
+  .app (.lam (.pi cN cN) (.app (.bvar 0) (.lit 1))) (.lam cN (.app cSucc (.bvar 0)))
+def g10 : Expr Nat :=                                                              -- capture
+  .app (.app (.lam cN (.lam cN (.app (.app cMk (.bvar 0)) (.bvar 1)))) (.lit 1)) (.lit 2)
+def g11 : Expr Nat := .const 8 []
+def g12 : Expr Nat := .app (.const 12 []) (.lit 0)                                 -- δ to a λ
+def g13 : Expr Nat :=                                                              -- let-bound λ
+  .letE (.pi cN cN) (.lam cN (.app cSucc (.bvar 0)))
+    (.app (.bvar 0) (.app (.bvar 0) (.lit 0)))
+def g14 : Expr Nat := .app (.lam cTrue (.app cSucc cZero)) (.const 14 [])           -- theorem arg erased
+
+-- 14 positive controls: evalLF (Rsx.lower t) = scmValOf (norm t), and is data
+#guard agrees ref ctlEnv .i64 g01
+#guard agrees ref ctlEnv tyNat1 g02
+#guard agrees ref ctlEnv tyNat1 g03
+#guard agrees ref ctlEnv tyNat1 g04
+#guard agrees ref ctlEnv tyNat1 g05
+#guard agrees ref ctlEnv tyNat3 g06
+#guard agrees ref ctlEnv .i64 g07
+#guard agrees ref ctlEnv .i64 g08
+#guard agrees ref ctlEnv tyNat1 g09
+#guard agrees ref ctlEnv (sumL 11 .i64) g10
+#guard agrees ref ctlEnv (sumL 9 .i64) g11
+#guard agrees ref ctlEnv tyNat2 g12
+#guard agrees ref ctlEnv tyNat2 g13
+#guard agrees ref ctlEnv tyNat2 g14
+
+-- the controls exercise the stages they name: erasure removed the arguments of g07, g08, g14
+#guard erase ctlEnv 0 64 [] g07 = some (.app (.lam (.lit 3)) .box)
+#guard erase ctlEnv 0 64 [] g08 = some (.app (.app (.lam (.lam (.bvar 0))) .box) (.lit 9))
+-- defunctionalization of g10: two λ records, the inner one capturing one variable
+#guard (defunc ((erase ctlEnv 0 64 [] g10).getD .box)).2.map Code.ncap = [1, 0]
+
+-- refusals agree with the value side: no data value, and the lowering evaluates to none
+def g15 : Expr Nat := .lam cN (.bvar 0)          -- a function: not data
+def g16 : Expr Nat := .const 13 []               -- an axiom: rigid, not data
+#guard (obs ctlEnv g15).isNone && (runLowered (ref tyNat1 g15)).isNone
+#guard (obs ctlEnv g16).isNone && (runLowered (ref tyNat1 g16)).isNone
+
+-- gap witnesses (reports/rsxlower/GAPS.md): the value side has data that no BootExpr of
+-- the requested type produces
+def g17 : Expr Nat := .app (.app cMk (.const 11 [])) (.lit 3)   -- fields: constructor and literal
+def g18 : Expr Nat := .lit 9223372036854775808                  -- 2^63, beyond i64
+#guard (obs ctlEnv g17).isSome && (runLowered (ref (sumL 11 .i64) g17)).isNone
+#guard (obs ctlEnv g18).isSome && (runLowered (ref .i64 g18)).isNone
+
+/-! ### Negative controls: planted lowering mutants are refused by the same check -/
+
+/-- erasure mutant: treats every term whose type's type is any sort as irrelevant
+    (erases data). -/
+def irrelevantAnySort (E : ResolvedEnv) (n : Nat) (Γ : LCtx) (e : Expr Nat) : Bool :=
+  match inferT E n Γ e with
+  | some T =>
+      isArity T ||
+        (match inferT E n Γ T with
+         | some (.sort _) => true
+         | _ => false)
+  | none => false
+
+/-- defunctionalization mutant: captured slot `k` read at `k` instead of `1 + k`. -/
+def capRenOff (fs : List Nat) : Nat → Nat
+  | 0 => 0
+  | i + 1 => (idxOf i fs).getD fs.length
+
+/-- fuel-stage mutant: `apply` binds the argument after the captured values. -/
+def bindLast (a : DVal) (caps : List DVal) : List DVal := caps ++ [a]
+
+/-- emission mutant: constructor fields in reverse order. -/
+def fieldsRev (args : List DVal) : List DVal := (relevantArgs args).reverse
+
+def mutErase (t : BootTy) (e : Expr Nat) : BootExpr [] [] t :=
+  pipeline (eraseWith (irrelevantAnySort ctlEnv 0) noGlobals ctlEnv) defunc run emit defaultFuel t e
+def mutDefunc (t : BootTy) (e : Expr Nat) : BootExpr [] [] t :=
+  pipeline (erase ctlEnv 0) (convWith capRenOff id []) run emit defaultFuel t e
+def mutRun (t : BootTy) (e : Expr Nat) : BootExpr [] [] t :=
+  pipeline (erase ctlEnv 0) defunc (runWith bindLast) emit defaultFuel t e
+def mutEmit (t : BootTy) (e : Expr Nat) : BootExpr [] [] t :=
+  pipeline (erase ctlEnv 0) defunc run (emitWith fieldsRev) defaultFuel t e
+
+-- the reference is the pipeline with the reference stages
+example : ref = pipeline (erase ctlEnv 0) defunc run emit defaultFuel := rfl
+
+#guard !(agrees mutErase ctlEnv tyNat1 g03)
+#guard !(agrees mutDefunc ctlEnv (sumL 11 .i64) g10)
+#guard !(agrees mutRun ctlEnv (sumL 11 .i64) g10)
+#guard !(agrees mutEmit ctlEnv (sumL 11 .i64) g10)
+
+/-! ### Counterexample to the step-4 statement: a Prop-typed data value
+
+`True.intro : True` in `ctlEnv` (member 5; `True` = member 4, an inductive in `Prop`).
+`DataTy` holds (`True` is an inductive), `norm` returns `True.intro`, `scmValOf` gives
+`.inj 5 (.list [])`, `relevantSpine` holds (no fields), and the value fits
+`sumL 6 .i64`. Erasure maps the term to `□` (its type's type is `Prop`: Letouzey's test,
+Lean's compiler erases it too), so the lowering refuses at every fuel. Hence the
+reference family does NOT meet `adequacyStatementNoRoot` (the step-4 form), and the
+statement on main adds `irrelevant E n [] v = false`, which this witness violates
+(`cIntro_irrelevant`). -/
+
+def cIntroTyNat : BootTy := sumL 6 .i64
+
+def cIntroTy : HasTyT ctlEnv 0 [] cIntro (instantiateLevels [] cTrue) :=
+  .const [] 5 [] ⟨.constructorM, 0, cTrue, none⟩ rfl rfl rfl
+
+theorem cIntroData : DataTy ctlEnv (instantiateLevels [] cTrue) :=
+  ⟨4, [], [], ⟨.inductiveM, 0, .sort .zero, none⟩, rfl, rfl, rfl⟩
+
+theorem cIntroNorm : norm ctlEnv 2 cIntro = some cIntro := rfl
+theorem cIntroVal : scmValOf ctlEnv 1 cIntro = some (.inj 5 (.list [])) := rfl
+theorem cIntroRel : relevantSpine ctlEnv 0 1 cIntro = true := rfl
+theorem cIntroFits : valFits 1 cIntroTyNat (.inj 5 (.list [])) = true := by decide
+theorem cIntro_irrelevant : irrelevant ctlEnv 0 [] cIntro = true := by decide
+
+/-- the reference lowering of `True.intro` is the refusing term at every fuel and type. -/
+theorem lowerF_cIntro {S : SigTable} (F : Nat) (t : BootTy) :
+    lowerF ctlEnv 0 F (S := S) t cIntro = refuse := by
+  cases F with
+  | zero => rfl
+  | succ F =>
+    have hirr : irrelevant ctlEnv 0 [] (.const 5 []) = true := cIntro_irrelevant
+    have he : erase ctlEnv 0 (F + 1) [] cIntro = some .box := by
+      simp only [erase, cIntro, eraseWith, hirr, if_true]
+    unfold lowerF pipeline
+    rw [he]
+    cases t <;> rfl
+
+/-- the counterexample: the reference family does not meet the step-4 statement. -/
+theorem lowerF_not_adequate_noRoot {S : SigTable} (progs : Programs S S) :
+    ¬ adequacyStatementNoRoot (fun E n F t e => lowerF E n F (S := S) t e) progs := by
+  intro h
+  obtain ⟨F₀, hF⟩ := h ctlEnv 0 2 1 cIntro _ cIntro cIntroTyNat (.inj 5 (.list []))
+    cIntroTy cIntroData cIntroNorm cIntroVal cIntroRel cIntroFits
+  obtain ⟨lf, he⟩ := hF F₀ (Nat.le_refl _)
+  have he' : Residua.Bootstrap.Semantics.eval lawsA progs lf []
+      (lowerF ctlEnv 0 F₀ (S := S) cIntroTyNat cIntro) = some (.inj 5 (.list [])) := he
+  rw [lowerF_cIntro] at he'
+  exact eval_refuse_ne progs lf [] _ he'
+
+-- the same witness as a gap guard: data on the value side, refused by the lowering, and
+-- excluded from the statement on main by its root-relevance premise
+#guard (obs ctlEnv cIntro).isSome && (runLowered (ref cIntroTyNat cIntro)).isNone &&
+  irrelevant ctlEnv 0 [] cIntro
+
+/-! ### Counterexample to the session-7 statement: a transparent body not of its type
+
+`badEnv` is `ctlEnv` plus member 15, a transparent definition `c : True` whose body is
+`zero : N`. `HasTyT.const` types `c` at its declared type `True` (no rule reads the body;
+only `ConvT.delta` does, and it demands the body typed), so `DataTy` holds. `norm` unfolds
+`c` (`whnfFuel` δ never reads a type) to `zero`, whose value `.inj 1 (.list [])` is relevant
+(`zero : N`, `N : Type`) and fits `tyNat1`. Erasure tests `c` before δ: its type's type is
+`Prop`, so it erases to `□` and the lowering refuses at every fuel. Hence the reference
+family does NOT meet `adequacyStatementUntypedEnv` (the session-7 form), and the statement
+on main adds `BodiesTyped E n` (MetaCoq's `wf Σ`, the premise of `ConvT.delta`). The body
+is outside `BodiesTyped`: the certified checker `inferT` types it at `N`, not `True`
+(guard below); a proof that no `HasTyT` derivation types it at `True` needs a model of
+`ConvT` and is not given. -/
+
+def badEnv : ResolvedEnv where
+  members := fun r =>
+    match r with
+    | 15 => some ⟨.definitionM, 0, cTrue, some cZero⟩
+    | r => ctlEnv.members r
+
+def cBad : Expr Nat := .const 15 []
+
+def cBadTy : HasTyT badEnv 0 [] cBad (instantiateLevels [] cTrue) :=
+  .const [] 15 [] ⟨.definitionM, 0, cTrue, some cZero⟩ rfl rfl rfl
+
+theorem cBadData : DataTy badEnv (instantiateLevels [] cTrue) :=
+  ⟨4, [], [], ⟨.inductiveM, 0, .sort .zero, none⟩, rfl, rfl, rfl⟩
+
+theorem cBadNorm : norm badEnv 3 cBad = some cZero := rfl
+theorem cBadVal : scmValOf badEnv 1 cZero = some (.inj 1 (.list [])) := rfl
+theorem cBadRel : relevantSpine badEnv 0 1 cZero = true := rfl
+theorem cBadRoot : irrelevant badEnv 0 [] cZero = false := by decide
+theorem cBadFits : valFits 1 tyNat1 (.inj 1 (.list [])) = true := by decide
+theorem cBad_irrelevant : irrelevant badEnv 0 [] cBad = true := by decide
+
+/-- the reference lowering of `c` is the refusing term at every fuel and type. -/
+theorem lowerF_cBad {S : SigTable} (F : Nat) (t : BootTy) :
+    lowerF badEnv 0 F (S := S) t cBad = refuse := by
+  cases F with
+  | zero => rfl
+  | succ F =>
+    have hirr : irrelevant badEnv 0 [] (.const 15 []) = true := cBad_irrelevant
+    have he : erase badEnv 0 (F + 1) [] cBad = some .box := by
+      simp only [erase, cBad, eraseWith, hirr, if_true]
+    unfold lowerF pipeline
+    rw [he]
+    cases t <;> rfl
+
+/-- the counterexample: the reference family does not meet the session-7 statement. -/
+theorem lowerF_not_adequate_untypedEnv {S : SigTable} (progs : Programs S S) :
+    ¬ adequacyStatementUntypedEnv (fun E n F t e => lowerF E n F (S := S) t e) progs := by
+  intro h
+  obtain ⟨F₀, hF⟩ := h badEnv 0 3 1 cBad _ cZero tyNat1 (.inj 1 (.list []))
+    cBadTy cBadData cBadNorm cBadVal cBadRel cBadRoot cBadFits
+  obtain ⟨lf, he⟩ := hF F₀ (Nat.le_refl _)
+  have he' : Residua.Bootstrap.Semantics.eval lawsA progs lf []
+      (lowerF badEnv 0 F₀ (S := S) tyNat1 cBad) = some (.inj 1 (.list [])) := he
+  rw [lowerF_cBad] at he'
+  exact eval_refuse_ne progs lf [] _ he'
+
+-- the same witness as a gap guard: data on the value side, refused by the lowering, the
+-- unfolded value relevant while the constant is a proof, and the body typed by the
+-- certified checker at `N`, not at the declared `True`
+#guard (obs badEnv cBad).isSome && (runLowered (Rsx.lower badEnv (t := tyNat1) cBad)).isNone &&
+  irrelevant badEnv 0 [] cBad && !(irrelevant badEnv 0 [] cZero) &&
+  decide (inferT badEnv 0 [] cZero = some cN) && decide (inferT badEnv 0 [] cZero ≠ some cTrue)
+-- a well-typed body of the same shape (`c : N := zero`, member 11-like) is lowered: `g06`
+#guard agrees (fun t e => Rsx.lower badEnv (t := t) e) badEnv tyNat3 g06
+
+/-! ### Counterexamples to the session-8 statement: the relevance test is syntactic
+
+`Rsx.irrelevant` reads the certified syntactic checker `inferT` (no conversion rule), and
+`isPropSort` matches `Sort 0` as written. `lvlEnv` (members 0…5):
+0 `I : Sort (max 0 0)` (an inductive in a sort equal to `Prop`, `eqN`), 1 `K : I`,
+2 `IdP : Sort (max 0 0) → Sort 0 := fun A => A`, 3 `c : IdP I := K`, 4 `J : Type`,
+5 `Mk : IdP I → J`. Every body is typed at its declared type (`lvlBodiesTyped`, through
+`ConvT.sorts`, `.pi`, `.delta`, `.beta`).
+
+1. `c` is typed at `I` only through conversion (`IdP I ≡ I`); `I` is an inductive, so `DataTy`
+   holds; `norm` unfolds `c` to `K`. Erasure tests `c`: its declared type `IdP I` has
+   syntactic type `Sort 0`, so `c ↦ □` and the lowering refuses. The value `K` has type `I`,
+   whose syntactic type is `Sort (max 0 0)`, not `Sort 0` as written: relevant.
+2. `Mk c` is syntactically typed at `J`. Erasure keeps `Mk` and erases the field `c`;
+   `norm` gives `Mk K`, whose field `K` passes `relevantSpine`; evalLF of the lowering returns
+   `.inj 5 (.list [])`, the value side `.inj 5 (.list [.inj 1 (.list [])])`.
+
+The statement on main requires `inferT E n [] e = some T` and `(inferT E n [] v).isSome`;
+witness 1 has `inferT c = IdP I` (not a data type) and witness 2 has `inferT (Mk K) = none`
+(`IdP I` vs `I` as written): `convTyped_witness_excluded`, `convValue_witness_excluded`. -/
+
+def lvl00 : Level := .max .zero .zero
+
+theorem lvl00_eqN : eqN lvl00 .zero := fun _ => rfl
+
+def wI : Expr Nat := .const 0 []
+def wK : Expr Nat := .const 1 []
+def wId : Expr Nat := .const 2 []
+def wC : Expr Nat := .const 3 []
+def wJ : Expr Nat := .const 4 []
+def wMk : Expr Nat := .const 5 []
+def wIdBody : Expr Nat := .lam (.sort lvl00) (.bvar 0)
+
+def mI : CheckedMember := ⟨.inductiveM, 0, .sort lvl00, none⟩
+def mK : CheckedMember := ⟨.constructorM, 0, wI, none⟩
+def mId : CheckedMember := ⟨.definitionM, 0, .pi (.sort lvl00) (.sort .zero), some wIdBody⟩
+def mC : CheckedMember := ⟨.definitionM, 0, .app wId wI, some wK⟩
+def mJ : CheckedMember := ⟨.inductiveM, 0, .sort (.succ .zero), none⟩
+def mMk : CheckedMember := ⟨.constructorM, 0, .pi (.app wId wI) wJ, none⟩
+
+def lvlEnv : ResolvedEnv where
+  members := fun r =>
+    match r with
+    | 0 => some mI
+    | 1 => some mK
+    | 2 => some mId
+    | 3 => some mC
+    | 4 => some mJ
+    | 5 => some mMk
+    | _ => none
+
+def wSortTy (Γ : LCtx) : HasTyT lvlEnv 0 Γ (.sort lvl00) (.sort (.succ lvl00)) := .sort Γ lvl00
+
+/-- `Sort (max 0 0) ≡ Sort 0` (`ConvT.sorts`, levels extensionally equal). -/
+def wSortConv (Γ : LCtx) : ConvT lvlEnv 0 Γ (.sort lvl00) (.sort .zero) (.sort (.succ lvl00)) :=
+  .sorts Γ lvl00 .zero lvl00_eqN
+
+def wITy : HasTyT lvlEnv 0 [] wI (.sort lvl00) := .const [] 0 [] mI rfl rfl rfl
+def wKTy : HasTyT lvlEnv 0 [] wK wI := .const [] 1 [] mK rfl rfl rfl
+
+def wVar0 : HasTyT lvlEnv 0 [.assumption (.sort lvl00)] (.bvar 0) (.sort lvl00) :=
+  .bvar [.assumption (.sort lvl00)] 0 (.sort lvl00) rfl
+
+def wIdBodyTy0 : HasTyT lvlEnv 0 [] wIdBody (.pi (.sort lvl00) (.sort lvl00)) :=
+  .lam [] (.sort lvl00) (.succ lvl00) (.bvar 0) (.sort lvl00) (wSortTy []) wVar0
+
+def wPiConv : ConvT lvlEnv 0 [] (.pi (.sort lvl00) (.sort lvl00)) (.pi (.sort lvl00) (.sort .zero))
+    (.sort (.imax (.succ lvl00) (.succ lvl00))) :=
+  .pi [] (.sort lvl00) (.sort lvl00) (.sort lvl00) (.sort .zero) (.succ lvl00) (.succ lvl00)
+    (.refl [] (.sort lvl00) _ (wSortTy [])) (wSortConv _)
+
+def wIdBodyTy : HasTyT lvlEnv 0 [] wIdBody (.pi (.sort lvl00) (.sort .zero)) :=
+  .conv [] wIdBody _ _ (.imax (.succ lvl00) (.succ lvl00)) wIdBodyTy0 wPiConv
+
+def wIdDelta : ConvT lvlEnv 0 [] wId wIdBody (.pi (.sort lvl00) (.sort .zero)) :=
+  .delta [] 2 [] mId wIdBody rfl rfl rfl rfl rfl wIdBodyTy
+
+def wAppConv : ConvT lvlEnv 0 [] (.app wId wI) (.app wIdBody wI) (.sort .zero) :=
+  .app [] wId wIdBody wI wI (.sort lvl00) (.sort .zero) wIdDelta (.refl [] wI _ wITy)
+
+def wBeta : ConvT lvlEnv 0 [] (.app wIdBody wI) wI (.sort lvl00) :=
+  .beta [] (.sort lvl00) (.bvar 0) wI (.sort lvl00) (.succ lvl00) (wSortTy []) wVar0 wITy
+
+def wBeta0 : ConvT lvlEnv 0 [] (.app wIdBody wI) wI (.sort .zero) :=
+  .tyConv [] _ _ (.sort lvl00) (.sort .zero) (.succ lvl00) wBeta (wSortConv [])
+
+/-- `IdP I ≡ I : Sort 0`. -/
+def wIdI : ConvT lvlEnv 0 [] (.app wId wI) wI (.sort .zero) :=
+  .trans [] _ _ _ _ wAppConv wBeta0
+
+def wCBodyTy : HasTyT lvlEnv 0 [] wK (.app wId wI) :=
+  .conv [] wK wI (.app wId wI) .zero wKTy (.symm [] _ _ _ wIdI)
+
+/-- witness 1's typing: `c : I`, through conversion only. -/
+def wCTy : HasTyT lvlEnv 0 [] wC wI :=
+  .conv [] wC (.app wId wI) wI .zero (.const [] 3 [] mC rfl rfl rfl) wIdI
+
+/-- every transparent body of `lvlEnv` is typed at its declared type. -/
+theorem lvlBodiesTyped : BodiesTyped lvlEnv 0 := by
+  intro r m b ls hm ht hb hlen _
+  match r, hm with
+  | 0, hm => cases hm; exact absurd ht (by decide)
+  | 1, hm => cases hm; exact absurd ht (by decide)
+  | 2, hm =>
+    cases hm; cases hb
+    cases ls with
+    | nil => exact ⟨wIdBodyTy⟩
+    | cons _ _ => exact absurd hlen (Nat.succ_ne_zero _)
+  | 3, hm =>
+    cases hm; cases hb
+    cases ls with
+    | nil => exact ⟨wCBodyTy⟩
+    | cons _ _ => exact absurd hlen (Nat.succ_ne_zero _)
+  | 4, hm => cases hm; exact absurd ht (by decide)
+  | 5, hm => cases hm; exact absurd ht (by decide)
+  | _ + 6, hm => exact Option.noConfusion hm
+
+theorem wIData : DataTy lvlEnv wI := ⟨0, [], [], mI, rfl, rfl, rfl⟩
+theorem wCNorm : norm lvlEnv 3 wC = some wK := rfl
+theorem wKVal : scmValOf lvlEnv 1 wK = some (.inj 1 (.list [])) := rfl
+theorem wKRel : relevantSpine lvlEnv 0 1 wK = true := rfl
+theorem wKRoot : irrelevant lvlEnv 0 [] wK = false := by decide
+theorem wKFits : valFits 1 tyNat1 (.inj 1 (.list [])) = true := by decide
+theorem wC_irrelevant : irrelevant lvlEnv 0 [] wC = true := by decide
+
+theorem lowerF_wC {S : SigTable} (F : Nat) (t : BootTy) :
+    lowerF lvlEnv 0 F (S := S) t wC = refuse := by
+  cases F with
+  | zero => rfl
+  | succ F =>
+    have hirr : irrelevant lvlEnv 0 [] (.const 3 []) = true := wC_irrelevant
+    have he : erase lvlEnv 0 (F + 1) [] wC = some .box := by
+      simp only [erase, wC, eraseWith, hirr, if_true]
+    unfold lowerF pipeline
+    rw [he]
+    cases t <;> rfl
+
+/-- witness 1: the reference family does not meet the session-8 statement. -/
+theorem lowerF_not_adequate_convTyped {S : SigTable} (progs : Programs S S) :
+    ¬ adequacyStatementConvTyped (fun E n F t e => lowerF E n F (S := S) t e) progs := by
+  intro h
+  obtain ⟨F₀, hF⟩ := h lvlEnv 0 3 1 wC _ wK tyNat1 (.inj 1 (.list [])) lvlBodiesTyped
+    wCTy wIData wCNorm wKVal wKRel wKRoot wKFits
+  obtain ⟨lf, he⟩ := hF F₀ (Nat.le_refl _)
+  have he' : Residua.Bootstrap.Semantics.eval lawsA progs lf []
+      (lowerF lvlEnv 0 F₀ (S := S) tyNat1 wC) = some (.inj 1 (.list [])) := he
+  rw [lowerF_wC] at he'
+  exact eval_refuse_ne progs lf [] _ he'
+
+/-- witness 1 is outside the statement on main: the checker types `c` at `IdP I`, which is
+    not a data type (its head `IdP` is a definition). -/
+theorem convTyped_witness_excluded (T : Expr Nat) (h : inferT lvlEnv 0 [] wC = some T) :
+    ¬ DataTy lvlEnv T := by
+  have h1 : inferT lvlEnv 0 [] wC = some (.app wId wI) := by decide
+  rw [h1] at h
+  cases h
+  intro ⟨r, ls, args, m, hs, hm, hc⟩
+  have hs0 : appsSpine (.app wId wI) = (.const 2 [], [wI]) := rfl
+  rw [hs0] at hs
+  injection hs with hh _
+  injection hh with hr _
+  subst hr
+  cases hm
+  exact absurd hc (by decide)
+
+def wMkC : Expr Nat := .app wMk wC
+def wMkK : Expr Nat := .app wMk wK
+def tyW2 : BootTy := sumL 6 (sumL 2 .i64)
+def wMkVal : Val := .inj 5 (.list [.inj 1 (.list [])])
+
+theorem wMkCInfer : inferT lvlEnv 0 [] wMkC = some wJ := by decide
+theorem wJData : DataTy lvlEnv wJ := ⟨4, [], [], mJ, rfl, rfl, rfl⟩
+theorem wMkCNorm : norm lvlEnv 5 wMkC = some wMkK := rfl
+theorem wMkKVal : scmValOf lvlEnv 2 wMkK = some wMkVal := rfl
+theorem wMkKRel : relevantSpine lvlEnv 0 2 wMkK = true := by decide
+theorem wMkKRoot : irrelevant lvlEnv 0 [] wMkK = false := by decide
+theorem wMkKFits : valFits 2 tyW2 wMkVal = true := by decide
+theorem wMkCErase (F : Nat) : erase lvlEnv 0 (F + 2) [] wMkC = some (.app (.ctor 5) .box) := by
+  have h0 : irrelevant lvlEnv 0 [] (.app (.const 5 []) (.const 3 [])) = false := by decide
+  have h1 : irrelevant lvlEnv 0 [] (.const 5 []) = false := by decide
+  have h2 : irrelevant lvlEnv 0 [] (.const 3 []) = true := wC_irrelevant
+  simp only [erase, wMkC, wMk, wC, eraseWith, h0, h1, h2, Bool.false_eq_true, if_false, if_true,
+    noGlobals]
+  rfl
+
+/-- the lowering of `Mk c` from fuel 2 on: the constructor with its erased field dropped. -/
+theorem lowerF_wMkC {S : SigTable} (F : Nat) :
+    lowerF lvlEnv 0 (F + 2) (S := S) tyW2 wMkC = lowerF lvlEnv 0 2 (S := S) tyW2 wMkC := by
+  unfold lowerF pipeline
+  rw [wMkCErase F, wMkCErase 0]
+  rfl
+
+theorem eval_emit_ctor_box {S : SigTable} (progs : Programs S S) (m F r : Nat) (ts : List BootTy)
+    (τ : BootTy) (hg : ts.get? r = some (.list τ)) :
+    Residua.Bootstrap.Semantics.eval lawsA progs (m + 1) []
+      (emit (S := S) (G := []) (F + 1) (.sum ts) (.ctor r [.box])) = some (.inj r (.list [])) := by
+  obtain ⟨hlt, hget⟩ := list_get?_some ts r _ hg
+  simp only [emit, emitWith]
+  rw [dif_pos hlt]
+  split
+  · rename_i τ' hτ'
+    simp only [Residua.Bootstrap.Semantics.eval]
+    rw [eval_cast_eq progs _ [] hτ'.symm]
+    simp [Residua.Bootstrap.Semantics.eval, relevantArgs, listOf]
+  · rename_i hne
+    exact absurd hget (hne τ)
+
+theorem eval_lowerF_wMkC {S : SigTable} (progs : Programs S S) (m : Nat) :
+    Residua.Bootstrap.Semantics.eval lawsA progs (m + 1) []
+      (lowerF lvlEnv 0 2 (S := S) tyW2 wMkC) = some (.inj 5 (.list [])) := by
+  have hlow : lowerF lvlEnv 0 2 (S := S) tyW2 wMkC = emit 2 tyW2 (.ctor 5 [.box]) := by
+    unfold lowerF pipeline
+    rw [wMkCErase 0]
+    rfl
+  rw [hlow]
+  exact eval_emit_ctor_box progs m 1 5 (List.replicate 6 (.list (sumL 2 .i64))) (sumL 2 .i64) rfl
+
+/-- witness 2: the reference family does not meet the session-8 statement (a wrong value,
+    not a refusal). -/
+theorem lowerF_not_adequate_convValue {S : SigTable} (progs : Programs S S) :
+    ¬ adequacyStatementConvTyped (fun E n F t e => lowerF E n F (S := S) t e) progs := by
+  intro h
+  obtain ⟨F₀, hF⟩ := h lvlEnv 0 5 2 wMkC _ wMkK tyW2 wMkVal lvlBodiesTyped
+    (hasTyT_of_inferT wMkCInfer) wJData wMkCNorm wMkKVal wMkKRel wMkKRoot wMkKFits
+  obtain ⟨lf, he⟩ := hF (F₀ + 2) (Nat.le_add_right _ _)
+  have he' : Residua.Bootstrap.Semantics.eval lawsA progs lf []
+      (lowerF lvlEnv 0 (F₀ + 2) (S := S) tyW2 wMkC) = some wMkVal := he
+  rw [lowerF_wMkC] at he'
+  cases lf with
+  | zero => rw [eval_fuel0] at he'; exact Option.noConfusion he'
+  | succ m =>
+    rw [eval_lowerF_wMkC] at he'
+    have h1 := Option.some.inj he'
+    simp only [wMkVal] at h1
+    injection h1 with _ h2
+    injection h2 with h3
+    exact List.noConfusion h3
+
+/-- witness 2 is outside the statement on main: the checker cannot type the value `Mk K`
+    (`Mk`'s domain is `IdP I` as written, `K`'s type is `I`). -/
+theorem convValue_witness_excluded : (inferT lvlEnv 0 [] wMkK).isSome = false := by decide
+
+-- the same witnesses as guards: data on the value side, the lowering refuses (1) or returns
+-- another value (2), and the statement's checker premises fail on each
+#guard (obs lvlEnv wC).isSome && (runLowered (Rsx.lower lvlEnv (t := tyNat1) wC)).isNone &&
+  irrelevant lvlEnv 0 [] wC && !(irrelevant lvlEnv 0 [] wK) &&
+  decide (inferT lvlEnv 0 [] wC = some (.app wId wI))
+#guard (obs lvlEnv wMkC).isSome && !(agrees (fun t e => Rsx.lower lvlEnv (t := t) e) lvlEnv tyW2 wMkC)
+  && (inferT lvlEnv 0 [] wMkC).isSome && !(inferT lvlEnv 0 [] wMkK).isSome
+
+end Lower
+end Rsx
+
+#print axioms Rsx.Lower.erase
+#print axioms Rsx.Lower.defunc
+#print axioms Rsx.Lower.run
+#print axioms Rsx.Lower.emit
+#print axioms Rsx.Lower.lowerF
+#print axioms Rsx.lower
+#print axioms Rsx.Lower.lower_adequacyStatementWeak
+#print axioms Rsx.Lower.adequacy_of_constructs
+#print axioms Rsx.Lower.lowerF_lit
+#print axioms Rsx.Lower.lit0_good
+#print axioms Rsx.Lower.adeqBvar
+#print axioms Rsx.Lower.adeqSort
+#print axioms Rsx.Lower.adeqPi
+#print axioms Rsx.Lower.adeqLam
+#print axioms Rsx.Lower.adeqLit
+#print axioms Rsx.Lower.erase_mono
+#print axioms Rsx.Lower.run_mono
+#print axioms Rsx.Lower.emitWith_evalStable
+#print axioms Rsx.Lower.lowerF_evalStable
+#print axioms Rsx.Lower.lowerF_eventual_of_exists
+#print axioms Rsx.Lower.good_of_exists
+#print axioms Rsx.Lower.lowerF_fuelStable
+#print axioms Rsx.Lower.fuelParity_not_fuelStable
+#print axioms Rsx.Lower.lowerF_cIntro
+#print axioms Rsx.Lower.lowerF_not_adequate_noRoot
+#print axioms Rsx.Lower.adeqConst_of_split
+#print axioms Rsx.Lower.adeqConstHead
+#print axioms Rsx.Lower.cBadTy
+#print axioms Rsx.Lower.lowerF_cBad
+#print axioms Rsx.Lower.lowerF_not_adequate_untypedEnv
+#print axioms Rsx.Lower.lvlBodiesTyped
+#print axioms Rsx.Lower.wCTy
+#print axioms Rsx.Lower.lowerF_not_adequate_convTyped
+#print axioms Rsx.Lower.convTyped_witness_excluded
+#print axioms Rsx.Lower.eval_emit_ctor_box
+#print axioms Rsx.Lower.lowerF_not_adequate_convValue
+#print axioms Rsx.Lower.convValue_witness_excluded

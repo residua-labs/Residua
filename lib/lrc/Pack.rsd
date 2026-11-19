@@ -1,0 +1,286 @@
+-- LRC: a scalar field that only ever holds a small value is stored in one byte, in two or in four.
+-- closure_claim = 0.
+--
+-- The wire's node record gives every scalar field of a constructor a word, whatever its source
+-- type: a Bool, a constructor of an enumeration and an Int all take 8 bytes (rbtree's node:
+-- colour, value and key, 48 bytes with the header and two children; Koka packs colour, value
+-- and a 32-bit key into one word, 32 bytes). Lean's and Koka's compilers know the field's type
+-- and lay it out by its size (IR/Basic.lean:174 CtorInfo `ssize`, the bytes of the scalar area;
+-- the fields come from the type). The wire has lost the type of a node's field, so it is
+-- recovered: a field is a byte when every value the program stores in it is one.
+--
+-- A value is a byte (0 .. 255) when it is
+--   * a literal in that range;
+--   * the result of a comparison or of `not` (0 or 1), or of `and`/`or` on bytes;
+--   * `isShared`'s result;
+--   * a parameter or a call's result that the wire types Bool (lib/lrc/FromWire.rsd `fwFn` gives
+--     those the IR type uint8). The wire is typed: a Bool is 0 or 1. A host that passes another
+--     word for a Bool breaks the entry's signature;
+--   * read from a field that is a byte.
+-- The last line makes it a fixpoint: every field starts as a byte; a store of a value that is
+-- not one makes the field wider; repeated until nothing changes (each round only widens).
+-- A join point's parameters count as words.
+--
+-- The same for two and for four bytes (lean.h's uint16 and uint32), which are laid out as such under rsc's layer
+-- `narrow` and stay words without it (`packScalarsW`). A value has at most that many when it is
+--   * a literal up to 65535, or up to 2^32 - 1;
+--   * a parameter or a call's result that the wire types with that width (the type table's tag 11,
+--     contracts/tasks/WIRE-SEQ-0.md revision 2; lib/lrc/FromWire.rsd `tysOfWidth` gives those the IR type). As
+--     for a Bool: a host that passes a word outside a parameter's width breaks the entry's signature. Inside the
+--     image a value of such a type is in its width, because the front end ends every operation of the type in a
+--     reduction (rsdc/Compile.rsd);
+--   * a modulus by a literal that is no more than 2^16, or 2^32 (a modulus by 256 is a byte);
+--   * read from a field of that many bytes.
+--
+-- The pass knows an object's constructor where the code shows it: the variable was bound by
+-- `ctor`, or it is the subject of the `case` alternative it is used in. Where a scalar field of
+-- an object of unknown constructor is read or written, nothing is packed at all.
+--
+-- Only node constructors (tid 1) are laid out anew. A list cell and a box keep their layout:
+-- the host reads them (docs/OBJECT-ABI.md). In the new scalar area the words come first, in
+-- their order, then the fields of four bytes, of two, of one (lean.h: by decreasing size); `ssize`
+-- is its bytes, as in Lean. A narrow field is written with `sset` at its type (uint8, uint16, uint32)
+-- and read by an `sproj` marked with its bytes (field c of the node, lib/lrc/Ir.rsd `sprojWidth`; Lean
+-- reads the width off the bound variable's type, which here stays the wire's word).
+--
+-- It runs first, on the declarations as translated, so every later pass sees one layout.
+import Lib.Lrc.FreeVars
+import Lib.Lrc.Prim
+
+namespace Lrc
+
+def pkMem (x : Int) : List Int → Bool
+  | [] => false
+  | y :: ys => x == y || pkMem x ys
+
+-- The objects whose constructor is known here: x, tid, cidx, ssize for each, the nearest first.
+-- The constructor of x when it is a node's, -1 for another object, -2 when x is not known.
+def pkCidx (x : Int) : List Int → Int
+  | y :: tid :: c :: _ :: rest => if x == y then (if tid == 1 then c else -1) else pkCidx x rest
+  | _ => -2
+
+def pkSsize (x : Int) : List Int → Nat
+  | y :: _ :: _ :: sz :: rest => if x == y then sz.toNat else pkSsize x rest
+  | _ => 0
+
+def pkBind (x : Int) (i : CtorInfo) (env : List Int) : List Int :=
+  x :: (i.tid : Int) :: (i.cidx : Int) :: (i.ssize : Int) :: env
+
+-- field `off` of constructor c
+def pkKey (c : Int) (off : Nat) : Int := c * 4096 + (off : Int)
+
+/-! ## What a value's bytes are
+
+A variable is known, on the path walked, to hold a value of at most 1, 2 or 4 bytes (lean.h's uint8, uint16,
+uint32); a value of fewer bytes is one of more, so `b1` is part of `b2` and `b2` of `b4`. `lits` holds the
+variables bound to a literal that is not negative, each with its value: a modulus by one is below it. -/
+
+structure PkV where
+  b1 : VSet
+  b2 : VSet
+  b4 : VSet
+  lits : List Int
+  deriving Inhabited
+
+def pkV0 : PkV := { b1 := vsEmpty, b2 := vsEmpty, b4 := vsEmpty, lits := [] }
+
+-- the bytes of variable x: 1, 2 or 4, and 8 when nothing is known
+def pkVar (v : PkV) (x : Nat) : Nat :=
+  if vsContains v.b1 x then 1 else if vsContains v.b2 x then 2 else if vsContains v.b4 x then 4 else 8
+
+-- x holds a value of w bytes
+def pkKnow (v : PkV) (x : Nat) (w : Nat) : PkV :=
+  if w == 1 then { v with b1 := vsInsert v.b1 x, b2 := vsInsert v.b2 x, b4 := vsInsert v.b4 x }
+  else if w == 2 then { v with b2 := vsInsert v.b2 x, b4 := vsInsert v.b4 x }
+  else if w == 4 then { v with b4 := vsInsert v.b4 x }
+  else v
+
+-- the literal x is bound to, -1 when it is bound to none
+def pkLitOf (y : Int) : List Int → Int
+  | x :: a :: rest => if x == y then a else pkLitOf y rest
+  | _ => -1
+
+def pkMax (a b : Nat) : Nat := if a > b then a else b
+
+-- the bytes of the widest argument; a place that is no variable is a word
+def pkArgs (v : PkV) : List Int → Nat
+  | [] => 1
+  | y :: ys => pkMax (if y >= 0 then pkVar v y.toNat else 8) (pkArgs v ys)
+
+-- the bytes of a number from 0 to `a`
+def pkLit (a : Int) : Nat :=
+  if a < 0 then 8 else if a <= 255 then 1 else if a <= 65535 then 2 else if a <= 4294967295 then 4 else 8
+
+-- ok: no scalar field of an unknown object was met. w2, w4, w8: the fields that hold a value of at least 2, of
+-- at least 4, of 8 bytes (a field of w8 is in w4, one of w4 in w2); a field in none of them is a byte.
+structure PkS where
+  ok : Bool
+  w2 : List Int
+  w4 : List Int
+  w8 : List Int
+  deriving Inhabited
+
+-- the bytes of the field `key`
+def pkField (s : PkS) (key : Int) : Nat :=
+  if pkMem key s.w8 then 8 else if pkMem key s.w4 then 4 else if pkMem key s.w2 then 2 else 1
+
+-- the field holds a value of w bytes too
+def pkWiden (s : PkS) (key : Int) (w : Nat) : PkS :=
+  let s2 := if w >= 2 && !pkMem key s.w2 then { s with w2 := key :: s.w2 } else s
+  let s4 := if w >= 4 && !pkMem key s2.w4 then { s2 with w4 := key :: s2.w4 } else s2
+  if w >= 8 && !pkMem key s4.w8 then { s4 with w8 := key :: s4.w8 } else s4
+
+def pkGrown (s : PkS) : Nat := s.w2.length + s.w4.length + s.w8.length
+
+-- the bytes of the value of an expression that binds one variable
+def pkExprW (env : List Int) (v : PkV) (s : PkS) (e : N) : Nat :=
+  if e.op == opLit then pkLit e.a
+  else if e.op == opPrim then
+    let p := primOp e
+    if p == primLt || p == primGt || p == primEq || p == primNot || p == primStrEq then 1
+    -- `and` and `or` are the wire's, on its Bool: of bytes they are a byte; nothing is said of wider operands
+    else if p == primAnd || p == primOr then (if pkArgs v e.ys == 1 then 1 else 8)
+    -- the wire's modulus has its divisor's sign (lib/lrc/Emit.rsd `emMod`): by a literal above zero it is below it.
+    -- A fixed-width operation of the front end ends in one (rsdc/Compile.rsd). This pass runs before
+    -- lib/lrc/Range.rsd makes such a modulus a mask, so it meets no mask.
+    else if p == primMod && pkLitOf (intAt 1 e.ys) v.lits > 0 then pkLit (pkLitOf (intAt 1 e.ys) v.lits - 1)
+    else 8
+  else if e.op == opSProj then
+    let c := pkCidx ((sprojVar e : Nat) : Int) env
+    if c >= 0 then pkField s (pkKey c (sprojOff e)) else 8
+  else if e.op == opIsShared then 1
+  else 8
+
+-- the binders of a call take the bytes of the types the callee's signature gives its results
+def pkCall (v : PkV) : List Int → List Int → PkV
+  | x :: _ :: binds, ty :: tys => pkCall (if x >= 0 then pkKnow v x.toNat (tyWidth ty) else v) binds tys
+  | _, _ => v
+
+def pkRets (f : Nat) (ds : DeclTab) : List Int :=
+  match dtFind ds f with
+  | some d => d.rets
+  | none => []
+
+mutual
+-- one body: `v` is what is known of the variables on this path
+partial def pkGo (ds : DeclTab) (env : List Int) (v : PkV) (s : PkS) (n : N) : PkS :=
+  if !s.ok then s
+  else if n.op == opVDecl then
+    let e := vdeclExpr n
+    let env2 := if e.op == opCtor then pkBind n.a (infoOf e) env else env
+    let s2 := if e.op == opSProj && pkCidx ((sprojVar e : Nat) : Int) env == -2 then { s with ok := false } else s
+    let v2 :=
+      if e.op == opFap then pkCall v (vdeclBinds n) (pkRets (fapFn e) ds)
+      else if n.ys.isEmpty then
+        let v1 := pkKnow v n.a.toNat (pkExprW env v s e)
+        if e.op == opLit && e.a >= 0 then { v1 with lits := n.a :: e.a :: v1.lits } else v1
+      else v
+    pkGo ds env2 v2 s2 (bodyOf n)
+  else if n.op == opSSet then
+    let c := pkCidx n.a env
+    if c == -2 then { s with ok := false }
+    else if c >= 0 then pkGo ds env v (pkWiden s (pkKey c (ssetOff n)) (pkVar v (ssetArg n))) (bodyOf n)
+    else pkGo ds env v s (bodyOf n)
+  else if n.op == opJDecl then pkGo ds env v (pkGo ds env v s (jdeclBody n)) (bodyOf n)
+  else if n.op == opCase then pkAlts ds env v s n.a (caseAlts n)
+  else if n.op == opRet || n.op == opJmp || n.op == opUnreachable then s
+  else pkGo ds env v s (bodyOf n)
+partial def pkAlts (ds : DeclTab) (env : List Int) (v : PkV) (s : PkS) (x : Int) : List N → PkS
+  | [] => s
+  | alt :: alts =>
+    let env2 := if altIsDefault alt then env else pkBind x (infoOf alt) env
+    pkAlts ds env v (pkGo ds env2 v s (altBody alt)) x alts
+end
+
+-- a parameter holds the bytes of its type
+def pkParams : List Param → PkV → PkV
+  | [], v => v
+  | p :: ps, v => pkParams ps (pkKnow v p.x (tyWidth p.ty))
+
+def pkDecls (all : DeclTab) : List Decl → PkS → PkS
+  | [], s => s
+  | d :: ds, s => pkDecls all ds (if d.ext then s else pkGo all [] (pkParams d.xs pkV0) s d.body)
+
+partial def pkFix (tab : DeclTab) (ds : List Decl) (s : PkS) : PkS :=
+  let s2 := pkDecls tab ds s
+  if !s2.ok || pkGrown s2 == pkGrown s then s2 else pkFix tab ds s2
+
+/-! ## The new layout of constructor c, whose scalar area had k words -/
+
+-- how many of the fields 0 .. j-1 hold w bytes
+def pkCount (s : PkS) (c : Int) (w : Nat) : Nat → Nat
+  | 0 => 0
+  | j + 1 => (if pkField s (pkKey c (8 * j)) == w then 1 else 0) + pkCount s c w j
+
+-- The offset of the field that was at `off`: the words first, then the fields of 4 bytes, of 2, of 1, each kind
+-- in its order (lean.h's scalar area: by decreasing size, so every field stands at a multiple of its size).
+def pkOff (s : PkS) (c : Int) (k off : Nat) : Nat :=
+  let w := pkField s (pkKey c off)
+  let j := off / 8
+  if w == 8 then 8 * pkCount s c 8 j
+  else if w == 4 then 8 * pkCount s c 8 k + 4 * pkCount s c 4 j
+  else if w == 2 then 8 * pkCount s c 8 k + 4 * pkCount s c 4 k + 2 * pkCount s c 2 j
+  else 8 * pkCount s c 8 k + 4 * pkCount s c 4 k + 2 * pkCount s c 2 k + pkCount s c 1 j
+
+def pkSize (s : PkS) (c : Int) (k : Nat) : Nat :=
+  8 * pkCount s c 8 k + 4 * pkCount s c 4 k + 2 * pkCount s c 2 k + pkCount s c 1 k
+
+def pkInfo (s : PkS) (i : CtorInfo) : CtorInfo :=
+  if i.tid == 1 then { i with ssize := pkSize s ((i.cidx : Nat) : Int) (i.ssize / 8) } else i
+
+mutual
+-- the body with the new layout; the environment holds the constructors as they were
+partial def pkRw (s : PkS) (env : List Int) (n : N) : N :=
+  if n.op == opVDecl then
+    let e := vdeclExpr n
+    let env2 := if e.op == opCtor then pkBind n.a (infoOf e) env else env
+    let c := if e.op == opSProj then pkCidx ((sprojVar e : Nat) : Int) env else -1
+    let e2 :=
+      if e.op == opCtor then withInfo e (pkInfo s (infoOf e))
+      else if c >= 0 then
+        let k := pkSsize ((sprojVar e : Nat) : Int) env / 8
+        let w := pkField s (pkKey c (sprojOff e))
+        { e with b := ((pkOff s c k (sprojOff e) : Nat) : Int), c := (if w == 8 then 0 else (w : Int)) }
+      else e
+    { n with kids := [e2, pkRw s env2 (bodyOf n)] }
+  else if n.op == opSSet then
+    let c := pkCidx n.a env
+    if c >= 0 then
+      let k := pkSsize n.a env / 8
+      let w := pkField s (pkKey c (ssetOff n))
+      { n with c := ((pkOff s c k (ssetOff n) : Nat) : Int), d := (if w == 8 then n.d else tyOfWidth w),
+               kids := [pkRw s env (bodyOf n)] }
+    else setBody n (pkRw s env (bodyOf n))
+  else if n.op == opJDecl then { n with kids := [pkRw s env (jdeclBody n), pkRw s env (bodyOf n)] }
+  else if n.op == opCase then { n with kids := pkRwAlts s env n.a (caseAlts n) }
+  else if n.op == opRet || n.op == opJmp || n.op == opUnreachable then n
+  else setBody n (pkRw s env (bodyOf n))
+partial def pkRwAlts (s : PkS) (env : List Int) (x : Int) : List N → List N
+  | [] => []
+  | alt :: alts =>
+    let env2 := if altIsDefault alt then env else pkBind x (infoOf alt) env
+    let alt2 := if altIsDefault alt then alt else withInfo alt (pkInfo s (infoOf alt))
+    altSetBody alt2 (pkRw s env2 (altBody alt)) :: pkRwAlts s env x alts
+end
+
+def pkRwDecls (s : PkS) : List Decl → List Decl
+  | [] => []
+  | d :: ds => (if d.ext then d else { d with body := pkRw s [] d.body }) :: pkRwDecls s ds
+
+-- The pass. `wide`: are fields of two and four bytes laid out as such, or do they stay words. They are laid out so
+-- under rsc's layer `narrow`, with the object fields of four bytes (lib/lrc/Pipeline.rsd option 2048): together the
+-- layout of lean.h's 32-bit target. With object fields of eight bytes only the bytes are packed, as before: there
+-- the one measured row whose node the widths change (rbtree in int32: 40 bytes to 32) pays more time than the
+-- memory is worth while the heap serves a cell of 32 bytes slower than one of 40
+-- (reports/backend-opt-fable/LAND-PACKW.md, "Not taken"). A byte field takes only values that are bytes, and a
+-- value read from a field of two or four bytes is none, so making those fields words again leaves every byte
+-- field what it is.
+def packScalarsW (wide : Bool) (decls : List Decl) : List Decl :=
+  let s := pkFix (dtOfList decls) decls { ok := true, w2 := [], w4 := [], w8 := [] }
+  let s := if wide then s else { s with w4 := s.w2, w8 := s.w2 }
+  if s.ok then pkRwDecls s decls else decls
+
+-- the pass of the layout with object fields of eight bytes: bytes and words
+def packScalars (decls : List Decl) : List Decl := packScalarsW false decls
+
+end Lrc

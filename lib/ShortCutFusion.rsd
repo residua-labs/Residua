@@ -1,0 +1,188 @@
+import RscBase
+
+-- Gill, Launchbury, Peyton Jones (FPCA 1993), short-cut fusion.
+-- Substitute the consuming algebra for a total list-building algebra.
+-- See docs/RSC_FUSION.md for the stricter failure-order side condition.
+-- A bounded byte walk uses the existing RSCM reader, not a second decoder.
+-- closure_claim = 0.
+
+structure FuseBytes where
+  ok : Bool
+  out : List Int
+  rest : List Int
+  left : Nat
+
+def fuseMiss : FuseBytes := { ok := false, out := [], rest := [], left := 0 }
+
+def fuseBytes (out rest : List Int) (left : Nat) : FuseBytes :=
+  { ok := true, out := out, rest := rest, left := left }
+
+def fusePrefix (pre : List Int) (r : FuseBytes) : FuseBytes :=
+  if r.ok then { r with out := pre ++ r.out } else r
+
+-- mode 0: clone; 1: insert the producer element between consumer binders;
+-- mode 2: total scalar producer term, independent of accumulator index 1.
+-- phase 1: n children; phase 2: framed children (match arms or call args).
+def fuseWalk (g : Dg) : Nat → Nat → Nat → Nat → Int → Nat → Nat → Nat → List Int → FuseBytes
+  | 0, _, _, _, _, _, _, _, _ => fuseMiss
+  | _ + 1, _, _, _, _, _, _, 0, _ => fuseMiss
+  | fuel + 1, mode, depth, phase, tag, n, ix, budget + 1, rest =>
+    if phase == 1 then
+      if n == 0 then fuseBytes [] rest (budget + 1)
+      else
+        let bind := if tag == 4 && ix == 1 then 1
+          else if tag == 50 && ix == 2 then 2
+          else if tag == 51 && ix < 2 then 1 else 0
+        let a := fuseWalk g fuel mode (depth + bind) 0 0 0 0 budget rest
+        if !a.ok then a
+        else
+          let b := fuseWalk g fuel mode depth 1 tag (n - 1) (ix + 1) a.left a.rest
+          if !b.ok then b else { b with out := a.out ++ b.out }
+    else if phase == 2 then
+      match rest with
+      | 0 :: bs => fuseBytes [0] bs budget
+      | 1 :: bs =>
+        let a := fuseWalk g fuel mode (depth + (if tag == 32 then 1 else 0)) 0 0 0 0 budget bs
+        if !a.ok then a
+        else
+          let b := fuseWalk g fuel mode depth 2 tag 0 0 a.left a.rest
+          if !b.ok then b else { b with out := 1 :: (a.out ++ b.out) }
+      | _ => fuseMiss
+    else
+      match drE g rest with
+      | [] => fuseMiss
+      | t :: bs =>
+        if mode == 2 && !(t == 0 || t == 1 || t == 3 || t == 5 || t == 12
+            || t == 13 || t == 14 || t == 15 || t == 16 || t == 17) then fuseMiss
+        else if t == 3 then
+          let v := readLeb bs
+          if v.ok != profile.cOk || v.n < 0 then fuseMiss
+          else if mode == 2 && v.n == 1 then fuseMiss
+          else
+            let i := v.n.toNat
+            let j := if mode == 1 && i > depth then i + 1 else i
+            fuseBytes (3 :: lebU j) v.rest budget
+        else if t == 0 || t == 41 then
+          let v := readLeafI64 bs
+          if v.ok != profile.cOk then fuseMiss
+          else fuseBytes ((t :: bs).take 10) v.rest budget
+        else if t == 1 then
+          match bs with
+          | b :: tail => if b == 0 || b == 1 then fuseBytes [t, b] tail budget else fuseMiss
+          | _ => fuseMiss
+        else if t == 22 || t == 33 || t == 37 then fuseBytes [t] bs budget
+        else if t == 2 || t == 34 then
+          let nm := skipName bs
+          if nm.ok != profile.cOk then fuseMiss
+          else
+            let pre := t :: bs.take (bs.length - nm.rest.length)
+            if t == 2 then fuseBytes pre nm.rest budget
+            else fusePrefix pre (fuseWalk g fuel mode depth 1 t 2 0 budget nm.rest)
+        else if t == 31 || t == 52 then
+          let v := readLeb bs
+          if v.ok != profile.cOk || v.n < 0 then fuseMiss
+          else fusePrefix (t :: lebU v.n.toNat)
+            (fuseWalk g fuel mode depth (if t == 52 then 2 else 1) t 1 0 budget v.rest)
+        else if t == 4 || t == 14 || t == 24 || t == 29 || t == 30 || t == 32
+            || t == 35 || t == 38 || t == 42 || t == 43 || t == 50 || t == 51 then
+          let ty := readTyD g bs
+          if ty.ok != profile.cOk then fuseMiss
+          else if mode == 2 && t == 14 && !((typeEq g) ty.acc [0] || (typeEq g) ty.acc [1]) then fuseMiss
+          else if t == 35 then
+            let v := readLeb ty.rest
+            if v.ok != profile.cOk || v.n < 0 then fuseMiss
+            else fusePrefix ((t :: ty.acc) ++ lebU v.n.toNat)
+              (fuseWalk g fuel mode depth 1 t 1 0 budget v.rest)
+          else if t == 32 then
+            let a := fuseWalk g fuel mode depth 0 0 0 0 budget ty.rest
+            if !a.ok then a
+            else fusePrefix ((t :: ty.acc) ++ a.out)
+              (fuseWalk g fuel mode depth 2 t 0 0 a.left a.rest)
+          else
+            let n := if t == 4 || t == 14 then 2 else if t == 50 then 3 else if t == 51 then 4 else 1
+            fusePrefix (t :: ty.acc) (fuseWalk g fuel mode depth 1 t n 0 budget ty.rest)
+        else
+          let n := if t == 5 || t == 20 || t == 48 then 3
+            else if t == 6 || t == 7 || t == 8 || t == 10 || t == 11 || t == 12
+              || t == 13 || t == 15 || t == 16 || t == 19 || t == 26 || t == 27
+              || t == 28 || t == 47 then 2
+            else if t == 9 || t == 17 || t == 18 || t == 21 || t == 23 || t == 25
+              || t == 36 || t == 39 || t == 40 || t == 44 || t == 45 || t == 46 || t == 49 then 1 else 0
+          if n == 0 then fuseMiss
+          else fusePrefix [t] (fuseWalk g fuel mode depth 1 t n 0 budget bs)
+
+-- A producer returns its prefix, emits one element after its prefix, or
+-- chooses between such results. Both predicates and emitted terms pass
+-- mode 2 above: no checked arithmetic, calls, unwraps, or accumulator reads.
+def fuseAlgebra (g : Dg) (elem consumer : List Int) : Nat → Nat → List Int → FuseBytes
+  | 0, _, _ => fuseMiss
+  | _ + 1, 0, _ => fuseMiss
+  | fuel + 1, budget + 1, rest =>
+    match drE g rest with
+    | 3 :: bs =>
+      let v := readLeb bs
+      if v.ok == profile.cOk && v.n == 1 then fuseBytes [3, 1] v.rest budget else fuseMiss
+    | 26 :: bs =>
+      match drE g bs with
+      | 3 :: vs =>
+        let v := readLeb vs
+        if v.ok != profile.cOk || v.n != 1 then fuseMiss
+        else
+          match drE g v.rest with
+          | 23 :: es =>
+            let e := fuseWalk g fuel 2 0 0 0 0 0 budget es
+            if !e.ok then e
+            else fuseBytes ((4 :: elem) ++ e.out ++ consumer) e.rest e.left
+          | _ => fuseMiss
+      | _ => fuseMiss
+    | 5 :: bs =>
+      let p := fuseWalk g fuel 2 0 0 0 0 0 budget bs
+      if !p.ok then p
+      else
+        let a := fuseAlgebra g elem consumer fuel p.left p.rest
+        if !a.ok then a
+        else
+          let b := fuseAlgebra g elem consumer fuel a.left a.rest
+          if !b.ok then b else { b with out := 5 :: (p.out ++ a.out ++ b.out) }
+    | _ => fuseMiss
+
+structure FuseRoot where
+  hit : Bool
+  bytes : List Int
+
+def fuseRoot (g : Dg) (rest : List Int) : FuseRoot := Id.run do
+  let miss : FuseRoot := { hit := false, bytes := rest }
+  -- This byte walker rewrites v1 trees. Refuse DAGs before opening a
+  -- reference; a DAG pass needs a cache keyed by node identity and scope.
+  if g.on then return miss
+  let 50 :: bs := drE g rest | return miss
+  let b := readTyD g bs
+  if b.ok != profile.cOk || b.acc.headD (-1) != 4 then return miss
+  let 50 :: inner := drE g b.rest | return miss
+  let a := readTyD g inner
+  if a.ok != profile.cOk || a.acc.headD (-1) != 4 then return miss
+  let xs := fuseWalk g 256 0 0 0 0 0 0 1024 a.rest
+  if !xs.ok then return miss
+  let 22 :: p := drE g xs.rest | return miss
+  let pend := skipE g profile.skipFuel p
+  if pend.ok != profile.cOk then return miss
+  let z := fuseWalk g 256 0 0 0 0 0 0 1024 pend.rest
+  if !z.ok then return miss
+  let c := fuseWalk g 256 1 0 0 0 0 0 1024 z.rest
+  if !c.ok then return miss
+  let body := fuseAlgebra g ((innerTy g) b.acc) c.out 256 1024 p
+  if !body.ok || !eqW body.rest pend.rest then return miss
+  let bytes := (50 :: a.acc) ++ xs.out ++ z.out ++ body.out ++ c.rest
+  -- Only the composed frame can deepen. The input was completely checked
+  -- by fuseWalk and loses fold ancestors; traversing it again with the
+  -- smaller skip budget rejects otherwise admissible deep inputs.
+  -- Keep the original limit on the new frame, seed and consumer body.
+  let frame := (50 :: a.acc) ++ [22] ++ z.out ++ body.out ++ c.rest
+  if (skipE g profile.skipFuel frame).ok != profile.cOk then return miss
+  return { hit := true, bytes := bytes }
+
+def fuseRoots (g : Dg) : Nat → List Int → List Int
+  | 0, rest => rest
+  | k + 1, rest =>
+    let r := fuseRoot g rest
+    if r.hit then fuseRoots g k r.bytes else rest

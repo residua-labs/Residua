@@ -1,0 +1,177 @@
+-- Runtime dialect wire, RSCM extension 127 revision 1.  This is typed IR,
+-- not target instruction bodies.  The primitive table is OBJECT-ABI v1.
+-- Tree/list walks are structural; signed LEB follows its integer remainder.
+structure RtPrim where
+  name : String
+  args : List Int
+  result : Int
+  opcode : List Int
+  memory : Bool
+
+-- Types: 0 = UInt64/USize, 1 = UInt32/address, 2 = Unit, 3 = bottom, 4 = Bool.
+-- Nodes: 0 literal, 1 local, 2 primitive, 3 call, 4 value-if,
+-- 5 sequence, 6 assignment, 7 while, 8 repeat, 9 break,
+-- 10 continue, 11 early return, 12 final value, 13 configuration Rc.
+structure RtNode where
+  tag : Int
+  val : Int
+  ty : Int
+  args : List RtNode
+
+structure RtFunction where
+  name : String
+  params : List Int
+  result : Int
+  locals : List Int
+  body : RtNode
+
+structure RtSignature where
+  name : String
+  params : List Int
+  result : Int
+
+def rtSignaturesOf : List RtFunction → List RtSignature
+  | [] => []
+  | fn :: fns => { name := fn.name, params := fn.params, result := fn.result } :: rtSignaturesOf fns
+
+def rtPrimitives : List RtPrim := [
+  { name := "RT.load8", args := [1, 0], result := 0, opcode := [49, 0], memory := true },
+  { name := "RT.store8", args := [1, 0, 0], result := 2, opcode := [60, 0], memory := true },
+  { name := "RT.load16", args := [1, 0], result := 0, opcode := [51, 1], memory := true },
+  { name := "RT.store16", args := [1, 0, 0], result := 2, opcode := [61, 1], memory := true },
+  { name := "RT.load32", args := [1, 0], result := 0, opcode := [53, 2], memory := true },
+  { name := "RT.store32", args := [1, 0, 0], result := 2, opcode := [62, 2], memory := true },
+  { name := "RT.load64", args := [1, 0], result := 0, opcode := [41, 3], memory := true },
+  { name := "RT.store64", args := [1, 0, 0], result := 2, opcode := [55, 3], memory := true },
+  { name := "RT.load32x", args := [1, 0], result := 1, opcode := [40, 2], memory := true },
+  { name := "RT.load8x", args := [1, 0], result := 1, opcode := [45, 0], memory := true },
+  { name := "RT.store32x", args := [1, 0, 1], result := 2, opcode := [54, 2], memory := true },
+  { name := "RT.store8x", args := [1, 0, 1], result := 2, opcode := [58, 0], memory := true },
+  { name := "RT.memorySize", args := [], result := 1, opcode := [63, 0], memory := false },
+  { name := "RT.memoryGrow", args := [1], result := 1, opcode := [64, 0], memory := false },
+  { name := "RT.memoryCopy", args := [1, 1, 1], result := 2, opcode := [252, 10, 0, 0], memory := false },
+  { name := "RT.addr", args := [0], result := 1, opcode := [167], memory := false },
+  { name := "RT.widen", args := [1], result := 0, opcode := [173], memory := false },
+  { name := "RT.add32", args := [1, 1], result := 1, opcode := [106], memory := false },
+  { name := "RT.sub32", args := [1, 1], result := 1, opcode := [107], memory := false },
+  { name := "RT.mul32", args := [1, 1], result := 1, opcode := [108], memory := false },
+  { name := "RT.divU32", args := [1, 1], result := 1, opcode := [110], memory := false },
+  { name := "RT.remU32", args := [1, 1], result := 1, opcode := [112], memory := false },
+  { name := "RT.and32", args := [1, 1], result := 1, opcode := [113], memory := false },
+  { name := "RT.or32", args := [1, 1], result := 1, opcode := [114], memory := false },
+  { name := "RT.xor32", args := [1, 1], result := 1, opcode := [115], memory := false },
+  { name := "RT.shl32", args := [1, 1], result := 1, opcode := [116], memory := false },
+  { name := "RT.shrU32", args := [1, 1], result := 1, opcode := [118], memory := false },
+  { name := "RT.shrS32", args := [1, 1], result := 1, opcode := [117], memory := false },
+  { name := "RT.rotl32", args := [1, 1], result := 1, opcode := [119], memory := false },
+  { name := "RT.rotr32", args := [1, 1], result := 1, opcode := [120], memory := false },
+  { name := "RT.eq32", args := [1, 1], result := 4, opcode := [70], memory := false },
+  { name := "RT.ne32", args := [1, 1], result := 4, opcode := [71], memory := false },
+  { name := "RT.ltU32", args := [1, 1], result := 4, opcode := [73], memory := false },
+  { name := "RT.gtU32", args := [1, 1], result := 4, opcode := [75], memory := false },
+  { name := "RT.leU32", args := [1, 1], result := 4, opcode := [77], memory := false },
+  { name := "RT.geU32", args := [1, 1], result := 4, opcode := [79], memory := false },
+  { name := "RT.ltS32", args := [1, 1], result := 4, opcode := [72], memory := false },
+  { name := "RT.gtS32", args := [1, 1], result := 4, opcode := [74], memory := false },
+  { name := "RT.leS32", args := [1, 1], result := 4, opcode := [76], memory := false },
+  { name := "RT.geS32", args := [1, 1], result := 4, opcode := [78], memory := false },
+  { name := "RT.eqz32", args := [1], result := 4, opcode := [69], memory := false },
+  { name := "RT.add64", args := [0, 0], result := 0, opcode := [124], memory := false },
+  { name := "RT.sub64", args := [0, 0], result := 0, opcode := [125], memory := false },
+  { name := "RT.mul64", args := [0, 0], result := 0, opcode := [126], memory := false },
+  { name := "RT.divU64", args := [0, 0], result := 0, opcode := [128], memory := false },
+  { name := "RT.remU64", args := [0, 0], result := 0, opcode := [130], memory := false },
+  { name := "RT.and64", args := [0, 0], result := 0, opcode := [131], memory := false },
+  { name := "RT.or64", args := [0, 0], result := 0, opcode := [132], memory := false },
+  { name := "RT.xor64", args := [0, 0], result := 0, opcode := [133], memory := false },
+  { name := "RT.shl64", args := [0, 0], result := 0, opcode := [134], memory := false },
+  { name := "RT.shrU64", args := [0, 0], result := 0, opcode := [136], memory := false },
+  { name := "RT.shrS64", args := [0, 0], result := 0, opcode := [135], memory := false },
+  { name := "RT.rotl64", args := [0, 0], result := 0, opcode := [137], memory := false },
+  { name := "RT.rotr64", args := [0, 0], result := 0, opcode := [138], memory := false },
+  { name := "RT.eq64", args := [0, 0], result := 4, opcode := [81], memory := false },
+  { name := "RT.ne64", args := [0, 0], result := 4, opcode := [82], memory := false },
+  { name := "RT.ltU64", args := [0, 0], result := 4, opcode := [84], memory := false },
+  { name := "RT.gtU64", args := [0, 0], result := 4, opcode := [86], memory := false },
+  { name := "RT.leU64", args := [0, 0], result := 4, opcode := [88], memory := false },
+  { name := "RT.geU64", args := [0, 0], result := 4, opcode := [90], memory := false },
+  { name := "RT.ltS64", args := [0, 0], result := 4, opcode := [83], memory := false },
+  { name := "RT.gtS64", args := [0, 0], result := 4, opcode := [85], memory := false },
+  { name := "RT.leS64", args := [0, 0], result := 4, opcode := [87], memory := false },
+  { name := "RT.geS64", args := [0, 0], result := 4, opcode := [89], memory := false },
+  { name := "RT.eqz64", args := [0], result := 4, opcode := [80], memory := false },
+  { name := "RT.divS64", args := [0, 0], result := 0, opcode := [127], memory := false },
+  { name := "RT.andBool", args := [4, 4], result := 4, opcode := [113], memory := false },
+  { name := "RT.orBool", args := [4, 4], result := 4, opcode := [114], memory := false },
+  { name := "RT.notBool", args := [4], result := 4, opcode := [69], memory := false },
+  { name := "RT.trap", args := [], result := 3, opcode := [0], memory := false },
+  { name := "RT.widenS", args := [1], result := 0, opcode := [172], memory := false }
+]
+
+def rtNil : RtNode := { tag := 5, val := 0, ty := 2, args := [] }
+
+def rtAt : Nat → List RtNode → RtNode
+  | _, [] => rtNil
+  | 0, x :: _ => x
+  | n + 1, _ :: xs => rtAt n xs
+
+def rtTypeAt : Nat → List Int → Int
+  | _, [] => -1
+  | 0, x :: _ => x
+  | n + 1, _ :: xs => rtTypeAt n xs
+
+def rtPrimAt : Nat → List RtPrim → RtPrim
+  | _, [] => { name := "", args := [], result := -1, opcode := [], memory := false }
+  | 0, x :: _ => x
+  | n + 1, _ :: xs => rtPrimAt n xs
+
+def rtPrimIndex : Nat → List RtPrim → String → Int
+  | _, [], _ => -1
+  | i, x :: xs, name => if x.name == name then (i : Int) else rtPrimIndex (i + 1) xs name
+
+def rtSigAt : Nat → List RtSignature → RtSignature
+  | _, [] => { name := "", params := [], result := -1 }
+  | 0, x :: _ => x
+  | n + 1, _ :: xs => rtSigAt n xs
+
+def rtSigIndex : Nat → List RtSignature → String → Int
+  | _, [], _ => -1
+  | i, x :: xs, name => if x.name == name then (i : Int) else rtSigIndex (i + 1) xs name
+
+-- Signed LEB is independent of a target backend. The wire carries scalar
+-- values, type ids, and semantic node/primitive ids, never target code.
+partial def rtLeb (value : Int) : List Int :=
+  let byte := value % 128
+  let rest := value / 128
+  if (rest == 0 && byte < 64) || (rest == -1 && byte >= 64) then [byte]
+  else (byte + 128) :: rtLeb rest
+
+mutual
+  def rtNodeWire : RtNode → List Int
+    | ⟨tag, value, ty, args⟩ =>
+      rtLeb tag ++ rtLeb value ++ rtLeb ty
+      ++ rtLeb (args.length : Int) ++ rtNodesWire args
+  def rtNodesWire : List RtNode → List Int
+    | [] => []
+    | node :: nodes => rtNodeWire node ++ rtNodesWire nodes
+end
+
+def rtIntsWire : List Int → List Int
+  | [] => []
+  | x :: xs => rtLeb x ++ rtIntsWire xs
+
+def rtStringWire (name : String) : List Int :=
+  let chars := name.toList
+  rtLeb (chars.length : Int) ++ chars.map (fun c => (c.toNat : Int))
+
+def rtFunctionWire (fn : RtFunction) : List Int :=
+  rtStringWire fn.name ++ rtLeb (fn.params.length : Int) ++ rtIntsWire fn.params
+  ++ rtLeb fn.result ++ rtLeb (fn.locals.length : Int) ++ rtIntsWire fn.locals
+  ++ rtNodeWire fn.body
+
+def rtFunctionsWire : List RtFunction → List Int
+  | [] => []
+  | fn :: rest => rtFunctionWire fn ++ rtFunctionsWire rest
+
+def rtModuleWire (fns : List RtFunction) : List Int :=
+  [82, 83, 67, 77, 127, 1] ++ rtLeb (fns.length : Int) ++ rtFunctionsWire fns

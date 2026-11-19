@@ -1,0 +1,211 @@
+# LANGUAGE — rsd bootstrap syntax 0.1
+
+GENERATED — do not edit. Produced by the repository-side syntax
+generator and twin instrument (the twin digests are pinned below;
+evidence not shipped in 0.1).
+
+This is the 0.1 bootstrap surface: the forms the committed seed's front
+edge (`rsdc/Compile.rsd`) accepts. It **will change** in later versions
+(0.11, 0.12, ...): the repository-side design grammar is design-only
+and is not this language; `.rsl`, the new surface, RSX entry, the
+elaborator and theorem checking are not part of 0.1.
+
+## Pinned inputs
+
+- head `ae7921b20fc544cd5cc656ff755c805080fc2db4`
+- `rsdc/Compile.rsd` sha256 `476a3b46c73976544bebd6946cc086a9ecd7fb5212c8764dc09874872c3ffffa`
+- `rsdc-ml` twin instrument source sha256 `8c38c9820e82db3ee2b727d22b36690e5e1c8bbe861a96e3ec19c1c660e0dfff` (instrument binary sha256 `d8f0ee40d3dfa12470047fa76374c755584f6a2273475be6ced814e32a08faad`; evidence not shipped in 0.1)
+- `bootstrap/sources.json` sha256 `d18201d45a0b5aaeb91a868f7c941d460701f3569a645b8f88f7c15594e2b1bd`
+- `bootstrap/seed/manifest.json` sha256 `b86761f0503e30bcdf0157f639b1c88a818926f143ca051a0f3a0f25a66732ff`
+- refuse-corpus table sha256 `43bdf3f5c285352ac71872502c74381744c5bde308dd1455c17d659b9370701d` (private contract text; evidence not shipped in 0.1)
+
+## Corpus verdicts
+
+Accept corpus — the chain's own sources (bodies = file minus `^import `
+lines, the `BuildAssembly.stripImports` rule):
+
+| file | body bytes | twin `parse` |
+|---|---|---|
+| `lib/Tarjan.rsd` | 5206 | err=0 |
+| `rsdc/Compile.rsd` | 823134 | err=0 |
+| `lib/RscBase.rsd` | 83368 | err=0 |
+| `lib/ShortCutFusion.rsd` | 8521 | err=0 |
+| `lib/TypeFacts.rsd` | 5494 | err=0 |
+| `rsc/rsc.rsd` | 322069 | err=0 |
+
+Concatenated bundle (1247797 bytes): `parse` err=0.
+
+Refuse corpus — the `form=rsdc-emit` rows of the pinned corpus table, run
+against the `rsdc-ml` twin check. Every existing row still refuses (54 checked).
+Recorded gap rows are point-in-time: verdicts are `match` (29),
+`pos_drift` (22, same residue at a moved line — the file
+was edited after the gaps run), `residue_changed` (3,
+still refused, on a different first construct), `missing` (1, named below).
+
+Missing rows (untracked or removed sources, recorded for completeness):
+- `out/web-devin-t/Serve.rsd`
+
+| file | recorded | observed | verdict |
+|---|---|---|---|
+| `lib/Proc.rsd` | rsdc_syntax@1:1 | rsdc_syntax@1:1 | match |
+| `web/stdhttp/Char.rsd` | rsdc_syntax@95:65 | rsdc_syntax@95:65 | match |
+| `web/stdhttp/Version.rsd` | rsdc_syntax@19:1 | rsdc_syntax@87:29 | pos_drift |
+| `web/stdhttp/ChunkedBuffer.rsd` | rsdc_syntax@19:1 | rsdc_syntax@41:1 | pos_drift |
+| `web/stdhttp/Encode.rsd` | rsdc_syntax@18:1 | rsdc_syntax@24:1 | pos_drift |
+| `web/stdhttp/Method.rsd` | rsdc_syntax@25:1 | rsdc_syntax@334:28 | pos_drift |
+| `web/stdhttp/Status.rsd` | rsdc_syntax@21:1 | rsdc_syntax@31:28 | pos_drift |
+| `web/stdhttp/LowerCase.rsd` | rsdc_syntax@18:1 | rsdc_syntax@16:1 | pos_drift |
+| `web/stdhttp/String.rsd` | rsdc_syntax@30:8 | rsdc_syntax@30:8 | match |
+| `web/stdhttp/IndexMultiMap.rsd` | rsdc_unclosed@26:36 | rsdc_unclosed@26:36 | match |
+| `web/stdhttp/HeaderName.rsd` | rsdc_syntax@20:1 | rsdc_syntax@28:26 | pos_drift |
+| `web/stdhttp/HeaderValue.rsd` | rsdc_syntax@20:1 | rsdc_syntax@34:27 | pos_drift |
+| `web/stdhttp/Headers.rsd` | rsdc_syntax@19:1 | rsdc_syntax@36:43 | pos_drift |
+| `web/stdhttp/UriEncoding.rsd` | rsdc_syntax@21:1 | rsdc_syntax@30:17 | pos_drift |
+| `web/stdhttp/IpAddress.rsd` | rsdc_syntax@27:29 | rsdc_syntax@27:29 | match |
+| `web/stdhttp/Parsec.rsd` | rsdc_syntax@28:27 | rsdc_syntax@28:27 | match |
+| `web/stdhttp/ByteArray.rsd` | rsdc_syntax@196:14 | rsdc_syntax@196:14 | match |
+| `web/stdhttp/UriBasic.rsd` | rsdc_syntax@28:1 | rsdc_syntax@42:22 | pos_drift |
+| `web/stdhttp/UriParser.rsd` | rsdc_syntax@27:1 | rsdc_syntax@32:1 | pos_drift |
+| `web/stdhttp/HeaderBasic.rsd` | rsdc_syntax@19:1 | rsdc_syntax@26:1 | pos_drift |
+| `web/stdhttp/BodyLength.rsd` | rsdc_syntax@18:1 | rsdc_syntax@41:1 | pos_drift |
+| `web/stdhttp/Chunk.rsd` | rsdc_syntax@30:29 | rsdc_syntax@30:29 | match |
+| `web/stdhttp/RequestHead.rsd` | rsdc_syntax@21:1 | rsdc_syntax@56:26 | pos_drift |
+| `web/stdhttp/ResponseHead.rsd` | rsdc_syntax@18:1 | rsdc_syntax@43:26 | pos_drift |
+| `web/stdhttp/H1Config.rsd` | rsdc_syntax@18:1 | rsdc_unbound@26:11 | residue_changed |
+| `web/stdhttp/H1Message.rsd` | rsdc_syntax@22:1 | rsdc_syntax@42:23 | pos_drift |
+| `web/stdhttp/H1Parser.rsd` | rsdc_syntax@24:1 | rsdc_syntax@24:1 | match |
+| `web/stdhttp/H1Error.rsd` | rsdc_syntax@18:1 | rsdc_syntax@87:27 | pos_drift |
+| `web/stdhttp/H1Event.rsd` | rsdc_syntax@18:1 | rsdc_syntax@23:24 | pos_drift |
+| `web/stdhttp/H1Reader.rsd` | rsdc_syntax@19:1 | rsdc_syntax@49:31 | pos_drift |
+| `web/stdhttp/H1Writer.rsd` | rsdc_syntax@19:1 | rsdc_syntax@73:25 | pos_drift |
+| `web/stdhttp/H1Machine.rsd` | rsdc_syntax@19:1 | rsdc_syntax@27:29 | pos_drift |
+| `web/Application.rsd` | rsdc_syntax@1:1 | rsdc_syntax@1:1 | match |
+| `web/HttpGrammar.rsd` | rsdc_syntax@23:9 | rsdc_syntax@23:9 | match |
+| `web/HttpMatcher.rsd` | rsdc_syntax@45:3 | rsdc_syntax@45:3 | match |
+| `web/h5i/H1Valid.rsd` | rsdc_syntax@53:10 | rsdc_syntax@53:10 | match |
+| `web/h5i/H1Decide.rsd` | rsdc_syntax@21:1 | rsdc_syntax@21:1 | match |
+| `web/h1/H1Rfc.rsd` | rsdc_syntax@32:52 | rsdc_syntax@32:52 | match |
+| `web/h1/H1Stream.rsd` | rsdc_syntax@29:20 | rsdc_syntax@29:20 | match |
+| `web/Http.rsd` | rsdc_syntax@72:3 | rsdc_syntax@72:3 | match |
+| `web/HttpCodec.rsd` | rsdc_syntax@41:3 | rsdc_syntax@41:3 | match |
+| `web/net/Admission.rsd` | rsdc_syntax@1:1 | rsdc_syntax@1:1 | match |
+| `web/net/Wire.rsd` | rsdc_syntax@29:3 | rsdc_syntax@29:3 | match |
+| `web/net/Completions.rsd` | rsdc_syntax@138:1 | rsdc_unbound@135:1 | residue_changed |
+| `web/net/CompletionWire.rsd` | rsdc_syntax@16:3 | rsdc_syntax@16:3 | match |
+| `web/server/Model.rsd` | rsdc_syntax@30:13 | rsdc_syntax@30:13 | match |
+| `web/server/Codec.rsd` | rsdc_syntax@29:26 | rsdc_syntax@29:26 | match |
+| `web/server/Proc.rsd` | rsdc_unclosed@41:71 | rsdc_unclosed@41:71 | match |
+| `web/net/Context.rsd` | rsdc_syntax@65:31 | rsdc_syntax@65:31 | match |
+| `web/net/Rows.rsd` | rsdc_syntax@13:8 | rsdc_syntax@13:8 | match |
+| `web/net/HostProbe.rsd` | rsdc_syntax@3:34 | rsdc_syntax@3:34 | match |
+| `web/server/Live.rsd` | rsdc_syntax@6:13 | rsdc_syntax@6:13 | match |
+| `web/load/Serve.rsd` | rsdc_syntax@5:13 | rsdc_syntax@5:13 | match |
+| `out/web-devin-t/Serve.rsd` | rsdc_syntax@544:65 | — | missing |
+| `benchmarks/koka/KokaBase.rsd` | ? | rsdc_syntax@60:3 | residue_changed |
+
+## Declaration probes
+
+Minimal measured snippets (twin `parse` err codes):
+
+| lead token | probe | err |
+|---|---|---|
+| `def` | `def f : Nat := 0` | err=0 |
+| `structure` | `structure S where x : Nat` | err=0 |
+| `inductive` | `inductive Foo where | a | b` | err=0 |
+| `abbrev` | `abbrev A : Nat := 0` | err=1 |
+| `abbrev` | `abbrev A : Nat` | err=1 |
+| `instance` | `instance : Inhabited Nat := ⟨0⟩` | err=6 |
+| `mutual` | `mutual def a : Nat := 0 def b : Nat := 1 end` | err=0 |
+| `namespace` | `namespace N def a : Nat := 0 end N` | err=0 |
+| `open` | `open N` | err=0 |
+| `section` | `section S end S` | err=0 |
+| `theorem` | `theorem t : Nat := 1` | err=1 |
+| `axiom` | `axiom a : Nat` | err=1 |
+| `class` | `class C where m : Nat` | err=1 |
+| `variable` | `variable (n : Nat)` | err=1 |
+| `opaque` | `opaque o : Nat` | err=1 |
+| `import` | `import Lib.X` | err=1 |
+| `partial` | `partial def f : Nat := 0` | err=0 |
+| `by` | `def f : Nat := by exact 0` | err=1 |
+| `deriving` | `structure S where x : Nat deriving Repr` | err=0 |
+| `fun` | `def f : Nat -> Nat := fun x => x` | err=0 |
+
+## Parse-tree contract
+
+The front edge's own contract, verbatim from `rsdc/Compile.rsd`:
+
+```
+-- rsdc front edge: .rsd text to a parse tree, for the annotated subset.
+-- Nodes are four Int slots in a persistent, chunked Array; node ids and links
+-- are stable indices, -1 is none. The AVL holds synthetic name spans only.
+-- 1 id a=start b=end (UTF-8 byte positions). 2 num a=start b=end c=value.
+-- 3 str a=start b=end, raw, quotes included. 4 hole.
+-- 5 app a=fn b=first li. 6 bin a=op b=lhs c=rhs.
+-- 7 una a=op b=expr (1 neg, 2 not). 8 if a=c b=t c=e.
+-- 9 let a=name b=ty c=let2. 10 let2 a=val b=body.
+-- 11 list a=first li. 12 li a=expr b=next.
+-- 13 paren a=inner. 14 inst a=ty b=first fld. 15 fld a=name b=expr c=next.
+-- 16 arrow a=dom b=cod. 17 proj a=expr b=index.
+-- 18 file a=first cmd. 19 cmd a=decl b=next.
+-- 20 def a=name b=sig c=val. 21 sig a=first grp b=ret.
+-- 22 grp a=first li b=ty c=next. 23 eqns a=first alt.
+-- 24 alt a=first li b=body c=next. 25 body a=expr.
+-- 26 struct a=name b=first fdcl. 27 fdcl a=name b=ty c=next.
+-- 28 mutual a=first cmd. 29 dproj a=expr b=ns c=ne. 30 ascribe a=expr b=ty.
+-- 31 termMatch a=scrutinee li b=first alt c=inferred result type after prep.
+-- 32 lambda a=first grp b=body c=inferred result type after prep.
+-- 33 checked index a=list receiver b=Nat index.
+-- 34 namespace a=name b=cmds. 35 open a=names.
+-- 36 scoped commands a=open names (-1 for section) b=cmdSpine.
+-- 37 abbrev a=name b=ty.
+-- 43 doBind a=name b=expr. 44 doBare a=expr. 45 doLet a=name b=ty c=expr.
+-- 46 doBlock a=stmt spine. desugarSt erases these before check.
+-- 47 anonymous constructor expression a=element spine.
+-- 48 instance declaration a=name (-1 if automatic) b=sig c=val; erased by instanceLower.
+-- 56 inferred type a=concrete type code; private to preparation.
+-- Qualified decl names: ident slot c holds qa (a synth span >= fileLen);
+-- receiver-pinned use-site idents hold c == -9.
+-- bin ops: 1 +  2 -  3 *  4 /  5 ==  6 !=  7 <  8 >  9 <=  10 >=
+-- 11 &&  12 ||  13 ::  14 ++
+-- err: 1 syntax, 2 unclosed, 3 fuel, 4 nonassoc, 5 unbound, 6 type, 7 arity.
+```
+
+## Reserved words (33)
+
+`def`, `do`, `deriving`, `decreasing_by`, `structure`, `section`, `set_option`, `where`, `with`, `mutual`, `match`, `end`, `else`, `if`, `in`, `inductive`, `instance`, `import`, `then`, `theorem`, `termination_by`, `let`, `namespace`, `abbrev`, `axiom`, `class`, `by`, `fun`, `return`, `open`, `opaque`, `variable`, `partial`
+
+Reserved words are tokens, not all of them declaration forms: the probe
+table above measures which lead positions the parser accepts at this
+head (10 of 20 probes parse clean).
+
+## Refusal vocabulary
+
+Front-edge err codes (contract above). The twin instrument's named
+residues (27):
+
+`rsdc_arena_field`, `rsdc_arity`, `rsdc_array_operation`, `rsdc_array_receiver`, `rsdc_basic_data_lowering`, `rsdc_budget`, `rsdc_do`, `rsdc_dup_binder`, `rsdc_fuel`, `rsdc_mixed_partial`, `rsdc_nonassoc`, `rsdc_rec_ind`, `rsdc_runtime_binder`, `rsdc_runtime_fuel`, `rsdc_runtime_loop_scope`, `rsdc_runtime_name`, `rsdc_runtime_primitive_scope`, `rsdc_runtime_syntax`, `rsdc_runtime_type`, `rsdc_runtime_wire`, `rsdc_syntax`, `rsdc_type`, `rsdc_type_depth`, `rsdc_unbound`, `rsdc_unclosed`, `rsdc_unknown`, `rsdc_word_op`
+
+## Lexical notes
+
+- Line comments: `--` to end of line.
+- String literals `"..."` are stored raw (node 3 keeps the quotes);
+  character literals use `'x'`; anonymous constructors use `⟨...⟩`
+  (UTF-8 ⟨, codepoint 10216); `#[` opens an array literal.
+- Application is juxtaposition; `( )` groups; `[a, b]` is a list;
+  `e[i]` is a checked index (node 33); `x.y` / `x.y.z` are projections
+  (nodes 17, 29); `t : T` ascription is node 30.
+- `if .. then .. else`, `let`, `fun`, `match`, `do` blocks and
+  `{ ty with f := v, .. }` instance literals follow the tag table.
+- Indentation is tracked by the front edge (`St.indent`); command
+  spines and do-blocks follow it.
+- Bodies are compiled without `import` lines: the toolchain strips
+  every `^import ` line (`BuildAssembly.stripImports`); name resolution
+  is positional against the bundle.
+
+## Not in 0.1
+
+Theorem proving (`theorem`, `by`, `simp`/`rw`/...), the elaborator and
+R-CIC (`rsd_proofs`), the `.rsl` reader surface, the new surface syntax,
+RSX entry and the repository-side design grammar. All later versions.
+
+closure_claim = 0

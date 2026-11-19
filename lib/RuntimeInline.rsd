@@ -1,0 +1,124 @@
+import WasmDecode
+
+-- L19: clone the lowered source fast path, leaving drop_cold out of line.
+-- Local banks belong to the caller and are reused by successive sites. Each
+-- expansion restores Wasm's fresh-local semantics before running the body.
+-- The block substitutes for the callee's implicit function label: a return
+-- branches to that block, rather than returning from the enclosing caller.
+structure RiCode where
+  ok : Bool := false
+  code : List Int := []
+
+def riCat : List (List Int) → List Int → List Int
+  | [], acc => acc
+  | c :: cs, acc => riCat cs (c ++ acc)
+
+def riJoin (chunks : List (List Int)) : List Int :=
+  riCat chunks []
+
+def riBody : Nat → Nat → Nat → Nat → List (List Int) → List Int → RiCode
+  | 0, _, _, _, _, _ => {}
+  | _ + 1, _, _, _, _, [] => {}
+  | fuel + 1, base, slots, depth, acc, bs =>
+    let i := rgStep bs
+    if !i.ok then {}
+    else if i.op == 11 && depth == 0 then
+      if i.rest.isEmpty then { ok := true, code := riJoin ([11] :: acc) } else {}
+    else if i.op == 32 || i.op == 33 || i.op == 34 then
+      if i.n >= slots then {}
+      else riBody fuel base slots depth ((i.op :: lebU (base + i.n)) :: acc) i.rest
+    else if i.op == 15 then
+      riBody fuel base slots depth (([12] ++ lebU depth) :: acc) i.rest
+    else if i.op == 18 then {}
+    else if i.op == 2 || i.op == 3 || i.op == 4 then
+      riBody fuel base slots (depth + 1) (i.bs :: acc) i.rest
+    else if i.op == 11 then
+      riBody fuel base slots (depth - 1) (i.bs :: acc) i.rest
+    else riBody fuel base slots depth (i.bs :: acc) i.rest
+
+def riSaveArgs : Nat → Nat → List Int
+  | _, 0 => []
+  | base, n + 1 => ls (base + n) ++ riSaveArgs base n
+
+def riZero : Nat → List Int → List Int
+  | _, [] => []
+  | base, ty :: tys =>
+    (if ty == vtI64 then i64Const 0 else i32Const 0) ++ ls base ++ riZero (base + 1) tys
+
+def riExpand (f : WFn) (base : Nat) : RiCode :=
+  if !f.results.isEmpty || (f.params ++ f.locals).any (fun t => t != vtI64 && t != vtI32) then {}
+  else
+    let body := riBody (f.code.length + 1) base (f.params.length + f.locals.length) 0 [] f.code
+    { ok := body.ok, code := riSaveArgs base f.params.length ++ riZero (base + f.params.length) f.locals
+        ++ [2, 64] ++ body.code }
+
+structure RiWalk where
+  ok : Bool := false
+  code : List Int := []
+  locals : List Int := []
+  dupBase : Nat := 0
+  dropBase : Nat := 0
+  hasDup : Bool := false
+  hasDrop : Bool := false
+  sites : Nat := 0
+  size : Nat := 0
+
+-- FABLE-EMIT-SIZE-0: the caller-size cap of the expansion, in bytes of the
+-- caller's instruction code after it. A caller that would exceed the cap keeps its
+-- `call 6` / `call 7` sites: the body stays in the runtime, as in Lean's
+-- lean.h (lean_inc_ref, lean_dec_ref, lean_dec_ref_cold) and Koka's
+-- kklib.h (kk_block_dup, kk_block_drop, kk_block_check_drop).
+-- Rule: HotSpot C2 refuses an inline once the caller reaches
+-- DesiredMethodLimit = 8000 bytecodes after inlining
+-- (InlineTree::try_to_inline, opto/bytecodeInfo.cpp, "size >
+-- DesiredMethodLimit"); GCC has the same shape in large-function-insns and
+-- large-function-growth (ipa-inline.cc caller_growth_limits). The unit
+-- here is the same: bytes of stack bytecode. The decision is per caller,
+-- all or nothing: its sites carry no profile to rank them.
+-- Cost: the initial code length and decoding can traverse the original
+-- caller. With fixed runtime templates and bounded Wasm indices, the pass
+-- is O(|code| + |params| + |locals|) plus attempted expansion work.
+-- The cap counts instruction-code bytes, excluding encoded local groups.
+def riCodeCap : Nat := 8000
+
+-- Templates are exactly the two source-lowered functions, not guessed byte
+-- sequences. A failed decode preserves the entire original function, and
+-- so does a rewritten body larger than `cap` bytes.
+def riWalk (dup drop : WFn) (np cap : Nat) : Nat → RiWalk → List (List Int) → List Int → RiWalk
+  | 0, _, _, _ => {}
+  | _ + 1, state, acc, [] => { state with ok := true, code := riJoin acc }
+  | fuel + 1, state, acc, bs =>
+    let i := rgStep bs
+    if !i.ok || state.size > cap then {}
+    else if i.op == 16 && (i.n == 6 || i.n == 7) then
+      let isDup := i.n == 6
+      let f := if isDup then dup else drop
+      let present := if isDup then state.hasDup else state.hasDrop
+      let base := if present then (if isDup then state.dupBase else state.dropBase) else np + state.locals.length
+      let expansion := riExpand f base
+      if !expansion.ok then {}
+      else
+        let next := { state with
+          locals := if present then state.locals else state.locals ++ f.params ++ f.locals
+          dupBase := if isDup then base else state.dupBase
+          dropBase := if isDup then state.dropBase else base
+          hasDup := state.hasDup || isDup
+          hasDrop := state.hasDrop || !isDup
+          sites := state.sites + 1
+          size := state.size + expansion.code.length }
+        riWalk dup drop np cap fuel next (expansion.code :: acc) i.rest
+    else riWalk dup drop np cap fuel { state with size := state.size + i.bs.length } (i.bs :: acc) i.rest
+
+def riFunction (dup drop : WFn) (f : WFn) : WFn :=
+  let rewritten := riWalk dup drop f.params.length riCodeCap (f.code.length + 1) { locals := f.locals } [] f.code
+  if rewritten.ok && rewritten.sites > 0 && rewritten.size ≤ riCodeCap then
+    { f with code := rewritten.code, locals := rewritten.locals }
+  else f
+
+def runtimeInlineFns (lay : Layers) (rtCount : Nat) (fns : List WFn) : List WFn :=
+  if !lay.rc then fns
+  else
+    let empty : WFn := { params := [], results := [], locals := [], code := [] }
+    let dup := fns.getD 6 empty
+    let drop := fns.getD 7 empty
+    fns.take rtCount ++ (fns.drop rtCount).map (riFunction dup drop)

@@ -1,0 +1,239 @@
+import Lean
+
+/-!
+gates/semalign/Check.rsd — the `sem_aligned` deciding recipe
+(GATE-HARNESS-0 r2, item g6; method: gates/semalign/METHOD.md).
+
+Runs the chain's rows corpus (`CORPUS.tsv`, normalized from
+`rsc/rows/manifest.txt`, q-pinned against `e2e/manifest.tsv`) through:
+
+  A  rscm's meaning  = Residua.Bootstrap.SCM.evalSCM
+  B  scm's evalLF    = Residua.Bootstrap.Semantics.eval lawsA  (evalBoot)
+
+and reports `equal` rows out of decidable rows as the hole's COUNTER.
+Planted wrong core ops (`lawsMutant`, gate-local `lawsPlanted`) must be
+caught. Host-layer classes (capacity:*, machineClock, pin, v1:*) are
+named gap rows outside the decidable denominator.
+
+Output rows (COMPARE.tsv):  name  class  A  B  equal  oracle  m  p  status
+Final line:  sem_aligned <eq>/<decidable> diffs=<n> mutant_m=<x> mutant_p=<y> gaps=<g> bad=<b>
+
+Rerun:  <lean> --run gates/semalign/Check.rsd        (from repo root)
+Artifacts under gates/semalign/out/.
+-/
+
+open System
+
+def GD : FilePath := "gates/semalign"
+def OD : FilePath := GD / "out"
+def LEANC : String := "leanc"
+def LEAN : String := "lean"
+
+def readTable (p : FilePath) : IO (List (List String)) := do
+  let s ← IO.FS.readFile p
+  return s.splitOn "\n" |>.filter (fun l => l ≠ "")
+    |>.map (fun l => (l.dropRightWhile (fun c => c == '\r')).splitOn "\t")
+
+def runCmd (cmd : String) (args : Array String) (env : Array (String × Option String) := #[])
+    : IO (UInt32 × String) := do
+  let r ← IO.Process.output { cmd := cmd, args := args, env := env }
+  return (r.exitCode, r.stdout ++ r.stderr)
+
+def mkdir (p : FilePath) : IO Unit := IO.FS.createDirAll p
+
+/-- (module name, .rsd/.lean source, source root for -R) -/
+def envModules : List (String × String × String) :=
+  [ ("Residua.SHA256",                    "lean/rsd-cert/Residua/SHA256.lean",                    "lean/rsd-cert")
+  , ("Residua.Bootstrap.IR",              "lean/rsd-cert/Residua/Bootstrap/IR.lean",              "lean/rsd-cert")
+  , ("Residua.Bootstrap.EvalBootSeparators","lean/rsd-cert/Residua/Bootstrap/EvalBootSeparators.lean","lean/rsd-cert")
+  , ("Residua.Bootstrap.Semantics",       "lean/rsd-cert/Residua/Bootstrap/Semantics.lean",       "lean/rsd-cert")
+  , ("Residua.Bootstrap.SCM",             "lean/rsd-cert/Residua/Bootstrap/SCM.lean",             "lean/rsd-cert")
+  , ("RscmDecode",                        "emitter/evallean/RscmDecode.lean",                     "emitter/evallean")
+  , ("RscmNF",                            "emitter/evallean/RscmNF.lean",                         "emitter/evallean")
+  , ("RscmAny",                           "emitter/evallean/RscmAny.lean",                        "emitter/evallean")
+  , ("ValText",                           "emitter/evallean/ValText.lean",                        "emitter/evallean")
+  ]
+
+def modObj (mod : String) : FilePath := OD / (mod.replace "." "/" ++ ".olean")
+
+/-- build one env module (skip if olean already present); returns ok -/
+def buildModule (mod src root : String) : IO Bool := do
+  let o := modObj mod
+  if ← o.pathExists then return true
+  let c := OD / (mod.replace "." "/" ++ ".c")
+  let oo := OD / (mod.replace "." "/" ++ ".o")
+  match o.parent with
+  | some d => mkdir d
+  | none => pure ()
+  let log ← IO.FS.Handle.mk (OD / (mod.replace "." "/" ++ ".buildlog")) .write
+  let (rc, out) ← runCmd LEAN
+    #["-M", "6144", "-DmaxHeartbeats=3200000", "-R", root,
+      "-o", o.toString, "-c", c.toString, src]
+    #[("LEAN_PATH", some OD.toString)]
+  log.putStr out; log.flush
+  if rc != 0 then
+    IO.println s!"  env FAIL {mod} rc={rc} (see {mod}.buildlog)"
+    return false
+  let (rc2, out2) ← runCmd LEANC #["-c", c.toString, "-o", oo.toString]
+  if rc2 != 0 then
+    IO.println s!"  env FAIL {mod} leanc rc={rc2}\n{out2}"
+    return false
+  return true
+
+/-- compile + link the driver exe -/
+def buildExe : IO Bool := do
+  let o := OD / "SemAlign.olean"
+  let c := OD / "SemAlign.c"
+  let oo := OD / "SemAlign.o"
+  let (rc, out) ← runCmd LEAN
+    #["-M", "6144", "-DmaxHeartbeats=3200000", "-R", GD.toString,
+      "-o", o.toString, "-c", c.toString, (GD / "SemAlign.rsd").toString]
+    #[("LEAN_PATH", some OD.toString)]
+  if rc != 0 then
+    IO.println s!"  driver FAIL rc={rc}\n{out}"
+    return false
+  let (rc2, out2) ← runCmd LEANC #["-c", c.toString, "-o", oo.toString]
+  if rc2 != 0 then
+    IO.println s!"  driver leanc FAIL rc={rc2}\n{out2}"
+    return false
+  let mut linkArgs : Array String := #[oo.toString]
+  for (mod, _, _) in envModules do
+    linkArgs := linkArgs.push (OD / (mod.replace "." "/" ++ ".o") |>.toString)
+  -- On darwin the lld bundled with leanc ignores -stack_size (the corpus'
+  -- deep rows need a raised stack); relink with the system clang and the
+  -- same libs, per emitter/evallean/README.md.
+  let (rc3, out3) ←
+    if System.Platform.isOSX then do
+      let (_, ldf) ← runCmd LEANC #["--print-ldflags"]
+      let ldfA := ldf.trim.splitOn " " |>.toArray
+      -- gmp/uv live in <toolchain>/lib (ldflags only adds .../lib/lean)
+      let mut extra : Array String := #[]
+      for i in [0:ldfA.size] do
+        if ldfA[i]! == "-L" && i + 1 < ldfA.size then
+          let d := ldfA[i+1]!
+          if d.endsWith "/lean" then
+            extra := extra ++ #["-L", d.dropRight 5]
+      runCmd "/usr/bin/clang"
+        (linkArgs ++ #["-o", (OD / "semalign").toString]
+          ++ ldfA ++ extra ++ #["-Wl,-no_data_const", "-Wl,-stack_size,0x20000000"])
+    else
+      runCmd LEANC (linkArgs ++ #["-o", (OD / "semalign").toString])
+  if rc3 != 0 then
+    IO.println s!"  link FAIL rc={rc3}\n{out3}"
+    return false
+  return true
+
+def isHostClass (cls : String) : Bool :=
+  cls == "pin" || cls == "machineClock" || cls.startsWith "capacity:"
+    || cls.startsWith "v1:"
+
+/-- expected-outcome shape from the row class vs side-A text (evidence col) -/
+def oracleOk (cls a : String) : Bool :=
+  if cls.startsWith "sourceStuck" || cls == "sourceFuelExhausted" then a == "none"
+  else if cls.startsWith "residue:" then a == "none" || a.startsWith "(res"
+  else a != "none"   -- value / value:<v>
+
+def fieldVal (line key : String) : Option String :=
+  line.splitOn " " |>.find? (fun t => t.startsWith (key ++ "="))
+    |>.map (fun t => t.drop (key.length + 1))
+
+-- The gate's own normal form: q projects the decidable corpus rows (the
+-- host-class gaps stay out of the denominator), and admit refuses an empty
+-- decidable set so a hollow corpus cannot print a pass counter.
+namespace GateSemalignNF
+
+inductive Residue where
+  | corpusEmpty
+
+def q (rows : List (List String)) : List (List String) :=
+  rows.filter fun r => !isHostClass (r.getD 5 "?")
+
+def admit (c : List (List String)) : Except Residue Nat :=
+  if c.isEmpty then Except.error Residue.corpusEmpty else Except.ok c.length
+
+def residueName : Residue -> String
+  | Residue.corpusEmpty => "corpusEmpty"
+
+end GateSemalignNF
+
+def main : IO Unit := do
+  mkdir OD
+  -- stage 1: env
+  IO.println "== env =="
+  let mut i := 0
+  for (mod, src, root) in envModules do
+    i := i + 1
+    IO.println s!"  [{i}/{envModules.length}] {mod}"
+    unless ← buildModule mod src root do
+      IO.println s!"sem_aligned env_build_failed module={mod}"
+      return
+  -- stage 2: driver
+  IO.println "== driver =="
+  unless ← buildExe do
+    IO.println "sem_aligned driver_build_failed"
+    return
+  -- stage 3: corpus
+  IO.println "== corpus =="
+  let exe := (OD / "semalign").toString
+  let rows ← readTable (GD / "CORPUS.tsv")
+  match GateSemalignNF.admit (GateSemalignNF.q rows) with
+  | .error e =>
+    IO.println s!"sem_aligned refused={GateSemalignNF.residueName e}"
+    return
+  | .ok _ => pure ()
+  let cap := (← IO.getEnv "SEMALIGN_MAX").map (·.toNat!) |>.getD rows.length
+  let mut nEq := 0
+  let mut nDec := 0
+  let mut nDiff := 0
+  let mut nGap := 0
+  let mut nM := 0
+  let mut nP := 0
+  let mut oracleBad := 0
+  let mut out := "name\tclass\tA\tB\tequal\toracle\tm\tp\tstatus\n"
+  for row in rows.take cap do
+    let name := row.getD 0 "?"
+    let rscm := row.getD 1 "?"
+    let entry := row.getD 3 "0"
+    let fuel := row.getD 4 "0"
+    let cls := row.getD 5 "?"
+    let argText := row.getD 6 ""
+    let args := if argText = "" then #[] else argText.splitOn "," |>.toArray
+    if isHostClass cls then
+      nGap := nGap + 1
+      out := out ++ s!"{name}\t{cls}\t-\t-\t-\t-\t-\t-\tgap=host_class\n"
+    else
+      nDec := nDec + 1
+      -- Rows exec under a raised stack rlimit: the corpus' deep rows
+      -- overflow an 8 MiB rlimit on Linux (rc 134, the runtime's stack
+      -- guard; a linker -z stack-size does not move that guard), while
+      -- on darwin the relinked exe's -stack_size already covers it.
+      -- /bin/sh ulimit is the portable setter; both forms are
+      -- best-effort so a restricted shell still runs the row.
+      let argv : Array String :=
+        #["-c", "ulimit -s unlimited 2>/dev/null || ulimit -s 524288 2>/dev/null; exec \"$@\"",
+          "semalign-row", exe, "run", rscm, entry, fuel] ++ args
+      let (rc, stdout) ← runCmd "sh" argv
+      let line := stdout.trim.takeWhile (fun c => c != '\n')
+      if rc != 0 then
+        nGap := nGap + 1
+        out := out ++ s!"{name}\t{cls}\t-\t-\t-\t-\t-\t-\tgap=run_rc{rc}\n"
+      else if (line.splitOn " " |>.head?).getD "" == "gap=decode" ||
+              line.startsWith "gap=" then
+        nGap := nGap + 1
+        out := out ++ s!"{name}\t{cls}\t-\t-\t-\t-\t-\t-\t{line}\n"
+      else do
+        let a := (fieldVal line "A").getD "?"
+        let b := (fieldVal line "B").getD "?"
+        let eq := (fieldVal line "equal").getD "0" == "1"
+        let m := (fieldVal line "m").getD "0" == "1"
+        let p := (fieldVal line "p").getD "0" == "1"
+        let ok := oracleOk cls a
+        unless ok do oracleBad := oracleBad + 1
+        if eq then nEq := nEq + 1 else nDiff := nDiff + 1
+        if m then nM := nM + 1
+        if p then nP := nP + 1
+        out := out ++ s!"{name}\t{cls}\t{a}\t{b}\t{if eq then 1 else 0}\t{if ok then 1 else 0}\t{if m then 1 else 0}\t{if p then 1 else 0}\tok\n"
+      IO.println s!"  {name} class={cls} rc={rc}"
+  IO.FS.writeFile (OD / "COMPARE.tsv") out
+  let bad := nDiff + (if nM == 0 then 1 else 0) + (if nP == 0 then 1 else 0)
+  IO.println s!"sem_aligned {nEq}/{nDec} diffs={nDiff} mutant_m={nM} mutant_p={nP} gaps={nGap} oracle_bad={oracleBad} bad={bad}"

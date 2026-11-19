@@ -1,0 +1,81 @@
+-- LRC: simplify `case`: drop unreachable alternatives, drop a case with one alternative, merge
+-- the most common alternative into a default.
+-- A port of Lean 4.14.0 src/lean/Lean/Compiler/IR/SimpCase.lean, cited as SimpCase:LINE.
+-- closure_claim = 0.
+-- absent: ensureHasDefault
+--   (`ensureHasDefault` is not used by Lean's simpCase (ExpandResetReuse and EmitC call it); it is ported with its first user)
+import Lib.Lrc.AlphaEqv
+
+namespace Lrc
+
+def scAnyDefault : List N → Bool
+  | [] => false
+  | alt :: alts => altIsDefault alt || scAnyDefault alts
+
+-- SimpCase:20 getOccsOf: the alternatives from this one on whose body equals this one's
+def scOccs (body : N) : List N → Nat
+  | [] => 0
+  | alt :: alts => (if bodyEq (altBody alt) body then 1 else 0) + scOccs body alts
+
+structure ScMax where
+  alt : N
+  n : Nat
+  deriving Inhabited
+
+-- SimpCase:28 maxOccs: the first alternative with the largest count
+def scMaxGo : List N → ScMax → ScMax
+  | [], m => m
+  | alt :: alts, m =>
+    let curr := scOccs (altBody alt) (alt :: alts)
+    scMaxGo alts (if curr > m.n then { alt := alt, n := curr } else m)
+
+def scFilterNe (body : N) : List N → List N
+  | [] => []
+  | alt :: alts => if bodyEq (altBody alt) body then scFilterNe body alts else alt :: scFilterNe body alts
+
+-- SimpCase:38 addDefault
+def scAddDefault (alts : List N) : List N :=
+  match alts with
+  | [] => alts
+  | [_] => alts
+  | first :: rest =>
+    if scAnyDefault alts then alts
+    else
+      let m := scMaxGo rest { alt := first, n := scOccs (altBody first) alts }
+      if m.n == 1 then alts
+      else scFilterNe (altBody m.alt) alts ++ [mkAltDefault (altBody m.alt)]
+
+-- SimpCase:47 filterUnreachable
+def scFilterUnreachable : List N → List N
+  | [] => []
+  | alt :: alts =>
+    if (altBody alt).op == opUnreachable then scFilterUnreachable alts else alt :: scFilterUnreachable alts
+
+-- SimpCase:50 mkSimpCase
+def scMkCase (term : N) (alts : List N) : N :=
+  let alts := scAddDefault (scFilterUnreachable alts)
+  match alts with
+  | [] => mkUnreachable
+  | [alt] => altBody alt
+  | _ => { term with kids := alts }
+
+mutual
+-- SimpCase:60 FnBody.simpCase
+partial def simpCaseBody (b : N) : N :=
+  let f := flatten b
+  let bs := scJPs f.bs
+  if f.term.op == opCase then reshape bs (scMkCase f.term (scAlts (caseAlts f.term)))
+  else reshape bs f.term
+partial def scJPs : List N → List N
+  | [] => []
+  | b :: bs => (if b.op == opJDecl then jdeclSetBody b (simpCaseBody (jdeclBody b)) else b) :: scJPs bs
+partial def scAlts : List N → List N
+  | [] => []
+  | alt :: alts => altSetBody alt (simpCaseBody (altBody alt)) :: scAlts alts
+end
+
+-- SimpCase:73 Decl.simpCase
+def declSimpCase (d : Decl) : Decl :=
+  if d.ext then d else { d with body := simpCaseBody d.body }
+
+end Lrc

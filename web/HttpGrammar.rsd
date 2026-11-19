@@ -1,0 +1,121 @@
+namespace Web.HttpGrammar
+
+-- RFC 9112 message grammar with its RFC 9110 / RFC 3986 imports.
+-- This is data, interpreted by the local finite-state matcher.
+-- No unlanded regular-expression engine is a dependency.
+inductive ABNF where
+  | empty
+  | range (lo hi : Nat)
+  | literal (text : String)
+  | sequence (parts : List ABNF)
+  | alternative (choices : List ABNF)
+  | repeat (min : Nat) (max : Option Nat) (body : ABNF)
+  | reference (name : String)
+  | capture (name : String) (body : ABNF)
+  deriving Repr, Inhabited
+
+structure Rule where
+  name : String
+  source : String
+  body : ABNF
+  deriving Repr, Inhabited
+
+def ref := ABNF.reference
+def lit := ABNF.literal
+def seq := ABNF.sequence
+def alt := ABNF.alternative
+def many (body : ABNF) := ABNF.repeat 0 none body
+def plus (body : ABNF) := ABNF.repeat 1 none body
+def optional (body : ABNF) := ABNF.repeat 0 (some 1) body
+def times (n : Nat) (body : ABNF) := ABNF.repeat n (some n) body
+def upto (n : Nat) (body : ABNF) := ABNF.repeat 0 (some n) body
+def chars (text : String) := alt (text.toList.map (fun c => ABNF.range c.toNat c.toNat))
+def captured (name : String) := ABNF.capture name (ref name)
+
+def core : List Rule := [
+  ⟨"ALPHA", "RFC5234 B.1", alt [.range 65 90, .range 97 122]⟩,
+  ⟨"DIGIT", "RFC5234 B.1", .range 48 57⟩,
+  ⟨"HEXDIG", "RFC5234 B.1", alt [ref "DIGIT", .range 65 70, .range 97 102]⟩,
+  ⟨"SP", "RFC5234 B.1", lit " "⟩,
+  ⟨"HTAB", "RFC5234 B.1", .range 9 9⟩,
+  ⟨"CRLF", "RFC5234 B.1", lit "\r\n"⟩,
+  ⟨"VCHAR", "RFC5234 B.1", .range 33 126⟩,
+  ⟨"OWS", "RFC9110 5.6.3", many (alt [ref "SP", ref "HTAB"])⟩,
+  ⟨"BWS", "RFC9110 5.6.3", ref "OWS"⟩,
+  ⟨"tchar", "RFC9110 5.6.2", alt [ref "ALPHA", ref "DIGIT", chars "!#$%&'*+-.^_`|~"]⟩,
+  ⟨"token", "RFC9110 5.6.2", plus (ref "tchar")⟩,
+  ⟨"obs-text", "RFC9110 5.6.3", .range 128 255⟩,
+  ⟨"field-vchar", "RFC9110 5.5", alt [ref "VCHAR", ref "obs-text"]⟩,
+  ⟨"field-content", "RFC9110 5.5", seq [ref "field-vchar", optional (seq [
+    plus (alt [ref "SP", ref "HTAB", ref "field-vchar"]), ref "field-vchar"])]⟩,
+  ⟨"field-value", "RFC9110 5.5", many (ref "field-content")⟩,
+  ⟨"qdtext", "RFC9110 5.6.4", alt [ref "HTAB", ref "SP", .range 33 33,
+    .range 35 91, .range 93 126, ref "obs-text"]⟩,
+  ⟨"quoted-pair", "RFC9110 5.6.4", seq [lit "\\", alt [ref "HTAB", ref "SP", ref "VCHAR", ref "obs-text"]]⟩,
+  ⟨"quoted-string", "RFC9110 5.6.4", seq [lit "\"", many (alt [ref "qdtext", ref "quoted-pair"]), lit "\""]⟩]
+
+def uri : List Rule := [
+  ⟨"unreserved", "RFC3986 2.3", alt [ref "ALPHA", ref "DIGIT", chars "-._~"]⟩,
+  ⟨"pct-encoded", "RFC3986 2.1", seq [lit "%", ref "HEXDIG", ref "HEXDIG"]⟩,
+  ⟨"sub-delims", "RFC3986 2.2", chars "!$&'()*+,;="⟩,
+  ⟨"pchar", "RFC3986 3.3", alt [ref "unreserved", ref "pct-encoded", ref "sub-delims", chars ":@"]⟩,
+  ⟨"segment", "RFC3986 3.3", many (ref "pchar")⟩,
+  ⟨"segment-nz", "RFC3986 3.3", plus (ref "pchar")⟩,
+  ⟨"absolute-path", "RFC9110 4.1", plus (seq [lit "/", ref "segment"])⟩,
+  ⟨"path-abempty", "RFC3986 3.3", many (seq [lit "/", ref "segment"])⟩,
+  ⟨"path-absolute", "RFC3986 3.3", seq [lit "/", optional (seq [ref "segment-nz", ref "path-abempty"])]⟩,
+  ⟨"path-rootless", "RFC3986 3.3", seq [ref "segment-nz", ref "path-abempty"]⟩,
+  ⟨"path-empty", "RFC3986 3.3", .empty⟩,
+  ⟨"query", "RFC3986 3.4", many (alt [ref "pchar", chars "/?"])⟩,
+  ⟨"scheme", "RFC3986 3.1", seq [ref "ALPHA", many (alt [ref "ALPHA", ref "DIGIT", chars "+-."])]⟩,
+  ⟨"userinfo", "RFC3986 3.2.1", many (alt [ref "unreserved", ref "pct-encoded", ref "sub-delims", lit ":"])⟩,
+  ⟨"reg-name", "RFC3986 3.2.2", many (alt [ref "unreserved", ref "pct-encoded", ref "sub-delims"])⟩,
+  ⟨"port", "RFC3986 3.2.3", many (ref "DIGIT")⟩,
+  ⟨"dec-octet", "RFC3986 3.2.2", alt [ref "DIGIT", seq [.range 49 57, ref "DIGIT"],
+    seq [lit "1", times 2 (ref "DIGIT")], seq [lit "2", .range 48 52, ref "DIGIT"],
+    seq [lit "25", .range 48 53]]⟩,
+  ⟨"IPv4address", "RFC3986 3.2.2", seq [times 3 (seq [ref "dec-octet", lit "."]), ref "dec-octet"]⟩,
+  ⟨"h16", "RFC3986 3.2.2", .repeat 1 (some 4) (ref "HEXDIG")⟩,
+  ⟨"ls32", "RFC3986 3.2.2", alt [seq [ref "h16", lit ":", ref "h16"], ref "IPv4address"]⟩,
+  ⟨"IPv6address", "RFC3986 3.2.2", alt [
+    seq [times 6 (seq [ref "h16", lit ":"]), ref "ls32"],
+    seq [lit "::", times 5 (seq [ref "h16", lit ":"]), ref "ls32"],
+    seq [optional (ref "h16"), lit "::", times 4 (seq [ref "h16", lit ":"]), ref "ls32"],
+    seq [optional (seq [upto 1 (seq [ref "h16", lit ":"]), ref "h16"]), lit "::", times 3 (seq [ref "h16", lit ":"]), ref "ls32"],
+    seq [optional (seq [upto 2 (seq [ref "h16", lit ":"]), ref "h16"]), lit "::", times 2 (seq [ref "h16", lit ":"]), ref "ls32"],
+    seq [optional (seq [upto 3 (seq [ref "h16", lit ":"]), ref "h16"]), lit "::", ref "h16", lit ":", ref "ls32"],
+    seq [optional (seq [upto 4 (seq [ref "h16", lit ":"]), ref "h16"]), lit "::", ref "ls32"],
+    seq [optional (seq [upto 5 (seq [ref "h16", lit ":"]), ref "h16"]), lit "::", ref "h16"],
+    seq [optional (seq [upto 6 (seq [ref "h16", lit ":"]), ref "h16"]), lit "::"]]⟩,
+  ⟨"IPvFuture", "RFC3986 3.2.2", seq [chars "vV", plus (ref "HEXDIG"), lit ".",
+    plus (alt [ref "unreserved", ref "sub-delims", lit ":"])]⟩,
+  ⟨"IP-literal", "RFC3986 3.2.2", seq [lit "[", alt [ref "IPv6address", ref "IPvFuture"], lit "]"]⟩,
+  ⟨"uri-host", "RFC3986 3.2.2", alt [ref "IP-literal", ref "IPv4address", ref "reg-name"]⟩,
+  ⟨"authority", "RFC3986 3.2", seq [optional (seq [ref "userinfo", lit "@"]), ref "uri-host", optional (seq [lit ":", ref "port"])]⟩,
+  ⟨"hier-part", "RFC3986 3", alt [seq [lit "//", ref "authority", ref "path-abempty"],
+    ref "path-absolute", ref "path-rootless", ref "path-empty"]⟩,
+  ⟨"absolute-URI", "RFC3986 4.3", seq [ref "scheme", lit ":", ref "hier-part", optional (seq [lit "?", ref "query"])]⟩]
+
+def message : List Rule := [
+  ⟨"method", "RFC9112 3.1", ref "token"⟩,
+  ⟨"origin-form", "RFC9112 3.2.1", seq [ref "absolute-path", optional (seq [lit "?", ref "query"])]⟩,
+  ⟨"absolute-form", "RFC9112 3.2.2", ref "absolute-URI"⟩,
+  ⟨"authority-form", "RFC9112 3.2.3", seq [ref "uri-host", lit ":", ref "port"]⟩,
+  ⟨"asterisk-form", "RFC9112 3.2.4", lit "*"⟩,
+  ⟨"request-target", "RFC9112 3.2", alt [ref "origin-form", ref "absolute-form", ref "authority-form", ref "asterisk-form"]⟩,
+  ⟨"HTTP-version", "RFC9112 2.3", seq [lit "HTTP/", ref "DIGIT", lit ".", ref "DIGIT"]⟩,
+  ⟨"request-line", "RFC9112 3", seq [captured "method", ref "SP", captured "request-target", ref "SP", captured "HTTP-version", ref "CRLF"]⟩,
+  ⟨"field-name", "RFC9110 5.1", ref "token"⟩,
+  ⟨"field-line", "RFC9112 5", seq [captured "field-name", lit ":", ref "OWS", captured "field-value", ref "OWS", ref "CRLF"]⟩,
+  ⟨"chunk-size", "RFC9112 7.1", plus (ref "HEXDIG")⟩,
+  ⟨"chunk-ext-name", "RFC9112 7.1.1", ref "token"⟩,
+  ⟨"chunk-ext-val", "RFC9112 7.1.1", alt [ref "token", ref "quoted-string"]⟩,
+  ⟨"chunk-ext", "RFC9112 7.1.1", many (seq [ref "BWS", lit ";", ref "BWS", ref "chunk-ext-name",
+    optional (seq [ref "BWS", lit "=", ref "BWS", ref "chunk-ext-val"])])⟩,
+  ⟨"chunk-line", "local: chunk-size [ chunk-ext ] CRLF, RFC 9112 7.1 `chunk` without its data", seq [captured "chunk-size", ref "chunk-ext", ref "CRLF"]⟩,
+  ⟨"content-length", "RFC9110 8.6", plus (ref "DIGIT")⟩,
+  ⟨"host", "RFC9110 7.2", seq [ref "uri-host", optional (seq [lit ":", ref "port"])]⟩]
+
+def rules : List Rule := core ++ uri ++ message
+
+end Web.HttpGrammar

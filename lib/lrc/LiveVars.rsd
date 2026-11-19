@@ -1,0 +1,119 @@
+-- LRC: live variables.
+-- A port of Lean 4.14.0 src/lean/Lean/Compiler/IR/LiveVars.lean, cited as LiveVars:LINE.
+-- With join points a variable can be live in a body without occurring in it: it occurs in the body
+-- of a join point the body jumps to (LiveVars:12).
+-- closure_claim = 0.
+-- absent: M visitVar visitJP visitArg visitArgs visitExpr LiveVarSet mkLiveVarSet Collector skip collectVar collectArg collectArray collectArgs accumulate collectJP bindVar bindParams
+--   (the state monad, the combinators of Lean's collector style and the per-form visitors, folded into the two traversals; a live set is a VSet (lib/lrc/Set.rsd))
+import Lib.Lrc.FreeVars
+
+namespace Lrc
+
+/-! ## IsLive (LiveVars:29)
+
+Lean keeps the join point declarations in a `LocalContext` held as state, and erases a non-local
+join point when it visits it. Here the context is the list of those declarations, and the state
+is returned beside the answer. -/
+
+-- one join point declaration in scope (IR/Basic.lean:454 LocalContextEntry.joinPoint)
+structure JP where
+  j : Nat
+  xs : List Param
+  body : N
+  deriving Inhabited
+
+def jpFind (j : Nat) : List JP → Option JP
+  | [] => none
+  | p :: ps => if p.j == j then some p else jpFind j ps
+
+-- IR/Basic.lean:498 LocalContext.eraseJoinPointDecl
+def jpErase (j : Nat) : List JP → List JP
+  | [] => []
+  | p :: ps => if p.j == j then jpErase j ps else p :: jpErase j ps
+
+structure IsLiveR where
+  hit : Bool
+  ctx : List JP
+  deriving Inhabited
+
+mutual
+-- LiveVars:46 visitFnBody
+partial def isLiveGo (w : Nat) (n : N) (ctx : List JP) : IsLiveR :=
+  if n.op == opVDecl then
+    if exprHasVar (vdeclExpr n) w then { hit := true, ctx := ctx } else isLiveGo w (bodyOf n) ctx
+  else if n.op == opJDecl then
+    let r := isLiveGo w (jdeclBody n) ctx
+    if r.hit then r else isLiveGo w (bodyOf n) r.ctx
+  else if n.op == opJmp then
+    if hasIdxArgs w (jmpArgs n) then { hit := true, ctx := ctx }
+    else
+      match jpFind (jmpId n) ctx with
+      -- not a local join point: visit its body once, with the declaration removed (LiveVars:60)
+      | some p => isLiveGo w p.body (jpErase (jmpId n) ctx)
+      -- a local join point: its body was visited at its declaration (LiveVars:64)
+      | none => { hit := false, ctx := ctx }
+  else if n.op == opRet then { hit := hasIdxArgs w (retArgs n), ctx := ctx }
+  else if n.op == opCase then
+    if n.a == (w : Int) then { hit := true, ctx := ctx } else isLiveAlts w (caseAlts n) ctx
+  else if n.op == opUnreachable then { hit := false, ctx := ctx }
+  else if hasIdxArgs w (insUses n) then { hit := true, ctx := ctx }
+  else isLiveGo w (bodyOf n) ctx
+partial def isLiveAlts (w : Nat) : List N → List JP → IsLiveR
+  | [], ctx => { hit := false, ctx := ctx }
+  | alt :: alts, ctx =>
+    let r := isLiveGo w (altBody alt) ctx
+    if r.hit then r else isLiveAlts w alts r.ctx
+end
+
+-- LiveVars:79 FnBody.hasLiveVar: `ctx` holds every join point declaration free in `b`
+def hasLiveVar (b : N) (ctx : List JP) (x : Nat) : Bool := (isLiveGo x b ctx).hit
+
+/-! ## LiveVars (LiveVars:91): the set of variables live at the start of a body.
+`m` gives, for each join point in scope, the variables live at the start of its body
+(LiveVars:83 JPLiveVarMap). -/
+
+structure JPLive where
+  j : Nat
+  live : VSet
+  deriving Inhabited
+
+def jpLiveFind (j : Nat) : List JPLive → Option VSet
+  | [] => none
+  | p :: ps => if p.j == j then some p.live else jpLiveFind j ps
+
+-- LiveVars:122 collectExpr; LiveVars:162 updateLiveVars
+def updateLiveVars (e : N) (v : VSet) : VSet := vsInsertArgs v (exprArgs e)
+
+mutual
+-- LiveVars:137 collectFnBody. Lean composes the collectors right to left: the rest of the body
+-- first, then the binder is erased, then the instruction's own variables are added.
+partial def liveGo (n : N) (m : List JPLive) (s : VSet) : VSet :=
+  if n.op == opVDecl then
+    let s := liveGo (bodyOf n) m s
+    let s := vsEraseAll s (bindVars (vdeclBinds n))
+    updateLiveVars (vdeclExpr n) s
+  else if n.op == opJDecl then
+    let jl := vsEraseAll (liveGo (jdeclBody n) m vsEmpty) (paramVars (jdeclParams n))
+    liveGo (bodyOf n) ({ j := jdeclId n, live := jl } :: m) s
+  else if n.op == opRet then vsInsertArgs s (retArgs n)
+  else if n.op == opCase then vsInsert (liveAlts (caseAlts n) m s) (caseVar n)
+  else if n.op == opUnreachable then s
+  else if n.op == opJmp then
+    let s := vsInsertArgs s (jmpArgs n)
+    match jpLiveFind (jmpId n) m with
+    | some l => vsUnion s l
+    | none => s
+  else vsInsertArgs (liveGo (bodyOf n) m s) (insUses n)
+partial def liveAlts : List N → List JPLive → VSet → VSet
+  | [], _, s => s
+  | alt :: alts, m, s => liveAlts alts m (liveGo (altBody alt) m s)
+end
+
+-- LiveVars:165 collectLiveVars
+def collectLiveVars (b : N) (m : List JPLive) (v : VSet) : VSet := liveGo b m v
+
+-- LiveVars:156 updateJPLiveVarMap
+def updateJPLiveVarMap (j : Nat) (ys : List Param) (v : N) (m : List JPLive) : List JPLive :=
+  { j := j, live := vsEraseAll (liveGo v m vsEmpty) (paramVars ys) } :: m
+
+end Lrc

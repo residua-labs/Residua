@@ -1,0 +1,56 @@
+# RELEASE-NOTES — Residua 0.1
+
+English | [中文](RELEASE-NOTES.zh-CN)
+
+Release 0.1 is the minimal self-bootstrap closure: verifiable-provenance
+compilation. Given a source and an artifact, anyone can rebuild from the
+committed wasm seed with a C compiler and no other toolchain, and check
+byte for byte that the artifact comes from the source — trusting neither
+the publisher nor a large binary toolchain.
+
+## In this archive
+
+- the committed `rsdc`/`rsc` wasm seeds and their 54-member source
+  closure (`bootstrap/seed/stage-14274/`)
+- the seed recipe (`bootstrap/seed/stage-14274/README.md`) and the C
+  host bridges it needs
+- the rsd chain `rsd -> rscm -> wasm` invoked as the stage host's file
+  contract (`release/docs/RSD-COMMAND`)
+- frozen formal semantics per layer (scm, lambda-RC, wasm0) pinned by
+  content digest, as specification texts
+- the language conformance corpus the bootstrap grammar was measured
+  against (`release/docs/LANGUAGE` rows)
+- the 0.1 performance record (`release/docs/PERF-RECORD.tsv`, form in
+  `release/docs/PERF-RECORD`)
+- the stranger documents: INSTALL, QUICKSTART, VERIFY-RELEASE, OVERVIEW,
+  LANGUAGE, STDLIB, RSD-COMMAND, SPECS, RESIDUES, PERF-RECORD — in
+  English; README and nine `release/docs/` texts (OVERVIEW, ARCHITECTURE,
+  TRUST, GLOSSARY, STABILITY, FAQ, RELATED-WORK, CONTRIBUTING-SECURITY,
+  RELEASE-NOTES, this file included) also ship in Chinese `.zh-CN`
+  mirrors
+
+## Verification
+
+`release/docs/VERIFY-RELEASE` is the protocol: seed digests, the
+archive digest, then the full seed recipe on a clean Linux x86-64 — the recipe's rebuilt compiler images must compare
+byte-identical to the committed seeds (`seed_roundtrip=2/2`).
+
+## Stated limits of 0.1
+
+Single-module programs (no `import`); no I/O execution layer; no proof
+checking (the R-CIC checker is not in this release); no UInt64; a 4 GiB
+address space; the q content-identity format is not final; no
+publish/query entry for results; no importable standard library. The
+bootstrap `.rsd` grammar refuses `theorem`, `axiom`, `class`, `abbrev`,
+`variable`, `opaque`, `by` and `import`.
+
+## Order after 0.1
+
+1. R-CIC kernel + q format + Jig's publish/query entry — the first point
+   a stranger can find, check and reuse another's result.
+2. Programming completeness: modules, real programs, UInt64, an
+   execution layer, 64-bit addressing, application suites.
+3. Cheap confirmation of execution: wasm0 -> AIR -> zk.
+4. Generic connectors to external semantics (K/KORE, Lean/Rocq import).
+
+`closure_claim=0` (`release/MANIFEST.md`).

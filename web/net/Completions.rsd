@@ -1,0 +1,134 @@
+namespace Web.Net.Completions
+open Web.Net
+
+inductive Status where
+  | success | eof | osError | cancelled
+  deriving BEq, Repr, DecidableEq, Inhabited
+
+structure Completion where
+  op : Operation
+  id : Nat
+  status : Status := .success
+  handle : Nat
+  result : Nat := 0
+  errno : Int := 0
+  payload : ByteArray := ByteArray.empty
+
+inductive Residue where
+  | config | state | batchCount | unmatchedId | operation | integerWidth | handle
+  | shape | result | cancellation | closeFailure
+  deriving BEq, Repr, DecidableEq
+
+def residueName : Residue → String
+  | Residue.config => "nf_net_completion_config"
+  | Residue.state => "nf_net_completion_state"
+  | Residue.batchCount => "nf_net_completion_batch_count"
+  | Residue.unmatchedId => "nf_net_completion_unmatched_id"
+  | Residue.operation => "nf_net_completion_operation"
+  | Residue.integerWidth => "nf_net_completion_integer_width"
+  | Residue.handle => "nf_net_completion_handle"
+  | Residue.shape => "nf_net_completion_shape"
+  | Residue.result => "nf_net_completion_result"
+  | Residue.cancellation => "nf_net_completion_cancellation"
+  | Residue.closeFailure => "nf_net_completion_close_failure"
+
+def nf_names : List String := ["nf_net_completion_config", "nf_net_completion_state",
+  "nf_net_completion_batch_count", "nf_net_completion_unmatched_id", "nf_net_completion_operation",
+  "nf_net_completion_integer_width", "nf_net_completion_handle", "nf_net_completion_shape",
+  "nf_net_completion_result", "nf_net_completion_cancellation", "nf_net_completion_close_failure"]
+
+def lookup (s : State) (id : Nat) : Option Submission :=
+  s.pending.find? (fun request => request.id == id)
+
+def created (request : Submission) (reply : Completion) : Bool :=
+  reply.status == .success && (request.op == .listen || request.op == .accept)
+
+def expectedHandle (request : Submission) (reply : Completion) : Nat :=
+  if created request reply then request.id else request.handle
+
+def emptyResult (reply : Completion) : Bool := reply.result == 0 && reply.payload.isEmpty
+
+def successValid (request : Submission) (reply : Completion) : Bool :=
+  match request.op with
+  | .listen => reply.payload.isEmpty && 0 < reply.result && reply.result <= 65535 &&
+      (request.argument == 0 || request.argument == reply.result)
+  | .accept => emptyResult reply
+  | .read => reply.result == reply.payload.size && 0 < reply.result && reply.result <= request.argument
+  | .write => reply.payload.isEmpty && 0 < reply.result && reply.result <= request.payload.size
+  | .close => emptyResult reply
+  | .readFile => reply.result == reply.payload.size && reply.result <= request.argument
+
+def completionResidue? (s : State) (reply : Completion) : Option Residue :=
+  match lookup s reply.id with
+  | none => some .unmatchedId
+  | some request =>
+    if reply.op != request.op then some .operation
+    else if reply.id == 0 || reply.id > maxId || reply.handle > maxId ||
+      reply.result > maxU32 || reply.payload.size > maxU32 ||
+      reply.errno < -2147483648 || reply.errno > 2147483647 then some .integerWidth
+    else if reply.handle != expectedHandle request reply ||
+      (created request reply && (resource s reply.handle).isSome) then some .handle
+    else if reply.status == .success then
+      if reply.errno != 0 then some .shape
+      else if !successValid request reply then some .result
+      else none
+    else if !emptyResult reply then some .shape
+    else if reply.status == .eof then
+      if request.op != .read || reply.errno != 0 then some .shape else none
+    else if reply.status == .osError then
+      if reply.errno == 0 then some .shape
+      else if request.op == .close then some .closeFailure
+      else none
+    else if reply.errno != 0 then some .shape
+    else if request.op == .listen || request.op == .close ||
+      !((resource s request.handle).getD ⟨0, false, false, false, false⟩).closing then
+      some .cancellation
+    else none
+
+def removePending (pending : List Submission) (id : Nat) : List Submission :=
+  pending.filter (fun request => request.id != id)
+
+-- Creation handles are the creating request's never-reused id. They need no
+-- unbounded retired-handle set and are safe even when completions interleave.
+def applyCompletion (s : State) (reply : Completion) : State :=
+  let pending := removePending s.pending reply.id
+  let resources := if reply.status == .success && (reply.op == .listen || reply.op == .accept) then
+    s.resources ++ [⟨reply.handle, reply.op == .listen, false, false, false⟩]
+  else if reply.op == .close && reply.status == .success then
+    s.resources.map (fun r => if r.handle == reply.handle then { r with closed := true } else r)
+  else if reply.status == .eof then
+    s.resources.map (fun r => if r.handle == reply.handle then { r with eof := true } else r)
+  else s.resources
+  { s with pending := pending, resources := resources.filter (fun r =>
+    !r.closed || pending.any (fun request => request.handle == r.handle)) }
+
+structure Failure where
+  index : Nat
+  residue : Residue
+  deriving BEq, Repr
+
+def foldCompletions (s : State) (index : Nat) : List Completion → Except Failure State
+  | [] => .ok s
+  | reply :: rest => match completionResidue? s reply with
+    | some residue => .error ⟨index, residue⟩
+    | none => foldCompletions (applyCompletion s reply) (index + 1) rest
+
+structure Input where
+  config : Config
+  state : State
+  batch : List Completion
+
+def runNF (i : Input) : Except Failure State :=
+  if !configValid i.config then .error ⟨0, .config⟩
+  else if !stateValid i.config i.state then .error ⟨0, .state⟩
+  else if i.batch.length > i.config.maxBatch then .error ⟨0, .batchCount⟩
+  else foldCompletions i.state 0 i.batch
+
+def residue? (i : Input) : Option Failure :=
+  match runNF i with
+  | .error failure => some failure
+  | .ok _ => none
+
+def admissible (i : Input) : Bool := (residue? i).isNone
+
+end Web.Net.Completions

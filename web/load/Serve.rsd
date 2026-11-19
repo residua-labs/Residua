@@ -1,0 +1,75 @@
+-- Measurement-only actuator. All HTTP decisions remain in the existing Proc.
+namespace Web.Load.Serve
+open Lean Web.Server
+abbrev Child := Net.HostProbe.Child
+def require := Net.HostProbe.require
+
+-- A duration-bounded run declares a profile whose step bound covers it, and stops when the
+-- runner has written `stop` and every connection has closed.
+def durationSteps : Nat := 1073741824
+
+def pump (target fuel : Nat) (sy : Http.Syntax) (pipe : Child) (dir : String)
+    (initial : Driver.Proc) (untilStop : Bool := false) : IO Json := do
+  let mut p := initial
+  let mut port := 0
+  for tick in [0:fuel] do
+    let r ← Live.exchange pipe p dir tick false
+    p := Driver.resume sy p (Driver.octets r)
+    -- The state is decoded only on ticks that read it; a refused resume still fails at the next exchange.
+    if port == 0 || !untilStop || tick % 64 == 0 then
+      let s ← IO.ofExcept (Driver.state? p)
+      if port == 0 && s.port != 0 then
+        port := s.port
+        IO.println (Json.mkObj [("port",toJson port)]).compress
+        (← IO.getStdout).flush
+      if untilStop then
+        if tick % 64 == 0 && s.connections.isEmpty && (← System.FilePath.pathExists (dir ++ "/stop")) then
+          require (s.protocolRefusals == 0) "load-server-refusals"
+          return Json.mkObj [("requests",toJson s.requests),("connections",toJson s.connections.length),
+            ("protocol_refusals",toJson s.protocolRefusals),("transactions",toJson (tick+1))]
+      else if s.requests >= target && s.connections.isEmpty then
+        require (s.requests == target && s.protocolRefusals == 0) "load-server-count"
+        return Json.mkObj [("requests",toJson s.requests),("connections",toJson s.connections.length),
+          ("protocol_refusals",toJson s.protocolRefusals),("transactions",toJson (tick+1))]
+  throw (IO.userError "load-server-step-cap")
+
+def run (args : List String) : IO UInt32 := do
+  require (args.length == 3) "load-serve-args"
+  let binary := args[0]!
+  let dir := args[1]!
+  let untilStop := args[2]! == "until-stop"
+  let target ← if untilStop then pure 0 else match (args[2]!).toNat? with
+    | some n => pure n
+    | none => throw (IO.userError "load-target")
+  require (untilStop || (0 < target && target <= 513)) "load-target-cap"
+  IO.FS.createDirAll dir
+  let context ← if untilStop then Net.HostProbe.declaredContextWith {maxSteps := durationSteps}
+    else Net.HostProbe.declaredContext
+  require (Web.Net.Context.admissible context.contract context) "load-context-before-open"
+  let q := Net.HostProbe.hex context.namespaceQ
+  let sy ← IO.ofExcept (Web.Http.buildSyntax.mapError reprStr)
+  let initial ← IO.ofExcept (Driver.start q)
+  let socket := dir ++ "/device.sock"
+  let server ← if untilStop then Net.HostProbe.spawn binary #[socket,q,"web/load/assets"]
+    else Net.HostProbe.spawn "time" #["-l",binary,socket,q,"web/load/assets"]
+  let finished ← IO.mkRef false
+  try
+    require ((← server.stdout.getLine).trim == "ready") "load-device-ready"
+    let pipe ← Net.HostProbe.spawn "nc" #["-U",socket]
+    try
+      let result ← pump target context.profile.maxSteps sy pipe dir initial untilStop
+      IO.FS.writeFile (dir ++ "/server.json") (result.pretty ++ "\n")
+      IO.println result.compress
+    finally Net.HostProbe.stop pipe
+    -- EOF closes the single 9P session; wait for normal actuator termination so
+    -- time -l records the device's own CPU and high-water RSS rather than a poll.
+    let exit ← server.wait
+    finished.set true
+    let stderr ← server.stderr.readToEnd
+    IO.FS.writeFile (dir ++ "/device-resource.stderr") stderr
+    require (exit == 0) ("load-device-exit:" ++ stderr)
+  finally
+    unless ← finished.get do Net.HostProbe.stop server
+    try IO.FS.removeFile socket catch _ => pure ()
+  return (0 : UInt32)
+end Web.Load.Serve

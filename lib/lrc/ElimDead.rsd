@@ -1,0 +1,60 @@
+-- LRC: remove bindings and join points that nothing uses.
+-- A port of Lean 4.14.0 src/lean/Lean/Compiler/IR/ElimDeadVars.lean, cited as ElimDeadVars:LINE.
+-- closure_claim = 0.
+--
+-- One difference, behind `keepRefusing`. Lean's IR is total, so Lean drops any binding whose
+-- variable is dead (ElimDeadVars:26). A wire computation may refuse (fuel, a stuck match, checked arithmetic),
+-- and the refusal is the program's outcome. With `keepRefusing` a dead binding stays when its
+-- expression is a call or a primitive that is not total (lib/lrc/Prim.rsd `primTotal`). The stage
+-- runs with it on; the comparison with Lean's pass runs with it off.
+import Lib.Lrc.AlphaEqv
+import Lib.Lrc.Prim
+
+namespace Lrc
+
+def edRefuses (e : N) : Bool :=
+  e.op == opFap || (e.op == opPrim && !primTotal (primOp e))
+
+def edAnyUsed (used : VSet) : List Nat → Bool
+  | [] => false
+  | x :: xs => vsContains used x || edAnyUsed used xs
+
+-- ElimDeadVars:12 reshapeWithoutDead. `bsRev` holds the instructions before the terminal, the
+-- last one first; `b` is the body built so far; `used` the free indices of `b`.
+partial def edReshape (keepRefusing : Bool) (bsRev : List N) (b : N) (used : VSet) : N :=
+  match bsRev with
+  | [] => b
+  | curr :: rest =>
+    let keep :=
+      if curr.op == opVDecl then
+        edAnyUsed used (bindVars (vdeclBinds curr)) || (keepRefusing && edRefuses (vdeclExpr curr))
+      else if curr.op == opJDecl then vsContains used (jdeclId curr)
+      else true
+    if keep then edReshape keepRefusing rest (setBody curr b) (collectFreeIndices curr used)
+    else edReshape keepRefusing rest b used
+
+mutual
+-- ElimDeadVars:32 FnBody.elimDead
+partial def elimDeadBody (keepRefusing : Bool) (b : N) : N :=
+  let f := flatten b
+  let bs := edJPs keepRefusing f.bs
+  let term := if f.term.op == opCase then { f.term with kids := edAlts keepRefusing (caseAlts f.term) } else f.term
+  edReshape keepRefusing bs.reverse term (freeIndices term)
+partial def edJPs (keepRefusing : Bool) : List N → List N
+  | [] => []
+  | b :: bs =>
+    (if b.op == opJDecl then jdeclSetBody b (elimDeadBody keepRefusing (jdeclBody b)) else b) :: edJPs keepRefusing bs
+partial def edAlts (keepRefusing : Bool) : List N → List N
+  | [] => []
+  | alt :: alts => altSetBody alt (elimDeadBody keepRefusing (altBody alt)) :: edAlts keepRefusing alts
+end
+
+-- ElimDeadVars:43 Decl.elimDead, as Lean has it
+def declElimDead (d : Decl) : Decl :=
+  if d.ext then d else { d with body := elimDeadBody false d.body }
+
+-- the form the stage runs
+def declElimDeadKeep (d : Decl) : Decl :=
+  if d.ext then d else { d with body := elimDeadBody true d.body }
+
+end Lrc

@@ -1,0 +1,258 @@
+-- Counting Immutable Beans, arXiv:1908.05647v3, section 5.2, Figure 4.
+-- Shared first-order dependency collector and SCC work queue. The typed
+-- ANF adapter and rsc use this implementation; there is no second solver.
+-- Facts: 0,x = Owned x; 1,z,x = a projection/alias join edge;
+-- 2,f,args = call f args; 3,args = all-Owned arguments; 4,f,args =
+-- a tail join (also propagates ownership from actuals to formals).
+-- Constructors, returns, reset/reuse and loop joins are retained.
+-- Projection constraints are closed to a finite least fixed point.
+-- Scope/freshness are checked by the input adapter; indices and arities
+-- are checked here as well. Uses the existing AVL and Tarjan components.
+import AvlMap
+import Tarjan
+
+namespace Lib.Beans
+
+structure Owned where
+  tree : Map := map0 0
+  keys : List Nat := []
+
+def Owned.contains (s : Owned) (x : Nat) : Bool :=
+  (get s.tree (Int.ofNat x)).v >= 0
+
+def Owned.insert (s : Owned) (x : Nat) : Owned :=
+  if s.contains x then s
+  else { tree := (ins s.tree (Int.ofNat x) 0 0 0 []).m, keys := x :: s.keys }
+
+-- The AVL map has no deletion operation. A negative value is its ordinary
+-- missing-key sentinel; keep the enumerable live-key list in agreement.
+def Owned.erase (s : Owned) (x : Nat) : Owned :=
+  if !s.contains x then s
+  else { tree := (ins s.tree (Int.ofNat x) (-1) 0 0 []).m, keys := s.keys.filter (fun y => y != x) }
+
+def Owned.size (s : Owned) : Nat := s.keys.length
+def Owned.toList (s : Owned) : List Nat := s.keys
+
+def insertAll : Owned → List Nat → Owned
+  | s, [] => s
+  | s, x :: xs => insertAll (s.insert x) xs
+
+def join (a b : Owned) : Owned := insertAll a b.toList
+
+def flowInsert : Owned → List Int → Owned
+  | s, [] => s
+  | s, x :: xs => flowInsert (s.insert x.toNat) xs
+
+def flowNonnegative : List Int → Bool
+  | [] => true
+  | x :: xs => x >= 0 && flowNonnegative xs
+
+def flowZeros : List Nat → List Int
+  | [] => []
+  | _ :: xs => 0 :: flowZeros xs
+
+def flowParamBits (s : Owned) : List Nat → List Int
+  | [] => []
+  | x :: xs => (if s.contains x then 1 else 0) :: flowParamBits s xs
+
+structure FlowFn where
+  params : List Nat
+  facts : List (List Int)
+
+def flowFnAt : List FlowFn → Nat → FlowFn
+  | [], _ => { params := [], facts := [] }
+  | f :: _, 0 => f
+  | _ :: fs, n + 1 => flowFnAt fs n
+
+def flowOwnArgs : Owned → List Int → List Int → Owned
+  | s, [], _ => s
+  | s, x :: xs, b :: bs =>
+    flowOwnArgs (if b != 0 then s.insert x.toNat else s) xs bs
+  | s, _, [] => s -- infer checks arity before starting the work queue
+
+def flowStep (beta : Map) : List (List Int) → Owned → Owned
+  | [], s => s
+  | fact :: facts, s =>
+    let s := match fact with
+      | [0, x] => s.insert x.toNat
+      | [1, z, x] =>
+        if s.contains z.toNat || s.contains x.toNat then (s.insert x.toNat).insert z.toNat else s
+      | 2 :: f :: args | 4 :: f :: args => flowOwnArgs s args (get beta f).xs
+      | 3 :: args => flowInsert s args
+      | _ => s
+    flowStep beta facts s
+
+-- Each strict iteration adds a variable named by a fact. The operand
+-- count bounds those names, and the extra visit observes convergence.
+def flowOperandCount : List (List Int) → Nat
+  | [] => 0
+  | f :: fs => f.length + flowOperandCount fs
+
+structure FlowClosure where
+  owned : Owned
+  err : Int := 0
+
+def flowClose (beta : Map) (facts : List (List Int)) : Nat → Owned → FlowClosure
+  | 0, s => { owned := s, err := 5 }
+  | fuel + 1, s =>
+    let next := flowStep beta facts s
+    if next.size == s.size then { owned := next }
+    else flowClose beta facts fuel next
+
+def flowCollect (beta : Map) (facts : List (List Int)) (s : Owned) : Owned :=
+  (flowClose beta facts (flowOperandCount facts + 1) s).owned
+
+def flowCheckFacts (p : List FlowFn) : List (List Int) → Int
+  | [] => 0
+  | fact :: rest =>
+    let err := match fact with
+      | [0, x] => if x < 0 then 3 else 0
+      | [1, z, x] => if z < 0 || x < 0 then 3 else 0
+      | 2 :: f :: args | 4 :: f :: args =>
+        if f < 0 || f >= (p.length : Int) then 1
+        else if args.length != (flowFnAt p f.toNat).params.length then 2
+        else if !flowNonnegative args then 3 else 0
+      | 3 :: args => if !flowNonnegative args then 3 else 0
+      | _ => 3
+    if err != 0 then err else flowCheckFacts p rest
+
+def flowCalls : List (List Int) → Owned → List Int → List Int
+  | [], _, calls => calls
+  | (2 :: f :: _) :: facts, seen, calls
+  | (4 :: f :: _) :: facts, seen, calls =>
+    if seen.contains f.toNat then flowCalls facts seen calls
+    else flowCalls facts (seen.insert f.toNat) (f :: calls)
+  | _ :: facts, seen, calls => flowCalls facts seen calls
+
+def flowAddCallers (caller : Nat) : List Int → Map → Map
+  | [], m => m
+  | f :: fs, m =>
+    let old := (get m f).xs
+    flowAddCallers caller fs (ins m f 0 0 0 ((caller : Int) :: old)).m
+
+structure FlowPrep where
+  edges : List (List Int)
+  callers : Map
+  beta : Map
+  err : Int
+
+def flowPrepare (p : List FlowFn) : List FlowFn → Nat → FlowPrep → FlowPrep
+  | [], _, s => { s with edges := s.edges.reverse }
+  | f :: fs, i, s =>
+    let scope := insertAll {} f.params
+    let err := if scope.size != f.params.length then 3 else flowCheckFacts p f.facts
+    if err != 0 then { s with err := err }
+    else
+      let calls := flowCalls f.facts {} []
+      let beta := (ins s.beta (i : Int) 0 0 0 (flowZeros f.params)).m
+      flowPrepare p fs (i + 1) { s with
+        edges := calls :: s.edges, callers := flowAddCallers i calls s.callers,
+        beta := beta }
+
+def flowBudget (callers : Map) : List FlowFn → Nat → Nat
+  | [], _ => 0
+  | f :: fs, i => 1 + f.params.length * (1 + (get callers (i : Int)).xs.length)
+      + flowBudget callers fs (i + 1)
+
+structure FlowResult where
+  beta : Map := map0 0
+  visits : Map := map0 0
+  loops : List Int := []
+  raises : Nat := 0
+  err : Int := 0
+
+structure FlowWork where
+  front : List Int
+  back : List Int
+  queued : Map
+  result : FlowResult
+
+def flowEnqueue : List Int → FlowWork → FlowWork
+  | [], s => s
+  | f :: fs, s =>
+    if (get s.queued f).v == 1 then flowEnqueue fs s
+    else flowEnqueue fs { s with
+      back := f :: s.back
+      queued := (ins s.queued f 1 0 0 []).m }
+
+def flowJoin : List Int → List Int → List Int
+  | [], _ => []
+  | x :: xs, y :: ys => (if x != 0 || y != 0 then 1 else 0) :: flowJoin xs ys
+  | xs, [] => xs
+
+def flowRaised : List Int → List Int → Nat
+  | x :: xs, y :: ys => (if x == 0 && y != 0 then 1 else 0) + flowRaised xs ys
+  | _, _ => 0
+
+-- Lean Borrow.ownParamsUsingArgs: an Owned actual crossing a tail join
+-- makes the corresponding formal Owned, so no token must be dropped after
+-- a tail call. The same monotone queue handles this reverse dependency.
+def flowTail (callers : Map) (owned : Owned) : List (List Int) → FlowWork → FlowWork
+  | [], s => s
+  | (4 :: f :: args) :: facts, s =>
+    let old := (get s.result.beta f).xs
+    let fresh := flowParamBits owned (args.map Int.toNat)
+    let next := flowJoin old fresh
+    let s := if next == old then s else
+      flowEnqueue (f :: (get callers f).xs) { s with result := { s.result with
+        beta := (ins s.result.beta f 0 0 0 next).m,
+        raises := s.result.raises + flowRaised old next } }
+    flowTail callers owned facts s
+  | _ :: facts, s => flowTail callers owned facts s
+
+-- FIFO, callee-first SCC initial order. Only a raised parameter bit wakes
+-- callers. The budget is exactly one initial visit plus possible wakes.
+def flowWork (p : List FlowFn) (callers : Map) : Nat → FlowWork → FlowResult
+  | 0, s =>
+    if s.front.isEmpty && s.back.isEmpty then s.result
+    else { s.result with err := 5 }
+  | fuel + 1, s =>
+    let front := if s.front.isEmpty then s.back.reverse else s.front
+    let back := if s.front.isEmpty then [] else s.back
+    match front with
+    | [] => s.result
+    | f :: rest =>
+      let s := { s with
+        front := rest
+        back := back
+        queued := (ins s.queued f 0 0 0 []).m }
+      let fn := flowFnAt p f.toNat
+      let seed := flowOwnArgs {} (fn.params.map Int.ofNat) (get s.result.beta f).xs
+      let closed := flowClose s.result.beta fn.facts (flowOperandCount fn.facts + 1) seed
+      let owned := closed.owned
+      let old := (get s.result.beta f).xs
+      let fresh := flowParamBits owned fn.params
+      let next := flowJoin old fresh
+      let visits := (ins s.result.visits f ((get s.result.visits f).v + 1) 0 0 []).m
+      let s := { s with result := { s.result with visits := visits } }
+      let s := if next == old then s else
+        flowEnqueue (get callers f).xs { s with result := { s.result with
+          beta := (ins s.result.beta f 0 0 0 next).m,
+          raises := s.result.raises + flowRaised old next } }
+      if closed.err != 0 then { s.result with err := closed.err }
+      else flowWork p callers fuel (flowTail callers owned fn.facts s)
+
+def flowInit (v : Int) : Nat → Map → Map
+  | 0, m => m
+  | k + 1, m => flowInit v k (ins m (k : Int) v 0 0 []).m
+
+def flowMaxEdges : List (List Int) → Nat
+  | [] => 0
+  | xs :: rest => max xs.length (flowMaxEdges rest)
+
+def flowInfer (p : List FlowFn) : FlowResult :=
+  let pre := flowPrepare p p 0 {
+    edges := [], callers := map0 0, beta := map0 0, err := 0 }
+  if pre.err != 0 then { err := pre.err }
+  else
+    let scc := tarjan pre.edges
+    if scc.err != 0 then { err := 4 }
+    else
+      let initial : FlowResult := { beta := pre.beta, loops := scc.recs }
+      -- Visit counters start at zero; the map's missing sentinel is -1.
+      let visits := flowInit 0 p.length (map0 0)
+      flowWork p pre.callers (flowBudget pre.callers p 0) {
+        front := scc.groups.flatten, back := [], queued := flowInit 1 p.length (map0 0),
+        result := { initial with visits := visits } }
+
+end Lib.Beans

@@ -1,0 +1,129 @@
+-- LRC: the call graph of a program and its strongly connected components.
+-- closure_claim = 0.
+--
+-- The wire is first-order: every call names its function, so the graph is exact. The inliner
+-- (lib/lrc/Inline.rsd), the range facts (lib/lrc/Range.rsd) and the borrow inference
+-- (lib/lrc/Borrow.rsd) walk the functions callees first, and ask whether a function calls itself
+-- through others.
+import AvlMap
+import Lib.Lrc.Set
+import Lib.Lrc.Ir
+
+namespace Lrc
+
+mutual
+-- the functions a body calls
+partial def cgCallees (n : N) (acc : List Int) : List Int :=
+  if n.op == opVDecl then
+    let e := vdeclExpr n
+    cgCallees (bodyOf n) (if e.op == opFap && !acc.contains (fapFn e : Int) then (fapFn e : Int) :: acc else acc)
+  else if n.op == opJDecl then cgCallees (bodyOf n) (cgCallees (jdeclBody n) acc)
+  else if n.op == opCase then cgCalleesAlts (caseAlts n) acc
+  else if isTerminal n then acc
+  else cgCallees (bodyOf n) acc
+partial def cgCalleesAlts : List N → List Int → List Int
+  | [], acc => acc
+  | alt :: alts, acc => cgCalleesAlts alts (cgCallees (altBody alt) acc)
+end
+
+def cgOrder : List (List Int) → List Int
+  | [] => []
+  | g :: gs => g ++ cgOrder gs
+
+/-! ## The call graph's components
+
+Tarjan's algorithm (SIAM J. Computing 1(2), 1972), as lib/Tarjan.rsd has it: a component is
+recorded when its root is left, so it comes after the components it calls. Here the marks of the
+vertices are in maps (lib/AvlMap.rsd) and not in lists read by position, so n functions with e
+calls take (n + e) log n steps; the front end's own image has 16718 declarations. Vertex i is
+declaration i; a call of an index outside the list is left out. -/
+
+structure TjS where
+  -- the order in which a vertex was met, the lowest such order it reaches, 1 while it is on the stack
+  disc : IMap
+  low : IMap
+  on : IMap
+  stk : List Int
+  clk : Nat
+  -- the components recorded, the last one first
+  groups : List (List Int)
+  deriving Inhabited
+
+structure TjPop where
+  comp : List Int
+  rest : List Int
+  deriving Inhabited
+
+-- the stack down to v: the component, and the stack below it
+def tjPopTo (v : Int) : List Int → List Int → TjPop
+  | [], acc => { comp := acc, rest := [] }
+  | w :: ws, acc => if w == v then { comp := w :: acc, rest := ws } else tjPopTo v ws (w :: acc)
+
+def tjOff : List Int → IMap → IMap
+  | [], m => m
+  | w :: ws, m => tjOff ws (imInsert m w.toNat 0)
+
+mutual
+partial def tjVisit (adj : Map) (v : Nat) (s : TjS) : TjS :=
+  let s1 : TjS := { s with disc := imInsert s.disc v s.clk, low := imInsert s.low v s.clk, on := imInsert s.on v 1,
+                           stk := (v : Int) :: s.stk, clk := s.clk + 1 }
+  let s2 := tjEdges adj v (mapXs adj (v : Int)) s1
+  if imFind s2.low v == imFind s2.disc v then
+    let p := tjPopTo (v : Int) s2.stk []
+    { s2 with stk := p.rest, on := tjOff p.comp s2.on, groups := p.comp :: s2.groups }
+  else s2
+partial def tjEdges (adj : Map) (v : Nat) : List Int → TjS → TjS
+  | [], s => s
+  | w :: ws, s =>
+    let dw := imFind s.disc w.toNat
+    if dw < 0 then
+      let s1 := tjVisit adj w.toNat s
+      let lw := imFind s1.low w.toNat
+      tjEdges adj v ws (if lw < imFind s1.low v then { s1 with low := imInsert s1.low v lw.toNat } else s1)
+    else if imFind s.on w.toNat == 1 && dw < imFind s.low v then tjEdges adj v ws { s with low := imInsert s.low v dw.toNat }
+    else tjEdges adj v ws s
+end
+
+partial def tjFrom (adj : Map) (i n : Nat) (s : TjS) : TjS :=
+  if i >= n then s else tjFrom adj (i + 1) n (if imFind s.disc i < 0 then tjVisit adj i s else s)
+
+-- for each declaration with a body: the functions it calls that are declarations of the list
+def cgAdj (size : Nat) : List Decl → Map → Map
+  | [], m => m
+  | d :: ds, m =>
+    cgAdj size ds (if d.ext then m else mapPut m (d.f : Int) 1 0 0 ((cgCallees d.body []).filter (fun c => c < (size : Int))))
+
+structure CallScc where
+  -- for each declaration with a body: the functions it calls (the entry's list)
+  adj : Map
+  -- the components, each after the ones it calls
+  groups : List (List Int)
+  -- the functions of a cycle: a component of several, or a function that calls itself
+  recs : VSet
+  -- for each function of a component of several: the component (the entry's list)
+  comps : Map
+  deriving Inhabited
+
+def sccComps (g : List Int) : List Int → Map → Map
+  | [], m => m
+  | v :: vs, m => sccComps g vs (mapPut m v 1 0 0 g)
+
+def sccMark (adj : Map) : List (List Int) → CallScc → CallScc
+  | [], c => c
+  | g :: gs, c =>
+    match g with
+    | [v] => sccMark adj gs (if (mapXs adj v).contains v then { c with recs := vsInsert c.recs v.toNat } else c)
+    | _ => sccMark adj gs { c with recs := vsInsertArgs c.recs g, comps := sccComps g g c.comps }
+
+-- `decls` in the order of their function numbers (lib/lrc/Ir.rsd `declsDense`)
+def callScc (decls : List Decl) : CallScc :=
+  let adj := cgAdj decls.length decls (map0 0)
+  let s := tjFrom adj 0 decls.length { disc := imEmpty, low := imEmpty, on := imEmpty, stk := [], clk := 0, groups := [] }
+  sccMark adj s.groups { adj := adj, groups := s.groups.reverse, recs := vsEmpty, comps := map0 0 }
+
+-- the component of f: the functions that call each other with it
+def sccOf (c : CallScc) (f : Int) : List Int :=
+  let r := mapNode c.comps f
+  if r.tag == 0 then [f] else r.extra
+
+end Lrc

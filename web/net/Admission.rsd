@@ -1,0 +1,218 @@
+import Lean
+namespace Web.Net
+
+inductive Operation where
+  | listen | accept | read | write | close | readFile
+  deriving BEq, Repr, DecidableEq, Inhabited
+
+structure Submission where
+  id : Nat
+  op : Operation
+  handle : Nat := 0
+  argument : Nat := 0
+  payload : ByteArray := ByteArray.empty
+
+structure Config where
+  ports : List Nat := [0]
+  maxListeners : Nat := 1
+  maxConnections : Nat := 1024
+  maxPending : Nat := 4096
+  maxBatch : Nat := 64
+  maxPayload : Nat := 4096
+  maxBufferedBytes : Nat := 8388608
+  dataCap : Nat := 8168
+  reapWaitMs : Nat := 10
+
+structure Resource where
+  handle : Nat
+  listener : Bool
+  closing : Bool := false
+  closed : Bool := false
+  eof : Bool := false
+  deriving BEq, Repr
+
+structure State where
+  resources : List Resource := []
+  pending : List Submission := []
+  lastId : Nat := 0
+
+def maxId : Nat := 9223372036854775807
+def maxU32 : Nat := 4294967295
+
+def submissionBytes (r : Submission) : Nat := 25 + r.payload.size
+
+def reservedBytes (r : Submission) : Nat :=
+  30 + r.payload.size + (if r.op == .read || r.op == .readFile then r.argument else 0)
+
+-- A file read has no handle: it is not a resource, and close does not cancel it.
+def detached (op : Operation) : Bool := op == .listen || op == .readFile
+
+-- One path component of [A-Za-z0-9._-], never `.` or `..`.
+def assetByte (c : Nat) : Bool :=
+  (48 <= c && c <= 57) || (65 <= c && c <= 90) || (97 <= c && c <= 122) || c == 46 || c == 95 || c == 45
+
+def assetName (b : ByteArray) : Bool :=
+  let cs := b.data.toList.map UInt8.toNat
+  0 < cs.length && cs.length <= 255 && cs != [46] && cs != [46,46] && cs.all assetByte
+
+def buffered (s : State) : Nat := (s.pending.map reservedBytes).foldl (· + ·) 0
+
+def portsOrdered : List Nat → Bool
+  | [] => true
+  | [_] => true
+  | a :: b :: rest => a < b && portsOrdered (b :: rest)
+
+def configValid (c : Config) : Bool :=
+  !c.ports.isEmpty && c.ports.all (· <= 65535) &&
+  portsOrdered c.ports && c.reapWaitMs <= 1000 &&
+  0 < c.maxListeners && c.maxListeners <= c.maxPending &&
+  0 < c.maxConnections && c.maxConnections <= c.maxPending &&
+  0 < c.maxPending && c.maxPending <= maxU32 &&
+  0 < c.maxBatch && c.maxBatch <= c.maxPending &&
+  0 < c.maxPayload && c.maxPayload <= maxU32 &&
+  38 + c.maxPayload <= c.dataCap && c.dataCap <= maxU32 &&
+  30 + c.maxPayload <= c.maxBufferedBytes && c.maxBufferedBytes <= maxId
+
+def resource (s : State) (handle : Nat) : Option Resource :=
+  s.resources.find? (fun r => r.handle == handle)
+
+def pendingCount (s : State) (op : Operation) : Nat :=
+  (s.pending.filter (fun r => r.op == op)).length
+
+def resourceCount (s : State) (listener : Bool) : Nat :=
+  (s.resources.filter (fun r => r.listener == listener)).length
+
+def pendingOn (s : State) (handle : Nat) (op : Operation) : Bool :=
+  s.pending.any (fun r => r.handle == handle && r.op == op)
+
+inductive Residue where
+  | config | state | batchCount | batchBytes | integerWidth | idOrder | arguments
+  | unknownHandle | handleKind | closing | duplicateOperation | readAfterEOF
+  | listeners | connections | pending | buffered
+  deriving BEq, Repr, DecidableEq
+
+def residueName : Residue → String
+  | Residue.config => "nf_net_config"
+  | Residue.state => "nf_net_state"
+  | Residue.batchCount => "nf_net_batch_count"
+  | Residue.batchBytes => "nf_net_batch_bytes"
+  | Residue.integerWidth => "nf_net_integer_width"
+  | Residue.idOrder => "nf_net_id_order"
+  | Residue.arguments => "nf_net_arguments"
+  | Residue.unknownHandle => "nf_net_unknown_handle"
+  | Residue.handleKind => "nf_net_handle_kind"
+  | Residue.closing => "nf_net_closing"
+  | Residue.duplicateOperation => "nf_net_duplicate_operation"
+  | Residue.readAfterEOF => "nf_net_read_after_eof"
+  | Residue.listeners => "nf_net_listeners"
+  | Residue.connections => "nf_net_connections"
+  | Residue.pending => "nf_net_pending"
+  | Residue.buffered => "nf_net_buffered"
+
+def nf_names : List String := ["nf_net_config", "nf_net_state", "nf_net_batch_count",
+  "nf_net_batch_bytes", "nf_net_integer_width", "nf_net_id_order", "nf_net_arguments",
+  "nf_net_unknown_handle", "nf_net_handle_kind", "nf_net_closing",
+  "nf_net_duplicate_operation", "nf_net_read_after_eof", "nf_net_listeners",
+  "nf_net_connections", "nf_net_pending", "nf_net_buffered"]
+
+def argumentsValid (c : Config) (r : Submission) : Bool :=
+  match r.op with
+  | .listen => r.handle == 0 && c.ports.contains r.argument && r.payload.isEmpty
+  | .accept => r.argument == 0 && r.payload.isEmpty
+  | .read => 0 < r.argument && r.argument <= c.maxPayload && r.payload.isEmpty
+  | .write => r.argument == 0 && 0 < r.payload.size && r.payload.size <= c.maxPayload
+  | .close => r.argument == 0 && r.payload.isEmpty
+  | .readFile => r.handle == 0 && 0 < r.argument && r.argument <= c.maxPayload && assetName r.payload
+
+-- These are local consistency conditions, not a reachability certificate.
+-- The runtime obtains states only by replay from the empty initial state.
+def stateValid (c : Config) (s : State) : Bool :=
+  s.lastId <= maxId && s.pending.length <= c.maxPending && buffered s <= c.maxBufferedBytes &&
+  (s.resources.map (·.handle)).eraseDups.length == s.resources.length &&
+  (s.pending.map (·.id)).eraseDups.length == s.pending.length &&
+  s.resources.all (fun r => 0 < r.handle && r.handle <= s.lastId &&
+    (!r.closed || r.closing) && (!r.eof || !r.listener) &&
+    (!r.closing || r.closed || pendingOn s r.handle .close) &&
+    (!r.closed || !pendingOn s r.handle .close) &&
+    !s.pending.any (fun request => request.id == r.handle)) &&
+  s.pending.all (fun r => 0 < r.id && r.id <= s.lastId && r.handle <= maxId &&
+    r.argument <= maxU32 && argumentsValid c r &&
+    (s.pending.filter (fun other => other.handle == r.handle && other.op == r.op)).length ==
+      (if detached r.op then pendingCount s r.op else 1) &&
+    (if detached r.op then r.handle == 0 else
+      match resource s r.handle with
+      | none => false
+      | some h => r.handle < r.id &&
+        (if r.op == .accept then h.listener
+         else if r.op == .read then !h.listener && !h.eof
+         else if r.op == .write then !h.listener
+         else h.closing && !h.closed))) &&
+  resourceCount s true + pendingCount s .listen <= c.maxListeners &&
+  resourceCount s false + pendingCount s .accept <= c.maxConnections
+
+def requestResidue? (c : Config) (s : State) (r : Submission) : Option Residue :=
+  if r.id > maxId || r.handle > maxId || r.argument > maxU32 || r.payload.size > maxU32 then
+    some .integerWidth
+  else if r.id == 0 || r.id <= s.lastId then some .idOrder
+  else if !argumentsValid c r then some .arguments
+  else if !detached r.op && (resource s r.handle).isNone then some .unknownHandle
+  else if r.op == .accept && !((resource s r.handle).getD ⟨0, false, false, false, false⟩).listener then
+    some .handleKind
+  else if (r.op == .read || r.op == .write) &&
+    ((resource s r.handle).getD ⟨0, false, false, false, false⟩).listener then some .handleKind
+  else if !detached r.op &&
+    ((resource s r.handle).getD ⟨0, false, false, false, false⟩).closing then some .closing
+  else if !detached r.op && pendingOn s r.handle r.op then some .duplicateOperation
+  else if r.op == .read && ((resource s r.handle).getD ⟨0, false, false, false, false⟩).eof then
+    some .readAfterEOF
+  else if r.op == .listen && resourceCount s true + pendingCount s .listen >= c.maxListeners then
+    some .listeners
+  else if r.op == .accept && resourceCount s false + pendingCount s .accept >= c.maxConnections then
+    some .connections
+  else if s.pending.length >= c.maxPending then some .pending
+  else if buffered s + reservedBytes r > c.maxBufferedBytes then some .buffered
+  else none
+
+def reserve (s : State) (r : Submission) : State :=
+  { lastId := r.id, pending := s.pending ++ [r],
+    resources := if r.op == .close then s.resources.map (fun h =>
+      if h.handle == r.handle then { h with closing := true } else h) else s.resources }
+
+structure Failure where
+  index : Nat
+  residue : Residue
+  deriving BEq, Repr
+
+def foldBatch (c : Config) (s : State) (index : Nat) : List Submission → Except Failure State
+  | [] => .ok s
+  | r :: rs => match requestResidue? c s r with
+    | some residue => .error ⟨index, residue⟩
+    | none => foldBatch c (reserve s r) (index + 1) rs
+
+structure Input where
+  config : Config
+  state : State
+  batch : List Submission
+
+def preResidue? (i : Input) : Option Residue :=
+  if !configValid i.config then some .config
+  else if !stateValid i.config i.state then some .state
+  else if i.batch.isEmpty || i.batch.length > i.config.maxBatch then some .batchCount
+  else if 8 + (i.batch.map submissionBytes).foldl (· + ·) 0 > i.config.dataCap then some .batchBytes
+  else none
+
+def runNF (i : Input) : Except Failure State :=
+  match preResidue? i with
+  | some residue => .error ⟨0, residue⟩
+  | none => foldBatch i.config i.state 0 i.batch
+
+def residue? (i : Input) : Option Failure :=
+  match runNF i with
+  | .error failure => some failure
+  | .ok _ => none
+
+def admissible (i : Input) : Bool := (residue? i).isNone
+
+-- These state the guard/transition relationship. Reachability and codec laws
+-- are separate obligations and are not claimed by these three NF laws.
+end Web.Net

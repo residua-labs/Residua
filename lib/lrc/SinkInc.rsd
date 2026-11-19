@@ -1,0 +1,144 @@
+-- LRC: counts-up sunk to the reset they pair with, and to the count-down that undoes them.
+-- closure_claim = 0.
+--
+-- Lean's counting pass counts a variable up where it is bound when some later code consumes it
+-- (RC.lean:187: a projection of an owned object). A match on a nested pattern binds a field,
+-- counts it up and branches on it; the cell it was read from is reset further down, in the
+-- branches. Lean's expandResetReuse pairs a count-up with the reset only when both stand in one
+-- block: ExpandResetReuse.lean:98 `eraseProjIncFor` walks back from `reset y` over
+-- `let z := proj[i] y; inc z` and stops at anything else. Across the `case` the pair is not
+-- seen: the unique path counts the field up above the test and down again below it, where it
+-- releases the fields the code did not read (rbtree's balance: two count-ups, two count-downs
+-- and two further loads on the path that rebuilds nothing).
+--
+-- Here a count-up moves down. It passes what neither counts nor releases nor calls: a projection,
+-- a scalar read, a literal, an operator on words, another count-up; and it goes into every
+-- alternative of a `case`. It stops in front of anything else. This is the push-down of a `dup`
+-- into the branches of Perceus (Reinking, Xie, de Moura, Leijen: Perceus, PLDI 2021, section 2.3,
+-- with its fusion of a `dup` and a `drop` of one variable): the count-up happens on every path
+-- it happened on, later, and nothing between its old place and its new one can see or lower
+-- the count.
+-- * In front of a count-down of the same variable both vanish.
+-- * In front of `reset y`, a count-up of z bound to `proj[i] y` is written as Lean's pass expects
+--   it: `let z2 := proj[i] y; inc z2`, z2 fresh, directly before the reset. y is not written
+--   between the first read and the reset (a cell is written only after its reset), so z2 is z.
+--   Lean's pass then erases the pair on the unique path and counts z2 up on the shared one.
+-- * In front of `dec y` the same: drop specialization (lib/lrc/DropSpec.rsd) looks for the pair
+--   in the same way, with the same window.
+-- It runs between explicitRC and expandResetReuse.
+import Lib.Lrc.NormIds
+
+namespace Lrc
+
+-- the pending count-ups as instructions in front of b, in their order
+def siEmit : List N → N → N
+  | [], b => b
+  | i :: rest, b => setBody i (siEmit rest b)
+
+-- an operator on words: it reads its arguments and consumes none (lib/lrc/Prim.rsd)
+def siPurePrim (e : N) : Bool :=
+  e.op == opPrim && (primOp e <= 17 || primOp e == primTagOf || (primOp e >= primAddW && primOp e <= primUnbox)
+    || primOp e == primShrW || primOp e == primDivU || primOp e == primRemU)
+
+-- a binding the count-ups pass
+def siPasses (n : N) : Bool :=
+  let e := vdeclExpr n
+  n.op == opVDecl && n.ys.isEmpty && (e.op == opProj || e.op == opSProj || e.op == opLit || siPurePrim e)
+
+structure SiTake where
+  found : Bool
+  rest : List N
+  deriving Inhabited
+
+-- one count of the first pending count-up of x with the count-down's flags, taken off the list
+def siTake (x : Nat) (c d : Int) : List N → SiTake
+  | [] => { found := false, rest := [] }
+  | i :: rest =>
+    if rcVar i == x && i.c == c && i.d == d then
+      { found := true, rest := if rcN i <= 1 then rest else { i with b := i.b - 1 } :: rest }
+    else
+      let r := siTake x c d rest
+      { found := r.found, rest := i :: r.rest }
+
+structure SiPairs where
+  next : Nat
+  plain : List N   -- count-ups that stay as they are
+  pairs : List N   -- for each paired one: the fresh projection and its count-up
+  used : List Int  -- the fields already paired
+  deriving Inhabited
+
+-- pi, py, pt: for a variable bound to `proj[i] y`, the i, the y and the binding's type
+def siPairs (pi py pt : IMap) (y : Nat) (nFields : Nat) : List N → SiPairs → SiPairs
+  | [], r => r
+  | i :: rest, r =>
+    let z := rcVar i
+    let f := imFind pi z
+    if imContains py z && imFind py z == (y : Int) && f >= 0 && f.toNat < nFields && !r.used.contains f then
+      let v := r.next
+      let pair := [mkVDecl v (imFind pt z) (mkProj f.toNat y) (n0 opUnreachable), { i with a := (v : Int) }]
+      siPairs pi py pt y nFields rest { next := v + 1, plain := r.plain, pairs := r.pairs ++ pair, used := f :: r.used }
+    else siPairs pi py pt y nFields rest { r with plain := r.plain ++ [i] }
+
+-- in front of a `dec` the constructor is not at hand: every field index is taken
+def siAnyField : Nat := 1000000
+
+structure SiR where
+  next : Nat
+  node : N
+  deriving Inhabited
+
+structure SiAlts where
+  next : Nat
+  alts : List N
+  deriving Inhabited
+
+mutual
+-- `pend`: the count-ups on their way down, in their order; `next`: the first unused index
+partial def siGo (pi py pt : IMap) (pend : List N) (n : N) (next : Nat) : SiR :=
+  if n.op == opInc && rcN n >= 1 then siGo pi py pt (pend ++ [n]) (bodyOf n) next
+  else if siPasses n then
+    let e := vdeclExpr n
+    let x := vdeclVar n
+    let isProj := e.op == opProj
+    let r := siGo (if isProj then imInsert pi x (projIdx e) else pi) (if isProj then imInsert py x (projVar e) else py)
+      (if isProj then imInsert pt x (vdeclTy n).toNat else pt) pend (bodyOf n) next
+    { next := r.next, node := { n with kids := [e, r.node] } }
+  else if n.op == opVDecl && (vdeclExpr n).op == opReset then
+    let e := vdeclExpr n
+    let p := siPairs pi py pt (resetVar e) (resetN e) pend { next := next, plain := [], pairs := [], used := [] }
+    let r := siGo pi py pt [] (bodyOf n) p.next
+    { next := r.next, node := siEmit (p.plain ++ p.pairs) { n with kids := [e, r.node] } }
+  else if n.op == opDec && rcN n == 1 then
+    let t := siTake (rcVar n) n.c n.d pend
+    if t.found then siGo pi py pt t.rest (bodyOf n) next
+    else
+      let p := siPairs pi py pt (rcVar n) siAnyField pend { next := next, plain := [], pairs := [], used := [] }
+      let r := siGo pi py pt [] (bodyOf n) p.next
+      { next := r.next, node := siEmit (p.plain ++ p.pairs) (setBody n r.node) }
+  else if n.op == opCase then
+    let r := siAlts pi py pt pend (caseAlts n) next
+    { next := r.next, node := { n with kids := r.alts } }
+  else if n.op == opJDecl then
+    let v := siGo pi py pt [] (jdeclBody n) next
+    let b := siGo pi py pt [] (bodyOf n) v.next
+    { next := b.next, node := siEmit pend { n with kids := [v.node, b.node] } }
+  else if isTerminal n then { next := next, node := siEmit pend n }
+  else
+    let r := siGo pi py pt [] (bodyOf n) next
+    { next := r.next, node := siEmit pend (setBody n r.node) }
+partial def siAlts (pi py pt : IMap) (pend : List N) : List N → Nat → SiAlts
+  | [], next => { next := next, alts := [] }
+  | alt :: alts, next =>
+    let b := siGo pi py pt pend (altBody alt) next
+    let r := siAlts pi py pt pend alts b.next
+    { next := r.next, alts := altSetBody alt b.node :: r.alts }
+end
+
+def declSinkInc (d : Decl) : Decl :=
+  if d.ext then d else { d with body := (siGo imEmpty imEmpty imEmpty [] d.body (declMaxIndex d + 1)).node }
+
+def sinkInc : List Decl → List Decl
+  | [] => []
+  | d :: ds => declSinkInc d :: sinkInc ds
+
+end Lrc

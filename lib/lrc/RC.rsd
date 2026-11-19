@@ -1,0 +1,364 @@
+-- LRC: explicit reference counting (insertion of `inc` and `dec` instructions).
+-- A port of Lean 4.14.0 src/lean/Lean/Compiler/IR/RC.lean, cited as RC:LINE.
+-- closure_claim = 0.
+import Lib.Lrc.LiveVars
+import Lib.Lrc.Borrow
+
+namespace Lrc
+
+-- RC:18 VarInfo
+structure XrVarInfo where
+  ref : Bool
+  persistent : Bool
+  consume : Bool
+  deriving Inhabited
+
+def xrVarInfo0 : XrVarInfo := { ref := true, persistent := false, consume := false }
+
+-- RC:24 VarMap (Lean's is a hash map). The entry of a variable holds its three flags as one
+-- number: 1 `ref`, 2 `persistent`, 4 `consume`. A list searched for every variable made the pass
+-- the square of a function's size.
+def xrVMFind (x : Nat) (m : IMap) : Option XrVarInfo :=
+  let v := imFind m x
+  if v < 0 then none else some { ref := v % 2 == 1, persistent := v / 2 % 2 == 1, consume := v / 4 % 2 == 1 }
+
+def xrVMInsert (x : Nat) (info : XrVarInfo) (m : IMap) : IMap :=
+  imInsert m x ((if info.ref then 1 else 0) + (if info.persistent then 2 else 0) + (if info.consume then 4 else 0))
+
+-- RC:26 Context
+structure XrCtx where
+  -- the declarations by function number (lib/lrc/Ir.rsd `DeclTab`; RC:28 `decls : Array Decl`)
+  decls : DeclTab
+  varMap : IMap
+  jpLiveVarMap : List JPLive
+  localCtx : List JP
+  deriving Inhabited
+
+-- RC:33 getDecl
+def xrGetDecl (ctx : XrCtx) (fid : Nat) : Option Decl :=
+  dtFind ctx.decls fid
+
+def xrGetDeclParams (ctx : XrCtx) (fid : Nat) : List Param :=
+  match xrGetDecl ctx fid with
+  | some d => d.xs
+  | none => []
+
+-- RC:38 getVarInfo
+def xrGetVarInfo (ctx : XrCtx) (x : Nat) : XrVarInfo :=
+  match xrVMFind x ctx.varMap with
+  | some info => info
+  | none => xrVarInfo0
+
+-- RC:43 getJPParams
+def xrGetJPParams (ctx : XrCtx) (j : Nat) : List Param :=
+  match jpFind j ctx.localCtx with
+  | some jp => jp.xs
+  | none => []
+
+-- RC:48 getJPLiveVars
+def xrGetJPLiveVars (ctx : XrCtx) (j : Nat) : VSet :=
+  match jpLiveFind j ctx.jpLiveVarMap with
+  | some s => s
+  | none => vsEmpty
+
+-- RC:53 mustConsume
+def xrMustConsume (ctx : XrCtx) (x : Nat) : Bool :=
+  let info := xrGetVarInfo ctx x
+  info.ref && info.consume
+
+-- RC:57 addInc
+def xrAddInc (ctx : XrCtx) (x : Nat) (b : N) (n : Nat) : N :=
+  let info := xrGetVarInfo ctx x
+  if n == 0 then b else mkInc x n true info.persistent b
+
+-- RC:61 addDec
+def xrAddDec (ctx : XrCtx) (x : Nat) (b : N) : N :=
+  let info := xrGetVarInfo ctx x
+  mkDec x 1 true info.persistent b
+
+-- RC:65 updateRefUsingCtorInfo
+def xrUpdateRefUsingCtorInfo (ctx : XrCtx) (x : Nat) (c : CtorInfo) : XrCtx :=
+  if c.isRef then ctx
+  else
+    match xrVMFind x ctx.varMap with
+    | some info => { ctx with varMap := xrVMInsert x { info with ref := false } ctx.varMap }
+    | none => ctx
+
+def xrAddDecForAltGo (ctx : XrCtx) (altLiveVars : VSet) : List Nat → N → N
+  | [], b => b
+  | x :: xs, b =>
+    let b := if !vsContains altLiveVars x && xrMustConsume ctx x then xrAddDec ctx x b else b
+    xrAddDecForAltGo ctx altLiveVars xs b
+
+-- RC:75 addDecForAlt
+def xrAddDecForAlt (ctx : XrCtx) (caseLiveVars altLiveVars : VSet) (b : N) : N :=
+  xrAddDecForAltGo ctx altLiveVars (vsToList caseLiveVars) b
+
+def xrNoOccBefore (x : Int) : Nat → List Int → Bool
+  | 0, _ => true
+  | k + 1, y :: ys => y != x && xrNoOccBefore x k ys
+  | _, [] => true
+
+-- RC:80 isFirstOcc
+def xrIsFirstOcc (xs : List Int) (i : Nat) : Bool :=
+  xrNoOccBefore (intAt i xs) i xs
+
+def xrParamBorrow : Nat → List Param → Bool
+  | _, [] => true
+  | 0, p :: _ => p.borrow
+  | i + 1, _ :: ps => xrParamBorrow i ps
+
+def xrConsumePred (allConsumed : Bool) (ps : List Param) (i : Nat) : Bool :=
+  if allConsumed then true else !(xrParamBorrow i ps)
+
+-- RC:86 isBorrowParamAux
+def xrIsBorrowParamAux (x : Nat) (ys : List Int) (allConsumed : Bool) (ps : List Param) (i : Nat) : Bool :=
+  match ys with
+  | [] => false
+  | y :: rest =>
+    let hit := argIsVar y && x == y.toNat && !(xrConsumePred allConsumed ps i)
+    hit || xrIsBorrowParamAux x rest allConsumed ps (i + 1)
+
+-- RC:93 isBorrowParam
+def xrIsBorrowParam (x : Nat) (ys : List Int) (ps : List Param) : Bool :=
+  xrIsBorrowParamAux x ys false ps 0
+
+-- RC:101 getNumConsumptions
+def xrGetNumConsumptions (x : Nat) (ys : List Int) (allConsumed : Bool) (ps : List Param) (i : Nat) : Nat :=
+  match ys with
+  | [] => 0
+  | y :: rest =>
+    let c := if argIsVar y && x == y.toNat && xrConsumePred allConsumed ps i then 1 else 0
+    c + xrGetNumConsumptions x rest allConsumed ps (i + 1)
+
+def xrAddIncBeforeGo (ctx : XrCtx) (xsAll : List Int) (allConsumed : Bool) (ps : List Param) (liveVarsAfter : VSet) (i : Nat) : List Int → N → N
+  | [], b => b
+  | y :: rest, b =>
+    let b :=
+      if !argIsVar y then b
+      else
+        let x := y.toNat
+        let info := xrGetVarInfo ctx x
+        if !info.ref || !(xrIsFirstOcc xsAll i) then b
+        else
+          let numConsumptions := xrGetNumConsumptions x xsAll allConsumed ps 0
+          let numIncs :=
+            if !info.consume || vsContains liveVarsAfter x || xrIsBorrowParamAux x xsAll allConsumed ps 0
+            then numConsumptions
+            else numConsumptions - 1
+          xrAddInc ctx x b numIncs
+    xrAddIncBeforeGo ctx xsAll allConsumed ps liveVarsAfter (i + 1) rest b
+
+-- RC:108 addIncBeforeAux
+def xrAddIncBeforeAux (ctx : XrCtx) (xs : List Int) (allConsumed : Bool) (ps : List Param) (b : N) (liveVarsAfter : VSet) : N :=
+  xrAddIncBeforeGo ctx xs allConsumed ps liveVarsAfter 0 xs b
+
+-- RC:126 addIncBefore
+def xrAddIncBefore (ctx : XrCtx) (xs : List Int) (ps : List Param) (b : N) (liveVarsAfter : VSet) : N :=
+  xrAddIncBeforeAux ctx xs false ps b liveVarsAfter
+
+def xrAddDecAfterFullAppGo (ctx : XrCtx) (xsAll : List Int) (ps : List Param) (bLiveVars : VSet) (i : Nat) : List Int → N → N
+  | [], b => b
+  | y :: rest, b =>
+    let b :=
+      if !argIsVar y then b
+      else
+        let x := y.toNat
+        if xrMustConsume ctx x && xrIsFirstOcc xsAll i && xrIsBorrowParam x xsAll ps && !vsContains bLiveVars x then
+          xrAddDec ctx x b
+        else b
+    xrAddDecAfterFullAppGo ctx xsAll ps bLiveVars (i + 1) rest b
+
+-- RC:130 addDecAfterFullApp
+def xrAddDecAfterFullApp (ctx : XrCtx) (xs : List Int) (ps : List Param) (b : N) (bLiveVars : VSet) : N :=
+  xrAddDecAfterFullAppGo ctx xs ps bLiveVars 0 xs b
+
+-- RC:143 addIncBeforeConsumeAll
+def xrAddIncBeforeConsumeAll (ctx : XrCtx) (xs : List Int) (b : N) (liveVarsAfter : VSet) : N :=
+  xrAddIncBeforeAux ctx xs true [] b liveVarsAfter
+
+-- RC:148 addDecForDeadParams
+def xrAddDecForDeadParams (ctx : XrCtx) : List Param → N → VSet → N
+  | [], b, _ => b
+  | p :: ps, b, bLiveVars =>
+    let b := if !p.borrow && tyIsObj p.ty && !vsContains bLiveVars p.x then xrAddDec ctx p.x b else b
+    xrAddDecForDeadParams ctx ps b bLiveVars
+
+-- RC:152 isPersistent
+def xrIsPersistent (e : N) : Bool :=
+  e.op == opFap && (fapArgs e).isEmpty
+
+-- RC:157 consumeExpr
+def xrConsumeExpr (m : IMap) (v : N) : Bool :=
+  if v.op == opProj then
+    match xrVMFind (projVar v) m with
+    | some info => info.consume
+    | none => true
+  else true
+
+-- Lean/Runtime.lean:23 maxSmallNat (2^63 - 1 on 64-bit targets, include/lean/lean.h:1156 LEAN_MAX_SMALL_NAT)
+def xrMaxSmallNat : Int := 9223372036854775807
+
+-- RC:165 isScalarBoxedInTaggedPtr
+def xrIsScalarBoxedInTaggedPtr (v : N) : Bool :=
+  if v.op == opCtor then (infoOf v).isScalar
+  else if v.op == opLit then v.a >= 0 && v.a <= xrMaxSmallNat
+  else false
+
+-- RC:171 updateVarInfo
+def xrUpdateVarInfo (ctx : XrCtx) (x : Nat) (t : Int) (v : N) : XrCtx :=
+  let info : XrVarInfo := {
+    ref := tyIsObj t && !(xrIsScalarBoxedInTaggedPtr v),
+    persistent := xrIsPersistent v,
+    consume := xrConsumeExpr ctx.varMap v
+  }
+  { ctx with varMap := xrVMInsert x info ctx.varMap }
+
+def xrUpdateVarInfoBinds (ctx : XrCtx) (v : N) : List Int → XrCtx
+  | x :: t :: rest => xrUpdateVarInfoBinds (xrUpdateVarInfo ctx x.toNat t v) v rest
+  | _ => ctx
+
+-- RC:180 addDecIfNeeded
+def xrAddDecIfNeeded (ctx : XrCtx) (x : Nat) (b : N) (bLiveVars : VSet) : N :=
+  if xrMustConsume ctx x && !vsContains bLiveVars x then xrAddDec ctx x b else b
+
+structure XrBodyR where
+  body : N
+  live : VSet
+  deriving Inhabited
+
+def xrAddDecForDeadBinds (ctx : XrCtx) : List Nat → N → VSet → N
+  | [], b, _ => b
+  | z :: zs, b, bLiveVars =>
+    let b := xrAddDecIfNeeded ctx z b bLiveVars
+    xrAddDecForDeadBinds ctx zs b bLiveVars
+
+-- RC:183 processVDecl
+def xrProcessVDecl (ctx : XrCtx) (n : N) (b : N) (bLiveVars : VSet) : XrBodyR :=
+  let z := vdeclVar n
+  let v := vdeclExpr n
+  let b := if (vdeclExtra n).isEmpty then b else xrAddDecForDeadBinds ctx (bindVars (vdeclBinds n)) b bLiveVars
+  let b1 :=
+    if v.op == opCtor then xrAddIncBeforeConsumeAll ctx (ctorArgs v) (setBody n b) bLiveVars
+    else if v.op == opReuse then xrAddIncBeforeConsumeAll ctx (reuseArgs v) (setBody n b) bLiveVars
+    else if v.op == opProj then
+      let x := projVar v
+      let b := xrAddDecIfNeeded ctx x b bLiveVars
+      let b := if (xrGetVarInfo ctx x).consume then xrAddInc ctx z b 1 else b
+      setBody n b
+    else if v.op == opSProj then setBody n (xrAddDecIfNeeded ctx (sprojVar v) b bLiveVars)
+    else if v.op == opFap || v.op == opPrim then
+      -- a primitive that consumes an argument says so as a declaration does (lib/lrc/Prim.rsd `primParams`)
+      let ps := if v.op == opFap then xrGetDeclParams ctx (fapFn v) else primParams (primOp v) v.ys.length
+      let ys := v.ys
+      let b := xrAddDecAfterFullApp ctx ys ps b bLiveVars
+      let b := setBody n b
+      xrAddIncBefore ctx ys ps b bLiveVars
+    else setBody n b
+  let liveVars := vsEraseAll (updateLiveVars v bLiveVars) (bindVars (vdeclBinds n))
+  { body := b1, live := liveVars }
+
+-- RC:208 updateVarInfoWithParams
+def xrUpdateVarInfoWithParams (ctx : XrCtx) : List Param → XrCtx
+  | [] => ctx
+  | p :: ps =>
+    let info : XrVarInfo := { ref := tyIsObj p.ty, persistent := false, consume := !p.borrow }
+    xrUpdateVarInfoWithParams { ctx with varMap := xrVMInsert p.x info ctx.varMap } ps
+
+-- the live variables of the alternatives of a case
+def xrAltsLive : List XrBodyR → VSet → VSet
+  | [], s => s
+  | r :: rs, s => xrAltsLive rs (vsUnion s r.live)
+
+-- RC:242 `caseLiveVars`, RC:247 `addDecForAlt`, on the visited alternatives in order
+def xrFinishAlts (x : Nat) (caseLiveVars : VSet) (ctx : XrCtx) : List N → List XrBodyR → List N
+  | alt :: alts, r :: rs =>
+    altSetBody alt (xrAddDecForAlt (if altIsDefault alt then ctx else xrUpdateRefUsingCtorInfo ctx x (infoOf alt)) caseLiveVars r.live r.body)
+      :: xrFinishAlts x caseLiveVars ctx alts rs
+  | _, _ => []
+
+mutual
+-- RC:213 visitFnBody
+partial def xrVisitFnBody (n : N) (ctx : XrCtx) : XrBodyR :=
+  if n.op == opVDecl then
+    let ctx := xrUpdateVarInfoBinds ctx (vdeclExpr n) (vdeclBinds n)
+    let r := xrVisitFnBody (bodyOf n) ctx
+    xrProcessVDecl ctx n r.body r.live
+  else if n.op == opJDecl then
+    let j := jdeclId n
+    let xs := jdeclParams n
+    let ctxAtV := xrUpdateVarInfoWithParams ctx xs
+    let rv := xrVisitFnBody (jdeclBody n) ctxAtV
+    let v := xrAddDecForDeadParams ctxAtV xs rv.body rv.live
+    -- The join point's live variables are those of its body less its parameters. Lean collects
+    -- them from the body once more (LiveVars:156 `updateJPLiveVarMap`); the visit above returned
+    -- them, and the decrements just added name parameters only. Collected again they cost a walk
+    -- of the rest of the function at every join point, the square of the depth for join points
+    -- nested as the stage's are.
+    let ctx := { ctx with
+      localCtx := { j := j, xs := xs, body := v } :: ctx.localCtx,
+      jpLiveVarMap := { j := j, live := vsEraseAll rv.live (paramVars xs) } :: ctx.jpLiveVarMap
+    }
+    let rb := xrVisitFnBody (bodyOf n) ctx
+    { body := mkJDecl j xs v rb.body, live := rb.live }
+  else if n.op == opSSet then
+    let rb := xrVisitFnBody (bodyOf n) ctx
+    { body := setBody n rb.body, live := vsInsert rb.live (ssetVar n) }
+  else if n.op == opMData then
+    let rb := xrVisitFnBody (bodyOf n) ctx
+    { body := setBody n rb.body, live := rb.live }
+  else if n.op == opCase then
+    -- Lean collects the case's live variables from the case before it visits the alternatives
+    -- (RC:237): a walk of everything under the case at every case. They are the subject and
+    -- the live variables of each alternative (LiveVars:140), which the visits return.
+    let rs := xrVisitAlts (caseVar n) ctx (caseAlts n)
+    let caseLiveVars := vsInsert (xrAltsLive rs vsEmpty) (caseVar n)
+    { body := { n with kids := xrFinishAlts (caseVar n) caseLiveVars ctx (caseAlts n) rs }, live := caseLiveVars }
+  else if n.op == opRet then
+    match retArgs n with
+    | [y] =>
+      if argIsVar y then
+        let x := y.toNat
+        let info := xrGetVarInfo ctx x
+        let b := if info.ref && !info.consume then xrAddInc ctx x n 1 else n
+        { body := b, live := vsInsert vsEmpty x }
+      else { body := n, live := vsEmpty }
+    | ys =>
+      { body := xrAddIncBeforeConsumeAll ctx ys n vsEmpty, live := vsInsertArgs vsEmpty ys }
+  else if n.op == opJmp then
+    let j := jmpId n
+    let xs := jmpArgs n
+    let jLiveVars := xrGetJPLiveVars ctx j
+    let ps := xrGetJPParams ctx j
+    let b := xrAddIncBefore ctx xs ps n jLiveVars
+    let bLiveVars := collectLiveVars b ctx.jpLiveVarMap vsEmpty
+    { body := b, live := bLiveVars }
+  else if n.op == opUnreachable then { body := n, live := vsEmpty }
+  else { body := n, live := vsEmpty }
+-- every alternative's body visited (RC:240-247, before `addDecForAlt`)
+partial def xrVisitAlts (x : Nat) (ctx : XrCtx) : List N → List XrBodyR
+  | [] => []
+  | alt :: alts =>
+    let ctx1 := if altIsDefault alt then ctx else xrUpdateRefUsingCtorInfo ctx x (infoOf alt)
+    xrVisitFnBody (altBody alt) ctx1 :: xrVisitAlts x ctx alts
+end
+
+-- RC:269 visitDecl
+def xrVisitDecl (decls : DeclTab) (d : Decl) : Decl :=
+  if d.ext then d
+  else
+    let ctx : XrCtx := { decls := decls, varMap := imEmpty, jpLiveVarMap := [], localCtx := [] }
+    let ctx := xrUpdateVarInfoWithParams ctx d.xs
+    let r := xrVisitFnBody d.body ctx
+    let b := xrAddDecForDeadParams ctx d.xs r.body r.live
+    { d with body := b }
+
+def xrVisitDecls (decls : DeclTab) : List Decl → List Decl
+  | [] => []
+  | d :: ds => xrVisitDecl decls d :: xrVisitDecls decls ds
+
+-- RC:281 explicitRC
+def explicitRC (decls : List Decl) : List Decl :=
+  xrVisitDecls (dtOfList decls) decls
+
+end Lrc

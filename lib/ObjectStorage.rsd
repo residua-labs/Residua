@@ -1,0 +1,618 @@
+import RscBase
+
+-- Explicit boxing at the heap boundary. Source parameters and locals retain
+-- their flat ABI; each heap field has the one class from ObjectLayout.
+structure StorageCode where
+  ok : Bool := true
+  err : Int := profile.cWide
+  code : List Int := []
+  nxt : Nat := 0
+
+def storageClass (g : Dg) (ty : List Int) : Int :=
+  objectSlotClass ((tyView g ty).headD (-1))
+
+-- DERIV-HANG: the heap node's f0 field carries the constructor index,
+-- which is always < 245 (the same bound storagePackCtor asserts on the
+-- header tag8), so an i64 slot is wasted width.  Under lay.rc the node
+-- packs f0 into a one-byte slot: scalar bytes 34 -> 27, payload 64 -> 56,
+-- capacity class 128 -> 64 bytes per node.  The wire record type, the
+-- flat local ABI, and the `off` arena path are untouched.  Both v1
+-- (8 fields) and v2 (9 fields) node shapes are covered.
+def isHeapNodeFields (tg : Dg) : List (List Int) → Bool
+  | [f0, f1, f2, f3, f4, f5, f6, f7] =>
+    (typeEq tg) f0 [0] && (typeEq tg) f1 (4 :: heapHandleTy) &&
+    (typeEq tg) f2 [0] && (typeEq tg) f3 [0] && (typeEq tg) f4 [0] &&
+    (typeEq tg) f5 [1] && (typeEq tg) f6 [1] && (typeEq tg) f7 [2]
+  | [f0, f1, f2, f3, f4, f5, f6, f7, f8] =>
+    (typeEq tg) f0 [0] && (typeEq tg) f1 (4 :: heapHandleTy2) &&
+    (typeEq tg) f2 [0] && (typeEq tg) f3 [0] && (typeEq tg) f4 [0] &&
+    (typeEq tg) f5 [1] && (typeEq tg) f6 [1] && (typeEq tg) f7 [2] &&
+    (typeEq tg) f8 [4, 0]
+  | _ => false
+
+-- DERIV-HANG: a `[35]`-projection on a heap-node record marks that field
+-- live.  A scalar slot no body projects is a dead store (constructor writes
+-- pad it to zero), so under lay.rc it holds one byte without changing any
+-- observed value.  The scan runs once per compile into g.nodeUse; callers
+-- without a populated graph fall back to the same scan inline.
+def nodeProjUse (g : Dg) (u : List Int) : List Int → List Int
+  | [] => u
+  | t :: bs =>
+    if t == 35 then
+      let ty := (readTyD g) bs
+      let ix := if ty.ok == profile.cOk then readLeb ty.rest else rdFail ty.ok []
+      let u := if ix.ok == profile.cOk && (isHeapNode g) ty.acc && !(u.any (fun f => f == ix.n))
+          then ix.n :: u else u
+      nodeProjUse g u bs
+    else nodeProjUse g u bs
+
+def nodeUsedGo (g : Dg) (u : List Int) : Nat → List Int
+  | 0 => u
+  | k + 1 => nodeUsedGo g (nodeProjUse g u (dgAt g k)) k
+
+def nodeUsed (g : Dg) : List Int := nodeUsedGo g [] g.n
+
+def nodeUseOf (g : Dg) : List Int :=
+  if g.on then (if g.nodeUse.isEmpty then nodeUsed g else g.nodeUse)
+  else [0, 1, 2, 3, 4, 5, 6, 7, 8]
+
+def nodeClassGo (u : List Int) (i : Int) : List Int → List Int
+  | [] => []
+  | c :: cs =>
+    (if i == 0 || ((i == 3 || i == 4) && !(u.any (fun f => f == i))) then 1 else c)
+      :: nodeClassGo u (i + 1) cs
+
+-- The class list for a record's active fields, with the node's tag field and
+-- unprojected i64 scalar slots narrowed to one byte under lay.rc.  Field
+-- count is asserted so a filtered `active` list can never misalign the
+-- override.  For a v2 node with f3/f4 unprojected the payload drops below
+-- the 56-byte bound: capacity class 128 -> 64 bytes per node.
+def nodeClasses (g : Dg) (lay : Layers) (fields : List (List Int)) : List Int :=
+  let cs := fields.map (storageClass g)
+  if lay.rc && isHeapNodeFields g fields then nodeClassGo (nodeUseOf g) 0 cs
+  else cs
+
+def storageHeader (rc tag other : Int) : Int :=
+  let h := rc + other * 281474976710656 + tag * 72057594037927936
+  if h >= 9223372036854775808 then h - 18446744073709551616 else h
+
+def storageAlloc (d : Nat) (bytes tag other : Int) : List Int :=
+  lg 0 ++ i64Const bytes ++ i64Const tag ++ i64Const other ++ callFn 0 ++ ls d
+    ++ lg d ++ [80] ++ voidIf (i64Const profile.tagCapacity ++ [15])
+
+def storageRetain (lay : Layers) (p : Nat) : List Int :=
+  if lay.rc then lg 0 ++ lg p ++ callFn 6 else []
+
+def storageRead (p : Nat) (off cls : Int) : List Int :=
+  lg p ++ [167] ++ (if cls == 1 then [49, 0] ++ lebU off.toNat else i64LoadAt off)
+
+def storageWrite (p : Nat) (off cls : Int) (value : List Int) : List Int :=
+  lg p ++ [167] ++ value ++ (if cls == 1 then [60, 0] ++ lebU off.toNat else i64StoreAt off)
+
+def storageTypes (g : Dg) : Nat → Bool → List Int → List (List Int)
+  | 0, _, _ => []
+  | n + 1, named, rest =>
+    let t := readTyD g (if named then (skipName rest).rest else rest)
+    t.acc :: storageTypes g n named t.rest
+
+def storageFields (g : Dg) (ty : List Int) : List (List Int) :=
+  match tyView g ty with
+  | 5 :: bs => storageTypes g 2 false bs
+  | 7 :: bs =>
+    let n := readLeb bs
+    storageTypes g n.n.toNat true n.rest
+  | _ => []
+
+def storageJoin (a b : StorageCode) : StorageCode :=
+  { ok := a.ok && b.ok, err := if !a.ok then a.err else b.err,
+    code := a.code ++ b.code, nxt := if a.nxt > b.nxt then a.nxt else b.nxt }
+
+mutual
+def storagePack (g : Dg) (lay : Layers) (arr : List (List Int)) : Nat → List Int → Nat → Nat → Nat → StorageCode
+  | 0, _, _, _, next => { ok := false, nxt := next }
+  | k + 1, ty, src, d, next =>
+    let body := tyView g ty
+    let kind := body.headD (-1)
+    if storageClass g ty != 0 || isHeapHandle g ty then
+      { code := cpW src d 1 ++ (if isHeapHandle g ty then storageRetain lay d else []), nxt := next }
+    else if kind == 4 && isArenaListWithLayers g lay ty then
+      -- A packed arena descriptor is scalar provenance, never a pointer.
+      { code := storageAlloc d 16 0 0 ++ stW d 8 (lg src), nxt := next }
+    else if kind == 4 && memT g arr ty then
+      { code := lg (src + 1) ++ [80, 4, 64]
+          ++ cpW src d 1 ++ storageRetain lay d
+          ++ [5] ++ storageAlloc d 24 0 1
+          ++ stW d 8 (lg src) ++ stW d 16 (lg (src + 1)) ++ storageRetain lay src ++ [11], nxt := next }
+    else if kind == 2 || kind == 3 || kind == 4 then
+      { code := cpW src d 1 ++ storageRetain lay d, nxt := next }
+    else if kind == 5 || kind == 7 then
+      let fields := storageFields g ty
+      if fields.isEmpty then { code := i64Const 1 ++ ls d, nxt := next }
+      else if fields.length == 1 && storageClass g (fields.headD []) == 0 then
+        storagePack g lay arr k (fields.headD []) src d next
+      else if fields.length == 1 && storageClass g (fields.headD []) == 1 then
+        { code := lg src ++ i64Const 1 ++ [134] ++ i64Const 1 ++ [132] ++ ls d, nxt := next }
+      else storagePackCtor g lay arr k fields src d next 0
+    else if kind == 8 then
+      let a := storagePackCtor g lay arr k [body.tail] (src + 1) d next 1
+      { a with code := lg src ++ [80, 4, 64] ++ i64Const 1 ++ ls d ++ [5] ++ a.code ++ [11] }
+    else if kind == 9 then
+      let payload := body.tail
+      let a := storagePackCtor g lay arr k [payload] (src + 1) d next 0
+      let b := storagePackCtor g lay arr k [[0]] (src + 1 + wordsOfWithLayers g lay arr payload) d a.nxt 1
+      { ok := a.ok && b.ok, nxt := b.nxt,
+        code := lg src ++ [80, 4, 64] ++ a.code ++ [5] ++ b.code ++ [11] }
+    else if kind == 6 then
+      let n := readLeb body.tail
+      storagePackArms g lay arr k (storageTypes g n.n.toNat false n.rest) src (src + 1) d next 0
+    else { ok := false, nxt := next }
+
+def storagePackCtor (g : Dg) (lay : Layers) (arr : List (List Int)) : Nat → List (List Int) → Nat → Nat → Nat → Int → StorageCode
+  | 0, _, _, _, next, _ => { ok := false, nxt := next }
+  | k + 1, fields, src, d, next, tag =>
+    let active := fields.filter (fun t => wordsOfWithLayers g lay arr t != 0)
+    if active.isEmpty then { code := i64Const (2 * tag + 1) ++ ls d, nxt := next }
+    else
+      let classes := nodeClasses g lay active
+      let layout := objectLayout classes
+      let fieldsCode := storagePackFields g lay arr k fields layout.offsets classes src d next
+      { ok := tag >= 0 && tag < 245 && layout.ok && fieldsCode.ok, nxt := fieldsCode.nxt,
+        code := storageAlloc d (layout.bytes : Int) tag (layout.objects : Int) ++ fieldsCode.code }
+
+def storagePackFields (g : Dg) (lay : Layers) (arr : List (List Int)) : Nat → List (List Int) → List Int → List Int → Nat → Nat → Nat → StorageCode
+  | 0, _, _, _, _, _, next => { ok := false, nxt := next }
+  | _ + 1, [], _, _, _, _, next => { nxt := next }
+  | k + 1, t :: ts, offsets, classes, src, p, next =>
+    let w := wordsOfWithLayers g lay arr t
+    if w == 0 then storagePackFields g lay arr k ts offsets classes src p next
+    else
+      let packed := storagePack g lay arr k t src next (next + 1)
+      let more := storagePackFields g lay arr k ts offsets.tail classes.tail (src + w) p packed.nxt
+      { ok := packed.ok && more.ok, nxt := more.nxt,
+        code := packed.code ++ storageWrite p (offsets.headD 8) (classes.headD (storageClass g t)) (lg next) ++ more.code }
+
+def storagePackArms (g : Dg) (lay : Layers) (arr : List (List Int)) : Nat → List (List Int) → Nat → Nat → Nat → Nat → Int → StorageCode
+  | 0, _, _, _, _, next, _ => { ok := false, nxt := next }
+  | _ + 1, [], _, _, _, next, _ => { nxt := next }
+  | k + 1, t :: ts, tag, src, d, next, i =>
+    let a := storagePackCtor g lay arr k [t] src d next i
+    let b := storagePackArms g lay arr k ts tag (src + wordsOfWithLayers g lay arr t) d a.nxt (i + 1)
+    { ok := a.ok && b.ok, nxt := b.nxt,
+      code := lg tag ++ i64Const i ++ [81, 4, 64] ++ a.code ++ [5] ++ b.code ++ [11] }
+
+-- Unpacking borrows leaves. The ordinary ownership closing operation retains
+-- the selected flat leaves before releasing the containing object.
+def storageUnpack (g : Dg) (lay : Layers) (arr : List (List Int)) : Nat → List Int → Nat → Nat → Nat → StorageCode
+  | 0, _, _, _, next => { ok := false, nxt := next }
+  | k + 1, ty, p, dst, next =>
+    let body := tyView g ty
+    let kind := body.headD (-1)
+    if storageClass g ty != 0 || isHeapHandle g ty then
+      { code := cpW p dst 1, nxt := next }
+    else if kind == 4 && isArenaListWithLayers g lay ty then
+      { code := ldW p 8 ++ ls dst, nxt := next }
+    else if kind == 4 && memT g arr ty then
+      { code := storageRead p 7 1 ++ i64Const 246 ++ [81]
+          ++ storageRead p 7 1 ++ i64Const 248 ++ [81, 114, 4, 64]
+          ++ cpW p dst 1 ++ i64Const 0 ++ ls (dst + 1)
+          ++ [5] ++ ldW p 8 ++ ls dst ++ ldW p 16 ++ ls (dst + 1) ++ [11], nxt := next }
+    else if kind == 2 || kind == 3 || kind == 4 then { code := cpW p dst 1, nxt := next }
+    else if kind == 5 || kind == 7 then
+      let fields := storageFields g ty
+      if fields.isEmpty then { nxt := next }
+      else if fields.length == 1 && storageClass g (fields.headD []) == 0 then
+        storageUnpack g lay arr k (fields.headD []) p dst next
+      else if fields.length == 1 && storageClass g (fields.headD []) == 1 then
+        { code := lg p ++ i64Const 1 ++ [136] ++ ls dst, nxt := next }
+      else storageUnpackCtor g lay arr k fields p dst next
+    else if kind == 8 then
+      let a := storageUnpackCtor g lay arr k [body.tail] p (dst + 1) next
+      { a with code := zeroW dst (wordsOfWithLayers g lay arr ty)
+          ++ lg p ++ i64Const 1 ++ [82, 4, 64] ++ i64Const 1 ++ ls dst ++ a.code ++ [11] }
+    else if kind == 9 then
+      let payload := body.tail
+      let a := storageUnpackCtor g lay arr k [payload] p (dst + 1) next
+      { a with code := zeroW dst (wordsOfWithLayers g lay arr ty)
+          ++ lg p ++ i64Const 1 ++ [131, 80, 69, 4, 126] ++ lg p ++ i64Const 1 ++ [136]
+          ++ [5] ++ storageRead p 7 1 ++ [11] ++ ls dst
+          ++ lg dst ++ [80, 4, 64] ++ a.code ++ [5]
+          ++ ldW p 8 ++ ls (dst + 1 + wordsOfWithLayers g lay arr payload) ++ [11] }
+    else if kind == 6 then
+      let n := readLeb body.tail
+      let a := storageUnpackArms g lay arr k (storageTypes g n.n.toNat false n.rest) p dst (dst + 1) next 0
+      { a with code := zeroW dst (wordsOfWithLayers g lay arr ty)
+          ++ lg p ++ i64Const 1 ++ [131, 80, 69, 4, 126] ++ lg p ++ i64Const 1 ++ [136]
+          ++ [5] ++ storageRead p 7 1 ++ [11] ++ ls dst ++ a.code }
+    else { ok := false, nxt := next }
+
+def storageUnpackCtor (g : Dg) (lay : Layers) (arr : List (List Int)) : Nat → List (List Int) → Nat → Nat → Nat → StorageCode
+  | 0, _, _, _, next => { ok := false, nxt := next }
+  | k + 1, fields, p, dst, next =>
+    let active := fields.filter (fun t => wordsOfWithLayers g lay arr t != 0)
+    let classes := nodeClasses g lay active
+    let layout := objectLayout classes
+    let a := storageUnpackFields g lay arr k fields layout.offsets classes p dst next
+    { a with ok := layout.ok && a.ok }
+
+def storageUnpackFields (g : Dg) (lay : Layers) (arr : List (List Int)) : Nat → List (List Int) → List Int → List Int → Nat → Nat → Nat → StorageCode
+  | 0, _, _, _, _, _, next => { ok := false, nxt := next }
+  | _ + 1, [], _, _, _, _, next => { nxt := next }
+  | k + 1, t :: ts, offsets, classes, p, dst, next =>
+    let w := wordsOfWithLayers g lay arr t
+    if w == 0 then storageUnpackFields g lay arr k ts offsets classes p dst next
+    else
+      let a := storageUnpack g lay arr k t next dst (next + 1)
+      let b := storageUnpackFields g lay arr k ts offsets.tail classes.tail p (dst + w) a.nxt
+      { ok := a.ok && b.ok, nxt := b.nxt,
+        code := storageRead p (offsets.headD 8) (classes.headD (storageClass g t)) ++ ls next ++ a.code ++ b.code }
+
+def storageUnpackArms (g : Dg) (lay : Layers) (arr : List (List Int)) : Nat → List (List Int) → Nat → Nat → Nat → Nat → Int → StorageCode
+  | 0, _, _, _, _, next, _ => { ok := false, nxt := next }
+  | _ + 1, [], _, _, _, next, _ => { nxt := next }
+  | k + 1, t :: ts, p, tag, dst, next, i =>
+    let a := storageUnpackCtor g lay arr k [t] p dst next
+    let b := storageUnpackArms g lay arr k ts p tag (dst + wordsOfWithLayers g lay arr t) a.nxt (i + 1)
+    { ok := a.ok && b.ok, nxt := b.nxt,
+      code := lg tag ++ i64Const i ++ [81, 4, 64] ++ a.code ++ [5] ++ b.code ++ [11] }
+end
+
+-- The reserved Cib.Heap node has a nullary constructor encoded by its
+-- generic record payload. Preserve that constructor as a v1 immediate;
+-- the nominal handle in its children field distinguishes ordinary records.
+def storageHeapImmediateKind (g : Dg) (arr : List (List Int)) (ty : List Int) : Nat :=
+  if (tyView g ty).take 2 != [7, 8] || !(isHeapNode g ty) then 0
+  else if memT g arr (4 :: heapHandleTy) then 2 else 1
+
+def storageHeapZeroFields (src : Nat) : Nat → List Int
+  | 0 => []
+  | n + 1 => storageHeapZeroFields src n ++ lg (src + n) ++ [80, 113]
+
+def storageHeapNullary (arrayKids : Bool) (src : Nat) : List Int :=
+  lg src ++ i64Const 0 ++ [89] ++ lg src ++ i64Const 64 ++ [83, 113]
+    ++ lg (src + 1) ++ i64Const (if arrayKids then objectEmptyArray else profile.emptyAt) ++ [81, 113]
+    ++ storageHeapZeroFields (src + 2) (if arrayKids then 6 else 5)
+    ++ lg (src + (if arrayKids then 8 else 7)) ++ i64Const profile.emptyStr ++ [81, 113]
+
+def storagePackHeapNode (g : Dg) (lay : Layers) (arr : List (List Int))
+    (ty : List Int) (src dst next : Nat) : StorageCode :=
+  let a := storagePack g lay arr profile.v2Fuel ty src dst next
+  let sk := storageHeapImmediateKind g arr ty
+  if sk == 0 then a
+  else
+    { a with code := storageHeapNullary (sk == 2) src ++ [4, 64]
+        ++ lg src ++ i64Const 1 ++ [134] ++ i64Const 1 ++ [132] ++ ls dst
+        ++ [5] ++ a.code ++ [11] }
+
+def storageUnpackHeapNode (g : Dg) (lay : Layers) (arr : List (List Int))
+    (ty : List Int) (p dst next : Nat) : StorageCode :=
+  let a := storageUnpack g lay arr profile.v2Fuel ty p dst next
+  let boxed := lg p ++ i64Const profile.heapAt ++ [84]
+    ++ voidIf (refuseTo profile.tagStuck stTypeMismatch) ++ a.code
+  let sk := storageHeapImmediateKind g arr ty
+  if sk == 0 then { a with code := boxed }
+  else
+    let w := wordsOfWithLayers g lay arr ty
+    { a with code := lg p ++ i64Const 1 ++ [131, 80, 4, 64] ++ boxed ++ [5]
+        ++ lg p ++ i64Const 128 ++ [90]
+          ++ voidIf (refuseTo profile.tagStuck stTypeMismatch)
+        ++ zeroW dst w ++ lg p ++ i64Const 1 ++ [136] ++ ls dst
+        ++ i64Const (if sk == 2 then objectEmptyArray else profile.emptyAt) ++ ls (dst + 1)
+        ++ i64Const profile.emptyStr ++ ls (dst + w - 1) ++ [11] }
+
+def storageLoadField (g : Dg) (lay : Layers) (arr : List (List Int)) (ty : List Int) (p : Nat) (off : Int) (dst next : Nat) : StorageCode :=
+  let a := storageUnpack g lay arr profile.v2Fuel ty next dst (next + 1)
+  { a with code := storageRead p off (storageClass g ty) ++ ls next ++ a.code }
+
+def storageCons (g : Dg) (lay : Layers) (arr : List (List Int)) (elem : List Int) (src tail dst next : Nat) : StorageCode :=
+  let a := storagePack g lay arr profile.v2Fuel elem src next (next + 1)
+  let layout := objectLayout [storageClass g elem, 0]
+  { ok := a.ok && layout.ok, nxt := a.nxt,
+    code := a.code ++ storageAlloc dst (layout.bytes : Int) 1 (layout.objects : Int)
+      ++ storageWrite dst (layout.offsets.headD 8) (storageClass g elem) (lg next)
+      ++ stW dst ((layout.offsets[1]?).getD 16) (lg tail) ++ storageRetain lay tail }
+
+-- Lean ExpandResetReuse: save the new fields before releasing old edges.
+-- A direct flat object field can transfer its old edge when it is unchanged.
+-- The helper restores that edge if another saved field made the root shared.
+def storageFlatObject (g : Dg) (lay : Layers) (arr : List (List Int)) : Nat → List Int → Rd
+  | 0, ty => rdFail (rscFuelFailure (storageFlatFuelRequest ty)) []
+  | k + 1, ty =>
+    let kind := (tyView g ty).headD (-1)
+    if isHeapHandle g ty || kind == 2 || kind == 3 then rdOk 1 []
+    else if kind == 4 then rdOk (if !isArenaListWithLayers g lay ty && !memT g arr ty then 1 else 0) []
+    else if kind == 5 || kind == 7 then
+      let fields := storageFields g ty
+      if fields.length == 1 && storageClass g (fields.headD []) == 0
+        then storageFlatObject g lay arr k (fields.headD [])
+        else rdOk 0 []
+    else rdOk 0 []
+
+def storageUnique (p : Nat) : List Int :=
+  lg p ++ i64Const profile.heapAt ++ [89, 4, 127]
+    ++ lg p ++ [167, 40, 2, 0] ++ i32Const 1 ++ [70]
+    ++ [5] ++ i32Const 0 ++ [11]
+
+def storageReuseSelect (old choice : Nat) : List Nat → List Int
+  | [] => []
+  | p :: ps =>
+    lg old ++ [80, 4, 64] ++ storageUnique p ++ [4, 64]
+      ++ cpW p old 1 ++ i64Const ((p + 1 : Nat) : Int) ++ ls choice ++ [11, 11]
+      ++ storageReuseSelect old choice ps
+
+def storageReuseClear (choice : Nat) : List Nat → List Int
+  | [] => []
+  | p :: ps =>
+    lg choice ++ i64Const ((p + 1 : Nat) : Int) ++ [81, 4, 64]
+      ++ i64Const 0 ++ ls p ++ [11] ++ storageReuseClear choice ps
+
+structure StorageReuseFields where
+  ok : Bool := true
+  err : Int := profile.cWide
+  save : List Int := []
+  write : List Int := []
+  nxt : Nat := 0
+
+-- The reuse callers compute the node's layout-class list once (`nodeClasses`),
+-- so this worker threads it beside `offsets`; each active field's read and
+-- write uses the narrowed class. `headD` falls back to `storageClass g ty`
+-- when the override list runs out.
+def storageReuseFieldsClasses (g : Dg) (lay : Layers) (arr : List (List Int))
+    (old mask dst : Nat) : Nat → List (List Int) → List Int → List Int → Nat → Nat → StorageReuseFields
+  | _, [], _, _, _, next => { nxt := next }
+  | 0, ty :: fields, offsets, _, src, next =>
+    { ok := false, err := rscFuelFailure (storageFieldsFuelRequest old mask dst src next
+        (ty :: fields) offsets), nxt := next }
+  | k + 1, ty :: fields, offsets, classes, src, next =>
+    let w := wordsOfWithLayers g lay arr ty
+    if w == 0 then storageReuseFieldsClasses g lay arr old mask dst k fields offsets classes src next
+    else
+      let cls := classes.headD (storageClass g ty)
+      let off := offsets.headD 8
+      let flat := if cls == 0 && off >= 8 && off < 520
+        then storageFlatObject g lay arr profile.v2Fuel ty else rdOk 0 []
+      if flat.ok != profile.cOk then { ok := false, err := flat.ok, nxt := next }
+      else
+        let value := next
+        let same := next + 1
+        let direct := flat.n != 0
+        let packed := if direct then { code := cpW src value 1, nxt := next + 2 : StorageCode }
+          else storagePack g lay arr profile.v2Fuel ty src value (next + 1)
+        -- Equality is needed only for transferring a direct object edge.
+        -- Lean ExpandResetReuse otherwise emits the field store directly.
+        let save := if direct then
+            let equality := lg old ++ [80, 69, 4, 64]
+              ++ storageRead old off cls ++ lg value ++ [81, 173] ++ ls same ++ [11]
+            let transfer :=
+              lg same ++ [80, 69, 4, 64]
+                ++ lg mask ++ i64Const 1 ++ i64Const (off / 8 - 1) ++ [134, 132] ++ ls mask
+                ++ [5] ++ storageRetain lay value ++ [11]
+            i64Const 0 ++ ls same ++ packed.code ++ equality ++ transfer
+          else packed.code
+        let write := storageWrite dst off cls (lg value)
+        let write := if direct then
+            lg old ++ lg dst ++ [81] ++ lg same ++ [80, 69, 113, 4, 64, 5] ++ write ++ [11]
+          else write
+        let more := storageReuseFieldsClasses g lay arr old mask dst k fields offsets.tail classes.tail (src + w) packed.nxt
+        { ok := packed.ok && more.ok, err := if !packed.ok then packed.err else more.err,
+          nxt := more.nxt, save := save ++ more.save, write := write ++ more.write }
+
+def storageReuseFields (g : Dg) (lay : Layers) (arr : List (List Int))
+    (old mask dst : Nat) : Nat → List (List Int) → List Int → Nat → Nat → StorageReuseFields
+  | _, [], _, _, next => { nxt := next }
+  | 0, ty :: fields, offsets, src, next =>
+    { ok := false, err := rscFuelFailure (storageFieldsFuelRequest old mask dst src next
+        (ty :: fields) offsets), nxt := next }
+  | k + 1, ty :: fields, offsets, src, next =>
+    let w := wordsOfWithLayers g lay arr ty
+    if w == 0 then storageReuseFields g lay arr old mask dst k fields offsets src next
+    else
+      let cls := storageClass g ty
+      let off := offsets.headD 8
+      let flat := if cls == 0 && off >= 8 && off < 520
+        then storageFlatObject g lay arr profile.v2Fuel ty else rdOk 0 []
+      if flat.ok != profile.cOk then { ok := false, err := flat.ok, nxt := next }
+      else
+        let value := next
+        let same := next + 1
+        let direct := flat.n != 0
+        let packed := if direct then { code := cpW src value 1, nxt := next + 2 : StorageCode }
+          else storagePack g lay arr profile.v2Fuel ty src value (next + 1)
+        -- Equality is needed only for transferring a direct object edge.
+        -- Lean ExpandResetReuse otherwise emits the field store directly.
+        let save := if direct then
+            let equality := lg old ++ [80, 69, 4, 64]
+              ++ storageRead old off cls ++ lg value ++ [81, 173] ++ ls same ++ [11]
+            let transfer :=
+              lg same ++ [80, 69, 4, 64]
+                ++ lg mask ++ i64Const 1 ++ i64Const (off / 8 - 1) ++ [134, 132] ++ ls mask
+                ++ [5] ++ storageRetain lay value ++ [11]
+            i64Const 0 ++ ls same ++ packed.code ++ equality ++ transfer
+          else packed.code
+        let write := storageWrite dst off cls (lg value)
+        let write := if direct then
+            lg old ++ lg dst ++ [81] ++ lg same ++ [80, 69, 113, 4, 64, 5] ++ write ++ [11]
+          else write
+        let more := storageReuseFields g lay arr old mask dst k fields offsets.tail (src + w) packed.nxt
+        { ok := packed.ok && more.ok, err := if !packed.ok then packed.err else more.err,
+          nxt := more.nxt, save := save ++ more.save, write := write ++ more.write }
+
+def storagePackCtorReuse (g : Dg) (lay : Layers) (arr : List (List Int))
+    (fields : List (List Int)) (candidates : List Nat) (src dst next : Nat) (tag : Int) : StorageCode :=
+  if candidates.isEmpty || !lay.rc || !lay.reuse then
+    storagePackCtor g lay arr profile.v2Fuel fields src dst next tag
+  else
+    let active := fields.filter (fun t => wordsOfWithLayers g lay arr t != 0)
+    if active.isEmpty then { code := i64Const (2 * tag + 1) ++ ls dst, nxt := next }
+    else
+      let classes := nodeClasses g lay active
+      let layout := objectLayout classes
+      let old := next
+      let choice := next + 1
+      let single := candidates.tail.isEmpty
+      let mask := next + (if single then 1 else 2)
+      let token := mask + 1
+      let saved := storageReuseFieldsClasses g lay arr old mask dst profile.v2Fuel fields layout.offsets classes src (token + 1)
+      let source := candidates.headD 0
+      let select := if single then
+          storageUnique source ++ [4, 64] ++ cpW source old 1 ++ [11]
+        else i64Const 0 ++ ls choice ++ storageReuseSelect old choice candidates
+      let clear := if single then
+          lg old ++ [80, 69, 4, 64] ++ i64Const 0 ++ ls source ++ [11]
+        else storageReuseClear choice candidates
+      { ok := layout.ok && saved.ok && tag >= 0 && tag < 245, err := saved.err, nxt := saved.nxt,
+        code := i64Const 0 ++ ls old ++ i64Const 0 ++ ls mask
+          ++ select ++ saved.save ++ clear
+          ++ lg 0 ++ lg old ++ lg mask ++ callFn 16 ++ ls token
+          ++ lg 0 ++ lg token ++ i64Const (layout.bytes : Int) ++ i64Const tag
+          ++ i64Const (layout.objects : Int) ++ callFn 15 ++ ls dst
+          ++ lg dst ++ [80] ++ voidIf (i64Const profile.tagCapacity ++ [15]) ++ saved.write }
+
+def storagePackHeapNodeReuse (g : Dg) (lay : Layers) (arr : List (List Int))
+    (ty : List Int) (candidates : List Nat) (src dst next : Nat) : StorageCode :=
+  let a := storagePackCtorReuse g lay arr (storageFields g ty) candidates src dst next 0
+  let sk := storageHeapImmediateKind g arr ty
+  if sk == 0 then a
+  else
+    { a with code := storageHeapNullary (sk == 2) src ++ [4, 64]
+        ++ lg src ++ i64Const 1 ++ [134] ++ i64Const 1 ++ [132] ++ ls dst
+        ++ [5] ++ a.code ++ [11] }
+
+def storageConsReuse (g : Dg) (lay : Layers) (arr : List (List Int))
+    (elem : List Int) (candidates : List Nat) (src tail dst next : Nat) : StorageCode :=
+  if candidates.isEmpty || !lay.rc || !lay.reuse then storageCons g lay arr elem src tail dst next
+  else
+    let w := wordsOfWithLayers g lay arr elem
+    let a := storagePackCtorReuse g lay arr [elem, 4 :: elem] candidates next dst (next + w + 1) 1
+    { a with code := cpW src next w ++ cpW tail (next + w) 1 ++ a.code }
+
+-- Perceus drop specialization at a known constructor read. Direct object
+-- fields transfer through reset_keep; boxed fields retain only their used
+-- flat leaves before their containing box is dropped. Unused leaves are
+-- cleared so the lexical binding cannot own a dangling reference.
+def storageFlatRetain (lay : Layers) (slot : Nat) : List Int → List Int
+  | [] => []
+  | m :: ms => (if m == 1 then storageRetain lay slot else [])
+      ++ storageFlatRetain lay (slot + 1) ms
+
+def storageFlatClear (slot : Nat) : List Int → List Int
+  | [] => []
+  | m :: ms => (if m == 1 then i64Const 0 ++ ls slot else [])
+      ++ storageFlatClear (slot + 1) ms
+
+structure StorageReadKeep where
+  ok : Int := profile.cOk
+  mask : List Int := []
+  retain : List Int := []
+  retainAll : List Int := []
+  clear : List Int := []
+
+def storageReadKeepFields (g : Dg) (lay : Layers) (arr : List (List Int))
+    (whole : Bool) (used : List Int) (mask : Nat)
+    : List (List Int) → List Int → Nat → Nat → StorageReadKeep
+  | [], _, _, _ => {}
+  | ty :: fields, offsets, index, src =>
+    let w := wordsOfWithLayers g lay arr ty
+    let off := offsets.headD 8
+    let needed := whole || used.any (fun field => field == (index : Int))
+    let flags := mapOfWithLayers g lay arr ty
+    let flat := if storageClass g ty == 0 && off >= 8 && off < 520
+      then storageFlatObject g lay arr profile.v2Fuel ty else rdOk 0 []
+    if flat.ok != profile.cOk then { ok := flat.ok }
+    else
+      let direct := flat.n != 0
+      let more := storageReadKeepFields g lay arr whole used mask fields
+        (if w == 0 then offsets else offsets.tail) (index + 1) (src + w)
+      if more.ok != profile.cOk then more else
+        let retain := if needed then storageFlatRetain lay src flags else []
+        { mask := (if needed && direct && w != 0 then
+              lg mask ++ i64Const 1 ++ i64Const (off / 8 - 1) ++ [134, 132] ++ ls mask
+            else []) ++ more.mask,
+          retain := (if direct then [] else retain) ++ more.retain,
+          retainAll := retain ++ more.retainAll,
+          clear := (if needed then [] else storageFlatClear src flags) ++ more.clear }
+
+def storageReadHeapNodeReuse (g : Dg) (lay : Layers) (arr : List (List Int))
+    (ty : List Int) (whole : Bool) (used : List Int) (p dst token next : Nat) : StorageCode :=
+  let unpacked := storageUnpackHeapNode g lay arr ty p dst (next + 1)
+  let fields := storageFields g ty
+  let active := fields.filter (fun t => wordsOfWithLayers g lay arr t != 0)
+  let classes := nodeClasses g lay active
+  let layout := objectLayout classes
+  let keep := storageReadKeepFields g lay arr whole used next fields layout.offsets 0 dst
+  { ok := unpacked.ok && layout.ok && keep.ok == profile.cOk,
+    err := if !unpacked.ok then unpacked.err else if keep.ok != profile.cOk then keep.ok else profile.cWide,
+    nxt := unpacked.nxt,
+    code := unpacked.code ++ keep.clear
+      ++ lg p ++ i64Const profile.heapAt ++ [89, 4, 64]
+        ++ i64Const 0 ++ ls next ++ keep.mask ++ keep.retain
+        ++ lg 0 ++ lg p ++ lg next ++ callFn 16 ++ ls token
+      ++ [5] ++ keep.retainAll ++ lg 0 ++ lg p ++ callFn 14 ++ ls token ++ [11]
+      ++ i64Const 0 ++ ls p }
+
+-- A frame-limited token owns one detached cell and no children. It is never
+-- an ordinary constructor root: in particular, unchanged-field retention
+-- must not inspect the dead cell. The existing late reset path remains the
+-- fallback when no token is available.
+def storageTokenSelect (old choice : Nat) : List Nat → List Int
+  | [] => []
+  | p :: ps =>
+    lg old ++ [80, 4, 64] ++ lg p ++ [80, 69, 4, 64]
+      ++ cpW p old 1 ++ i64Const ((p + 1 : Nat) : Int) ++ ls choice ++ [11, 11]
+      ++ storageTokenSelect old choice ps
+
+def storagePackCtorTokens (g : Dg) (lay : Layers) (arr : List (List Int))
+    (fields : List (List Int)) (candidates tokens : List Nat) (src dst next : Nat) (tag : Int) : StorageCode :=
+  if tokens.isEmpty || !lay.rc || !lay.reuse then
+    storagePackCtorReuse g lay arr fields candidates src dst next tag
+  else
+    let active := fields.filter (fun t => wordsOfWithLayers g lay arr t != 0)
+    if active.isEmpty then { code := i64Const (2 * tag + 1) ++ ls dst, nxt := next }
+    else
+      let classes := nodeClasses g lay active
+      let layout := objectLayout classes
+      let token := next
+      let choice := next + 1
+      let select := i64Const 0 ++ ls token ++ i64Const 0 ++ ls choice
+        ++ storageTokenSelect token choice tokens
+      let allocate := storageReuseClear choice tokens
+        ++ lg 0 ++ lg token ++ i64Const (layout.bytes : Int) ++ i64Const tag
+        ++ i64Const (layout.objects : Int) ++ callFn 15 ++ ls dst
+        ++ lg dst ++ [80] ++ voidIf (i64Const profile.tagCapacity ++ [15])
+      if candidates.isEmpty then
+        -- reuse(0, ...) allocates. Both branches pack the fields once and
+        -- need no unchanged-field temporaries when no live parent exists.
+        let packed := storagePackFields g lay arr profile.v2Fuel fields layout.offsets classes src dst (next + 2)
+        { ok := layout.ok && packed.ok && tag >= 0 && tag < 245, nxt := packed.nxt,
+          code := select ++ allocate ++ packed.code }
+      else
+        -- Only a live late-reset parent may supply unchanged field edges.
+        -- A detached token has no children, even if their old bytes remain.
+        let old := next + 2
+        let oldChoice := next + 3
+        let mask := next + 4
+        let saved := storageReuseFieldsClasses g lay arr old mask dst profile.v2Fuel fields layout.offsets classes src (next + 5)
+        { ok := layout.ok && saved.ok && tag >= 0 && tag < 245, err := saved.err, nxt := saved.nxt,
+          code := select ++ i64Const 0 ++ ls old ++ i64Const 0 ++ ls oldChoice ++ i64Const 0 ++ ls mask
+            ++ lg token ++ [80, 4, 64] ++ storageReuseSelect old oldChoice candidates ++ [11]
+            ++ saved.save ++ storageReuseClear oldChoice candidates
+            ++ lg token ++ [80, 4, 64]
+              ++ lg 0 ++ lg old ++ lg mask ++ callFn 16 ++ ls token ++ [11]
+            ++ allocate ++ saved.write }
+
+def storagePackHeapNodeTokens (g : Dg) (lay : Layers) (arr : List (List Int))
+    (ty : List Int) (candidates tokens : List Nat) (src dst next : Nat) : StorageCode :=
+  let a := storagePackCtorTokens g lay arr (storageFields g ty) candidates tokens src dst next 0
+  let sk := storageHeapImmediateKind g arr ty
+  if sk == 0 then a
+  else
+    { a with code := storageHeapNullary (sk == 2) src ++ [4, 64]
+        ++ lg src ++ i64Const 1 ++ [134] ++ i64Const 1 ++ [132] ++ ls dst
+        ++ [5] ++ a.code ++ [11] }
+
+def storageArrayOne (g : Dg) (lay : Layers) (arr : List (List Int)) (elem : List Int) (src dst next : Nat) : StorageCode :=
+  let a := storagePack g lay arr profile.v2Fuel elem src next (next + 1)
+  let cls := storageClass g elem
+  { ok := a.ok, nxt := a.nxt,
+    code := a.code ++ storageAlloc dst (24 + objectSlotWidth cls) (if cls == 0 then 246 else 248) (if cls == 0 then 0 else cls)
+      ++ stW dst 8 (i64Const 1) ++ stW dst 16 (i64Const 1) ++ storageWrite dst 24 cls (lg next)
+      ++ i64Const 0 ++ ls (dst + 1) }

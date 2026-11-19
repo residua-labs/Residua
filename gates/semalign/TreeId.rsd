@@ -1,0 +1,104 @@
+import Lean
+
+/-!
+gates/semalign/TreeId.rsd — the rerunnable tree-identity check behind
+METHOD.md's "two sides" paragraph (AUDIT-SWE-RESIDUES-13-R2 r1 §4,
+residue `method_tree_identity`).
+
+Reproduces, from the working tree, every measurement the method names:
+
+  absent  `test -d scm/Residua`              -> exit != 0
+  absent  `git ls-files -- scm/Residua`      -> empty stdout
+  absent  `diff -rq lean/rsd-cert/Residua scm/Residua`
+                                           -> exit 2, "No such file or directory"
+  real    `diff -rq lean/rsd-cert/Residua oracle/scm/Residua`
+                                           -> exit 1, 16 stdout lines:
+                                              9 "Only in lean/...", 5 "Only in
+                                              oracle/...", 2 "Files ... differ"
+  pinned  Semantics.lean and IR.lean are byte-identical across the two
+          trees (git hash-object equal)
+
+Prints one line per measurement and a final counter:
+  tree_identity ok=<ok>/<total> bad=<bad>        exit 0 iff bad=0
+
+Rerun:  lean --run gates/semalign/TreeId.rsd        (from repo root)
+-/
+
+def runCmd (cmd : String) (args : Array String) : IO (UInt32 × String × String) := do
+  let r ← IO.Process.output { cmd := cmd, args := args }
+  return (r.exitCode, r.stdout, r.stderr)
+
+def outLines (s : String) : List String :=
+  (s.splitOn "\n").filter (· ≠ "")
+
+/-- name inside a `diff -rq` "Only in <dir>: <name>" line -/
+def onlyName (l : String) : String :=
+  match l.splitOn ": " with
+  | _ :: n :: _ => n
+  | _ => "?"
+
+/-- the differ pair inside a "Files <a> and <b> differ" line -/
+def differPair (l : String) : List String :=
+  match l.splitOn " " with
+  | _ :: a :: "and" :: b :: _ => [a, b]
+  | _ => [l]
+
+def hasSub (s sub : String) : Bool := (s.splitOn sub).length > 1
+
+def strSetEq (a b : List String) : Bool :=
+  a.all (fun x => b.any (· == x)) && b.all (fun x => a.any (· == x))
+
+def pairSetEq (a b : List (List String)) : Bool :=
+  a.all (fun x => b.any (strSetEq · x)) && b.all (fun x => a.any (strSetEq · x))
+
+/-- one clause: <name> <detail> ok=1|0 -/
+def check (name detail : String) (good : Bool) : IO Bool := do
+  if good then
+    IO.println s!"{name} {detail} ok=1"
+    return true
+  IO.eprintln s!"{name} {detail} ok=0"
+  return false
+
+def LEAN_TREE : String := "lean/rsd-cert/Residua"
+def ORACLE_TREE : String := "oracle/scm/Residua"
+def ROOT_TREE : String := "scm/Residua"
+
+def main : IO UInt32 := do
+  let mut goods : List Bool := []
+  -- 1. scm/Residua is not a directory at the repo root
+  let (rc1, _, _) ← runCmd "test" #["-d", ROOT_TREE]
+  goods := (← check "root_dir" s!"test -d {ROOT_TREE} rc={rc1} expect!=0" (rc1 != 0)) :: goods
+  -- 2. git tracks nothing under scm/Residua
+  let (rc2, o2, _) ← runCmd "git" #["ls-files", "--", ROOT_TREE]
+  goods := (← check "root_lsfiles" s!"git ls-files {ROOT_TREE} rc={rc2} lines={(outLines o2).length} expect=0" (rc2 == 0 && outLines o2 == [])) :: goods
+  -- 3. diffing the lean tree against the absent root path is an error
+  let (rc3, _, e3) ← runCmd "diff" #["-rq", LEAN_TREE, ROOT_TREE]
+  goods := (← check "root_diff" s!"diff -rq {LEAN_TREE} {ROOT_TREE} rc={rc3} expect=2 nosuch={hasSub e3 "No such file or directory"}" (rc3 == 2 && hasSub e3 "No such file or directory")) :: goods
+  -- 4. the real comparison: 16 lines, 9 lean-only, 5 oracle-only, 2 differ
+  let (rc4, o4, _) ← runCmd "diff" #["-rq", LEAN_TREE, ORACLE_TREE]
+  let ls := outLines o4
+  let onlyL := ls.filter (·.startsWith s!"Only in {LEAN_TREE}")
+  let onlyO := ls.filter (·.startsWith s!"Only in {ORACLE_TREE}")
+  let diffs := ls.filter (·.startsWith "Files ")
+  let leanExpect := ["BootTypeWire.lean", "Bundle.lean", "BundleRed.lean", "EvalLean", "Rsdc", "Runtime", "SCM.lean", "SCMAuditCached.lean", "SCMSourceWire.lean"]
+  let oracleExpect := ["EncodeWasm0.lean", "SlotSemanticsCore.lean", "Wasm0", "Wasm0.lean", "Wasm0Machine.lean"]
+  let differExpect : List (List String) := [
+    [s!"{LEAN_TREE}/Bootstrap/EvalBootSeparators.lean", s!"{ORACLE_TREE}/Bootstrap/EvalBootSeparators.lean"],
+    [s!"{LEAN_TREE}/SHA256.lean", s!"{ORACLE_TREE}/SHA256.lean"]]
+  let namesOk := strSetEq (onlyL.map onlyName) leanExpect
+      && strSetEq (onlyO.map onlyName) oracleExpect
+      && pairSetEq (diffs.map differPair) differExpect
+  let shapeOk := rc4 == 1 && ls.length == 16 && onlyL.length == 9 && onlyO.length == 5 && diffs.length == 2
+  goods := (← check "tree_diff" s!"diff -rq rc={rc4} lines={ls.length} lean_only={onlyL.length} oracle_only={onlyO.length} differ={diffs.length} names={namesOk}" (shapeOk && namesOk)) :: goods
+  -- 5. the two pinned files are byte-identical across the trees
+  for rel in ["Bootstrap/Semantics.lean", "Bootstrap/IR.lean"] do
+    let (rcA, hA, _) ← runCmd "git" #["hash-object", s!"{LEAN_TREE}/{rel}"]
+    let (rcB, hB, _) ← runCmd "git" #["hash-object", s!"{ORACLE_TREE}/{rel}"]
+    let a ← IO.FS.readBinFile s!"{LEAN_TREE}/{rel}"
+    let b ← IO.FS.readBinFile s!"{ORACLE_TREE}/{rel}"
+    let same := rcA == 0 && rcB == 0 && hA.trim == hB.trim && a.data == b.data
+    goods := (← check s!"identical:{rel}" s!"hash={hA.trim} bytes={a.size} equal={same}" same) :: goods
+  let ok := (goods.filter (· == true)).length
+  let bad := (goods.filter (· == false)).length
+  IO.println s!"tree_identity ok={ok}/{goods.length} bad={bad}"
+  return if bad == 0 then 0 else 1

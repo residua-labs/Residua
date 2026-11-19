@@ -1,0 +1,121 @@
+-- Lean 4.14 IR/ExpandResetReuse: a linear detached-allocation token.
+-- Appended after V1's stable function prefix by RuntimeReuseBundle.
+-- reset_keep is the compiler's reuse-specialization expansion: each set
+-- bit transfers one existing object-field edge to the caller's saved field.
+-- If the root became shared while saving fields, restore those skipped
+-- retains before consuming its ownership token. No source can call it.
+mutual
+partial def rsd_rt_v1_reset (base : UInt64) (p : UInt64) : RT.M UInt64 := do {
+  return (← rsd_rt_v1_reset_keep base p 0)
+}
+
+partial def rsd_rt_v1_reuse (base : UInt64) (token : UInt64) (bytes : UInt64) (tag : UInt64) (other : UInt64) : RT.M UInt64 := do {
+  let mut sizeClass : UInt64 := 0;
+  let mut capacity : UInt64 := 0;
+  let mut rounded : UInt64 := 0;
+  if RT.eqz64 token then { return (← rsd_rt_v1_alloc base bytes tag other) };
+  if RT.orBool (RT.gtU64 tag 250) (RT.gtU64 other 255) then { runtimeFailure base 12; return 0 };
+  if RT.andBool (RT.eq64 tag 250) (RT.orBool (RT.ne64 bytes 32) (RT.ne64 other 0)) then {
+    runtimeFailure base 12; return 0
+  };
+  if RT.ne64 (RT.and64 token 1) 0 then { runtimeFailure base 13; return 0 };
+  sizeClass := (← RT.load64 (RT.addr (RT.sub64 token 8)) 0);
+  if RT.geU64 sizeClass 9223372036854775808 then {
+    if RT.ne64 (RT.and64 (← RT.load64 (RT.addr base) 352) 1) 0 then {
+      runtimeFailure base 15
+    } else { runtimeFailure base 13 };
+    return 0
+  };
+  if RT.ne64 (← RT.load32 (RT.addr token) 0) 0 then {
+    runtimeFailure base 13; return 0
+  };
+  -- The private prefix is either a large/legacy exponent or an aligned
+  -- class-page offset. It is never part of the public object header.
+  if RT.ltU64 sizeClass 8192 then {
+    if RT.orBool (RT.ltU64 sizeClass 5) (RT.gtU64 sizeClass 31) then { runtimeFailure base 13; return 0 };
+    capacity := RT.shl64 1 sizeClass
+  } else {
+    if RT.ne64 (RT.and64 sizeClass 8191) 0 then { runtimeFailure base 13; return 0 };
+    capacity := (← RT.load64 (RT.addr sizeClass) 16);
+    if RT.orBool (RT.orBool (RT.ltU64 capacity 16) (RT.gtU64 capacity 4104))
+      (RT.ne64 (RT.and64 capacity 7) 0) then { runtimeFailure base 13; return 0 };
+    if RT.orBool (RT.ltU64 token (RT.add64 sizeClass 40))
+      (RT.gtU64 (RT.add64 token capacity) (RT.add64 sizeClass 8200)) then { runtimeFailure base 13; return 0 };
+    if RT.ne64 (RT.remU64 (RT.sub64 token (RT.add64 sizeClass 40)) capacity) 0 then {
+      runtimeFailure base 13; return 0
+    }
+  };
+  if RT.orBool (RT.ltU64 bytes 8) (RT.gtU64 bytes 4294967288) then {
+    rsd_rt_v1_free base token;
+    return (← rsd_rt_v1_alloc base bytes tag other)
+  };
+  rounded := RT.and64 (RT.add64 bytes 7) 18446744073709551608;
+  if RT.ltU64 capacity (RT.add64 rounded 8) then {
+    rsd_rt_v1_free base token;
+    return (← rsd_rt_v1_alloc base bytes tag other)
+  };
+  RT.store64 (RT.addr token) 0 (RT.or64 1 (RT.or64 (RT.shl64 other 48) (RT.shl64 tag 56)));
+  RT.store64 (RT.addr base) 640 (RT.add64 (← RT.load64 (RT.addr base) 640) 1);
+  return token
+}
+
+partial def rsd_rt_v1_reset_keep (base : UInt64) (p : UInt64) (keep : UInt64) : RT.M UInt64 := do {
+  let mut count : UInt64 := 0;
+  let mut total : UInt64 := 0;
+  let mut tag : UInt64 := 0;
+  let mut i : UInt64 := 0;
+  let mut mask : UInt64 := keep;
+  if RT.orBool (RT.eqz64 p) (RT.ne64 (RT.and64 p 1) 0) then {
+    if RT.ne64 keep 0 then { runtimeFailure base 12 };
+    return 0
+  };
+  if RT.ne64 (RT.and64 (← RT.load64 (RT.addr base) 352) 1) 0 then {
+    if RT.geU64 (← RT.load64 (RT.addr (RT.sub64 p 8)) 0) 9223372036854775808 then {
+      runtimeFailure base 15; return 0
+    }
+  };
+  count := (← RT.load32 (RT.addr p) 0);
+  if RT.geU64 count 2147483648 then { runtimeFailure base 11; return 0 };
+  tag := (← RT.load8 (RT.addr p) 7);
+  if RT.andBool (RT.eq64 tag 250) (RT.eq64 count 1) then {
+    if RT.ne64 keep 0 then { runtimeFailure base 12; return 0 };
+    total := (← RT.load64 (RT.addr p) 24);
+    RT.store64 (RT.addr p) 16 0;
+    RT.store64 (RT.addr p) 24 0;
+    if RT.ne64 total 0 then { rsd_rt_v1_free base (RT.sub64 total 8) };
+    RT.store32 (RT.addr p) 0 0;
+    return p
+  };
+  if RT.geU64 tag 245 then {
+    if RT.ne64 keep 0 then { runtimeFailure base 12; return 0 };
+    rsd_rt_v1_drop base p;
+    return 0
+  };
+  total := (← RT.load8 (RT.addr p) 6);
+  -- The compiler emits a mask only for a constructor with <= 64 object
+  -- fields. Larger constructors still use the ordinary reset entry.
+  if RT.andBool (RT.ltU64 total 64) (RT.ne64 (RT.shrU64 keep total) 0) then {
+    runtimeFailure base 12; return 0
+  };
+  if RT.ne64 count 1 then {
+    while RT.ltU64 i total do {
+      if RT.ne64 (RT.and64 mask 1) 0 then {
+        rsd_rt_v1_dup base (← RT.load64 (RT.addr (RT.add64 (RT.add64 p 8) (RT.mul64 i 8))) 0)
+      };
+      mask := RT.shrU64 mask 1;
+      i := RT.add64 i 1
+    };
+    rsd_rt_v1_drop base p;
+    return 0
+  };
+  RT.store32 (RT.addr p) 0 0;
+  while RT.ltU64 i total do {
+    if RT.eqz64 (RT.and64 mask 1) then {
+      rsd_rt_v1_drop base (← RT.load64 (RT.addr (RT.add64 (RT.add64 p 8) (RT.mul64 i 8))) 0)
+    };
+    mask := RT.shrU64 mask 1;
+    i := RT.add64 i 1
+  };
+  return p
+}
+end

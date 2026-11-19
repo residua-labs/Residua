@@ -1,0 +1,73 @@
+-- Array wire admission. Identity includes the complete type code and exact name.
+namespace ArrayWireNF
+
+def isListTy : Nat -> Int -> Bool
+  | 0, c => c >= 100000 && (c - 100000) % 3 == 0
+  | n + 1, c => isListTy n c
+
+def elemTy : Nat -> Int -> Int
+  | 0, c => (c - 100000) / 3
+  | n + 1, c => elemTy n c
+
+def isBasicTy : Nat -> Int -> Bool
+  | 0, c => c >= 100002 && (c - 100000) % 3 == 2 && elemTy 0 c % 16 == 0
+  | n + 1, c => isBasicTy n c
+
+def basicKind : Nat -> Int -> Int
+  | 0, c => if isBasicTy 0 c then elemTy 0 c / 16 % 16 else 0
+  | n + 1, c => basicKind n c
+
+def nameEq : List Int -> List Int -> Bool
+  | [], [] => true
+  | x :: xs, y :: ys => x == y && nameEq xs ys
+  | _, _ => false
+
+structure Request where
+  receiver : Int
+  name : List Int
+
+inductive Residue where
+  | receiverNotArray
+  | operationUnsupported
+
+def residueName : Residue -> String
+  | Residue.receiverNotArray => "nf_array_wire_receiver_not_array"
+  | Residue.operationUnsupported => "nf_array_wire_operation_unsupported"
+
+structure State where
+  opcode : Int
+  residue : Option Residue
+
+def q (r : Request) : Request := r
+
+def sigma (r : Request) : Request := r
+
+def code (name : List Int) : Int :=
+  if nameEq name [115, 105, 122, 101] || nameEq name [65, 114, 114, 97, 121, 46, 115, 105, 122, 101] then 4
+  else if nameEq name [105, 115, 69, 109, 112, 116, 121] || nameEq name [65, 114, 114, 97, 121, 46, 105, 115, 69, 109, 112, 116, 121] then 7
+  else if nameEq name [65, 114, 114, 97, 121, 46, 101, 109, 112, 116, 121] then 13
+  else if nameEq name [65, 114, 114, 97, 121, 46, 109, 107, 69, 109, 112, 116, 121] then 14
+  else if nameEq name [65, 114, 114, 97, 121, 46, 109, 107] || nameEq name [76, 105, 115, 116, 46, 116, 111, 65, 114, 114, 97, 121] || nameEq name [116, 111, 65, 114, 114, 97, 121] then 15
+  else if nameEq name [103, 101, 116, 68] || nameEq name [65, 114, 114, 97, 121, 46, 103, 101, 116, 68] then 10
+  else if nameEq name [112, 117, 115, 104] || nameEq name [65, 114, 114, 97, 121, 46, 112, 117, 115, 104] then 16
+  else if nameEq name [116, 111, 76, 105, 115, 116] || nameEq name [65, 114, 114, 97, 121, 46, 116, 111, 76, 105, 115, 116] then 17
+  else if nameEq name [115, 101, 116, 68] || nameEq name [65, 114, 114, 97, 121, 46, 115, 101, 116, 68] then 18
+  else if nameEq name [101, 120, 116, 114, 97, 99, 116] || nameEq name [65, 114, 114, 97, 121, 46, 101, 120, 116, 114, 97, 99, 116] then 19
+  else 0
+
+def residue? (r : Request) : Option Residue :=
+  if basicKind 0 r.receiver != 4 && !(isListTy 0 r.receiver && nameEq r.name [116, 111, 65, 114, 114, 97, 121]) then some Residue.receiverNotArray
+  else if code r.name == 0 then some Residue.operationUnsupported
+  else none
+
+def admit (r : Request) : Bool :=
+  (residue? r).isNone
+
+def step (r : Request) (_state : State) : State :=
+  { opcode := if admit r then code (sigma r).name else 0, residue := residue? r : State }
+
+def refusal : Residue -> Int
+  | Residue.receiverNotArray => 18
+  | Residue.operationUnsupported => 19
+
+end ArrayWireNF

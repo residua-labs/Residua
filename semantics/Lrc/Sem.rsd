@@ -1,0 +1,1461 @@
+-- semantics/Lrc/Sem.rsd: the formal semantics of the LRC stage's IR (lib/lrc/Ir.rsd), hole 15 unit 1.
+-- closure_claim = 0.
+--
+-- The definition below is the semantics: a total, fueled definitional interpreter, in the style of
+-- lean/rsd-cert/Residua/Bootstrap/Semantics.lean (evalLF). It is total because every recursive call
+-- spends one step of `steps`; running out of steps is the outcome `steps`, which is not a value.
+-- Two modes:
+--   * `Mode.counted`: lambda-RC. Reference counts as lean.h keeps them (lean_inc_ref, lean_dec_ref,
+--     lean_is_exclusive) and as src/lean/Lean/Compiler/IR/EmitC.lean emits them (emitInc, emitDec,
+--     emitReset, emitReuse, emitProj, emitSProj, emitSet, emitSSet, emitDel).
+--   * `Mode.pure`: lambda-pure. Every RC instruction is erased: inc, dec and del do nothing, reset
+--     yields a token without releasing anything, reuse allocates a fresh cell, and isShared answers
+--     "shared", so that the code ExpandResetReuse writes takes the path that allocates.
+-- The forms, the primitives and the fuel rules are those of the stage's host oracle,
+-- instruments/lrc-host/Interp.rsd (Lrc.Host), which is partial and monadic. This file restates it
+-- as a total definition and adds the pure mode. Where lib/lrc departs from Lean's IR
+-- (src/lean/Lean/Compiler/IR/Basic.lean), lib/lrc/Ir.rsd's header lists it: no uproj, uset, pap,
+-- ap, box or unbox; a `prim` form for the wire's operators; several results of a `fap` (`extra`)
+-- and of `ret`; `mdata` only as a fuel guard; `set` with the field index in a variable
+-- (`mkSetAt`, lib/lrc/Trmc.rsd); constant cells (`mkLitObj`, lib/lrc/Closed.rsd); the stage's own
+-- functions after the image's, which take no fuel (`isOwnFn`, `Lrc.nHelpers` = 20 of them); and
+-- calls at the caller's fuel (`mkFapSame`).
+--
+-- Revision 2026-11-18 (agy-lrcsem, premise 1088077f2): the IR as lib/lrc/Prim.rsd has it after
+-- fd4ed634e and 81f910e70, run as instruments/lrc-host/Interp.rsd runs it. The 16 primitive codes
+-- added since 3df167c84: 107 to 109 (a magnitude's word), 116 to 118 (words as unsigned numbers),
+-- 119 to 126 (arrays), 127 and 128 (an integer's word). The array object (tags 246 and 248, the
+-- elements as its fields, the empty array the empty list) is in the heap. The four consuming array
+-- primitives (Prim.rsd `primConsumes`: push, set, ofList, toList) follow lean.h's
+-- `lean_array_push`, `lean_array_fset` and `lean_array_to_list`: in the counted mode an array whose
+-- count is 1 is written in place (and a list cell whose count is 1 gives its head away), any other
+-- is copied; in the pure mode the result is always a fresh object. A list as a result is shown flat
+-- (`[e e ...]`), as the host oracle's `showV` shows it.
+--
+-- Revision 2026-11-18 r2 (swe-lrcrev2, WAIST-0 revision): the IR gains the six forms of the
+-- `Lrc` section below (`pap`, `ap`, `box`, `unbox`, `uproj`, `uset`), ported as its header
+-- cites: the closure object is tag 245 (lean.h `LeanClosure`) with its function index and
+-- arity as scalar entries 0 and 1 and its captured arguments as owned object fields
+-- (`lean_alloc_closure`, `lean_closure_set`); `ap` is apply.cpp's `lean_apply_n` in both modes
+-- (the exclusive/shared split is its `lean_is_exclusive` branch, `inPlace`); `box`/`unbox` are
+-- the typed lean.h functions per IRType; `uproj`/`uset` sit beside `sproj`/`sset` over a usize
+-- lane between the object fields and the byte scalars (Basic:170-172, lean.h:572/:602). A ctor's
+-- usize count arrives by `Lrc.mkUCtor` (`Lrc.ctorUsize`). `listSet` is tail-recursive now — the
+-- r1 recursion exceeded the stack on swe-irsem's eqat7 and rr-append rows
+-- (reports/irsem-swe/STATUS.md); `listSet_eq` states it keeps `List.set`. A program of the r1 IR
+-- (`r1Node`) has the same outcome as under the frozen r1 file (`conservativeStatement`): the
+-- only shared code path this revision rewrote for it is `listSet`, and the r2 arms sit behind op
+-- codes an r1 program never carries.
+--
+-- Check: cat lib/lrc/Ir.rsd semantics/Lrc/Sem.rsd > /tmp/lrc-sem.lean && lean /tmp/lrc-sem.lean
+--   (the r1 recipe, unchanged: the r2 datatype is the `Lrc` section below, so every recipe that
+--   concatenated Ir.rsd + Sem.rsd — gates/irsem's IrsemAll.lean, reports/lrcsem/HostAgree.rsd —
+--   runs as before; r1 programs see only the r1 arms, per `r1Node`/`conservativeStatement`).
+-- Against the host oracle: reports/lrcsem/HostAgree.rsd (its header has the command; r1 forms only).
+-- The r2 datatype section (the six forms, `Lrc.cloTag`, `mkUCtor`) moved to lib/lrc/Ir.rsd (LRC-REV2-IMPL-0 revision 2:
+-- the IR owns its syntax, as Basic.lean does). Recipes still concatenate Ir.rsd then Sem.rsd.
+
+namespace Lrc.Sem
+
+inductive Mode where
+  | pure
+  | counted
+  deriving BEq, Inhabited, Repr
+
+inductive V where
+  | int (n : Int)
+  | box (tag : Nat)
+  | ptr (a : Nat)
+  | str (s : String)
+  | irr
+  deriving Inhabited, BEq, Repr
+
+structure Obj where
+  rc : Int
+  tag : Nat
+  objs : List V
+  usize : List Int
+  scalars : List (Nat × Int)
+  freed : Bool
+  persistent : Bool
+  deriving Inhabited
+
+structure St where
+  heap : List Obj
+  nImg : Nat
+  deriving Inhabited
+
+abbrev M := StateT St (Except String)
+
+-- the wire's refusals: a refusal is an outcome of the program, as the host oracle has it
+def refuse (what : String) : M α := throw s!"refusal:{what}"
+
+/-- Tail-recursive worker for `listSet`: the r1 definition recursed per element and exceeded the
+stack on swe-irsem's eqat7 and rr-append rows (reports/irsem-swe/STATUS.md "deep recursion
+detected in Lrc.Sem.listSet._rarg"). -/
+def listSetAux : List α → Nat → α → List α → List α
+  | [], _, _, acc => acc.reverse
+  | _ :: xs, 0, v, acc => acc.reverseAux (v :: xs)
+  | x :: xs, i + 1, v, acc => listSetAux xs i v (x :: acc)
+
+def listSet (xs : List α) (i : Nat) (v : α) : List α := listSetAux xs i v []
+
+theorem listSetAux_eq : ∀ (xs : List α) (i : Nat) (v : α) (acc : List α),
+    listSetAux xs i v acc = acc.reverse ++ xs.set i v := by
+  intro xs
+  induction xs with
+  | nil => intro i v acc; simp [listSetAux]
+  | cons x xs ih =>
+    intro i v acc
+    cases i with
+    | zero => simp [listSetAux, List.reverseAux_eq]
+    | succ j =>
+      show listSetAux xs j v (x :: acc) = acc.reverse ++ (x :: xs.set j v)
+      rw [ih]; simp [List.reverse_cons, List.append_assoc]
+
+/-- `listSet` is `List.set`: behaviour equal to the r1 definition, which was `List.set` clause
+for clause. -/
+theorem listSet_eq (xs : List α) (i : Nat) (v : α) : listSet xs i v = xs.set i v := by
+  simp [listSet, listSetAux_eq]
+
+def objAt (a : Nat) : M Obj := do
+  let s ← get
+  match s.heap.get? a with
+  | some o => if o.freed then throw s!"use after free of object {a}" else pure o
+  | none => throw s!"no object {a}"
+
+def setObj (a : Nat) (o : Obj) : M Unit := modify fun s => { s with heap := listSet s.heap a o }
+
+def alloc (tag : Nat) (objs : List V) (usize : List Int := []) : M V := do
+  let s ← get
+  set { s with heap := s.heap ++ [({ rc := 1, tag := tag, objs := objs, usize := usize, scalars := [], freed := false, persistent := false } : Obj)] }
+  return .ptr s.heap.length
+
+-- lean.h:638 `lean_alloc_closure` + `lean_closure_set` per captured argument: the function index
+-- and the arity sit in scalar entries 0 and 1 (a closure is no constructor — its scalar area is
+-- the header's `m_fun`/`m_arity`), the captured arguments are the object fields, each owned.
+def allocClo (f : Nat) (arity : Nat) (caps : List V) : M V := do
+  let s ← get
+  set { s with heap := s.heap ++ [({ rc := 1, tag := Lrc.cloTag, objs := caps, usize := [], scalars := [(0, f), (1, arity)], freed := false, persistent := false } : Obj)] }
+  return .ptr s.heap.length
+
+-- `lean_alloc_ctor(0, 0, sizeof(word))` (lean.h:1970, :1980, :1990): a boxed scalar as a tag-0
+-- object with its value in the usize lane (`lean_ctor_set_usize`) or the byte-scalar lane
+-- (`lean_ctor_set_uint64`/`lean_ctor_set_float`).
+def allocScalar (us : List Int) (sc : List (Nat × Int)) : M V := do
+  let s ← get
+  set { s with heap := s.heap ++ [({ rc := 1, tag := 0, objs := [], usize := us, scalars := sc, freed := false, persistent := false } : Obj)] }
+  return .ptr s.heap.length
+
+-- the closure header's fields of a heap object (lean.h `lean_closure_object`): the function and
+-- the arity; the captured arguments are `objs`, `m_num_fixed` is `objs.length`
+def cloFn (o : Obj) : Nat := ((o.scalars.lookup 0).getD 0).toNat
+def cloArity (o : Obj) : Nat := ((o.scalars.lookup 1).getD 0).toNat
+
+def incV (mode : Mode) (v : V) (n : Nat) : M Unit :=
+  if mode == .pure then pure () else
+  match v with
+  | .ptr a => do
+    let o ← objAt a
+    if o.persistent then return
+    setObj a { o with rc := o.rc + n }
+  | _ => pure ()
+
+-- lean.h lean_dec_ref: at count one the object is freed and its fields are released;
+-- the pure run performs no reference counting at all (`incV` has no fuel either), so
+-- the mode check precedes the step gate — otherwise an exclusive `.ap` at steps zero
+-- would free the cell on the counted side while the pure side throws "steps"
+def decV (mode : Mode) : Nat → V → M Unit
+  | k, v =>
+    if mode == .pure then pure () else
+    match k, v with
+    | 0, _ => throw "steps"
+    | k + 1, v =>
+      match v with
+      | .ptr a => do
+        let o ← objAt a
+        if o.persistent then return
+        if o.rc <= 0 then throw s!"release of object {a} with count {o.rc}"
+        if o.rc == 1 then
+          setObj a { o with rc := 0, freed := true }
+          o.objs.forM (decV mode k)
+        else setObj a { o with rc := o.rc - 1 }
+      | _ => pure ()
+
+-- An array (instruments/lrc-host/Interp.rsd "Arrays"; lean.h `lean_array_object`): tag 246 holds
+-- elements that are objects, 248 one-word scalars; the elements are the object's fields.
+def isArrTag (t : Nat) : Bool := t == 246 || t == 248
+def arrTag (shape : Int) : Nat := if shape == 0 then 248 else 246
+
+-- lean.h `lean_is_exclusive` as the consuming array primitives test it: only the counted run
+-- writes in place
+def inPlace (mode : Mode) (o : Obj) : Bool := mode == .counted && o.rc == 1 && !o.persistent
+
+structure Frame where
+  vars : List (Nat × V)
+  jps : List (Nat × (List Lrc.Param × Lrc.N))
+  deriving Inhabited
+
+def Frame.empty : Frame := { vars := [], jps := [] }
+
+def Frame.get (fr : Frame) (y : Int) : M V :=
+  if y < 0 then pure .irr
+  else match fr.vars.lookup y.toNat with
+    | some v => pure v
+    | none => throw s!"unbound variable x_{y}"
+
+def Frame.bind (fr : Frame) (x : Nat) (v : V) : Frame := { fr with vars := (x, v) :: fr.vars }
+
+def asInt (v : V) : M Int :=
+  match v with
+  | .int n => pure n
+  | _ => throw "an integer was expected"
+
+def i64Min : Int := -9223372036854775808
+def i64Max : Int := 9223372036854775807
+
+def checked (n : Int) : M V :=
+  if n < i64Min || n > i64Max then refuse "stuck:checkedArithmetic" else pure (.int n)
+
+-- lib/lrc/Prim.rsd: the wire's operators (docs/GRAMMAR.md 1.3); as instruments/lrc-host/Interp.rsd `prim`
+def prim (op : Nat) (args : List V) : M V := do
+  match op, args with
+  | 6, [a, b] => checked ((← asInt a) + (← asInt b))
+  | 7, [a, b] => checked ((← asInt a) - (← asInt b))
+  | 8, [a, b] => checked ((← asInt a) * (← asInt b))
+  | 9, [a] => checked (0 - (← asInt a))
+  | 10, [a, b] =>
+    let x ← asInt a
+    let y ← asInt b
+    if y == 0 then refuse "residue:divisionByZero"
+    else if Int.tmod x y != 0 then refuse "residue:nonExactDivision"
+    else if x == i64Min && y == -1 then refuse "residue:signedOverflow"
+    else pure (.int (Int.tdiv x y))
+  | 11, [a, b] =>
+    let x ← asInt a
+    let y ← asInt b
+    if y == 0 then refuse "residue:divisionByZero" else pure (.int (Int.fmod x y))
+  | 12, [a, b] => return .int (if (← asInt a) < (← asInt b) then 1 else 0)
+  | 13, [a, b] => return .int (if (← asInt a) > (← asInt b) then 1 else 0)
+  | 14, [a, b] => return .int (if (← asInt a) == (← asInt b) then 1 else 0)
+  | 15, [a, b] => return .int (if (← asInt a) != 0 && (← asInt b) != 0 then 1 else 0)
+  | 16, [a, b] => return .int (if (← asInt a) != 0 || (← asInt b) != 0 then 1 else 0)
+  | 17, [a] => return .int (if (← asInt a) == 0 then 1 else 0)
+  | 101, _ => refuse "stuck:typeMismatch"
+  | 102, [.str a, .str b] => return .int (if a == b then 1 else 0)
+  | 100, [.box t] => return .int t
+  | 100, [.ptr a] => return .int (← objAt a).tag
+  -- a magnitude's word (lib/lrc/Prim.rsd `primIsScalar`, `primBox`, `primUnbox`; lean.h
+  -- `lean_is_scalar`, `lean_box`, `lean_unbox`)
+  | 107, [.box _] => return .int 1
+  | 107, [.ptr _] => return .int 0
+  | 108, [.int n] => if n < 0 then throw s!"a negative number was boxed: {n}" else return .box n.toNat
+  | 109, [.box t] => return .int t
+  -- an integer's word (`primBoxS`, `primUnboxS`): a box holds 63 bits, a number below zero is the upper half of them
+  | 127, [.int n] => return .box (n % 9223372036854775808).toNat
+  | 128, [.box t] => return .int (if t >= 4611686018427387904 then (t : Int) - 9223372036854775808 else (t : Int))
+  -- words as unsigned numbers (`primDivU`, `primRemU`): the stage writes them behind a test of the divisor
+  | 117, [a, b] => do
+    let d ← asInt b
+    if d == 0 then throw "an unsigned quotient by zero" else return .int ((← asInt a).toNat / d.toNat)
+  | 118, [a, b] => do
+    let d ← asInt b
+    if d == 0 then throw "an unsigned remainder by zero" else return .int ((← asInt a).toNat % d.toNat)
+  | _, _ => throw s!"primitive {op} on {args.length} arguments has no meaning"
+
+def proved (n : Int) : M V :=
+  if n < i64Min || n > i64Max then throw "an operator written as proved in range left i64" else pure (.int n)
+
+def primFact (op : Nat) (imm : Int) (args : List V) : M V := do
+  if op == 101 && imm == 13 then refuse "stuck:negativeFixBound"
+  match op, args with
+  -- arrays, the two that only read (`primIsArr`, `primArrSize`)
+  | 119, [v] =>
+    match v with
+    | .ptr a => return .int (if isArrTag (← objAt a).tag then 1 else 0)
+    | _ => return .int 0
+  | 120, [v] =>
+    match v with
+    | .box 0 => return .int 0
+    | .ptr a =>
+      let o ← objAt a
+      if isArrTag o.tag then return .int o.objs.length else throw s!"the size of object {a}, which is no array"
+    | _ => throw "the size of a value that is no array"
+  | 103, [a, b] => proved ((← asInt a) + (← asInt b))
+  | 104, [a, b] => proved ((← asInt a) - (← asInt b))
+  | 105, [a, b] => proved ((← asInt a) * (← asInt b))
+  | 106, [a] => return .int (Int.fmod (← asInt a) (imm + 1))
+  -- `primShrW`: the shift to the right by the immediate
+  | 116, [a] => return .int ((← asInt a).toNat >>> imm.toNat)
+  | _, _ => prim op args
+
+/-! ### The array primitives that count or allocate (lib/lrc/Prim.rsd `primArrGet` .. `primArrSlice`)
+
+As instruments/lrc-host/Interp.rsd `listElems` .. `arrSlice`, with the host's `counted` flag as the
+mode: in the counted mode the consuming primitives write in place exactly when `inPlace` holds and
+copy otherwise (counting the elements the copy shares once more and releasing the argument); in the
+pure mode every result is a fresh object and nothing is counted. `k` bounds the work as in `exec`. -/
+
+-- the object leaves the heap without its fields being released: they were moved out
+def freeCell (a : Nat) (o : Obj) : M Unit := setObj a { o with rc := 0, freed := true }
+
+-- The elements of the list `v`, of which the caller holds one reference when `owned`. A cell that
+-- nothing else holds gives its head away and is freed; from the first cell that something else
+-- holds on, every head is counted once more and the cells stay.
+def listElems (mode : Mode) : Nat → Int → V → Bool → List V → M (List V)
+  | 0, _, _, _, _ => throw "steps"
+  | k + 1, shape, v, owned, acc =>
+    match v with
+    | .box 0 => pure acc
+    | .ptr a => do
+      let o ← objAt a
+      if o.tag != 1 then throw s!"the elements of object {a}, which is no list cell"
+      let h := if shape == 0 then V.int ((o.scalars.lookup 0).getD 0) else o.objs.getD 0 default
+      let t := if shape == 0 then o.objs.getD 0 default else o.objs.getD 1 default
+      if mode == .pure then listElems mode k shape t false (acc ++ [h])
+      else if owned && inPlace mode o then
+        freeCell a o
+        listElems mode k shape t true (acc ++ [h])
+      else
+        incV mode h 1
+        if owned then decV mode k v
+        listElems mode k shape t false (acc ++ [h])
+    | _ => throw "the elements of a value that is no list"
+
+-- `primArrOfList`: the array of a list's elements (an array as it is)
+def arrOfList (mode : Mode) (k : Nat) (shape : Int) (v : V) : M V := do
+  match v with
+  | .box 0 => return v
+  | .ptr a =>
+    let o ← objAt a
+    if isArrTag o.tag then return v
+    let es ← listElems mode k shape v true []
+    alloc (arrTag shape) es
+  | _ => throw "the array of a value that is no list"
+
+-- a list cell of the shape (lib/lrc/FromWire.rsd `consInfo`): a scalar head in the scalar area
+-- and the tail as field 0, or the head and the tail as fields 0 and 1
+def consCell (shape : Nat) (e tl : V) : M V := do
+  if shape == 0 then
+    let c ← alloc 1 [tl]
+    match c with
+    | .ptr p =>
+      let o ← objAt p
+      let n ← match e with
+        | .int n => pure n
+        | _ => throw "a scalar element was expected"
+      setObj p { o with scalars := [(0, n)] }
+      return c
+    | _ => return c
+  else alloc 1 [e, tl]
+
+-- `primArrToList`: the list of an array's elements; any other value as it is
+def arrToList (mode : Mode) (k : Nat) (v : V) : M V := do
+  match v with
+  | .ptr a =>
+    let o ← objAt a
+    if !isArrTag o.tag then return v
+    let unique := inPlace mode o
+    if mode == .counted && !unique then o.objs.forM (fun x => incV mode x 1)
+    let acc ← o.objs.reverse.foldlM (fun acc e => consCell (if o.tag == 246 then 1 else 0) e acc) (V.box 0)
+    if unique then freeCell a o
+    else if mode == .counted then decV mode k v
+    return acc
+  | _ => return v
+
+-- a push or a write on a list that is not an array yet works on the array of its elements
+def arrNorm (mode : Mode) (k : Nat) (shape : Int) (a : V) : M V := do
+  match a with
+  | .ptr p => if isArrTag (← objAt p).tag then pure a else arrOfList mode k shape a
+  | _ => pure a
+
+def arrPushOn (mode : Mode) (k : Nat) (shape : Int) (a v : V) : M V := do
+  match a with
+  | .box 0 => alloc (arrTag shape) [v]
+  | .ptr p =>
+    let o ← objAt p
+    if !isArrTag o.tag then throw s!"push on object {p}, which is no array"
+    if inPlace mode o then
+      setObj p { o with objs := o.objs ++ [v] }
+      return a
+    else
+      if mode == .counted then o.objs.forM (fun e => incV mode e 1)
+      let r ← alloc o.tag (o.objs ++ [v])
+      if mode == .counted then decV mode k a
+      return r
+  | _ => throw "push on a value that is no list"
+
+-- `primArrPush`: the array with one more element at its end
+def arrPush (mode : Mode) (k : Nat) (shape : Int) (a v : V) : M V := do
+  arrPushOn mode k shape (← arrNorm mode k shape a) v
+
+def arrSetOn (mode : Mode) (k : Nat) (w : V) (i : Int) (v : V) : M V := do
+  match w with
+  | .ptr p =>
+    let o ← objAt p
+    if !isArrTag o.tag then throw s!"a write at an index of object {p}, which is no array"
+    if i < 0 || i >= o.objs.length then throw s!"a write at index {i} of an array of {o.objs.length} elements"
+    if inPlace mode o then
+      decV mode k (o.objs.getD i.toNat default)
+      let o' ← objAt p
+      setObj p { o' with objs := listSet o.objs i.toNat v }
+      return w
+    else
+      if mode == .counted then
+        (List.range o.objs.length).forM (fun j => if j != i.toNat then incV mode (o.objs.getD j default) 1 else pure ())
+      let r ← alloc o.tag (listSet o.objs i.toNat v)
+      if mode == .counted then decV mode k w
+      return r
+  | _ => throw "a write at an index of a value that is no array"
+
+-- `primArrSet`: the array with element i replaced
+def arrSet (mode : Mode) (k : Nat) (shape : Int) (a : V) (i : Int) (v : V) : M V := do
+  arrSetOn mode k (← arrNorm mode k shape a) i v
+
+-- `primArrGet`: element i, counted once more (it is read, the array is not consumed)
+def arrGet (mode : Mode) (v i : V) : M V := do
+  match v with
+  | .ptr a =>
+    let o ← objAt a
+    let n ← asInt i
+    if !isArrTag o.tag then throw s!"a read at an index of object {a}, which is no array"
+    else if n < 0 || n >= o.objs.length then throw s!"a read at index {n} of an array of {o.objs.length} elements"
+    else
+      let el := o.objs.getD n.toNat default
+      incV mode el 1
+      return el
+  | _ => throw "a read at an index of a value that is no array"
+
+-- `primArrSlice`: the elements from lo up to hi, both brought into the array's range
+def arrSlice (mode : Mode) (shape : Int) (a : V) (lo hi : Int) : M V := do
+  match a with
+  | .box 0 => return a
+  | .ptr p =>
+    let o ← objAt p
+    if !isArrTag o.tag then throw s!"a slice of object {p}, which is no array"
+    let l := if lo < 0 then 0 else lo.toNat
+    let h := if hi > (o.objs.length : Int) then o.objs.length else if hi < 0 then 0 else hi.toNat
+    if l >= h then return .box 0
+    let part := (o.objs.drop l).take (h - l)
+    part.forM (fun y => incV mode y 1)
+    alloc (arrTag shape) part
+  | _ => throw "a slice of a value that is no array"
+
+-- the primitives of this section
+def isArrOp (op : Nat) : Bool := op >= 121 && op <= 126
+
+def primArr (mode : Mode) (k : Nat) (op : Nat) (imm : Int) (args : List V) : M V := do
+  match op, args with
+  | 121, [v, i] => arrGet mode v i
+  | 122, [a, v] => arrPush mode k imm a v
+  | 123, [a, i, v] => arrSet mode k imm a (← asInt i) v
+  | 124, [xs] => arrOfList mode k imm xs
+  | 125, [a] => arrToList mode k a
+  | 126, [a, lo, hi] => arrSlice mode imm a (← asInt lo) (← asInt hi)
+  | _, _ => throw s!"primitive {op} on {args.length} arguments has no meaning"
+
+def tagOfV (v : V) : M Nat :=
+  match v with
+  | .int n => pure n.toNat
+  | .box t => pure t
+  | .ptr a => do
+    let o ← objAt a
+    if isArrTag o.tag then throw s!"a case on object {a}, which is an array"
+    if o.tag == Lrc.cloTag then throw s!"a case on object {a}, which is a closure"
+    return o.tag
+  | _ => throw "a case on a value without a tag"
+
+def bindAll (fr : Frame) : List Int → List V → M Frame
+  | x :: _ :: rest, v :: vs => bindAll (fr.bind x.toNat v) rest vs
+  | [], [] => pure fr
+  | x :: ty :: rest, [] =>
+    if Lrc.tyIsIrr ty then bindAll (fr.bind x.toNat .irr) rest []
+    else throw "a binder list and its values differ in length"
+  | _, _ => throw "a binder list and its values differ in length"
+
+def bindParams (fr : Frame) : List Lrc.Param → List V → Frame
+  | p :: ps, v :: vs => bindParams (fr.bind p.x v) ps vs
+  | _, _ => fr
+
+def ownCall (nImg : Nat) (e : Lrc.N) : Bool := (nImg > 0 && Lrc.isOwnFn nImg (Lrc.fapFn e)) || Lrc.fapSame e
+
+-- What one step of the interpreter works on: an expression, a body, a call, or (r2) the
+-- application of a closure value to argument values (apply.cpp `lean_apply_n`).
+inductive Task where
+  | expr (fuel : Nat) (fr : Frame) (e : Lrc.N)
+  | body (fuel : Nat) (fr : Frame) (n : Lrc.N)
+  | call (fuel : Nat) (f : Nat) (args : List V)
+  | ap (fuel : Nat) (f : V) (args : List V)
+  deriving Inhabited
+
+def findAlt (t : Nat) (alts : List Lrc.N) : Option Lrc.N :=
+  match alts.find? (fun alt => alt.op == Lrc.opAltCtor && alt.a.toNat == t) with
+  | some alt => some alt
+  | none => alts.find? Lrc.altIsDefault
+
+-- The semantics. `steps` bounds the work; `fuel` is the wire's fuel (the depth of source calls).
+def exec (ds : List Lrc.Decl) (mode : Mode) : Nat → Task → M (List V)
+  | 0, _ => throw "steps"
+  | k + 1, .call fuel f args => do
+    let nImg := (← get).nImg
+    if fuel == 0 && !(nImg > 0 && Lrc.isOwnFn nImg f) then refuse "fuel"
+    match Lrc.declAt f ds with
+    | some d =>
+      if d.ext then throw s!"call of f{f}, which has no body"
+      if d.xs.length != args.length then throw s!"call of f{f} with a wrong number of arguments"
+      exec ds mode k (.body fuel (bindParams Frame.empty d.xs args) d.body)
+    | none => throw s!"call of an unknown function f{f}"
+  | k + 1, .expr fuel fr e => do
+    if e.op == Lrc.opCtor then
+      let info := Lrc.infoOf e
+      let usize := Lrc.ctorUsize e
+      -- Basic:187-191 `isRef` counts the usize area: a usize-only ctor is a heap object
+      if info.isScalar && usize == 0 then return [.box info.cidx]
+      return [← alloc info.cidx (← e.ys.mapM fr.get) (List.replicate usize 0)]
+    else if e.op == Lrc.opReset then
+      let v ← fr.get (Lrc.resetVar e)
+      if mode == .pure then return [.box 0]
+      match v with
+      | .ptr a =>
+        let o ← objAt a
+        if o.rc == 1 then
+          o.objs.forM (decV mode k)
+          setObj a { o with objs := o.objs.map (fun _ => .box 0) }
+          return [v]
+        else
+          decV mode k v
+          return [.box 0]
+      | _ => return [.box 0]
+    else if e.op == Lrc.opReuse then
+      let info := Lrc.infoOf e
+      let args ← (Lrc.reuseArgs e).mapM fr.get
+      if mode == .pure then return [← alloc info.cidx args]
+      match ← fr.get (Lrc.reuseVar e) with
+      | .ptr a =>
+        let o ← objAt a
+        if o.rc != 1 then throw s!"reuse of object {a} with count {o.rc}"
+        setObj a { o with tag := (if Lrc.reuseUpdt e then info.cidx else o.tag), objs := args }
+        return [.ptr a]
+      | _ => return [← alloc info.cidx args]
+    else if e.op == Lrc.opProj then
+      match ← fr.get (Lrc.projVar e) with
+      | .ptr a =>
+        let o ← objAt a
+        if isArrTag o.tag then throw s!"proj of object {a}, which is an array"
+        if o.tag == Lrc.cloTag then throw s!"proj of object {a}, which is a closure"
+        match o.objs.get? (Lrc.projIdx e) with
+        | some v => return [v]
+        | none => throw s!"proj of a missing field of object {a}"
+      | _ => throw "proj of a value that is not an object"
+    else if e.op == Lrc.opSProj then
+      match ← fr.get (Lrc.sprojVar e) with
+      | .ptr a =>
+        let o ← objAt a
+        if o.tag == Lrc.cloTag then throw s!"sproj of object {a}, which is a closure"
+        if Lrc.sprojN e != o.objs.length then throw s!"sproj with a wrong object-field count on object {a}"
+        return [.int ((o.scalars.lookup (Lrc.sprojOff e)).getD 0)]
+      | _ => throw "sproj of a value that is not an object"
+    else if e.op == Lrc.opFap then
+      let nImg := (← get).nImg
+      let fuel' := if ownCall nImg e then fuel else fuel - 1 - Lrc.fapDepth e
+      exec ds mode k (.call fuel' (Lrc.fapFn e) (← e.ys.mapM fr.get))
+    else if e.op == Lrc.opPrim then
+      let args ← e.ys.mapM fr.get
+      if isArrOp (Lrc.primOp e) then return [← primArr mode k (Lrc.primOp e) e.b args]
+      else return [← primFact (Lrc.primOp e) e.b args]
+    else if e.op == Lrc.opLit then return [.int e.a]
+    else if Lrc.isLitObj e then
+      let s ← get
+      let fields := Lrc.litObjFields e
+      let scalars := (List.range (fields.length / 3)).map (fun i => ((fields.getD (3 * i) 0).toNat, fields.getD (3 * i + 2) 0))
+      set { s with heap := s.heap ++ [({ rc := 0, tag := Lrc.litObjTag e, objs := [], usize := [], scalars := scalars, freed := false, persistent := true } : Obj)] }
+      return [.ptr s.heap.length]
+    else if e.op == Lrc.opLitStr then
+      return [.str (if (Lrc.litBytes e).isEmpty then e.s else String.mk ((Lrc.litBytes e).map (fun b => Char.ofNat b.toNat)))]
+    else if e.op == Lrc.opIsShared then
+      if mode == .pure then return [.int 1]
+      match ← fr.get (Lrc.isSharedVar e) with
+      | .ptr a => return [.int (if (← objAt a).rc == 1 then 0 else 1)]
+      | _ => return [.int 1]
+    else if e.op == Lrc.opPap then
+      -- EmitC:430-437 `emitPartialApp`: `lean_alloc_closure((void*)f, arity, ys.size)` then a
+      -- `lean_closure_set` per argument — the captured arguments move in uncounted.
+      match Lrc.declAt (Lrc.papFn e) ds with
+      | some d =>
+        if d.xs.length <= (Lrc.papArgs e).length then
+          throw s!"pap of f{Lrc.papFn e} with {(Lrc.papArgs e).length} arguments of its arity {d.xs.length}"
+        return [← allocClo (Lrc.papFn e) d.xs.length (← (Lrc.papArgs e).mapM fr.get)]
+      | none => throw s!"pap of an unknown function f{Lrc.papFn e}"
+    else if e.op == Lrc.opAp then
+      exec ds mode k (.ap fuel (← fr.get (Lrc.apVar e)) (← (Lrc.apArgs e).mapM fr.get))
+    else if e.op == Lrc.opBox then
+      -- lean.h:290 `lean_box`, src/include/lean/lean.h:1948-1999 the typed variants: usize,
+      -- uint64 and float box as `lean_alloc_ctor(0, 0, sizeof(word))` with the scalar stored, the
+      -- rest box as the tagged word.
+      let n ← asInt (← fr.get (Lrc.boxVar e))
+      let ty := Lrc.boxTy e
+      if ty == Lrc.tyUSizeC then return [← allocScalar [n] []]
+      if ty == Lrc.tyI64 then return [← allocScalar [] [(8, n)]]
+      if ty == Lrc.tyFloatC then return [← allocScalar [] [(8, n)]]
+      return [.int (2 * n + 1)]
+    else if e.op == Lrc.opUnbox then
+      -- `lean_unbox` and the typed variants; EmitC:515 reads the type off the bound variable,
+      -- carried by the node.
+      let ty := Lrc.unboxTy e
+      match ← fr.get (Lrc.unboxVar e) with
+      | .int n =>
+        if ty == Lrc.tyUSizeC || ty == Lrc.tyI64 || ty == Lrc.tyFloatC then
+          throw s!"unbox of a tagged scalar {n} as a boxed {ty}"
+        return [.int ((n - 1) / 2)]
+      | .ptr a =>
+        let o ← objAt a
+        if ty == Lrc.tyUSizeC then
+          match o.usize.get? 0 with
+          | some n => return [.int n]
+          | none => throw s!"unbox of object {a} with no usize lane"
+        else if ty == Lrc.tyI64 || ty == Lrc.tyFloatC then
+          match o.scalars.lookup 8 with
+          | some n => return [.int n]
+          | none => throw s!"unbox of object {a} with no 8-byte scalar"
+        else throw s!"unbox of object {a} as the tagged-word type {ty}"
+      | _ => throw "unbox of a value that is no scalar or object"
+    else if e.op == Lrc.opUProj then
+      -- EmitC:381 -> lean.h:572 `lean_ctor_get_usize(o, i)`: usize slot j stands at index size + j
+      match ← fr.get (Lrc.uprojVar e) with
+      | .ptr a =>
+        let o ← objAt a
+        if o.tag == Lrc.cloTag then throw s!"uproj of object {a}, which is a closure"
+        match o.usize.get? (Lrc.uprojIdx e) with
+        | some n => return [.int n]
+        | none => throw s!"uproj of a missing usize of object {a}"
+      | _ => throw "uproj of a value that is not an object"
+    else throw s!"expression op {e.op}"
+  | k + 1, .body fuel fr n => do
+    if n.op == Lrc.opVDecl then
+      let vs ← exec ds mode k (.expr fuel fr (Lrc.vdeclExpr n))
+      let fr' ← bindAll fr (Lrc.vdeclBinds n) vs
+      exec ds mode k (.body fuel fr' (Lrc.bodyOf n))
+    else if n.op == Lrc.opJDecl then
+      exec ds mode k (.body fuel { fr with jps := (Lrc.jdeclId n, (Lrc.jdeclParams n, Lrc.jdeclBody n)) :: fr.jps } (Lrc.bodyOf n))
+    else if n.op == Lrc.opSet then
+      match ← fr.get n.a with
+      | .ptr a =>
+        let o ← objAt a
+        if o.tag == Lrc.cloTag then throw s!"set on object {a}, which is a closure"
+        if mode == .counted && o.rc != 1 then throw s!"set on object {a} with count {o.rc}"
+        let i ← if Lrc.setIsAt n then (do pure (← asInt (← fr.get (Lrc.setAtVar n))).toNat) else pure (Lrc.setIdx n)
+        if i >= o.objs.length then throw s!"set of a missing field of object {a}"
+        setObj a { o with objs := listSet o.objs i (← fr.get (Lrc.setArg n)) }
+        exec ds mode k (.body fuel fr (Lrc.bodyOf n))
+      | _ => throw "set on a value that is not an object"
+    else if n.op == Lrc.opSetTag then
+      match ← fr.get n.a with
+      | .ptr a =>
+        let o ← objAt a
+        setObj a { o with tag := n.b.toNat }
+        exec ds mode k (.body fuel fr (Lrc.bodyOf n))
+      | _ => throw "setTag on a value that is not an object"
+    else if n.op == Lrc.opSSet then
+      match ← fr.get n.a with
+      | .ptr a =>
+        let o ← objAt a
+        if o.tag == Lrc.cloTag then throw s!"sset on object {a}, which is a closure"
+        if mode == .counted && o.rc != 1 then throw s!"sset on object {a} with count {o.rc}"
+        if Lrc.ssetN n != o.objs.length then throw s!"sset with a wrong object-field count on object {a}"
+        let v ← asInt (← fr.get (Lrc.ssetArg n))
+        if n.d == Lrc.tyU8 && (v < 0 || v > 255) then throw s!"sset of {v} into a byte field of object {a}"
+        setObj a { o with scalars := (Lrc.ssetOff n, v) :: o.scalars.filter (fun p => p.1 != Lrc.ssetOff n) }
+        exec ds mode k (.body fuel fr (Lrc.bodyOf n))
+      | _ => throw "sset on a value that is not an object"
+    else if n.op == Lrc.opInc then
+      incV mode (← fr.get n.a) (Lrc.rcN n)
+      exec ds mode k (.body fuel fr (Lrc.bodyOf n))
+    else if n.op == Lrc.opDec then
+      decV mode k (← fr.get n.a)
+      exec ds mode k (.body fuel fr (Lrc.bodyOf n))
+    else if n.op == Lrc.opDel then
+      if mode == .counted then
+        match ← fr.get n.a with
+        | .ptr a =>
+          let o ← objAt a
+          setObj a { o with rc := 0, freed := true }
+        | _ => throw "del of a value that is not an object"
+      exec ds mode k (.body fuel fr (Lrc.bodyOf n))
+    else if n.op == Lrc.opMData then
+      if n.a == 1 && fuel <= n.b.toNat then refuse "fuel"
+      exec ds mode k (.body fuel fr (Lrc.bodyOf n))
+    else if n.op == Lrc.opCase then
+      let t ← tagOfV (← fr.get n.a)
+      match findAlt t (Lrc.caseAlts n) with
+      | some alt => exec ds mode k (.body fuel fr (Lrc.altBody alt))
+      | none => throw s!"a case without an alternative for tag {t}"
+    else if n.op == Lrc.opRet then
+      n.ys.mapM fr.get
+    else if n.op == Lrc.opJmp then
+      match fr.jps.lookup (Lrc.jmpId n) with
+      | some (ps, body) =>
+        let vs ← n.ys.mapM fr.get
+        if ps.length != vs.length then throw "a jump and its join point differ in arity"
+        exec ds mode k (.body fuel (bindParams fr ps vs) body)
+      | none => throw s!"jump to an unknown join point {Lrc.jmpId n}"
+    else if n.op == Lrc.opUSet then
+      -- Basic:258 `FnBody.uset` -> lean.h:602 `lean_ctor_set_usize(o, i, y)`; exclusive only, as
+      -- `set`/`sset` (Basic:259 "the runtime assumes that `x` is a constructor object and RC(x) = 1")
+      match ← fr.get n.a with
+      | .ptr a =>
+        let o ← objAt a
+        if o.tag == Lrc.cloTag then throw s!"uset on object {a}, which is a closure"
+        if mode == .counted && o.rc != 1 then throw s!"uset on object {a} with count {o.rc}"
+        if (Lrc.usetIdx n) >= o.usize.length then throw s!"uset of a missing usize of object {a}"
+        setObj a { o with usize := listSet o.usize (Lrc.usetIdx n) (← asInt (← fr.get (Lrc.usetArg n))) }
+        exec ds mode k (.body fuel fr (Lrc.bodyOf n))
+      | _ => throw "uset on a value that is not an object"
+    else if n.op == Lrc.opUnreachable then throw "unreachable was reached"
+    else throw s!"body op {n.op}"
+  | k + 1, .ap fuel f args => do
+    -- src/runtime/apply.cpp `lean_apply_n`: the application of closure f to `args`. The
+    -- arguments move in (lean_apply_1..16 take them as a call's own; fix_args stores the new
+    -- arguments uncounted); the captured fields move or count by `lean_is_exclusive` (`inPlace`).
+    match f with
+    | .ptr a => do
+      let o ← objAt a
+      if o.tag != Lrc.cloTag then throw s!"application of object {a} with tag {o.tag}, which is no closure"
+      let nImg := (← get).nImg
+      let fn := cloFn o; let arity := cloArity o; let cap := o.objs
+      if cap.length >= arity then throw s!"closure at {a} holds {cap.length} arguments of its arity {arity}"
+      let need := arity - cap.length
+      let fuel' := if nImg > 0 && Lrc.isOwnFn nImg fn then fuel else fuel - 1
+      if args.length == need then
+        -- `arity == fixed + n`: exclusive -> the captured fields move into the call and the cell
+        -- is freed (lean_free_small_object); shared -> a lean_inc of each field, the call, then
+        -- lean_dec_ref releases the closure's own references.
+        if !inPlace mode o then cap.forM (fun c => incV mode c 1)
+        let rs ← exec ds mode k (.call fuel' fn (cap ++ args))
+        if inPlace mode o then freeCell a o else decV mode k (.ptr a)
+        return rs
+      else if args.length < need then
+        -- `fix_args`: a new closure over the old captured fields and the new arguments.
+        if !inPlace mode o then cap.forM (fun c => incV mode c 1)
+        let r ← allocClo fn arity (cap ++ args)
+        if inPlace mode o then freeCell a o else decV mode k (.ptr a)
+        return [r]
+      else
+        -- `arity < fixed + n` (apply.cpp): a lean_inc of every fixed argument, the call of the
+        -- first `need` arguments, lean_dec_ref, and the result applied to the rest.
+        cap.forM (fun c => incV mode c 1)
+        let rs ← exec ds mode k (.call fuel' fn (cap ++ args.take need))
+        decV mode k (.ptr a)
+        match rs with
+        | r :: _ => exec ds mode k (.ap fuel r (args.drop need))
+        | [] => throw "an application whose call returned no result"
+    | _ => do
+      -- apply.cpp `lean_is_scalar(f)`: an erased proof — the arguments are released, f returned
+      args.forM (decV mode k)
+      return [f]
+
+-- The observable value: a value read back from the heap, as text (instruments/lrc-host/Interp.rsd `showV`).
+-- `showW k false v` is the text of v as one word; `showW k true v` the texts of the elements of the
+-- list cells from v on (the host's loop over a list: a cell of one object field holds a scalar
+-- head, a cell of two fields an object head; the list ends at the first value that is no object).
+def showW : Nat → Bool → V → M (List String)
+  | 0, _, _ => throw "steps"
+  | k + 1, false, v =>
+    match v with
+    | .int n => return [toString n]
+    | .box 0 => return ["[]"]
+    | .box t => return [s!"#{t}"]
+    | .str t => return [t]
+    | .irr => return ["_"]
+    | .ptr a => do
+      let o ← objAt a
+      if isArrTag o.tag then
+        -- an array, which no value at the boundary is (lib/lrc/FromWire.rsd "The boundary")
+        let es ← o.objs.mapM (showW k false)
+        return ["#[" ++ " ".intercalate es.flatten ++ "]"]
+      else if o.tag == 0 then
+        let objs ← o.objs.mapM (showW k false)
+        let scal := ((o.scalars.toArray.qsort (fun x y => x.1 < y.1)).toList).map (fun x => toString x.2)
+        -- the usize lane sits between the object fields and the byte scalars (Basic:170-172)
+        return ["{" ++ " ".intercalate (objs.flatten ++ (o.usize.map toString) ++ scal) ++ "}"]
+      else if o.tag == Lrc.cloTag then
+        return ["clo{f" ++ toString (cloFn o) ++ " a" ++ toString (cloArity o) ++ " c" ++ toString o.objs.length ++ "}"]
+      else
+        return ["[" ++ " ".intercalate (← showW k true v) ++ "]"]
+  | k + 1, true, v =>
+    match v with
+    | .ptr b => do
+      let c ← objAt b
+      match c.objs with
+      | [x] => return toString ((c.scalars.lookup 0).getD 0) :: (← showW k true x)
+      | [x, y] => return (← showW k false x) ++ (← showW k true y)
+      | _ => throw s!"object {b} is not a list cell"
+    | _ => return []
+
+def showV (k : Nat) (v : V) : M String := do
+  return " ".intercalate (← showW k false v)
+
+-- The outcome of a run: the observable text of the results, or the refusal or error text.
+inductive Outcome where
+  | value (text : String)
+  | stop (why : String)
+  deriving BEq, Inhabited, Repr
+
+def irrelevantFirst (xs : List Lrc.Param) (args : List Int) : List V :=
+  match xs with
+  | [] => []
+  | p :: ps =>
+    if Lrc.tyIsIrr p.ty then V.irr :: irrelevantFirst ps args
+    else match args with
+      | a :: rest => V.int a :: irrelevantFirst ps rest
+      | [] => V.irr :: irrelevantFirst ps []
+
+-- Run function f of the program `ds` on integer arguments.
+def runEntry (ds : List Lrc.Decl) (f : Nat) (args : List Int) (fuel steps : Nat) (mode : Mode) (nImg : Nat := 0) : Outcome :=
+  let act : M String := do
+    let d ← match Lrc.declAt f ds with
+      | some d => pure d
+      | none => throw s!"no function f{f}"
+    let rs ← exec ds mode steps (.call fuel f (irrelevantFirst d.xs args))
+    let texts ← (rs.filter (· != V.irr)).mapM (showV steps)
+    return " ".intercalate texts
+  match act.run { heap := [], nImg := nImg } with
+  | .ok (t, _) => .value t
+  | .error e => .stop e
+
+/-! ## Statements (type-checked, not asserted)
+
+RC erasure (the theorem of "Counting Immutable Beans" that reference counting does not change the
+pure result, for the instructions this IR has): whenever the counted run gives a value, the pure run
+gives the same observable value.
+
+Revision 2026-11-17 (cc). The unrestricted statement over every program is false; four
+counterexamples are the `#guard`s `cexIsShared`, `cexResetEscape`, `cexReuseTag` and
+`cexUndercount` below (the first three found by swe-semproof, raisin-clean swe/semproof
+reports/semproof-swe/QUESTIONS.md). `reset`, `reuse` and `isShared` observe the reference count, so
+their erasure holds only for programs whose counts are sound and that use them in the discipline
+the passes emit (Ullrich and de Moura, "Counting Immutable Beans", section 5: the theorem is about
+the output of RC insertion, not about every lambda-RC program). The statement is therefore stated
+over the fragment without those three forms (`rcObsFreeDs`). Programs that contain them are covered
+by the hop statements of the passes that introduce them (lib/lrc ResetReuse and ExpandResetReuse,
+proved per pass after the compiler freezes) and, meanwhile, by the per-hop translation validation
+of gates/irsem (counted run equal to pure run, per program).
+
+Revision 2026-11-18 (agy-lrcsem). The four consuming array primitives (lib/lrc/Prim.rsd
+`primConsumes`: 122 push, 123 set, 124 ofList, 125 toList) observe the reference count exactly as
+reset and reuse do: in the counted run an array (or a list cell) whose count is 1 is written in
+place, in the pure run the result is fresh. With a count too low the in-place write is seen through
+another reference (`cexArrUndercount` below), so they join the excluded forms. The other twelve new
+primitives (107 to 109, 116 to 121, 126, 127, 128) only read their arguments, count an element once
+more or allocate, and stay inside the fragment. Every array is made by a consuming primitive (slice
+only copies an array), so no program of the fragment holds an array that is not empty: the erasure
+of the array primitives on real arrays is the hop statements' and the per-hop gate's, as for
+reset and reuse.
+
+Revision r2 2026-11-18 (swe-lrcrev2, LRC-REV2-0). The six new forms stay inside the fragment: none
+of them observes a count in the sense this statement measures (`runEntry .counted = .value t`
+implies the same pure value). `pap` and `box` only allocate, `unbox` and `uproj` only read, and
+`ap`'s exclusive/shared choice (apply.cpp `fix_args`: move the fields vs inc-then-dec) changes the
+heap's counts, never the returned value. `uset`, like `set`/`sset` above, refuses a shared object
+only in counted mode, so its count observation can stop a counted run, never diverge a succeeding
+one. The `Task.ap` task's inc/dec bookkeeping is likewise value-silent. -/
+
+/-- the primitives that consume an argument (lib/lrc/Prim.rsd `primConsumes`; reports/lrcsem/HostAgree.rsd
+checks that the two agree on every code below 512) -/
+def consumes (op : Nat) : Bool := op == 122 || op == 123 || op == 124 || op == 125
+
+/-- `rcObsFreeDepth d n`: no `reset`, `reuse`, `isShared` node and no consuming primitive within depth `d` of `n`. -/
+def rcObsFreeDepth : Nat → Lrc.N → Bool
+  | 0, _ => true
+  | k + 1, n =>
+    !(n.op == Lrc.opReset || n.op == Lrc.opReuse || n.op == Lrc.opIsShared || (n.op == Lrc.opPrim && consumes (Lrc.primOp n)))
+      && n.kids.all (rcObsFreeDepth k)
+
+/-- `n` has no node that observes the reference count, at any depth. -/
+def rcObsFree (n : Lrc.N) : Prop := ∀ d, rcObsFreeDepth d n = true
+
+/-- every declaration body of `ds` is in the fragment -/
+def rcObsFreeDs (ds : List Lrc.Decl) : Prop := ∀ d ∈ ds, rcObsFree d.body
+
+def rcErasureStatement : Prop :=
+  ∀ (ds : List Lrc.Decl) (f : Nat) (args : List Int) (fuel steps : Nat) (t : String),
+    rcObsFreeDs ds →
+    runEntry ds f args fuel steps .counted = .value t → runEntry ds f args fuel steps .pure = .value t
+
+/-- The hop scm -> lambda-RC: for a translation `tr` of a wire program into the IR and the wire's
+own semantics `wire` (evalLF's outcome as text), the translated program has the same outcome. The
+concrete `tr` is lib/lrc/FromWire.rsd and the concrete `wire` is evalLF; they are parameters here so
+that this file stays independent of the wire's modules. -/
+def hopPreservesStatement (Prog : Type) (tr : Prog → List Lrc.Decl × Nat × Nat)
+    (wire : Prog → List Int → Nat → Outcome) : Prop :=
+  ∀ (p : Prog) (args : List Int) (fuel : Nat) (t : String),
+    wire p args fuel = .value t →
+      ∃ steps, runEntry (tr p).1 (tr p).2.1 args fuel steps .counted (tr p).2.2 = .value t
+
+/-! ## Garbage freedom (Perceus's property; Reinking, Xie, de Moura and Leijen, PLDI 2021)
+
+In counted mode, at the end of a run, the objects still live are exactly those reachable from the
+results. A leak (a missing dec) leaves a live object that nothing reaches; a release too many is a
+use after free and already fails the run. Constant cells (`persistent`) are outside the count. -/
+
+-- the counted run, keeping the final heap
+def runCounted (ds : List Lrc.Decl) (f : Nat) (args : List Int) (fuel steps : Nat) (nImg : Nat := 0) :
+    Except String (List V × St) :=
+  let act : M (List V) := do
+    let d ← match Lrc.declAt f ds with
+      | some d => pure d
+      | none => throw s!"no function f{f}"
+    exec ds .counted steps (.call fuel f (irrelevantFirst d.xs args))
+  act.run { heap := [], nImg := nImg }
+
+-- the addresses reachable from `vs` in `heap`
+def reach (heap : List Obj) : Nat → List V → List Nat → List Nat
+  | 0, _, seen => seen
+  | _, [], seen => seen
+  | k + 1, v :: vs, seen =>
+    match v with
+    | .ptr a =>
+      if seen.contains a then reach heap k vs seen
+      else match heap.get? a with
+        | some o => reach heap k (o.objs ++ vs) (a :: seen)
+        | none => reach heap k vs (a :: seen)
+    | _ => reach heap k vs seen
+
+-- the addresses still live: not freed, not a constant cell
+def liveAddrs (heap : List Obj) : List Nat :=
+  ((List.range heap.length).zip heap).filterMap (fun p => if !p.2.freed && !p.2.persistent then some p.1 else none)
+
+-- the executable check: every live address is reachable from the results, and every reachable
+-- counted address is live
+def garbageFree (rs : List V) (st : St) (steps : Nat) : Bool :=
+  let r := reach st.heap steps rs []
+  let live := liveAddrs st.heap
+  live.all (fun a => r.contains a) &&
+    r.all (fun a => match st.heap.get? a with
+      | some o => o.persistent || !o.freed
+      | none => false)
+
+def garbageFreeStatement : Prop :=
+  ∀ (ds : List Lrc.Decl) (f : Nat) (args : List Int) (fuel steps nImg : Nat) (rs : List V) (st : St),
+    runCounted ds f args fuel steps nImg = .ok (rs, st) → garbageFree rs st steps = true
+
+-- the check on one run, for the gate: none when the run did not end with values
+def garbageFreeRun (ds : List Lrc.Decl) (f : Nat) (args : List Int) (fuel steps : Nat) (nImg : Nat := 0) : Option Bool :=
+  match runCounted ds f args fuel steps nImg with
+  | .ok (rs, st) => some (garbageFree rs st steps)
+  | .error _ => none
+
+/-! ## The r1 fragment and conservativity (r2, swe-lrcrev2)
+
+The r1 IR is the fragment of the r2 IR without the six r2 forms, without a usize constructor
+area, and without an object of tag 245 (`LeanClosure`, which an r1 program could not make: its
+ctors' tags are its own and 245 is the runtime's). The r1 IR's programs therefore have only the
+r1 arms: the r2 arms sit behind op codes an r1 program never carries, an `.ap` task is spawned
+only from `opAp`, and the tag-245 field checks (`proj`/`sproj`/`set`/`sset`/`uset`/`case`/
+`uproj`) never fire on objects an r1 program allocates. The one shared code path this revision
+rewrote is `listSet`, and `listSet_eq` proves it keeps `List.set`, the r1 definition clause for
+clause. -/
+
+/-- `r1NodeDepth d n`: no r2 form, no usize constructor area, no tag-245 object within depth `d`
+of `n` (the depth convention of `rcObsFreeDepth`). -/
+def r1NodeDepth : Nat → Lrc.N → Bool
+  | 0, _ => true
+  | k + 1, n =>
+    !(n.op == Lrc.opPap || n.op == Lrc.opAp || n.op == Lrc.opBox || n.op == Lrc.opUnbox ||
+      n.op == Lrc.opUProj || n.op == Lrc.opUSet) &&
+    !(n.op == Lrc.opCtor && (Lrc.ctorUsize n != 0 || (Lrc.infoOf n).cidx == Lrc.cloTag)) &&
+    !(Lrc.isLitObj n && Lrc.litObjTag n == Lrc.cloTag) &&
+    n.kids.all (r1NodeDepth k)
+
+/-- `n` is a node of the r1 IR, at any depth -/
+def r1Node (n : Lrc.N) : Prop := ∀ d, r1NodeDepth d n = true
+
+/-- every declaration body of `ds` is in the r1 IR -/
+def r1Program (ds : List Lrc.Decl) : Prop := ∀ d ∈ ds, r1Node d.body
+
+/-- Conservativity of r2 over the r1 IR: every program of the r1 IR has the same outcome under
+r2 as under r1. The r1 interpreter — the frozen file at the r1 q — cannot share this file, so
+the statement takes it as the parameter `r1` (reports/lrcrev2/R1Diff.rsd instantiates it against
+the frozen file, renamed, over every control below). Established by the fragment argument above
+plus `listSet_eq`; exercised by the existing guard suite, each control `r1Program`-guarded and
+re-run under r2 with its r1 literal. -/
+def conservativeStatement
+    (r1 : List Lrc.Decl → Nat → List Int → Nat → Nat → Mode → Nat → Outcome) : Prop :=
+  ∀ (ds : List Lrc.Decl) (f : Nat) (args : List Int) (fuel steps nImg : Nat) (mode : Mode),
+    r1Program ds → runEntry ds f args fuel steps mode nImg = r1 ds f args fuel steps mode nImg
+
+end Lrc.Sem
+
+/-! ## Controls (executable; checked by `#guard`) -/
+namespace Lrc.SemControls
+open Lrc
+
+-- f0 (x): a pair cell (tag 1) of x and x, then its first field, read back: returns x
+def info1 : CtorInfo := { cidx := 1, size := 2, ssize := 0, tid := 1 }
+def body0 : N :=
+  mkVDecl 1 tyObj (mkCtor info1 [0, 0])
+    (mkVDecl 2 tyI64 (mkProj 0 1) (mkRet [2]))
+def prog0 : List Decl := [{ f := 0, xs := [{ x := 0, borrow := false, ty := tyI64 }], rets := [tyI64], body := body0, ext := false }]
+
+-- f0 (x): a case on x: 0 -> 10, otherwise -> x * 2 through prim 8 (checked mul)
+def body1 : N :=
+  mkCase 0 tyI64 [mkAltCtor (boolInfo 0) (mkVDecl 1 tyI64 (mkLit 10) (mkRet [1])),
+                  mkAltDefault (mkVDecl 1 tyI64 (mkLit 2) (mkVDecl 2 tyI64 (mkPrim 8 0 0 [0, 1]) (mkRet [2])))]
+def prog1 : List Decl := [{ f := 0, xs := [{ x := 0, borrow := false, ty := tyI64 }], rets := [tyI64], body := body1, ext := false }]
+
+-- f0 (n): recursion f0 (n - 1) until 0, so fuel runs out when n reaches the fuel
+def body2 : N :=
+  mkCase 0 tyI64 [mkAltCtor (boolInfo 0) (mkVDecl 1 tyI64 (mkLit 7) (mkRet [1])),
+                  mkAltDefault (mkVDecl 1 tyI64 (mkLit 1) (mkVDecl 2 tyI64 (mkPrim 7 0 0 [0, 1])
+                    (mkVDecl 3 tyI64 (mkFap 0 [2]) (mkRet [3]))))]
+def prog2 : List Decl := [{ f := 0, xs := [{ x := 0, borrow := false, ty := tyI64 }], rets := [tyI64], body := body2, ext := false }]
+
+-- with an inc and a dec around a shared cell: the counted and the pure run agree
+def body3 : N :=
+  mkVDecl 1 tyObj (mkCtor info1 [0, 0])
+    (mkInc 1 1 false false (mkVDecl 2 tyI64 (mkProj 1 1) (mkDec 1 1 false false (mkDec 1 1 false false (mkRet [2])))))
+def prog3 : List Decl := [{ f := 0, xs := [{ x := 0, borrow := false, ty := tyI64 }], rets := [tyI64], body := body3, ext := false }]
+
+-- a mutant of body3: one dec too many is a release below zero in the counted run only
+def body3m : N :=
+  mkVDecl 1 tyObj (mkCtor info1 [0, 0])
+    (mkVDecl 2 tyI64 (mkProj 1 1) (mkDec 1 1 false false (mkDec 1 1 false false (mkRet [2]))))
+def prog3m : List Decl := [{ f := 0, xs := [{ x := 0, borrow := false, ty := tyI64 }], rets := [tyI64], body := body3m, ext := false }]
+
+#guard Sem.runEntry prog0 0 [42] 10 100 .counted == .value "42"
+#guard Sem.runEntry prog0 0 [42] 10 100 .pure == .value "42"
+#guard Sem.runEntry prog1 0 [0] 10 100 .counted == .value "10"
+#guard Sem.runEntry prog1 0 [21] 10 100 .counted == .value "42"
+#guard Sem.runEntry prog2 0 [3] 10 1000 .counted == .value "7"
+#guard Sem.runEntry prog2 0 [30] 10 1000 .counted == .stop "refusal:fuel"
+#guard Sem.runEntry prog3 0 [5] 10 100 .counted == .value "5"
+#guard Sem.runEntry prog3 0 [5] 10 100 .pure == .value "5"
+#guard Sem.runEntry prog3m 0 [5] 10 100 .pure == .value "5"
+#guard (Sem.runEntry prog3m 0 [5] 10 100 .counted != .value "5")
+#guard Sem.runEntry prog1 0 [5] 10 1 .counted == .stop "steps"
+
+-- garbage freedom: a cell that is built and released, and its planted mutant with the dec missing
+def body4 : N := mkVDecl 1 tyObj (mkCtor info1 [0, 0]) (mkDec 1 1 false false (mkRet [0]))
+def prog4 : List Decl := [{ f := 0, xs := [{ x := 0, borrow := false, ty := tyI64 }], rets := [tyI64], body := body4, ext := false }]
+def body4m : N := mkVDecl 1 tyObj (mkCtor info1 [0, 0]) (mkRet [0])
+def prog4m : List Decl := [{ f := 0, xs := [{ x := 0, borrow := false, ty := tyI64 }], rets := [tyI64], body := body4m, ext := false }]
+-- a returned cell stays live and is reachable from the result
+def body5 : N := mkVDecl 1 tyObj (mkCtor info1 [0, 0]) (mkRet [1])
+def prog5 : List Decl := [{ f := 0, xs := [{ x := 0, borrow := false, ty := tyI64 }], rets := [tyObj], body := body5, ext := false }]
+
+#guard Sem.garbageFreeRun prog4 0 [5] 10 100 == some true
+#guard Sem.garbageFreeRun prog4m 0 [5] 10 100 == some false
+#guard Sem.garbageFreeRun prog5 0 [5] 10 100 == some true
+#guard Sem.runEntry prog4m 0 [5] 10 100 .counted == .value "5"
+
+/-! ### Why `rcErasureStatement` carries `rcObsFreeDs`: four programs whose two modes differ
+(a fifth, `cexArrUndercount`, for the consuming array primitives, follows the array controls below).
+Each is outside the fragment (`rcObsFreeDepth` is false) and its counted and pure runs disagree. -/
+def infoT9 : CtorInfo := { cidx := 9, size := 2, ssize := 0, tid := 1 }
+def progOf (b : N) : List Decl := [{ f := 0, xs := [{ x := 0, borrow := false, ty := tyI64 }], rets := [tyObj], body := b, ext := false }]
+-- isShared branched on with branches that differ: counted (unique) takes "false", pure "true"
+def cexIsShared : N :=
+  mkVDecl 1 tyObj (mkCtor info1 [0, 0]) (mkVDecl 2 tyU8 (mkIsShared 1) (mkIf 2 (mkRet [1]) (mkRet [0])))
+-- a reset result returned: counted gives the emptied cell, pure the token
+def cexResetEscape : N :=
+  mkVDecl 1 tyObj (mkCtor info1 [0, 0]) (mkVDecl 2 tyObj (mkReset 2 1) (mkRet [2]))
+-- reuse without header update at another tag, the tag read back: counted 1, pure 9
+def cexReuseTag : N :=
+  mkVDecl 1 tyObj (mkCtor info1 [0, 0]) (mkVDecl 2 tyObj (mkReset 2 1)
+    (mkVDecl 3 tyObj (mkReuse 2 infoT9 false [0, 0]) (mkVDecl 4 tyI64 (mkPrim 100 0 0 [3]) (mkRet [4]))))
+-- a count too low (x stored in z with no inc), then reset and reuse: counted mutates z's field
+def cexUndercount : N :=
+  mkVDecl 1 tyObj (mkCtor info1 [0, 0]) (mkVDecl 2 tyObj (mkCtor info1 [1, 0])
+    (mkVDecl 5 tyI64 (mkLit 7) (mkVDecl 3 tyObj (mkReset 2 1)
+      (mkVDecl 4 tyObj (mkReuse 3 info1 true [5, 5]) (mkRet [2])))))
+
+#guard Sem.rcObsFreeDepth 64 cexIsShared == false
+#guard Sem.rcObsFreeDepth 64 cexResetEscape == false
+#guard Sem.rcObsFreeDepth 64 cexReuseTag == false
+#guard Sem.rcObsFreeDepth 64 cexUndercount == false
+#guard Sem.runEntry (progOf cexIsShared) 0 [5] 10 100 .counted != Sem.runEntry (progOf cexIsShared) 0 [5] 10 100 .pure
+#guard Sem.runEntry (progOf cexResetEscape) 0 [5] 10 100 .counted != Sem.runEntry (progOf cexResetEscape) 0 [5] 10 100 .pure
+#guard Sem.runEntry (progOf cexReuseTag) 0 [5] 10 100 .counted != Sem.runEntry (progOf cexReuseTag) 0 [5] 10 100 .pure
+#guard Sem.runEntry (progOf cexUndercount) 0 [5] 10 100 .counted != Sem.runEntry (progOf cexUndercount) 0 [5] 10 100 .pure
+-- and the earlier controls are inside the fragment
+#guard Sem.rcObsFreeDepth 64 body0 && Sem.rcObsFreeDepth 64 body1 && Sem.rcObsFreeDepth 64 body4 && Sem.rcObsFreeDepth 64 body5
+
+/-! ### The forms added on 2026-11-18 (reports/lrcsem/README.md)
+
+Each program below runs in both modes. Its expected text is the host oracle's
+(instruments/lrc-host/Interp.rsd `runEntry`, counted and not counted): reports/lrcsem/HostAgree.rsd
+runs both engines on these same programs and checks that they agree. -/
+
+def cNil : CtorInfo := { cidx := 0, size := 0, ssize := 0, tid := 2 }
+def cConsS : CtorInfo := { cidx := 1, size := 1, ssize := 8, tid := 2 }
+def cConsO : CtorInfo := { cidx := 1, size := 2, ssize := 0, tid := 3 }
+def cBox : CtorInfo := { cidx := 0, size := 2, ssize := 0, tid := 5 }
+def progOf2 (b : N) : List Decl :=
+  [{ f := 0, xs := [{ x := 0, borrow := false, ty := tyI64 }, { x := 1, borrow := false, ty := tyI64 }], rets := [tyObj], body := b, ext := false }]
+
+-- both modes give the value t; both modes stop
+def bothValue (ds : List Decl) (args : List Int) (t : String) : Bool :=
+  Sem.runEntry ds 0 args 10 1000 .counted == .value t && Sem.runEntry ds 0 args 10 1000 .pure == .value t
+def isStop : Sem.Outcome → Bool
+  | .stop _ => true
+  | .value _ => false
+def bothStop (ds : List Decl) (args : List Int) : Bool :=
+  isStop (Sem.runEntry ds 0 args 10 1000 .counted) && isStop (Sem.runEntry ds 0 args 10 1000 .pure)
+-- the number of objects the run allocated
+def heapLen (ds : List Decl) (mode : Sem.Mode) (args : List Int) : Option Nat :=
+  match (Sem.exec ds mode 1000 (.call 10 0 (args.map Sem.V.int))).run { heap := [], nImg := 0 } with
+  | .ok (_, st) => some st.heap.length
+  | .error _ => none
+
+-- 107 isScalar of the empty list and of a cell: 1 0
+def pIsScalar : N :=
+  mkVDecl 1 tyObj (mkCtor cNil []) (mkVDecl 2 tyI64 (mkPrim 107 0 0 [1])
+    (mkVDecl 3 tyObj (mkCtor cBox [0, 0]) (mkVDecl 4 tyI64 (mkPrim 107 0 0 [3])
+      (mkDec 3 1 false false (mkRet [2, 4])))))
+-- 108 box x0, then 109 unbox it
+def pBox : N := mkVDecl 1 tyObj (mkPrim 108 0 0 [0]) (mkVDecl 2 tyI64 (mkPrim 109 0 0 [1]) (mkRet [1, 2]))
+-- 109 unbox of a scalar constructor's box
+def pUnbox : N := mkVDecl 1 tyObj (mkCtor (boolInfo 7) []) (mkVDecl 2 tyI64 (mkPrim 109 0 0 [1]) (mkRet [2]))
+-- 127 boxS x0, then 128 unboxS it
+def pBoxS : N := mkVDecl 1 tyObj (mkPrim 127 0 0 [0]) (mkVDecl 2 tyI64 (mkPrim 128 0 0 [1]) (mkRet [1, 2]))
+-- 116 shrW by 2
+def pShrW : N := mkVDecl 1 tyI64 (mkPrim 116 2 0 [0]) (mkRet [1])
+-- 117 divU and 118 remU of x0 by x1; 118 alone
+def pDivRemU : N := mkVDecl 2 tyI64 (mkPrim 117 0 0 [0, 1]) (mkVDecl 3 tyI64 (mkPrim 118 0 0 [0, 1]) (mkRet [2, 3]))
+def pRemU : N := mkVDecl 3 tyI64 (mkPrim 118 0 0 [0, 1]) (mkRet [3])
+def pDivU : N := mkVDecl 2 tyI64 (mkPrim 117 0 0 [0, 1]) (mkRet [2])
+-- 119 isArr, 120 size and 126 slice of the empty array, and 119 of a cell: 0 0 [] 0
+def pArrEmpty : N :=
+  mkVDecl 1 tyObj (mkCtor cNil []) (mkVDecl 2 tyI64 (mkPrim 119 0 0 [1]) (mkVDecl 3 tyI64 (mkPrim 120 0 0 [1])
+    (mkVDecl 4 tyI64 (mkLit 0) (mkVDecl 5 tyObj (mkPrim 126 0 0 [1, 4, 4])
+      (mkVDecl 6 tyObj (mkCtor cBox [0, 0]) (mkVDecl 7 tyI64 (mkPrim 119 0 0 [6])
+        (mkDec 6 1 false false (mkRet [2, 3, 5, 7]))))))))
+-- 121 get of the empty array: no element
+def pGetEmpty : N :=
+  mkVDecl 1 tyObj (mkCtor cNil []) (mkVDecl 4 tyI64 (mkLit 0) (mkVDecl 2 tyI64 (mkPrim 121 0 0 [1, 4]) (mkRet [2])))
+
+-- x4: the scalar list [x0, 3]
+def withList (k : N) : N :=
+  mkVDecl 1 tyI64 (mkLit 3) (mkVDecl 2 tyObj (mkCtor cNil [])
+    (mkVDecl 3 tyObj (mkCtor cConsS [2]) (mkSSet 3 1 0 1 tyI64
+      (mkVDecl 4 tyObj (mkCtor cConsS [3]) (mkSSet 4 1 0 0 tyI64 k)))))
+-- x4: the scalar array #[x0, 3], by two pushes (the second in place in the counted run)
+def withArr (k : N) : N :=
+  mkVDecl 1 tyObj (mkCtor cNil []) (mkVDecl 2 tyObj (mkPrim 122 0 0 [1, 0])
+    (mkVDecl 3 tyI64 (mkLit 3) (mkVDecl 4 tyObj (mkPrim 122 0 0 [2, 3]) k)))
+-- x3: the object array #[{x0 x0}]
+def withObjArr (k : N) : N :=
+  mkVDecl 1 tyObj (mkCtor cNil []) (mkVDecl 2 tyObj (mkCtor cBox [0, 0]) (mkVDecl 3 tyObj (mkPrim 122 1 0 [1, 2]) k))
+
+-- 119 isArr, 120 size and 121 get on #[x0, 3]: 1 2 3
+def pRead : N :=
+  withArr (mkVDecl 5 tyI64 (mkPrim 119 0 0 [4]) (mkVDecl 6 tyI64 (mkPrim 120 0 0 [4])
+    (mkVDecl 7 tyI64 (mkLit 1) (mkVDecl 8 tyI64 (mkPrim 121 0 0 [4, 7]) (mkDec 4 1 false false (mkRet [5, 6, 8]))))))
+-- 122 push on a unique array (in place when counted), its size and the array
+def pPush : N :=
+  mkVDecl 1 tyObj (mkCtor cNil []) (mkVDecl 2 tyObj (mkPrim 122 0 0 [1, 0])
+    (mkVDecl 3 tyI64 (mkLit 7) (mkVDecl 4 tyObj (mkPrim 122 0 0 [2, 3])
+      (mkVDecl 5 tyI64 (mkPrim 120 0 0 [4]) (mkRet [5, 4])))))
+-- the same push with the array shared (inc): the counted run copies, x2 keeps one element
+def pPushShared : N :=
+  mkVDecl 1 tyObj (mkCtor cNil []) (mkVDecl 2 tyObj (mkPrim 122 0 0 [1, 0])
+    (mkInc 2 1 false false (mkVDecl 3 tyI64 (mkLit 7) (mkVDecl 4 tyObj (mkPrim 122 0 0 [2, 3]) (mkRet [2, 4])))))
+-- 122 push on a list: the array of its elements first
+def pPushList : N := withList (mkVDecl 5 tyI64 (mkLit 7) (mkVDecl 6 tyObj (mkPrim 122 0 0 [4, 5]) (mkRet [6])))
+-- 123 set of element 0 to 9, unique and shared
+def pSet : N :=
+  mkVDecl 1 tyObj (mkCtor cNil []) (mkVDecl 2 tyObj (mkPrim 122 0 0 [1, 0])
+    (mkVDecl 3 tyI64 (mkLit 0) (mkVDecl 4 tyI64 (mkLit 9) (mkVDecl 5 tyObj (mkPrim 123 0 0 [2, 3, 4]) (mkRet [5])))))
+def pSetShared : N :=
+  mkVDecl 1 tyObj (mkCtor cNil []) (mkVDecl 2 tyObj (mkPrim 122 0 0 [1, 0]) (mkInc 2 1 false false
+    (mkVDecl 3 tyI64 (mkLit 0) (mkVDecl 4 tyI64 (mkLit 9) (mkVDecl 5 tyObj (mkPrim 123 0 0 [2, 3, 4]) (mkRet [2, 5]))))))
+-- 123 set on a list: element 1 of [x0, 3] to 9
+def pSetList : N :=
+  withList (mkVDecl 5 tyI64 (mkLit 1) (mkVDecl 6 tyI64 (mkLit 9) (mkVDecl 7 tyObj (mkPrim 123 0 0 [4, 5, 6]) (mkRet [7]))))
+-- 123 set of an object element: the old box is released in the counted run
+def pSetObj : N :=
+  withObjArr (mkVDecl 4 tyI64 (mkLit 0) (mkVDecl 5 tyI64 (mkLit 8) (mkVDecl 6 tyObj (mkCtor cBox [5, 5])
+    (mkVDecl 7 tyObj (mkPrim 123 1 0 [3, 4, 6]) (mkRet [7])))))
+-- 121 get of an object element, the array released: the element stays live
+def pGetObj : N :=
+  withObjArr (mkVDecl 4 tyI64 (mkLit 0) (mkVDecl 5 tyObj (mkPrim 121 1 0 [3, 4]) (mkDec 3 1 false false (mkRet [5]))))
+-- 124 ofList, unique (the cells give their heads away) and shared (the cells stay)
+def pOfList : N := withList (mkVDecl 5 tyObj (mkPrim 124 0 0 [4]) (mkRet [5]))
+def pOfListShared : N := withList (mkInc 4 1 false false (mkVDecl 5 tyObj (mkPrim 124 0 0 [4]) (mkRet [4, 5])))
+-- 125 toList, unique and shared
+def pToList : N := withArr (mkVDecl 5 tyObj (mkPrim 125 0 0 [4]) (mkRet [5]))
+def pToListShared : N := withArr (mkInc 4 1 false false (mkVDecl 5 tyObj (mkPrim 125 0 0 [4]) (mkRet [4, 5])))
+-- 126 slice [1, 9) of #[x0, 3], brought to [1, 2); and the empty slice [1, 1)
+def pSlice : N := withArr (mkVDecl 5 tyI64 (mkLit 1) (mkVDecl 6 tyI64 (mkLit 9) (mkVDecl 7 tyObj (mkPrim 126 0 0 [4, 5, 6]) (mkRet [4, 7]))))
+def pSliceEmpty : N := withArr (mkVDecl 5 tyI64 (mkLit 1) (mkVDecl 6 tyI64 (mkLit 1) (mkVDecl 7 tyObj (mkPrim 126 0 0 [4, 5, 6]) (mkRet [4, 7]))))
+-- an array is no constructor: a case on it and a proj of it stop
+def pCaseArr : N := withArr (mkCase 4 tyObj [mkAltDefault (mkRet [0])])
+def pProjArr : N := withArr (mkVDecl 5 tyI64 (mkProj 0 4) (mkRet [5]))
+-- an index at the array's size: get and set stop
+def pGetOut : N := withArr (mkVDecl 5 tyI64 (mkLit 2) (mkVDecl 6 tyI64 (mkPrim 121 0 0 [4, 5]) (mkRet [6])))
+def pSetOut : N := withArr (mkVDecl 5 tyI64 (mkLit 2) (mkVDecl 6 tyObj (mkPrim 123 0 0 [4, 5, 5]) (mkRet [6])))
+
+#guard bothValue (progOf pIsScalar) [5] "1 0"
+#guard bothValue (progOf pBox) [5] "#5 5"
+#guard bothValue (progOf pBox) [0] "[] 0"
+#guard bothStop (progOf pBox) [-1]
+#guard bothValue (progOf pUnbox) [5] "7"
+#guard bothValue (progOf pBoxS) [5] "#5 5"
+#guard bothValue (progOf pBoxS) [-5] "#9223372036854775803 -5"
+#guard bothValue (progOf pShrW) [21] "5"
+#guard bothValue (progOf pShrW) [-4] "0"
+#guard bothValue (progOf2 pDivRemU) [21, 4] "5 1"
+#guard bothStop (progOf2 pDivRemU) [21, 0]
+#guard bothStop (progOf2 pRemU) [21, 0]
+#guard bothStop (progOf2 pDivU) [21, 0]
+#guard bothValue (progOf2 pDivU) [21, 1] "21"
+#guard bothValue (progOf2 pRemU) [21, 1] "0"
+#guard bothValue (progOf pArrEmpty) [5] "0 0 [] 0"
+#guard bothStop (progOf pGetEmpty) [5]
+#guard bothValue (progOf pRead) [5] "1 2 3"
+#guard bothValue (progOf pPush) [5] "2 #[5 7]"
+#guard bothValue (progOf pPushShared) [5] "#[5] #[5 7]"
+#guard bothValue (progOf pPushList) [5] "#[5 3 7]"
+#guard bothValue (progOf pSet) [5] "#[9]"
+#guard bothValue (progOf pSetShared) [5] "#[5] #[9]"
+#guard bothValue (progOf pSetList) [5] "#[5 9]"
+#guard bothValue (progOf pSetObj) [5] "#[{8 8}]"
+#guard bothValue (progOf pGetObj) [5] "{5 5}"
+#guard bothValue (progOf pOfList) [5] "#[5 3]"
+#guard bothValue (progOf pOfListShared) [5] "[5 3] #[5 3]"
+#guard bothValue (progOf pToList) [5] "[5 3]"
+#guard bothValue (progOf pToListShared) [5] "#[5 3] [5 3]"
+#guard bothValue (progOf pSlice) [5] "#[5 3] #[3]"
+#guard bothValue (progOf pSliceEmpty) [5] "#[5 3] []"
+#guard bothStop (progOf pCaseArr) [5]
+#guard bothStop (progOf pProjArr) [5]
+#guard bothStop (progOf pGetOut) [5]
+#guard bothStop (progOf pSetOut) [5]
+-- the counted run writes in place: one object for the two pushes, against two in the pure run
+#guard heapLen (progOf pPush) .counted [5] == some 1
+#guard heapLen (progOf pPush) .pure [5] == some 2
+#guard heapLen (progOf pPushShared) .counted [5] == some 2
+
+-- the non-consuming new primitives are inside the fragment; every consuming one is outside
+#guard [pIsScalar, pBox, pUnbox, pBoxS, pShrW, pDivRemU, pRemU, pDivU, pArrEmpty, pGetEmpty].all (Sem.rcObsFreeDepth 64)
+#guard [pRead, pPush, pPushShared, pPushList, pSet, pSetShared, pSetList, pSetObj, pGetObj, pOfList, pOfListShared,
+        pToList, pToListShared, pSlice, pSliceEmpty].all (fun b => !Sem.rcObsFreeDepth 64 b)
+#guard [121, 126, 119, 120, 107, 108, 109, 116, 117, 118, 127, 128].all (fun p => !Sem.consumes p)
+#guard [122, 123, 124, 125].all Sem.consumes
+
+/-! ### Garbage freedom of the array primitives: every program releases what it made and returns x0.
+A count the semantics forgot (an element a copy shares, a cell or an array not released) leaves a
+live object that nothing reaches, or frees one twice. -/
+def gPushShared : N :=
+  mkVDecl 1 tyObj (mkCtor cNil []) (mkVDecl 2 tyObj (mkPrim 122 0 0 [1, 0]) (mkInc 2 1 false false
+    (mkVDecl 3 tyI64 (mkLit 7) (mkVDecl 4 tyObj (mkPrim 122 0 0 [2, 3]) (mkDec 2 1 false false (mkDec 4 1 false false (mkRet [0])))))))
+def gPushSharedObj : N :=
+  withObjArr (mkInc 3 1 false false (mkVDecl 5 tyObj (mkCtor cBox [0, 0]) (mkVDecl 6 tyObj (mkPrim 122 1 0 [3, 5])
+    (mkDec 3 1 false false (mkDec 6 1 false false (mkRet [0]))))))
+def gSetObj : N :=
+  withObjArr (mkVDecl 4 tyI64 (mkLit 0) (mkVDecl 5 tyObj (mkCtor cBox [4, 4]) (mkVDecl 6 tyObj (mkPrim 123 1 0 [3, 4, 5])
+    (mkDec 6 1 false false (mkRet [0])))))
+def gSetSharedObj : N :=
+  withObjArr (mkInc 3 1 false false (mkVDecl 4 tyI64 (mkLit 0) (mkVDecl 5 tyObj (mkCtor cBox [4, 4])
+    (mkVDecl 6 tyObj (mkPrim 123 1 0 [3, 4, 5]) (mkDec 3 1 false false (mkDec 6 1 false false (mkRet [0])))))))
+-- two object elements, the array shared, element 0 replaced: the copy shares element 1
+def gSetSharedObj2 : N :=
+  withObjArr (mkVDecl 4 tyObj (mkCtor cBox [0, 0]) (mkVDecl 5 tyObj (mkPrim 122 1 0 [3, 4]) (mkInc 5 1 false false
+    (mkVDecl 6 tyI64 (mkLit 0) (mkVDecl 7 tyObj (mkCtor cBox [6, 6]) (mkVDecl 8 tyObj (mkPrim 123 1 0 [5, 6, 7])
+      (mkDec 5 1 false false (mkDec 8 1 false false (mkRet [0])))))))))
+def gGetObj : N :=
+  withObjArr (mkVDecl 4 tyI64 (mkLit 0) (mkVDecl 5 tyObj (mkPrim 121 1 0 [3, 4]) (mkDec 3 1 false false (mkDec 5 1 false false (mkRet [0])))))
+def gOfList : N := withList (mkVDecl 5 tyObj (mkPrim 124 0 0 [4]) (mkDec 5 1 false false (mkRet [0])))
+def gOfListShared : N :=
+  withList (mkInc 4 1 false false (mkVDecl 5 tyObj (mkPrim 124 0 0 [4]) (mkDec 4 1 false false (mkDec 5 1 false false (mkRet [0])))))
+-- x4: the object list [{x0 x0}]
+def gOfListSharedObj : N :=
+  mkVDecl 2 tyObj (mkCtor cNil []) (mkVDecl 3 tyObj (mkCtor cBox [0, 0]) (mkVDecl 4 tyObj (mkCtor cConsO [3, 2])
+    (mkInc 4 1 false false (mkVDecl 5 tyObj (mkPrim 124 1 0 [4]) (mkDec 4 1 false false (mkDec 5 1 false false (mkRet [0])))))))
+def gToList : N := withArr (mkVDecl 5 tyObj (mkPrim 125 0 0 [4]) (mkDec 5 1 false false (mkRet [0])))
+def gToListObj : N := withObjArr (mkVDecl 4 tyObj (mkPrim 125 0 0 [3]) (mkDec 4 1 false false (mkRet [0])))
+def gToListSharedObj : N :=
+  withObjArr (mkInc 3 1 false false (mkVDecl 4 tyObj (mkPrim 125 0 0 [3]) (mkDec 3 1 false false (mkDec 4 1 false false (mkRet [0])))))
+def gSliceObj : N :=
+  withObjArr (mkVDecl 4 tyI64 (mkLit 0) (mkVDecl 5 tyI64 (mkLit 1) (mkVDecl 6 tyObj (mkPrim 126 1 0 [3, 4, 5])
+    (mkDec 3 1 false false (mkDec 6 1 false false (mkRet [0]))))))
+
+#guard [gPushShared, gPushSharedObj, gSetObj, gSetSharedObj, gSetSharedObj2, gGetObj, gOfList, gOfListShared, gOfListSharedObj,
+        gToList, gToListObj, gToListSharedObj, gSliceObj].all
+  (fun b => Sem.garbageFreeRun (progOf b) 0 [5] 10 1000 == some true && bothValue (progOf b) [5] "5")
+
+/-! ### The consuming primitives observe the count: the fifth counterexample.
+An array held by two references (x2 itself and the box x3, stored with no inc: its count is 1, one too
+low), pushed in place in the counted run and read through the box: counted 2, pure 1. With the
+count right (two incs before the box is made) both runs copy and give 1. -/
+def cexArrUndercount : N :=
+  mkVDecl 1 tyObj (mkCtor cNil []) (mkVDecl 2 tyObj (mkPrim 122 0 0 [1, 0])
+    (mkVDecl 3 tyObj (mkCtor cBox [2, 2]) (mkVDecl 5 tyI64 (mkLit 7)
+      (mkVDecl 4 tyObj (mkPrim 122 0 0 [2, 5]) (mkVDecl 6 tyObj (mkProj 0 3)
+        (mkVDecl 7 tyI64 (mkPrim 120 0 0 [6]) (mkRet [7])))))))
+def cexArrSound : N :=
+  mkVDecl 1 tyObj (mkCtor cNil []) (mkVDecl 2 tyObj (mkPrim 122 0 0 [1, 0]) (mkInc 2 2 false false
+    (mkVDecl 3 tyObj (mkCtor cBox [2, 2]) (mkVDecl 5 tyI64 (mkLit 7)
+      (mkVDecl 4 tyObj (mkPrim 122 0 0 [2, 5]) (mkVDecl 6 tyObj (mkProj 0 3)
+        (mkVDecl 7 tyI64 (mkPrim 120 0 0 [6]) (mkRet [7]))))))))
+
+#guard Sem.rcObsFreeDepth 64 cexArrUndercount == false
+#guard Sem.runEntry (progOf cexArrUndercount) 0 [5] 10 100 .counted != Sem.runEntry (progOf cexArrUndercount) 0 [5] 10 100 .pure
+#guard Sem.runEntry (progOf cexArrUndercount) 0 [5] 10 100 .counted == .value "2"
+#guard Sem.runEntry (progOf cexArrUndercount) 0 [5] 10 100 .pure == .value "1"
+#guard bothValue (progOf cexArrSound) [5] "1"
+
+/-! ### The stage's own functions: `Lrc.nHelpers` = 20 of them after the image's take no fuel.
+With one image function, f20 is the last helper (it runs at fuel 0) and f21 is not (it refuses). -/
+def progHelpers : List Decl :=
+  [{ f := 0, xs := [], rets := [tyI64], body := mkVDecl 1 tyI64 (mkLit 1) (mkRet [1]), ext := false },
+   { f := 20, xs := [], rets := [tyI64], body := mkVDecl 1 tyI64 (mkLit 3) (mkRet [1]), ext := false },
+   { f := 21, xs := [], rets := [tyI64], body := mkVDecl 1 tyI64 (mkLit 4) (mkRet [1]), ext := false }]
+
+#guard Lrc.nHelpers == 20
+#guard Sem.runEntry progHelpers 20 [] 0 100 .counted 1 == .value "3"
+#guard Sem.runEntry progHelpers 20 [] 0 100 .pure 1 == .value "3"
+#guard Sem.runEntry progHelpers 21 [] 0 100 .counted 1 == .stop "refusal:fuel"
+#guard Sem.runEntry progHelpers 21 [] 1 100 .counted 1 == .value "4"
+
+/-! ### Revision 2 (swe-lrcrev2): the six forms of the `Lrc` section above
+
+`pap`/`ap` as lean.h `lean_alloc_closure`/`lean_closure_set` and src/runtime/apply.cpp
+`lean_apply_n`; `box`/`unbox` as lean.h:290-291 and the typed variants
+(src/include/lean/lean.h:1948-1999); `uproj`/`uset` as lean.h:572/:602 beside `sproj`/`sset`.
+`r2ds` holds the callees the programs below share: f1 = x0 + x1 + x2 (primAddW), f2 = its last
+argument with its object arguments released (the call lent them), f3 = a closure of f1 over x0. -/
+
+def r2ds : List Decl :=
+  [{ f := 1,
+     xs := [{ x := 0, borrow := false, ty := tyI64 }, { x := 1, borrow := false, ty := tyI64 }, { x := 2, borrow := false, ty := tyI64 }],
+     rets := [tyI64],
+     body := mkVDecl 3 tyI64 (mkPrim 103 0 0 [0, 1]) (mkVDecl 4 tyI64 (mkPrim 103 0 0 [3, 2]) (mkRet [4])), ext := false },
+   { f := 2,
+     xs := [{ x := 0, borrow := false, ty := tyObj }, { x := 1, borrow := false, ty := tyObj }, { x := 2, borrow := false, ty := tyI64 }],
+     rets := [tyI64],
+     body := mkDec 0 1 false false (mkDec 1 1 false false (mkRet [2])), ext := false },
+   { f := 3,
+     xs := [{ x := 0, borrow := false, ty := tyI64 }], rets := [tyObj],
+     body := mkVDecl 1 tyObj (mkPap 4 [0]) (mkRet [1]), ext := false },
+   { f := 4,
+     xs := [{ x := 0, borrow := false, ty := tyI64 }, { x := 1, borrow := false, ty := tyI64 }],
+     rets := [tyI64],
+     body := mkVDecl 2 tyI64 (mkPrim 103 0 0 [0, 1]) (mkRet [2]), ext := false }]
+
+def progR2 (b : N) : List Decl :=
+  { f := 0, xs := [{ x := 0, borrow := false, ty := tyI64 }], rets := [tyObj], body := b, ext := false } :: r2ds
+
+-- under-application (apply.cpp `fix_args`: the exclusive closure's fields move) then exact:
+-- c1 = f1[x0] (1 of 3), c2 = c1[x0] (2 of 3), c2[x0] = 15
+def apUnder : N :=
+  mkVDecl 1 tyObj (mkPap 1 [0]) (mkVDecl 2 tyObj (mkAp 1 [0]) (mkVDecl 3 tyI64 (mkAp 2 [0]) (mkRet [3])))
+
+-- exact application of a shared closure that captured the same object twice (apply.cpp: a
+-- lean_inc of each captured field, the call, lean_dec_ref; the remaining reference released
+-- below); f2 releases the two references the call lent it
+def apSharedTwice : N :=
+  mkVDecl 1 tyObj (mkCtor info1 [0, 0]) (mkInc 1 1 false false
+    (mkVDecl 2 tyObj (mkPap 2 [1, 1]) (mkInc 2 1 false false
+      (mkVDecl 3 tyI64 (mkAp 2 [0]) (mkDec 2 1 false false (mkRet [3]))))))
+
+-- over-application onto a scalar result (apply.cpp: the rest applies to the result; a scalar
+-- applied returns itself — the erased proof): f1[x0][x0, x0, x0] = 15
+def apOverScalar : N :=
+  mkVDecl 1 tyObj (mkPap 1 [0]) (mkVDecl 2 tyI64 (mkAp 1 [0, 0, 0]) (mkRet [2]))
+
+-- over-application through a closure result: d = f3[] applied to two arguments calls f3(7) for
+-- the closure f1[7], then applies it to 20: 7 + 20 = 27
+def apOverClo : N :=
+  mkVDecl 1 tyI64 (mkLit 7) (mkVDecl 2 tyI64 (mkLit 20)
+    (mkVDecl 3 tyObj (mkPap 3 []) (mkVDecl 4 tyI64 (mkAp 3 [1, 2]) (mkRet [4]))))
+
+-- a scalar boxed and unboxed as `ty`: the tagged word for u8/u16/u32 (and any tagged type), the
+-- boxed word for usize/uint64/float
+def boxTrip (ty : Int) : N :=
+  mkVDecl 1 tyObj (mkBox ty 0) (mkVDecl 2 tyI64 (mkUnbox ty 1) (mkRet [2]))
+
+-- a ctor of one object field and two usize words; usize[1] := 77 read back, usize[0] still 0
+def infoU : CtorInfo := { cidx := 7, size := 1, ssize := 0, tid := 7 }
+def usizeRw : N :=
+  mkVDecl 1 tyObj (mkUCtor infoU 2 [0])
+    (mkVDecl 2 tyI64 (mkLit 77) (mkUSet 1 1 2
+      (mkVDecl 3 tyI64 (mkUProj 1 1) (mkVDecl 4 tyI64 (mkUProj 0 1)
+        (mkVDecl 5 tyI64 (mkPrim 103 0 0 [3, 4]) (mkRet [5]))))))
+
+#guard bothValue (progR2 apUnder) [5] "15"
+#guard bothValue (progR2 apSharedTwice) [5] "5"
+-- the shared closure's fields were counted and released as lean.h counts them: nothing left live
+#guard Sem.garbageFreeRun (progR2 apSharedTwice) 0 [5] 10 1000 == some true
+#guard bothValue (progR2 apOverScalar) [5] "15"
+#guard bothValue (progR2 apOverClo) [5] "27"
+#guard Sem.garbageFreeRun (progR2 apUnder) 0 [5] 10 1000 == some true
+#guard Sem.garbageFreeRun (progR2 apOverClo) 0 [5] 10 1000 == some true
+#guard [tyI64, 10, 11, 12, 13, 14].all (fun ty => bothValue (progOf (boxTrip ty)) [42] "42")
+#guard bothValue (progOf usizeRw) [5] "77"
+
+/-! #### Refusals (the mutants the six forms must reject) -/
+
+-- applying a constructor object, which is no closure
+def apNonClo : N := mkVDecl 1 tyObj (mkCtor info1 [0, 0]) (mkVDecl 2 tyObj (mkAp 1 [0]) (mkRet [2]))
+-- a pap holding as many arguments as the arity (lean.h:639 `assert(num_fixed < arity)`)
+def papFull : N := mkVDecl 1 tyObj (mkPap 1 [0, 0, 0]) (mkRet [1])
+-- a field read of a closure object
+def projClo : N := mkVDecl 1 tyObj (mkPap 1 [0]) (mkVDecl 2 tyI64 (mkProj 0 1) (mkRet [2]))
+-- a case on a closure
+def caseClo : N := mkVDecl 1 tyObj (mkPap 1 [0]) (mkCase 1 tyI64 [mkAltDefault (mkRet [0])])
+-- unboxing the tagged word as usize
+def unboxTag : N := mkVDecl 1 tyObj (mkBox 10 0) (mkVDecl 2 tyI64 (mkUnbox 13 1) (mkRet [2]))
+-- unboxing an object with no usize lane
+def unboxNoLane : N := mkVDecl 1 tyObj (mkCtor info1 [0, 0]) (mkVDecl 2 tyI64 (mkUnbox 13 1) (mkRet [2]))
+-- a uset on a shared object: the counted run refuses, the pure run writes
+def usetShared : N :=
+  mkVDecl 1 tyObj (mkUCtor infoU 1 [0]) (mkInc 1 1 false false (mkUSet 1 0 0 (mkRet [0])))
+-- a uproj out of the usize area
+def uprojOut : N := mkVDecl 1 tyObj (mkUCtor infoU 1 [0]) (mkVDecl 2 tyI64 (mkUProj 3 1) (mkRet [2]))
+
+#guard bothStop (progR2 apNonClo) [5]
+#guard Sem.runEntry (progR2 apNonClo) 0 [5] 10 100 .counted == .stop "application of object 0 with tag 1, which is no closure"
+#guard bothStop (progR2 papFull) [5]
+#guard bothStop (progR2 projClo) [5]
+#guard bothStop (progR2 caseClo) [5]
+#guard bothStop (progOf unboxTag) [42]
+#guard bothStop (progOf unboxNoLane) [42]
+#guard Sem.runEntry (progOf usetShared) 0 [5] 10 100 .counted == .stop "uset on object 0 with count 2"
+#guard Sem.runEntry (progOf usetShared) 0 [5] 10 100 .pure == .value "5"
+#guard bothStop (progOf uprojOut) [5]
+
+/-! #### The r2 forms inside the fragment, the r1 fragment of the earlier controls, `listSet` -/
+
+-- none of the six forms observes the reference count in the outcome sense: `ap`'s
+-- exclusive/shared split is heap bookkeeping (the same values either way, as the counted and
+-- pure guards above show), so `rcObsFree` needs no new exclusion
+#guard [apUnder, apSharedTwice, apOverScalar, apOverClo, usizeRw].all (Sem.rcObsFreeDepth 64)
+#guard [tyI64, 10, 11, 12, 13, 14].all (fun ty => Sem.rcObsFreeDepth 64 (boxTrip ty))
+#guard [apNonClo, papFull, projClo, caseClo, unboxTag, unboxNoLane, usetShared, uprojOut].all (Sem.rcObsFreeDepth 64)
+
+-- every earlier control is a program of the r1 IR (the r2 programs are not)
+#guard [prog0, prog1, prog2, prog3, prog3m, prog4, prog4m, prog5, progHelpers].all
+  (fun ds => ds.all (fun d => Sem.r1NodeDepth 64 d.body))
+#guard [body0, body1, body2, body3, body3m, body4, body4m, body5, cexIsShared, cexResetEscape, cexReuseTag, cexUndercount,
+        pIsScalar, pBox, pUnbox, pBoxS, pShrW, pDivRemU, pRemU, pDivU, pArrEmpty, pGetEmpty, pRead, pPush, pPushShared,
+        pPushList, pSet, pSetShared, pSetList, pSetObj, pGetObj, pOfList, pOfListShared, pToList, pToListShared,
+        pSlice, pSliceEmpty, pCaseArr, pProjArr, pGetOut, pSetOut, gPushShared, gPushSharedObj, gSetObj,
+        gSetSharedObj, gSetSharedObj2, gGetObj, gOfList, gOfListShared, gOfListSharedObj, gToList, gToListObj,
+        gToListSharedObj, gSliceObj, cexArrUndercount, cexArrSound].all (Sem.r1NodeDepth 64)
+#guard !(Sem.r1NodeDepth 64 apUnder) && !(Sem.r1NodeDepth 64 usizeRw) && !(Sem.r1NodeDepth 64 (boxTrip 10))
+
+-- listSet is `List.set`, and tail-recursive now (the r1 recursion overflowed the stack on
+-- swe-irsem's eqat7 and rr-append): a write past a hundred thousand cells returns the element
+#guard Sem.listSet ['a', 'b', 'c'] 1 'z' == ['a', 'z', 'c']
+#guard (Sem.listSet (List.replicate 100000 (7 : Int)) 99999 (-1)).get? 99999 == some (-1)
+
+end Lrc.SemControls
+
+#print axioms Lrc.Sem.exec
+#print axioms Lrc.Sem.runEntry
+#print axioms Lrc.Sem.rcErasureStatement
+#print axioms Lrc.Sem.hopPreservesStatement
+#print axioms Lrc.Sem.garbageFreeStatement
+#print axioms Lrc.Sem.garbageFreeRun
+#print axioms Lrc.Sem.listSet_eq
+#print axioms Lrc.Sem.conservativeStatement

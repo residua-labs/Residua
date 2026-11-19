@@ -1,0 +1,1458 @@
+-- LRC: the IR to wasm.
+-- closure_claim = 0.
+--
+-- Modelled on Lean 4.14.0 src/lean/Lean/Compiler/IR/EmitC.lean (cited as EmitC:LINE) and on
+-- include/lean/lean.h (cited as lean.h:LINE) for what an instruction means on an object; the
+-- calling convention, the status word, the result block and the fuel are the chain's own and are
+-- kept as lib/RscBase.rsd states them ("Convention (item 1)"): function i takes (base, fuel,
+-- parameter words) and returns a status, its result words are written at base + resAt.
+--
+-- An object (docs/OBJECT-ABI.md revision 2, lean.h:152 `lean_ctor_object`): an 8-byte header
+-- (rc32 at 0, other8 at 6 the number of object fields, tag8 at 7), the object fields from byte 8,
+-- then the scalar area. A constant constructor is the boxed tag, (tag << 1) | 1 (lean.h
+-- `lean_box`). Count 0 marks a persistent object, which is never counted (lean.h `lean_inc_ref`
+-- tests `m_rc > 0`; the runtime's dup and drop skip a zero count, lib/rt/V1.rsd). The count is
+-- read with its sign and the fast paths ask "positive", as lean.h does (`lean_is_st`): a negative
+-- count is lean.h's mark of an object shared between threads, which nothing sets yet, and it
+-- then goes to the cold path and not through the single-threaded one.
+--
+-- Under rsc's layer `narrow` an object field is 4 bytes and not 8 ("The width of an object field" below,
+-- docs/OBJECT-ABI.md "Narrow fields"); everything else of the object is as said here.
+--
+-- Every IR variable x is wasm local x + 1: the parameters are numbered from 1 in order
+-- (lib/lrc/NormIds.rsd), locals 0 and 1 are base and fuel. All locals are i64; a pointer is a
+-- zero-extended 32-bit offset, as everywhere in the chain.
+import RscBase
+import Lib.Lrc.FromWire
+
+namespace Lrc
+
+-- runtime functions (lib/rt/V1.rsd, in the order rsc/rsc.rsd links them)
+def rtAlloc : Nat := 0
+def rtFree : Nat := 9
+def rtDropCold : Nat := 10
+
+-- wasm opcodes used below, by name
+def wBlock : List Int := [2, 64]
+def wLoop : List Int := [3, 64]
+def wIf : List Int := [4, 64]
+def wElse : List Int := [5]
+def wEnd : List Int := [11]
+def wBr (depth : Nat) : List Int := 12 :: lebU depth
+def wReturn : List Int := [15]
+def wEqz : List Int := [80]
+def wEq : List Int := [81]
+def wNe : List Int := [82]
+def wLtS : List Int := [83]
+def wLtU : List Int := [84]
+def wGtS : List Int := [85]
+def wGtU : List Int := [86]
+def wLeU : List Int := [88]
+def wGeS : List Int := [89]
+def wAdd : List Int := [124]
+def wSub : List Int := [125]
+def wMul : List Int := [126]
+def wDivS : List Int := [127]
+def wRemS : List Int := [129]
+def wAnd : List Int := [131]
+def wOr : List Int := [132]
+def wXor : List Int := [133]
+def wShrU : List Int := [136]
+def wShrS : List Int := [135]
+def wI32Eqz : List Int := [69]
+def wWrap : List Int := [167]
+def wExtend : List Int := [172]
+-- i64.load8_u, i64.store8, i64.load32_u, i64.store32 at a byte offset
+def wLoad8 (off : Nat) : List Int := [49, 0] ++ lebU off
+def wStore8 (off : Nat) : List Int := [60, 0] ++ lebU off
+def wLoad32 (off : Nat) : List Int := [53, 2] ++ lebU off
+-- the same with the sign: a count is read as lean.h's `int m_rc`
+def wLoad32S (off : Nat) : List Int := [52, 2] ++ lebU off
+def wStore32 (off : Nat) : List Int := [62, 2] ++ lebU off
+-- i64.load16_u at a byte offset; br_if; i64.shl; i64.div_u; a block that leaves one i64
+def wLoad16 (off : Nat) : List Int := [51, 1] ++ lebU off
+def wBrIf (depth : Nat) : List Int := 13 :: lebU depth
+def wShl : List Int := [134]
+def wDivU : List Int := [128]
+def wRemU : List Int := [130]
+def wIfI64 : List Int := [4, 126]
+-- the exception-handling proposal's legacy forms: try with an i64 result, catch_all, throw of tag 0
+def wTryI64 : List Int := [6, 126]
+def wCatchAll : List Int := [25]
+def wThrow : List Int := [8, 0]
+def wUnreachable : List Int := [0]
+
+/-! ## How a function ends (`conv`)
+
+0, the present convention (lib/RscBase.rsd "Convention (item 1)"): a function returns a status, its
+result words are in the result block, and after every call the caller tests the status.
+1: an internal function returns its result words themselves, and a refusal writes status and
+detail into the block and throws; only the public entry catches, and returns the status as
+before. A refusal ends the run, so nothing between its place and the entry has work left to do:
+the wire's functions are total up to refusal, and no caller ever handles one. -/
+
+def emRefuse (conv : Nat) (tag detail : Int) : List Int :=
+  if conv == 0 then refuseTo tag detail
+  else blkSet offStatus (i64Const tag) ++ blkSet offDetail (i64Const (abiDetailBase + detail)) ++ wThrow
+
+-- memory was refused: the runtime has written the capacity status and detail
+def emCapacity (conv : Nat) : List Int :=
+  if conv == 0 then i64Const profile.tagCapacity ++ wReturn else wThrow
+
+def emI64s : Nat → List Int
+  | 0 => []
+  | k + 1 => vtI64 :: emI64s k
+
+-- the wasm local of IR variable x
+def loc1 (x : Nat) : Nat := x + 1
+
+-- an argument's value on the stack: an irrelevant one is the boxed zero (lean.h `lean_box(0)`)
+def emArg (y : Int) : List Int := if y < 0 then i64Const 1 else lg (loc1 y.toNat)
+
+def emArgs : List Int → List Int
+  | [] => []
+  | y :: ys => emArg y ++ emArgs ys
+
+-- what one function's emission needs: its own index, the first wasm index of the image's
+-- internal functions, its parameters (for a tail call), and its scratch locals
+structure Em where
+  self : Nat
+  fnBase : Nat
+  params : List Param
+  -- The number of the image's functions. A function from this index on is one of the stage's own
+  -- list functions (lib/lrc/FromWire.rsd `helperDecls`): it takes no fuel, since the wire's fuel
+  -- is the depth of source calls. It gets the caller's fuel unchanged and never tests it.
+  nImg : Nat
+  -- 0: objects come from the runtime's allocator (lib/rt/V1.rsd). Otherwise the stage's own heap
+  -- ("The stage's heap" below) and this is the wasm index of its refill function; its release
+  -- of a dead object and its free follow at + 1 and + 2.
+  heap : Nat
+  -- how functions end ("How a function ends" above)
+  conv : Nat
+  -- the module's persistent string literals ("String literals as persistent objects" below)
+  lits : List Int
+  -- scratch: t0 a status or a count, t1 a tag
+  t0 : Nat
+  t1 : Nat
+  -- the bytes of an object field: 8, or 4 ("The width of an object field" below)
+  fw : Nat := 8
+  deriving Inhabited
+
+/-! ## Counting (EmitC:279 emitInc, EmitC:287 emitDec; lean.h `lean_inc_ref_n`, `lean_dec_ref`) -/
+
+-- when the value may be a boxed scalar, the code runs only for a pointer
+def emIfPtr (x : Nat) (check : Bool) (code : List Int) : List Int :=
+  if check then lg (loc1 x) ++ i64Const 1 ++ wAnd ++ wEqz ++ wIf ++ code ++ wEnd else code
+
+-- count := count + n when the count is positive (lean.h `lean_inc_ref`); 0 is persistent
+def emInc (em : Em) (x : Nat) (n : Nat) (check : Bool) : List Int :=
+  emIfPtr x check
+    (lg (loc1 x) ++ wWrap ++ wLoad32S 0 ++ ls em.t0
+      ++ lg em.t0 ++ i64Const 0 ++ wGtS ++ wIf
+      ++ lg (loc1 x) ++ wWrap ++ lg em.t0 ++ i64Const n ++ wAdd ++ wStore32 0
+      ++ wEnd)
+
+-- count > 1: count := count - 1. count = 1: the cold path frees the object and releases its
+-- fields (lib/rt/V1.rsd rsd_rt_v1_drop_cold, or the stage's own; lean.h `lean_dec_ref_cold`).
+-- count = 0: persistent. The value is in wasm local l; t0 is scratch.
+def emDecLoc (heap t0 l : Nat) (check : Bool) : List Int :=
+  let body := lg l ++ wWrap ++ wLoad32S 0 ++ ls t0
+      ++ lg t0 ++ i64Const 1 ++ wGtS ++ wIf
+      ++ lg l ++ wWrap ++ lg t0 ++ i64Const 1 ++ wSub ++ wStore32 0
+      ++ wElse
+      ++ lg t0 ++ wEqz ++ wI32Eqz ++ wIf ++ lg 0 ++ lg l ++ callFn (if heap == 0 then rtDropCold else heap + 1) ++ wEnd
+      ++ wEnd
+  if check then lg l ++ i64Const 1 ++ wAnd ++ wEqz ++ wIf ++ body ++ wEnd else body
+
+def emDec (em : Em) (x : Nat) (check : Bool) : List Int := emDecLoc em.heap em.t0 (loc1 x) check
+
+/-! ## Objects -/
+
+/-! ### The width of an object field
+
+An object field is 8 bytes (docs/OBJECT-ABI.md revision 2). Under rsc's layer `narrow` it is 4, lean.h's
+layout on a target whose pointers are 4 bytes (`lean_ctor_object`: the fields are pointers; `lean_box`: a
+boxed number has 31 bits): the field holds the low half of its word, and that is the whole word, because a
+pointer is an offset below 2^32 and a boxed number is below 2^31 (lib/lrc/FromWire.rsd `magLimsOf`). A word
+read from a field is that half with zeros above it, as every pointer is here. The header is the same 8
+bytes, the scalar area follows the fields at byte 8 + fw * n, and an array's elements keep their 8 bytes.
+`fw` is the width in bytes (`Em.fw`); with 8 every instruction below is the one it was. -/
+
+def fldLoad (fw off : Nat) : List Int := if fw == 4 then wLoad32 off else i64LoadAt (off : Int)
+def fldStore (fw off : Nat) : List Int := if fw == 4 then wStore32 off else i64StoreAt (off : Int)
+-- the shift that makes a field's index its distance in bytes
+def fldShift (fw : Nat) : Int := if fw == 4 then 2 else 3
+-- A word of the scalar area at byte `pos` of its object. After an odd number of narrow fields it stands at an
+-- address that is no multiple of 8, and the instruction says so (the alignment it names is a promise).
+def scLoad (fw pos : Nat) : List Int := if fw == 4 && pos % 8 != 0 then [41, 2] ++ lebU pos else i64LoadAt (pos : Int)
+def scStore (fw pos : Nat) : List Int := if fw == 4 && pos % 8 != 0 then [55, 2] ++ lebU pos else i64StoreAt (pos : Int)
+-- a scalar of w bytes at byte `pos` of its object: a field lib/lrc/Pack.rsd made narrow is read with zeros above it
+-- (lean.h `lean_ctor_get_uint8`, `_uint16`, `_uint32`) and written from the low bytes of its word; 8 is a word
+def scRead (fw w pos : Nat) : List Int :=
+  if w == 1 then wLoad8 pos else if w == 2 then wLoad16 pos else if w == 4 then wLoad32 pos else scLoad fw pos
+def scWrite (fw w pos : Nat) : List Int :=
+  if w == 1 then wStore8 pos else if w == 2 then [61, 1] ++ lebU pos else if w == 4 then wStore32 pos else scStore fw pos
+-- the module of narrow fields says so to whoever reads its memory: its last function, exported as `fw`, returns 4
+def narrowFn : WFn := { params := [], results := [vtI64], locals := [], code := i64Const 4 ++ [opEnd] }
+-- "fw"
+def narrowName : List Int := [102, 119]
+
+-- the header word of a fresh object (lib/ObjectStorage.rsd `storageHeader`)
+def emHeader (tag other : Nat) : Int :=
+  let signedTag : Int := if tag >= 128 then (tag : Int) - 256 else (tag : Int)
+  1 + (other : Int) * 281474976710656 + signedTag * 72057594037927936
+
+/-! ### The stage's heap (plan/Closure.lean `S.AllocatorRows`: size classes, a one-word header, the
+limit checked once for a batch, the fast paths inline)
+
+After Lean's small object allocator (src/runtime/alloc.cpp: a free list for each size, 8 bytes
+apart, filled a page at a time) and lean.h's header, whose `m_cs_sz` holds the object's size so
+that a free needs nothing before the object. An object has no allocator prefix: its header
+carries its size in bytes at byte 4 (docs/OBJECT-ABI.md, the cs_sz field). The class table has a
+word for each size from 8 to 4096 bytes, addressed table + size; a free cell's first word links
+the next. The block word that holds the runtime allocator's table (lib/rt/ALLOCATOR.md, offset
+344) holds this table instead: with this heap on no object comes from the runtime's allocator.
+Memory comes from the runtime's `bump` (lib/rt/V1.rsd), which grows the memory and keeps the
+installed bound; a chunk of a little over 64 KiB (`hpChunk`) is cut into cells of one size. No statistics are kept. -/
+
+def hpTable : Int := 344
+def hpTableBytes : Nat := 4104
+-- The chunk: eight times the prime 8219. No cell size divides it, so the cells of a chunk stand shifted against
+-- the cells of the chunk before it: by 24 bytes for a cell of 32 or 64, which is three of the four places a cell
+-- of 32 can stand at. With chunks of 64 KiB one after the other, the cells of a size that divides the chunk stood
+-- on one lattice through the whole heap; a tree built from keys in order then has the nodes of a path a power of
+-- two cells apart, and with a cell of 32 or 64 bytes those addresses fall into the same sets of the cache (rbtree
+-- in int32 with nodes of 32 bytes: 1.6 times the time of the same code with nodes of 40 under node, 2.1 times
+-- native; reports/backend-opt-fable/LAND-NARROW.md, LAND-COLOUR.md). This is the slab allocator's colouring
+-- (Bonwick, The Slab Allocator, USENIX Summer 1994, section 4.1: a different offset for each slab), had from the
+-- chunk's size.
+def hpChunk : Nat := 65752
+def rtBump : Nat := 11
+
+-- refill(base, s): a fresh chunk of cells of s bytes; the first is the result, the others are the
+-- class's free list. 0 when memory is refused (`bump` has written the capacity status).
+-- locals: 2 the table, 3 the chunk, 4 the number of cells, 5 a counter, 6 a cell
+def heapRefillOf (tableBytes : Nat) : WFn :=
+  { params := emI64s 2, results := [vtI64], locals := emI64s 5,
+    code :=
+      blkGet hpTable ++ ls 2
+      ++ lg 2 ++ wEqz ++ wIf
+        ++ lg 0 ++ i64Const (tableBytes : Int) ++ callFn rtBump ++ ls 2
+        ++ lg 2 ++ wEqz ++ wIf ++ i64Const 0 ++ wReturn ++ wEnd
+        ++ i64Const 0 ++ ls 5
+        ++ wLoop
+          ++ lg 2 ++ lg 5 ++ wAdd ++ wWrap ++ i64Const 0 ++ i64StoreAt 0
+          ++ lg 5 ++ i64Const 8 ++ wAdd ++ ls 5
+          ++ lg 5 ++ i64Const (tableBytes : Int) ++ wLtU ++ wBrIf 0
+        ++ wEnd
+        ++ blkSet hpTable (lg 2)
+      ++ wEnd
+      ++ lg 0 ++ i64Const (hpChunk : Int) ++ callFn rtBump ++ ls 3
+      ++ lg 3 ++ wEqz ++ wIf ++ i64Const 0 ++ wReturn ++ wEnd
+      ++ i64Const (hpChunk : Int) ++ lg 1 ++ wDivU ++ ls 4
+      ++ lg 2 ++ lg 1 ++ wAdd ++ wWrap
+        ++ lg 4 ++ i64Const 1 ++ wGtU ++ wIfI64 ++ lg 3 ++ lg 1 ++ wAdd ++ wElse ++ i64Const 0 ++ wEnd
+        ++ i64StoreAt 0
+      ++ i64Const 1 ++ ls 5
+      ++ wBlock ++ wLoop
+        ++ lg 5 ++ lg 4 ++ wLtU ++ wI32Eqz ++ wBrIf 1
+        ++ lg 3 ++ lg 5 ++ lg 1 ++ wMul ++ wAdd ++ ls 6
+        ++ lg 6 ++ wWrap
+          ++ lg 5 ++ i64Const 1 ++ wAdd ++ lg 4 ++ wLtU ++ wIfI64 ++ lg 6 ++ lg 1 ++ wAdd ++ wElse ++ i64Const 0 ++ wEnd
+          ++ i64StoreAt 0
+        ++ lg 5 ++ i64Const 1 ++ wAdd ++ ls 5
+        ++ wBr 0
+      ++ wEnd ++ wEnd
+      ++ lg 3 ++ [opEnd] }
+
+def heapRefill : WFn := heapRefillOf hpTableBytes
+
+-- the cell in local o back on the free list of its size; a is scratch
+def hpPush (o a : Nat) : List Int :=
+  blkGet hpTable ++ lg o ++ wWrap ++ wLoad16 4 ++ wAdd ++ ls a
+    ++ lg o ++ wWrap ++ lg a ++ wWrap ++ i64LoadAt 0 ++ i64StoreAt 0
+    ++ lg a ++ wWrap ++ lg o ++ i64StoreAt 0
+
+-- release(base, p): p's count was 1. Lean's `lean_dec_ref_cold` and its worklist (the runtime's
+-- rsd_rt_v1_drop_cold likewise): a dead object's count field links the next dead one, so nothing
+-- recurses; each object field that is a pointer is counted down, and joins the list at 1.
+-- locals: 2 the list, 3 the object, 4 its number of object fields, 5 a counter, 6 a field, 7 its
+-- count, 8 scratch
+-- the field in local 6 is counted down, and at 1 joins the list of dead objects in local 2; local 7 is scratch
+def relOne : List Int :=
+  lg 6 ++ i64Const 1 ++ wAnd ++ wEqz ++ wIf
+    ++ lg 6 ++ wEqz ++ wI32Eqz ++ wIf
+      ++ lg 6 ++ wWrap ++ wLoad32S 0 ++ ls 7
+      ++ lg 7 ++ i64Const 1 ++ wGtS ++ wIf
+        ++ lg 6 ++ wWrap ++ lg 7 ++ i64Const 1 ++ wSub ++ wStore32 0
+      ++ wElse
+        ++ lg 7 ++ wEqz ++ wI32Eqz ++ wIf
+          ++ lg 6 ++ wWrap ++ lg 2 ++ wStore32 0
+          ++ lg 6 ++ ls 2
+        ++ wEnd
+      ++ wEnd
+    ++ wEnd
+  ++ wEnd
+
+/-! ### Arrays (lib/lrc/FromWire.rsd "Arrays"; lean.h `lean_array_object`, `lean_sarray_object`)
+
+An array is one cell: the header (tag 246 when the elements are objects, 248 when they are one-word
+scalars; no object fields), the number of elements at +8, the capacity at +16, the elements from
++24, eight bytes each. The capacity is 4 * 2^k. A cell of at most 4096 bytes comes from the lists by
+size and has its size in the header like any object; a larger one has size 0 there, comes from the
+runtime's `bump`, and when freed goes on the list of its capacity (the table has a word for each k
+after the words for the sizes). The empty array is the empty list, so an array has an element.
+The functions below follow the heap's three in the module, and only a module that has an array
+primitive has them (`declsUseArr`): any other module is as it was. Each returns 0 when memory is
+refused. They are the runtime of the primitives of lib/lrc/Prim.rsd; what each means is said there
+and run by instruments/lrc-host/Interp.rsd. -/
+
+def tagArr : Nat := 246
+def tagSArr : Nat := 248
+def hpBigAt : Int := 4104
+def hpTableBytesA : Nat := 4616
+def wGeU : List Int := [90]
+def wCtz : List Int := [122]
+def wSelect : List Int := [27]
+def wIfI32 : List Int := [4, 127]
+
+def arrFnNew (heap : Nat) : Nat := heap + 3
+def arrFnPush (heap : Nat) : Nat := heap + 4
+def arrFnSet (heap : Nat) : Nat := heap + 5
+def arrFnOfList (heap : Nat) : Nat := heap + 6
+def arrFnToList (heap : Nat) : Nat := heap + 7
+def arrFnSlice (heap : Nat) : Nat := heap + 8
+
+-- is the value in local x an array: a pointer whose tag is 246 or more (leaves an i32)
+def wIsArr (x : Nat) : List Int :=
+  lg x ++ i64Const 1 ++ wAnd ++ wEqz ++ wIfI32 ++ lg x ++ wWrap ++ wLoad8 7 ++ i64Const (tagArr : Int) ++ wGeU ++ wElse ++ [65, 0] ++ wEnd
+
+-- the value in local x is counted once more when it is an object with a positive count; t is scratch
+def wIncLoc (x t : Nat) : List Int :=
+  lg x ++ i64Const 1 ++ wAnd ++ wEqz ++ wIf
+    ++ lg x ++ wWrap ++ wLoad32S 0 ++ ls t
+    ++ lg t ++ i64Const 0 ++ wGtS ++ wIf ++ lg x ++ wWrap ++ lg t ++ i64Const 1 ++ wAdd ++ wStore32 0 ++ wEnd
+  ++ wEnd
+
+-- one reference to the object in local x, which something else holds too, is given up: a count above 1 goes down by one
+def wDecShared (x t : Nat) : List Int :=
+  lg x ++ wWrap ++ wLoad32S 0 ++ ls t
+    ++ lg t ++ i64Const 1 ++ wGtS ++ wIf ++ lg x ++ wWrap ++ lg t ++ i64Const 1 ++ wSub ++ wStore32 0 ++ wEnd
+
+-- the same for a value that may be a boxed scalar
+def wUndoInc (x t : Nat) : List Int :=
+  lg x ++ i64Const 1 ++ wAnd ++ wEqz ++ wIf ++ wDecShared x t ++ wEnd
+
+-- the tag of an array whose cells would have the shape in local s: scalars 248, objects 246
+def wTagOfShape (s : Nat) : List Int :=
+  i64Const (tagSArr : Int) ++ i64Const (tagArr : Int) ++ lg s ++ wEqz ++ wSelect
+
+-- The cell in local o back on its free list: the list of its size, or for a cell without one the list of its capacity.
+def hpPushA (o a : Nat) : List Int :=
+  lg o ++ wWrap ++ wLoad16 4 ++ ls a
+    ++ lg a ++ wEqz ++ wIf
+      ++ lg o ++ wWrap ++ i64LoadAt 16 ++ wCtz ++ i64Const 3 ++ wShl ++ i64Const hpBigAt ++ wAdd ++ ls a
+    ++ wEnd
+    ++ blkGet hpTable ++ lg a ++ wAdd ++ ls a
+    ++ lg o ++ wWrap ++ lg a ++ wWrap ++ i64LoadAt 0 ++ i64StoreAt 0
+    ++ lg a ++ wWrap ++ lg o ++ i64StoreAt 0
+
+-- the elements of the dead array in local 3 are counted down as an object's fields are (locals as in `heapReleaseOf`)
+def relElems : List Int :=
+  lg 3 ++ wWrap ++ wLoad8 7 ++ i64Const (tagArr : Int) ++ wEq ++ wIf
+    ++ lg 3 ++ wWrap ++ i64LoadAt 8 ++ ls 4
+    ++ i64Const 0 ++ ls 5
+    ++ wBlock ++ wLoop
+      ++ lg 5 ++ lg 4 ++ wLtU ++ wI32Eqz ++ wBrIf 1
+      ++ lg 3 ++ lg 5 ++ i64Const 3 ++ wShl ++ wAdd ++ wWrap ++ i64LoadAt 24 ++ ls 6
+      ++ relOne
+      ++ lg 5 ++ i64Const 1 ++ wAdd ++ ls 5
+      ++ wBr 0
+    ++ wEnd ++ wEnd
+  ++ wEnd
+
+-- `arr`: the module has arrays, whose elements are released too and whose cells may be large
+def heapReleaseOf (arr : Bool) (fw : Nat := 8) : WFn :=
+  { params := emI64s 2, results := [], locals := emI64s 7,
+    code :=
+      lg 1 ++ ls 2
+      ++ lg 1 ++ wWrap ++ i64Const 0 ++ wStore32 0
+      ++ wLoop
+        ++ lg 2 ++ ls 3
+        ++ lg 3 ++ wWrap ++ wLoad32 0 ++ ls 2
+        ++ lg 3 ++ wWrap ++ wLoad8 6 ++ ls 4
+        ++ i64Const 0 ++ ls 5
+        ++ wBlock ++ wLoop
+          ++ lg 5 ++ lg 4 ++ wLtU ++ wI32Eqz ++ wBrIf 1
+          ++ lg 3 ++ lg 5 ++ i64Const (fldShift fw) ++ wShl ++ wAdd ++ wWrap ++ fldLoad fw 8 ++ ls 6
+          ++ relOne
+          ++ lg 5 ++ i64Const 1 ++ wAdd ++ ls 5
+          ++ wBr 0
+        ++ wEnd ++ wEnd
+        ++ (if arr then relElems ++ hpPushA 3 8 else hpPush 3 8)
+        ++ lg 2 ++ wEqz ++ wI32Eqz ++ wBrIf 0
+      ++ wEnd
+      ++ [opEnd] }
+
+def heapRelease : WFn := heapReleaseOf false
+
+-- free(base, p): the cell alone (lean.h `lean_free_object`)
+def heapFree : WFn :=
+  { params := emI64s 2, results := [], locals := emI64s 1, code := hpPush 1 2 ++ [opEnd] }
+
+def heapFreeA : WFn :=
+  { params := emI64s 2, results := [], locals := emI64s 1, code := hpPushA 1 2 ++ [opEnd] }
+
+-- the heap's functions, in the order `Em.heap` names them
+def heapFns : List WFn := [heapRefill, heapRelease, heapFree]
+
+-- new(base, cap, tag): an array cell of capacity cap with no element
+-- locals: 3 its bytes, 4 the table, 5 the cell, 6 its list
+def arrNewFn (heap : Nat) : WFn :=
+  { params := emI64s 3, results := [vtI64], locals := emI64s 4,
+    code :=
+      lg 1 ++ i64Const 3 ++ wShl ++ i64Const 24 ++ wAdd ++ ls 3
+      ++ blkGet hpTable ++ ls 4
+      -- no table yet: a refill makes it, and the cell it gives goes back on its list
+      ++ lg 4 ++ wEqz ++ wIf
+        ++ lg 0 ++ i64Const 32 ++ callFn heap ++ ls 5
+        ++ lg 5 ++ wEqz ++ wIf ++ i64Const 0 ++ wReturn ++ wEnd
+        ++ blkGet hpTable ++ ls 4
+        ++ lg 5 ++ wWrap ++ lg 4 ++ wWrap ++ i64LoadAt 32 ++ i64StoreAt 0
+        ++ lg 4 ++ wWrap ++ lg 5 ++ i64StoreAt 32
+      ++ wEnd
+      ++ lg 3 ++ i64Const 4096 ++ wGtU ++ wIf
+        ++ lg 4 ++ lg 1 ++ wCtz ++ i64Const 3 ++ wShl ++ wAdd ++ i64Const hpBigAt ++ wAdd ++ ls 6
+        ++ lg 6 ++ wWrap ++ i64LoadAt 0 ++ ls 5
+        ++ lg 5 ++ wEqz ++ wIf
+          ++ lg 0 ++ lg 3 ++ callFn rtBump ++ ls 5
+          ++ lg 5 ++ wEqz ++ wIf ++ i64Const 0 ++ wReturn ++ wEnd
+        ++ wElse
+          ++ lg 6 ++ wWrap ++ lg 5 ++ wWrap ++ i64LoadAt 0 ++ i64StoreAt 0
+        ++ wEnd
+        ++ lg 5 ++ wWrap ++ lg 2 ++ i64Const 56 ++ wShl ++ i64Const 1 ++ wOr ++ i64StoreAt 0
+      ++ wElse
+        ++ lg 4 ++ lg 3 ++ wAdd ++ ls 6
+        ++ lg 6 ++ wWrap ++ i64LoadAt 0 ++ ls 5
+        ++ lg 5 ++ wEqz ++ wIf
+          ++ lg 0 ++ lg 3 ++ callFn heap ++ ls 5
+          ++ lg 5 ++ wEqz ++ wIf ++ i64Const 0 ++ wReturn ++ wEnd
+        ++ wElse
+          ++ lg 6 ++ wWrap ++ lg 5 ++ wWrap ++ i64LoadAt 0 ++ i64StoreAt 0
+        ++ wEnd
+        ++ lg 5 ++ wWrap ++ lg 2 ++ i64Const 56 ++ wShl ++ lg 3 ++ i64Const 32 ++ wShl ++ wOr ++ i64Const 1 ++ wOr ++ i64StoreAt 0
+      ++ wEnd
+      ++ lg 5 ++ wWrap ++ i64Const 0 ++ i64StoreAt 8
+      ++ lg 5 ++ wWrap ++ lg 1 ++ i64StoreAt 16
+      ++ lg 5 ++ [opEnd] }
+
+-- Elements 0 .. n-1 of the array in local `dst` from the elements of the array in local `src`, the first of them at the
+-- index in local `from1`; when local `obj` is not 0 each is counted once more. i, e and t are scratch.
+def wArrCopy (src dst n from1 obj i e t : Nat) : List Int :=
+  i64Const 0 ++ ls i
+    ++ wBlock ++ wLoop
+      ++ lg i ++ lg n ++ wLtU ++ wI32Eqz ++ wBrIf 1
+      ++ lg src ++ lg from1 ++ lg i ++ wAdd ++ i64Const 3 ++ wShl ++ wAdd ++ wWrap ++ i64LoadAt 24 ++ ls e
+      ++ lg obj ++ wEqz ++ wI32Eqz ++ wIf ++ wIncLoc e t ++ wEnd
+      ++ lg dst ++ lg i ++ i64Const 3 ++ wShl ++ wAdd ++ wWrap ++ lg e ++ i64StoreAt 24
+      ++ lg i ++ i64Const 1 ++ wAdd ++ ls i
+      ++ wBr 0
+    ++ wEnd ++ wEnd
+
+-- push(base, a, v, shape): the array of a's elements and v (lean.h `lean_array_push`)
+-- locals: 4 the size, 5 the capacity, 6 the result, 7 8 9 scratch, 10 whether the elements are objects, 11 zero
+def arrPushFn (heap : Nat) : WFn :=
+  { params := emI64s 4, results := [vtI64], locals := emI64s 8,
+    code :=
+      -- on the empty list: an array of one element
+      lg 1 ++ i64Const 1 ++ wEq ++ wIf
+        ++ lg 0 ++ i64Const 4 ++ wTagOfShape 3 ++ callFn (arrFnNew heap) ++ ls 6
+        ++ lg 6 ++ wEqz ++ wIf ++ i64Const 0 ++ wReturn ++ wEnd
+        ++ lg 6 ++ wWrap ++ i64Const 1 ++ i64StoreAt 8
+        ++ lg 6 ++ wWrap ++ lg 2 ++ i64StoreAt 24
+        ++ lg 6 ++ wReturn
+      ++ wEnd
+      -- on cells: on their array
+      ++ wIsArr 1 ++ wI32Eqz ++ wIf
+        ++ lg 0 ++ lg 1 ++ lg 3 ++ callFn (arrFnOfList heap) ++ ls 1
+        ++ lg 1 ++ wEqz ++ wIf ++ i64Const 0 ++ wReturn ++ wEnd
+      ++ wEnd
+      ++ ldW 1 8 ++ ls 4 ++ ldW 1 16 ++ ls 5
+      ++ i64Const 0 ++ ls 11
+      ++ lg 1 ++ wWrap ++ wLoad32 0 ++ i64Const 1 ++ wEq ++ wIf
+        -- nothing else holds it: in place while there is room
+        ++ lg 4 ++ lg 5 ++ wLtU ++ wIf
+          ++ lg 1 ++ lg 4 ++ i64Const 3 ++ wShl ++ wAdd ++ wWrap ++ lg 2 ++ i64StoreAt 24
+          ++ lg 1 ++ wWrap ++ lg 4 ++ i64Const 1 ++ wAdd ++ i64StoreAt 8
+          ++ lg 1 ++ wReturn
+        ++ wEnd
+        -- no room: a cell of twice the capacity, the elements move, the old cell is freed
+        ++ lg 0 ++ lg 5 ++ i64Const 1 ++ wShl ++ lg 1 ++ wWrap ++ wLoad8 7 ++ callFn (arrFnNew heap) ++ ls 6
+        ++ lg 6 ++ wEqz ++ wIf ++ i64Const 0 ++ wReturn ++ wEnd
+        ++ i64Const 0 ++ ls 10
+        ++ wArrCopy 1 6 4 11 10 7 8 9
+        ++ hpPushA 1 9
+      ++ wElse
+        -- something else holds it: a copy, each element counted once more, and this reference given up
+        ++ lg 0 ++ lg 5 ++ lg 5 ++ i64Const 1 ++ wShl ++ lg 4 ++ lg 5 ++ wLtU ++ wSelect ++ lg 1 ++ wWrap ++ wLoad8 7 ++ callFn (arrFnNew heap) ++ ls 6
+        ++ lg 6 ++ wEqz ++ wIf ++ i64Const 0 ++ wReturn ++ wEnd
+        ++ lg 1 ++ wWrap ++ wLoad8 7 ++ i64Const (tagArr : Int) ++ wEq ++ wExtend ++ ls 10
+        ++ wArrCopy 1 6 4 11 10 7 8 9
+        ++ wDecShared 1 9
+      ++ wEnd
+      ++ lg 6 ++ lg 4 ++ i64Const 3 ++ wShl ++ wAdd ++ wWrap ++ lg 2 ++ i64StoreAt 24
+      ++ lg 6 ++ wWrap ++ lg 4 ++ i64Const 1 ++ wAdd ++ i64StoreAt 8
+      ++ lg 6 ++ [opEnd] }
+
+-- ofList(base, xs, shape): the array of a list's elements; an array, and the empty list, as it is
+-- locals: 3 the number of cells, 4 a cell, 5 the capacity, 6 the result, 7 an index, 8 a head, 9 a tail,
+-- 10 whether the cell is ours alone so far, 11 scratch
+-- (a cell's tail is its field `shape`; its head is the scalar after that one field, or the field before it)
+def arrOfListFn (heap : Nat) (fw : Nat := 8) : WFn :=
+  { params := emI64s 3, results := [vtI64], locals := emI64s 9,
+    code :=
+      lg 1 ++ i64Const 1 ++ wEq ++ wIf ++ i64Const 1 ++ wReturn ++ wEnd
+      ++ wIsArr 1 ++ wIf ++ lg 1 ++ wReturn ++ wEnd
+      ++ i64Const 0 ++ ls 3 ++ lg 1 ++ ls 4
+      ++ wBlock ++ wLoop
+        ++ lg 4 ++ i64Const 1 ++ wEq ++ wBrIf 1
+        ++ lg 3 ++ i64Const 1 ++ wAdd ++ ls 3
+        ++ lg 4 ++ lg 2 ++ i64Const (fldShift fw) ++ wShl ++ wAdd ++ wWrap ++ fldLoad fw 8 ++ ls 4
+        ++ wBr 0
+      ++ wEnd ++ wEnd
+      ++ i64Const 4 ++ ls 5
+      ++ wBlock ++ wLoop
+        ++ lg 5 ++ lg 3 ++ wGeU ++ wBrIf 1
+        ++ lg 5 ++ i64Const 1 ++ wShl ++ ls 5
+        ++ wBr 0
+      ++ wEnd ++ wEnd
+      ++ lg 0 ++ lg 5 ++ wTagOfShape 2 ++ callFn (arrFnNew heap) ++ ls 6
+      ++ lg 6 ++ wEqz ++ wIf ++ i64Const 0 ++ wReturn ++ wEnd
+      ++ lg 6 ++ wWrap ++ lg 3 ++ i64StoreAt 8
+      -- The heads. Of a cell nothing else holds, the head moves and the cell is freed; from the first cell that
+      -- something else holds on, each head is counted once more and the cells stay.
+      ++ i64Const 1 ++ ls 10 ++ lg 1 ++ ls 4 ++ i64Const 0 ++ ls 7
+      ++ wBlock ++ wLoop
+        ++ lg 4 ++ i64Const 1 ++ wEq ++ wBrIf 1
+        ++ lg 4 ++ lg 2 ++ i64Const (fldShift fw) ++ wShl ++ wAdd ++ wWrap ++ fldLoad fw 8 ++ ls 9
+        ++ (if fw == 4 then lg 2 ++ wEqz ++ wIfI64 ++ lg 4 ++ wWrap ++ scLoad fw 12 ++ wElse ++ lg 4 ++ wWrap ++ fldLoad fw 8 ++ wEnd ++ ls 8
+            else lg 4 ++ i64Const 16 ++ wAdd ++ lg 2 ++ i64Const 3 ++ wShl ++ wSub ++ wWrap ++ i64LoadAt 0 ++ ls 8)
+        ++ lg 6 ++ lg 7 ++ i64Const 3 ++ wShl ++ wAdd ++ wWrap ++ lg 8 ++ i64StoreAt 24
+        ++ lg 7 ++ i64Const 1 ++ wAdd ++ ls 7
+        ++ lg 10 ++ lg 4 ++ wWrap ++ wLoad32 0 ++ i64Const 1 ++ wEq ++ wExtend ++ wAnd ++ wEqz ++ wI32Eqz ++ wIf
+          ++ hpPushA 4 11
+        ++ wElse
+          ++ lg 2 ++ wEqz ++ wI32Eqz ++ wIf ++ wIncLoc 8 11 ++ wEnd
+          ++ lg 10 ++ wEqz ++ wI32Eqz ++ wIf ++ wDecShared 4 11 ++ i64Const 0 ++ ls 10 ++ wEnd
+        ++ wEnd
+        ++ lg 9 ++ ls 4
+        ++ wBr 0
+      ++ wEnd ++ wEnd
+      ++ lg 6 ++ [opEnd] }
+
+-- toList(base, a): the list of an array's elements (lean.h `lean_array_to_list`); any other value as it is
+-- locals: 2 the size, 3 whether nothing else holds the array, 4 whether the elements are objects, 5 the list so far,
+-- 6 an index, 7 an element, 8 a cell, 9 the table, 10 scratch
+def arrToListFn (heap : Nat) (fw : Nat := 8) : WFn :=
+  { params := emI64s 2, results := [vtI64], locals := emI64s 9,
+    code :=
+      wIsArr 1 ++ wI32Eqz ++ wIf ++ lg 1 ++ wReturn ++ wEnd
+      ++ ldW 1 8 ++ ls 2
+      ++ lg 1 ++ wWrap ++ wLoad32 0 ++ i64Const 1 ++ wEq ++ wExtend ++ ls 3
+      ++ lg 1 ++ wWrap ++ wLoad8 7 ++ i64Const (tagArr : Int) ++ wEq ++ wExtend ++ ls 4
+      ++ i64Const 1 ++ ls 5 ++ lg 2 ++ ls 6
+      ++ wBlock ++ wLoop
+        ++ lg 6 ++ wEqz ++ wBrIf 1
+        ++ lg 6 ++ i64Const 1 ++ wSub ++ ls 6
+        ++ lg 1 ++ lg 6 ++ i64Const 3 ++ wShl ++ wAdd ++ wWrap ++ i64LoadAt 24 ++ ls 7
+        ++ lg 3 ++ wEqz ++ wExtend ++ lg 4 ++ wAnd ++ wEqz ++ wI32Eqz ++ wIf ++ wIncLoc 7 10 ++ wEnd
+        ++ (if fw == 4 then
+          -- narrow fields: a cell with a scalar head has 24 bytes (8 + 4 + 8, rounded up), one with an object 16
+          -- (8 + 4 + 4); local 10 is the cell's size, local 9 the word of its list
+          i64Const 24 ++ i64Const 16 ++ lg 4 ++ wEqz ++ wSelect ++ ls 10
+          ++ blkGet hpTable ++ lg 10 ++ wAdd ++ ls 9
+          ++ lg 9 ++ wWrap ++ i64LoadAt 0 ++ ls 8
+          ++ lg 8 ++ wEqz ++ wIf
+            ++ lg 0 ++ lg 10 ++ callFn heap ++ ls 8
+            ++ lg 8 ++ wEqz ++ wIf ++ i64Const 0 ++ wReturn ++ wEnd
+          ++ wElse
+            ++ lg 9 ++ wWrap ++ lg 8 ++ wWrap ++ i64LoadAt 0 ++ i64StoreAt 0
+          ++ wEnd
+          ++ lg 4 ++ wEqz ++ wIf
+            ++ lg 8 ++ wWrap ++ i64Const (emHeader 1 1 + 24 * 4294967296) ++ i64StoreAt 0
+            ++ lg 8 ++ wWrap ++ lg 5 ++ fldStore fw 8
+            ++ lg 8 ++ wWrap ++ lg 7 ++ scStore fw 12
+          ++ wElse
+            ++ lg 8 ++ wWrap ++ i64Const (emHeader 1 2 + 16 * 4294967296) ++ i64StoreAt 0
+            ++ lg 8 ++ wWrap ++ lg 7 ++ fldStore fw 8
+            ++ lg 8 ++ wWrap ++ lg 5 ++ fldStore fw 12
+          ++ wEnd
+        else
+        -- a cell of 24 bytes, as `emAllocObj` takes one
+        blkGet hpTable ++ ls 9
+        ++ lg 9 ++ wWrap ++ i64LoadAt 24 ++ ls 8
+        ++ lg 8 ++ wEqz ++ wIf
+          ++ lg 0 ++ i64Const 24 ++ callFn heap ++ ls 8
+          ++ lg 8 ++ wEqz ++ wIf ++ i64Const 0 ++ wReturn ++ wEnd
+        ++ wElse
+          ++ lg 9 ++ wWrap ++ lg 8 ++ wWrap ++ i64LoadAt 0 ++ i64StoreAt 24
+        ++ wEnd
+        ++ lg 4 ++ wEqz ++ wIf
+          ++ lg 8 ++ wWrap ++ i64Const (emHeader 1 1 + 24 * 4294967296) ++ i64StoreAt 0
+          ++ lg 8 ++ wWrap ++ lg 5 ++ i64StoreAt 8
+          ++ lg 8 ++ wWrap ++ lg 7 ++ i64StoreAt 16
+        ++ wElse
+          ++ lg 8 ++ wWrap ++ i64Const (emHeader 1 2 + 24 * 4294967296) ++ i64StoreAt 0
+          ++ lg 8 ++ wWrap ++ lg 7 ++ i64StoreAt 8
+          ++ lg 8 ++ wWrap ++ lg 5 ++ i64StoreAt 16
+        ++ wEnd)
+        ++ lg 8 ++ ls 5
+        ++ wBr 0
+      ++ wEnd ++ wEnd
+      ++ lg 3 ++ wEqz ++ wIf ++ wDecShared 1 10 ++ wElse ++ hpPushA 1 10 ++ wEnd
+      ++ lg 5 ++ [opEnd] }
+
+-- set(base, a, i, v, shape): a with element i replaced by v, i an index of a (lean.h `lean_array_fset`)
+-- locals: 5 the size, 6 the result, 7 scratch, 8 the old element, 9 scratch, 10 whether the elements are objects, 11 zero, 12 scratch
+def arrSetFn (heap : Nat) : WFn :=
+  { params := emI64s 5, results := [vtI64], locals := emI64s 8,
+    code :=
+      wIsArr 1 ++ wI32Eqz ++ wIf
+        ++ lg 0 ++ lg 1 ++ lg 4 ++ callFn (arrFnOfList heap) ++ ls 1
+        ++ lg 1 ++ wEqz ++ wIf ++ i64Const 0 ++ wReturn ++ wEnd
+      ++ wEnd
+      ++ lg 1 ++ wWrap ++ wLoad8 7 ++ i64Const (tagArr : Int) ++ wEq ++ wExtend ++ ls 10
+      ++ lg 1 ++ lg 2 ++ i64Const 3 ++ wShl ++ wAdd ++ wWrap ++ i64LoadAt 24 ++ ls 8
+      ++ lg 1 ++ wWrap ++ wLoad32 0 ++ i64Const 1 ++ wEq ++ wIf
+        -- nothing else holds it: written in place, the old element released
+        ++ lg 1 ++ lg 2 ++ i64Const 3 ++ wShl ++ wAdd ++ wWrap ++ lg 3 ++ i64StoreAt 24
+        ++ lg 10 ++ wEqz ++ wI32Eqz ++ wIf ++ emDecLoc heap 9 8 true ++ wEnd
+        ++ lg 1 ++ wReturn
+      ++ wEnd
+      -- a copy, each element counted once more; the old element at the index is not kept, so its count is taken back
+      ++ ldW 1 8 ++ ls 5
+      ++ lg 0 ++ ldW 1 16 ++ lg 1 ++ wWrap ++ wLoad8 7 ++ callFn (arrFnNew heap) ++ ls 6
+      ++ lg 6 ++ wEqz ++ wIf ++ i64Const 0 ++ wReturn ++ wEnd
+      ++ i64Const 0 ++ ls 11
+      ++ wArrCopy 1 6 5 11 10 7 12 9
+      ++ lg 10 ++ wEqz ++ wI32Eqz ++ wIf ++ wUndoInc 8 9 ++ wEnd
+      ++ lg 6 ++ lg 2 ++ i64Const 3 ++ wShl ++ wAdd ++ wWrap ++ lg 3 ++ i64StoreAt 24
+      ++ lg 6 ++ wWrap ++ lg 5 ++ i64StoreAt 8
+      ++ wDecShared 1 9
+      ++ lg 6 ++ [opEnd] }
+
+-- slice(base, a, lo, hi): the array of a's elements from index lo up to hi, both brought into a's range; the empty list when there is none
+-- locals: 4 the size, 5 the number taken, 6 the capacity, 7 the result, 8 9 10 scratch, 11 whether the elements are objects
+def arrSliceFn (heap : Nat) : WFn :=
+  { params := emI64s 4, results := [vtI64], locals := emI64s 8,
+    code :=
+      lg 1 ++ i64Const 1 ++ wEq ++ wIf ++ i64Const 1 ++ wReturn ++ wEnd
+      ++ ldW 1 8 ++ ls 4
+      ++ lg 2 ++ i64Const 0 ++ wLtS ++ wIf ++ i64Const 0 ++ ls 2 ++ wEnd
+      ++ lg 3 ++ lg 4 ++ wGtS ++ wIf ++ lg 4 ++ ls 3 ++ wEnd
+      ++ lg 2 ++ lg 3 ++ wGeS ++ wIf ++ i64Const 1 ++ wReturn ++ wEnd
+      ++ lg 3 ++ lg 2 ++ wSub ++ ls 5
+      ++ i64Const 4 ++ ls 6
+      ++ wBlock ++ wLoop
+        ++ lg 6 ++ lg 5 ++ wGeU ++ wBrIf 1
+        ++ lg 6 ++ i64Const 1 ++ wShl ++ ls 6
+        ++ wBr 0
+      ++ wEnd ++ wEnd
+      ++ lg 0 ++ lg 6 ++ lg 1 ++ wWrap ++ wLoad8 7 ++ callFn (arrFnNew heap) ++ ls 7
+      ++ lg 7 ++ wEqz ++ wIf ++ i64Const 0 ++ wReturn ++ wEnd
+      ++ lg 1 ++ wWrap ++ wLoad8 7 ++ i64Const (tagArr : Int) ++ wEq ++ wExtend ++ ls 11
+      ++ wArrCopy 1 7 5 2 11 8 9 10
+      ++ lg 7 ++ wWrap ++ lg 5 ++ i64StoreAt 8
+      ++ lg 7 ++ [opEnd] }
+
+-- the heap's functions of a module, the arrays' after them when it has arrays; `heap` is the wasm index of the first
+-- (`fw`: the bytes of an object field; the release of an object and the two functions that read or build list cells take it)
+def heapFnsFor (arr : Bool) (heap : Nat) (fw : Nat := 8) : List WFn :=
+  if arr then [heapRefillOf hpTableBytesA, heapReleaseOf true fw, heapFreeA, arrNewFn heap, arrPushFn heap, arrSetFn heap,
+               arrOfListFn heap fw, arrToListFn heap fw, arrSliceFn heap]
+  else if fw == 4 then [heapRefill, heapReleaseOf false fw, heapFree]
+  else heapFns
+
+-- An object of `bytes` bytes with its header into local d; a failed allocation ends the run
+-- with the capacity status. With the runtime's allocator the call is `storageAlloc`'s
+-- (lib/ObjectStorage.rsd). With the stage's heap: the first cell of the size's free list, or a
+-- refill; the header is written here.
+def emAllocObj (em : Em) (d : Nat) (bytes tag other : Nat) : List Int :=
+  if em.heap == 0 then
+    lg 0 ++ i64Const (bytes : Int) ++ i64Const (tag : Int) ++ i64Const (other : Int) ++ callFn rtAlloc ++ ls d
+      ++ lg d ++ wEqz ++ wIf ++ emCapacity em.conv ++ wEnd
+  else
+    let s := 8 * ((bytes + 7) / 8)
+    blkGet hpTable ++ ls em.t0
+      ++ lg em.t0 ++ wEqz ++ wIfI64 ++ i64Const 0 ++ wElse ++ lg em.t0 ++ wWrap ++ i64LoadAt (s : Int) ++ wEnd ++ ls d
+      ++ lg d ++ wEqz ++ wIf
+        ++ lg 0 ++ i64Const (s : Int) ++ callFn em.heap ++ ls d
+        ++ lg d ++ wEqz ++ wIf ++ emCapacity em.conv ++ wEnd
+      ++ wElse
+        ++ lg em.t0 ++ wWrap ++ lg d ++ wWrap ++ i64LoadAt 0 ++ i64StoreAt (s : Int)
+      ++ wEnd
+      ++ lg d ++ wWrap ++ i64Const (emHeader tag other + (s : Int) * 4294967296) ++ i64StoreAt 0
+
+def emAlloc (em : Em) (d : Nat) (info : CtorInfo) : List Int :=
+  emAllocObj em d (8 + em.fw * info.size + info.ssize) info.cidx info.size
+
+-- the object fields of local d from the arguments, field i at byte 8 + fw * i (lean.h `lean_ctor_set`)
+def emFields (fw d : Nat) : Nat → List Int → List Int
+  | _, [] => []
+  | i, y :: ys => lg d ++ wWrap ++ emArg y ++ fldStore fw (8 + fw * i) ++ emFields fw d (i + 1) ys
+
+-- the tag of the value in local x into local t: a boxed scalar is its own tag (lean.h `lean_obj_tag`)
+def emTag (x t : Nat) : List Int :=
+  lg x ++ i64Const 1 ++ wAnd ++ wEqz ++ [4, 126]
+    ++ lg x ++ wWrap ++ wLoad8 7
+    ++ wElse ++ lg x ++ i64Const 1 ++ wShrU
+    ++ wEnd ++ ls t
+
+-- Is the object in local x shared: its count is not 1 (lean.h `lean_is_exclusive`, which reads
+-- the count and tests nothing else). x is a pointer: `isShared` is only asked of a cell that a
+-- `case` showed to have fields (lib/lrc/ExpandResetReuse.rsd, lib/lrc/DropSpec.rsd).
+def emIsShared (x : Nat) : List Int :=
+  lg x ++ wWrap ++ wLoad32 0 ++ i64Const 1 ++ wNe ++ wExtend
+
+-- The runtime's drop on object field k of the object in local p, for k below n, and the field
+-- becomes the boxed scalar 0 (lean.h `lean_ctor_release`): a token that is not reused is
+-- released like any object, and that release must not reach the fields a second time.
+def emRelease (em : Em) (p : Nat) : Nat → List Int
+  | 0 => []
+  | k + 1 => emRelease em p k
+      ++ (if em.heap == 0 then lg 0 ++ lg p ++ wWrap ++ fldLoad em.fw (8 + em.fw * k) ++ callFn 7
+          else lg p ++ wWrap ++ fldLoad em.fw (8 + em.fw * k) ++ ls em.t1 ++ emDecLoc em.heap em.t0 em.t1 true)
+      ++ lg p ++ wWrap ++ i64Const 1 ++ fldStore em.fw (8 + em.fw * k)
+
+-- EmitC:359 emitReset: an exclusive object releases its n fields and is the token; any other is
+-- released and the token is the boxed zero
+def emReset (em : Em) (z x n : Nat) : List Int :=
+  emIsShared (loc1 x) ++ wEqz ++ wIf
+    ++ emRelease em (loc1 x) n
+    ++ lg (loc1 x) ++ ls (loc1 z)
+    ++ wElse
+    ++ emDec em x true
+    ++ i64Const 1 ++ ls (loc1 z)
+    ++ wEnd
+
+-- EmitC:369 emitReuse: a scalar token means allocate; otherwise the cell is the object, with its
+-- tag rewritten when the constructor changed; then the object fields are written
+def emReuse (em : Em) (z x : Nat) (info : CtorInfo) (updt : Bool) (ys : List Int) : List Int :=
+  lg (loc1 x) ++ i64Const 1 ++ wAnd ++ wEqz ++ wIf
+    ++ lg (loc1 x) ++ ls (loc1 z)
+    ++ (if updt then lg (loc1 z) ++ wWrap ++ i64Const info.cidx ++ wStore8 7 else [])
+    ++ wElse
+    ++ emAlloc em (loc1 z) info
+    ++ wEnd
+    ++ emFields em.fw (loc1 z) 0 ys
+
+/-! ## Primitives (lib/lrc/Prim.rsd): the wire's operators, with the wire's refusals
+
+The instruction sequences are those of the present emitter's templates (rsc/rsc.rsd `teAdd` to
+`teNot`, `tOverflowIf`, `tMulGuard`, `tNeg`, `tDiv`, `tMod`): checked add, sub, mul and neg refuse
+as stuck with reason `stChecked`; division refuses as a residue (by zero, inexact, min / -1). -/
+
+def emChecked (conv : Nat) : List Int := emRefuse conv profile.tagStuck stChecked
+
+-- d := a op b, then refuse when the signs say the result left i64. One test (Warren, Hacker's
+-- Delight, 2-13 "Overflow Detection"): a sum left i64 when both operands differ in sign from it,
+-- (a ^ d) & (b ^ d) < 0; a difference when the operands differ in sign and the result differs
+-- from the first, (a ^ b) & (a ^ d) < 0. The present emitter's template (rsc/rsc.rsd `teAdd`)
+-- asks the same in two nested tests.
+def emAddSub (conv : Nat) (op : Int) (isAdd : Bool) (a b d : Nat) : List Int :=
+  lg a ++ lg b ++ [op] ++ ls d
+    ++ lg a ++ lg d ++ wXor ++ (if isAdd then lg b ++ lg d ++ wXor else lg a ++ lg b ++ wXor) ++ wAnd
+    ++ i64Const 0 ++ wLtS ++ wIf ++ emChecked conv ++ wEnd
+
+def emMul (conv : Nat) (a b d : Nat) : List Int :=
+  lg a ++ lg b ++ wMul ++ ls d
+    ++ lg b ++ wEqz ++ wI32Eqz ++ wIf
+    ++ lg a ++ i64Const minI64 ++ wEq ++ wIf
+    ++ lg b ++ i64Const (-1) ++ wEq ++ wIf ++ emChecked conv ++ wEnd
+    ++ wEnd
+    ++ lg d ++ lg b ++ wDivS ++ lg a ++ wNe ++ wIf ++ emChecked conv ++ wEnd
+    ++ wEnd
+
+def emNeg (conv : Nat) (a d : Nat) : List Int :=
+  lg a ++ i64Const minI64 ++ wEq ++ wIf ++ emChecked conv ++ wEnd ++ i64Const 0 ++ lg a ++ wSub ++ ls d
+
+def emDiv (conv : Nat) (a b d : Nat) : List Int :=
+  lg b ++ wEqz ++ wIf ++ emRefuse conv profile.tagResidue profile.detDiv0 ++ wEnd
+    ++ lg a ++ lg b ++ wRemS ++ ls d
+    ++ lg d ++ i64Const 0 ++ wNe ++ wIf ++ emRefuse conv profile.tagResidue profile.detInexact ++ wEnd
+    ++ lg a ++ i64Const minI64 ++ wEq ++ wIf
+    ++ lg b ++ i64Const (-1) ++ wEq ++ wIf ++ emRefuse conv profile.tagResidue profile.detOverflow ++ wEnd
+    ++ wEnd
+    ++ lg a ++ lg b ++ wDivS ++ ls d
+
+def emMod (conv : Nat) (a b d : Nat) : List Int :=
+  lg b ++ wEqz ++ wIf ++ emRefuse conv profile.tagResidue profile.detDiv0 ++ wEnd
+    ++ lg a ++ lg b ++ wRemS ++ ls d
+    ++ lg d ++ wEqz ++ wI32Eqz ++ wIf
+    ++ lg a ++ lg b ++ wXor ++ i64Const 0 ++ wLtS ++ wIf ++ lg d ++ lg b ++ wAdd ++ ls d ++ wEnd
+    ++ wEnd
+
+structure Code where
+  ok : Bool
+  code : List Int
+  deriving Inhabited
+
+def codeOk (c : List Int) : Code := { ok := true, code := c }
+-- A node the emitter has no code for: the function's code fails, and `emitFns` names the function.
+-- No pass leaves such a node, and the gate refuses a literal over `litMax` (lib/lrc/FromWire.rsd
+-- `admit`), so when it happens it is a defect of the stage. rsc reports it as the stage's refusal
+-- `Residue.nodeNotWritten` at that function (rsc/rsc.rsd `lrcModule`); no module is written.
+def codeFail : Code := { ok := false, code := [] }
+
+-- Are the strings in locals a and b equal, into d (rsc/rsc.rsd `strEq`, its text): the byte
+-- sizes at +8, then the bytes from +32; nothing decodes a code point. `len` and `i` are scratch.
+def emStrEqBytes (a b d len i : Nat) : List Int :=
+  ldW a 8 ++ ls len ++ ldW b 8 ++ lg len ++ [82, 4, 64]
+    ++ i64Const 0 ++ ls d ++ [5]
+    ++ i64Const 0 ++ ls i ++ i64Const 1 ++ ls d
+    ++ [3, 64] ++ lg i ++ lg len ++ [83, 4, 64]
+    ++ lg a ++ lg i ++ [124, 167, 49, 0, 32]
+    ++ lg b ++ lg i ++ [124, 167, 49, 0, 32, 82, 4, 64]
+    ++ i64Const 0 ++ ls d ++ [12, 3, 11]
+    ++ lg i ++ i64Const 1 ++ [124] ++ ls i ++ [12, 1, 11, 11, 11]
+
+def emStrEq (a b d len i : Nat) : List Int :=
+  -- one object is equal to itself: two evaluations of a persistent literal are one object
+  lg a ++ lg b ++ wEq ++ wIf ++ i64Const 1 ++ ls d ++ wElse ++ emStrEqBytes a b d len i ++ wEnd
+
+-- the byte stores of a string literal, from byte `off` of the object in local d
+def emStrBytes (d : Nat) : Nat → List Int → List Int
+  | _, [] => []
+  | off, b :: bs => lg d ++ wWrap ++ i64Const b ++ wStore8 off ++ emStrBytes d (off + 1) bs
+
+def utf8Chars : List Int → Nat
+  | [] => 0
+  | b :: bs => (if b < 128 || b >= 192 then 1 else 0) + utf8Chars bs
+
+/-! ### String literals as persistent objects
+
+Lean builds a literal string where it is evaluated (EmitC:493 emitLit), unless the extraction of
+closed terms made it a constant, which the module's initialiser builds once and marks persistent
+(EmitC:692 emitDeclInit). The stage has the second form without an initialiser: the object of a
+literal is bytes the compiler knows, so it stands in the module's data with count 0, which no dup
+or drop changes and no release reaches, and evaluating the literal is its address. The objects
+lie from `profile.memoAt` up to the heap's start (a module of the stage has no memo tables). A
+literal that no longer fits there is built where it is evaluated.
+
+The pool is one list: for each literal its address, its number of bytes, its bytes. -/
+
+structure LitPool where
+  pool : List Int
+  next : Int
+  deriving Inhabited
+
+-- the bytes of a literal's object, a multiple of 8
+def litObjBytes (n : Nat) : Nat := 8 * ((33 + n + 7) / 8)
+
+def lpTake : Nat → List Int → List Int
+  | 0, _ => []
+  | _, [] => []
+  | k + 1, x :: xs => x :: lpTake k xs
+
+-- the address of the literal bs in the pool, 0 when it is not there
+partial def lpFind (bs : List Int) : List Int → Int
+  | addr :: n :: rest =>
+    if n.toNat == bs.length && lpTake n.toNat rest == bs then addr else lpFind bs (rest.drop n.toNat)
+  | _ => 0
+
+-- What a literal is found by: a string by its bytes; a constant cell (lib/lrc/Ir.rsd `mkLitObj`)
+-- by 256 + its tag and then the bytes of its scalar area. No byte is above 255, so the first
+-- element says which it is.
+def litKey (e : N) : List Int := if isLitObj e then (256 + e.b) :: litBytes e else litBytes e
+def litKeyIsObj (key : List Int) : Bool := intAt 0 key >= 256
+
+-- the bytes of the literal's object
+def lpCellBytes (key : List Int) : Nat :=
+  if litKeyIsObj key then 8 * ((8 + (key.length - 1) + 7) / 8) else litObjBytes key.length
+
+def lpAdd (p : LitPool) (bs : List Int) : LitPool :=
+  let size : Int := (lpCellBytes bs : Nat)
+  if lpFind bs p.pool != 0 || p.next + size > profile.heapAt then p
+  else { pool := p.pool ++ [p.next, (bs.length : Nat)] ++ bs, next := p.next + size }
+
+mutual
+partial def lpGo (p : LitPool) (n : N) : LitPool :=
+  if n.op == opVDecl then
+    let e := vdeclExpr n
+    lpGo (if e.op == opLitStr && !(litBytes e).isEmpty && (litBytes e).length <= litMax then lpAdd p (litKey e) else p) (bodyOf n)
+  else if n.op == opJDecl then lpGo (lpGo p (jdeclBody n)) (bodyOf n)
+  else if n.op == opCase then lpAlts p (caseAlts n)
+  else if n.op == opJmp || n.op == opRet || n.op == opUnreachable then p
+  else lpGo p (bodyOf n)
+partial def lpAlts (p : LitPool) : List N → LitPool
+  | [] => p
+  | alt :: alts => lpAlts (lpGo p (altBody alt)) alts
+end
+
+def lpDecls (p : LitPool) : List Decl → LitPool
+  | [] => p
+  | d :: ds => lpDecls (if d.ext then p else lpGo p d.body) ds
+
+-- the pool of a module's literals
+def litPool (decls : List Decl) : List Int :=
+  (lpDecls { pool := [], next := profile.memoAt } decls).pool
+
+-- the k low bytes of v, the lowest first
+def lpWord : Nat → Nat → List Int
+  | 0, _ => []
+  | k + 1, v => ((v % 256 : Nat) : Int) :: lpWord k (v / 256)
+
+-- A literal's object, as `emStrLit` builds one (rsc/rsc.rsd `wasmStr`, its layout), with count 0:
+-- tag 249, the byte size with the NUL at +8 and again as the capacity at +16, the number of
+-- characters at +24, the bytes from +32, then the NUL and zeros up to the object's size.
+def litObject (bs : List Int) : List Int :=
+  let n := bs.length
+  [0, 0, 0, 0, 0, 0, 0, 249] ++ lpWord 8 (n + 1) ++ lpWord 8 (n + 1) ++ lpWord 8 (utf8Chars bs)
+    ++ bs ++ List.replicate (litObjBytes n - 32 - n) 0
+
+-- A constant cell's object: count 0, its size where the stage's heap keeps one, no object field,
+-- its tag (the header `emHeader` writes, with the count 0); then the scalar area and zeros up to
+-- the cell's size.
+def litCell (key : List Int) : List Int :=
+  let bs := key.drop 1
+  let size := lpCellBytes key
+  [0, 0, 0, 0] ++ lpWord 2 size ++ [0, intAt 0 key - 256] ++ bs ++ List.replicate (size - 8 - bs.length) 0
+
+-- the pool's objects in the order of their addresses: the module's data from `profile.memoAt`
+partial def litData : List Int → List Int
+  | _ :: n :: rest =>
+    let key := lpTake n.toNat rest
+    (if litKeyIsObj key then litCell key else litObject key) ++ litData (rest.drop n.toNat)
+  | _ => []
+
+-- A constant cell into local d: its persistent object, or a cell built here when the pool had no
+-- room for it.
+def emLitObj (em : Em) (d : Nat) (e : N) : List Int :=
+  let addr := lpFind (litKey e) em.lits
+  if addr != 0 then i64Const addr ++ ls d
+  else emAllocObj em d (8 + (litBytes e).length) (litObjTag e) 0 ++ emStrBytes d 8 (litBytes e)
+
+-- A string literal into local d: its persistent object, or (rsc/rsc.rsd `wasmStr`, its layout) an
+-- object of tag 249 and 33 + n bytes, the byte size with the NUL at +8 and again as the capacity
+-- at +16, the number of characters at +24, the bytes from +32, then the NUL.
+def emStrLit (em : Em) (d : Nat) (bs : List Int) : List Int :=
+  let n := bs.length
+  let addr := lpFind bs em.lits
+  if addr != 0 then i64Const addr ++ ls d
+  else
+  emAllocObj em d (33 + n) 249 0
+    ++ stW d 8 (i64Const (n + 1 : Nat)) ++ stW d 16 (i64Const (n + 1 : Nat)) ++ stW d 24 (i64Const (utf8Chars bs : Nat))
+    ++ emStrBytes d 32 bs ++ lg d ++ wWrap ++ i64Const 0 ++ wStore8 (32 + n)
+
+-- An array primitive that is a function of the module ("Arrays"), into local d; memory refused ends the run with the
+-- capacity status. The list of a value that is no array is the value, without a call.
+-- May the write at index i of the value in local a go in place with nothing to release (leaves an i32):
+-- it is an array, nothing else holds it, and its elements are scalars or the element written over is a
+-- number in a box. Then `arrSetFn` would store the element and return the array, and so does the caller.
+def wArrSetInPlace (a i : Nat) : List Int :=
+  wIsArr a ++ wIfI32
+    ++ lg a ++ wWrap ++ wLoad32 0 ++ i64Const 1 ++ wEq ++ wIfI32
+      ++ lg a ++ wWrap ++ wLoad8 7 ++ i64Const (tagArr : Int) ++ wEq ++ wIfI32
+        ++ lg a ++ lg i ++ i64Const 3 ++ wShl ++ wAdd ++ wWrap ++ i64LoadAt 24 ++ i64Const 1 ++ wAnd ++ wEqz ++ wI32Eqz
+      ++ wElse ++ [65, 1] ++ wEnd
+    ++ wElse ++ [65, 0] ++ wEnd
+  ++ wElse ++ [65, 0] ++ wEnd
+
+-- lean.h has `lean_array_fset` and `lean_to_array`'s cases without work inline and the copying forms as
+-- calls. The same here: a write that goes in place and releases nothing is one store at the place of the
+-- call, and a value that is an array already is itself; every other case is the module's function.
+def emArrCall (em : Em) (p : Nat) (imm : Int) (ys : List Int) (d : Nat) : List Int :=
+  let a := loc1 (intAt 0 ys).toNat
+  let b := loc1 (intAt 1 ys).toNat
+  let c := loc1 (intAt 2 ys).toNat
+  let failed := ls d ++ lg d ++ wEqz ++ wIf ++ emCapacity em.conv ++ wEnd
+  if p == primArrPush then lg 0 ++ lg a ++ lg b ++ i64Const imm ++ callFn (arrFnPush em.heap) ++ failed
+  else if p == primArrSet then
+    wArrSetInPlace a b ++ wIf
+      ++ lg a ++ lg b ++ i64Const 3 ++ wShl ++ wAdd ++ wWrap ++ lg c ++ i64StoreAt 24 ++ lg a ++ ls d
+    ++ wElse ++ lg 0 ++ lg a ++ lg b ++ lg c ++ i64Const imm ++ callFn (arrFnSet em.heap) ++ failed ++ wEnd
+  else if p == primArrOfList then
+    wIsArr a ++ wIf ++ lg a ++ ls d ++ wElse ++ lg 0 ++ lg a ++ i64Const imm ++ callFn (arrFnOfList em.heap) ++ failed ++ wEnd
+  else if p == primArrSlice then lg 0 ++ lg a ++ lg b ++ lg c ++ callFn (arrFnSlice em.heap) ++ failed
+  else wIsArr a ++ wIf ++ lg 0 ++ lg a ++ callFn (arrFnToList em.heap) ++ failed ++ wElse ++ lg a ++ ls d ++ wEnd
+
+-- primitive p on argument locals into local d; `imm` is the node's first immediate
+def emPrim (em : Em) (p : Nat) (imm : Int) (ys : List Int) (d : Nat) : Code :=
+  let a := loc1 (intAt 0 ys).toNat
+  let b := loc1 (intAt 1 ys).toNat
+  if p == primAddW then codeOk (lg a ++ lg b ++ [124] ++ ls d)
+  else if p == primSubW then codeOk (lg a ++ lg b ++ [125] ++ ls d)
+  else if p == primMulW then codeOk (lg a ++ lg b ++ wMul ++ ls d)
+  else if p == primMask then codeOk (lg a ++ i64Const imm ++ wAnd ++ ls d)
+  else if p == primAdd then codeOk (emAddSub em.conv 124 true a b d)
+  else if p == primSub then codeOk (emAddSub em.conv 125 false a b d)
+  else if p == primMul then codeOk (emMul em.conv a b d)
+  else if p == primNeg then codeOk (emNeg em.conv a d)
+  else if p == primDiv then codeOk (emDiv em.conv a b d)
+  else if p == primMod then codeOk (emMod em.conv a b d)
+  else if p == primLt then codeOk (lg a ++ lg b ++ wLtS ++ wExtend ++ ls d)
+  else if p == primGt then codeOk (lg a ++ lg b ++ wGtS ++ wExtend ++ ls d)
+  else if p == primEq then codeOk (lg a ++ lg b ++ wEq ++ wExtend ++ ls d)
+  else if p == primAnd then codeOk (lg a ++ lg b ++ wAnd ++ ls d)
+  else if p == primOr then codeOk (lg a ++ lg b ++ wOr ++ ls d)
+  else if p == primNot then codeOk (lg a ++ wEqz ++ wExtend ++ ls d)
+  else if p == primTagOf then codeOk (emTag a em.t1 ++ lg em.t1 ++ ls d)
+  -- the refusal's detail is the immediate; none is the mismatch of `unwrap` on an absent option
+  else if p == primFail then codeOk (emRefuse em.conv profile.tagStuck (if imm == 0 then stTypeMismatch else imm))
+  else if p == primStrEq then codeOk (emStrEq a b d em.t0 em.t1)
+  -- a magnitude's word (lean.h `lean_is_scalar`, `lean_box`, `lean_unbox`), and words as unsigned numbers
+  else if p == primIsScalar then codeOk (lg a ++ i64Const 1 ++ wAnd ++ ls d)
+  else if p == primBox then codeOk (lg a ++ i64Const 1 ++ wShl ++ i64Const 1 ++ wOr ++ ls d)
+  else if p == primUnbox then codeOk (lg a ++ i64Const 1 ++ wShrU ++ ls d)
+  -- an integer's word (lean.h `lean_box` and `lean_unbox` of a signed number)
+  -- With narrow fields the word is the 32 bits a field keeps, with zeros above them wherever it stands (two words
+  -- of one integer are then equal, as the short forms take it), and the number comes back from those bits with
+  -- its sign (lean.h `lean_scalar_to_int64` on a target of 4-byte pointers).
+  else if p == primBoxS then
+    codeOk (lg a ++ i64Const 1 ++ wShl ++ i64Const 1 ++ wOr ++ (if em.fw == 4 then i64Const 4294967295 ++ wAnd else []) ++ ls d)
+  else if p == primUnboxS then
+    codeOk (if em.fw == 4 then lg a ++ i64Const 32 ++ wShl ++ i64Const 33 ++ wShrS ++ ls d else lg a ++ i64Const 1 ++ wShrS ++ ls d)
+  else if p == primShrW then codeOk (lg a ++ i64Const imm ++ wShrU ++ ls d)
+  else if p == primDivU then codeOk (lg a ++ lg b ++ wDivU ++ ls d)
+  else if p == primRemU then codeOk (lg a ++ lg b ++ wRemU ++ ls d)
+  -- arrays ("Arrays" above): the tests and the read are written here, the others are calls of the module's functions
+  else if p == primIsArr then codeOk (wIsArr a ++ wExtend ++ ls d)
+  else if p == primArrSize then
+    codeOk (lg a ++ i64Const 1 ++ wAnd ++ wEqz ++ wIfI64 ++ lg a ++ wWrap ++ i64LoadAt 8 ++ wElse ++ i64Const 0 ++ wEnd ++ ls d)
+  else if p == primArrGet then
+    codeOk (lg a ++ lg b ++ i64Const 3 ++ wShl ++ wAdd ++ wWrap ++ i64LoadAt 24 ++ ls d ++ (if imm == 0 then [] else wIncLoc d em.t0))
+  else if p == primArrPush || p == primArrSet || p == primArrOfList || p == primArrToList || p == primArrSlice then
+    (if em.heap == 0 then codeFail else codeOk (emArrCall em p imm ys d))
+  else codeFail
+
+/-! ## Expressions (EmitC:503 emitVDecl) -/
+
+-- the result words of a call, from the result block into the bound variables: x, ty, x, ty, ...
+def emResults : Nat → List Int → List Int
+  | i, x :: ty :: rest =>
+    (if tyIsIrr ty then [] else blkGet (profile.resAt + 8 * (i : Int)) ++ ls (loc1 x.toNat)) ++ emResults (i + 1) rest
+  | _, _ => []
+
+-- a call of image function f (EmitC:420 emitFullApp): base, fuel - 1, the arguments; a status
+-- other than 0 is this function's status
+-- the result words of a call from the stack into the bound variables, the last one first
+def emPops : List Int → List Int
+  | x :: ty :: rest => emPops rest ++ (if tyIsIrr ty then [] else ls (loc1 x.toNat))
+  | _ => []
+
+-- (`same`: the callee runs at this function's fuel, lib/lrc/Ir.rsd `fapSame`)
+def emCall (em : Em) (f : Nat) (same : Bool) (depth : Nat) (ys : List Int) : List Int :=
+  lg 0 ++ (if same || isOwnFn em.nImg f then lg 1 else lg 1 ++ i64Const (1 + depth : Nat) ++ wSub)
+    ++ emArgs ys ++ callFn (em.fnBase + f) ++ (if em.conv == 0 then prop em.t0 else [])
+
+def emExpr (em : Em) (binds : List Int) (e : N) : Code :=
+  let z := loc1 (intAt 0 binds).toNat
+  if e.op == opLit then codeOk (i64Const e.a ++ ls z)
+  else if e.op == opLitStr then
+    (if (litBytes e).length > litMax then codeFail
+     else if isLitObj e then codeOk (emLitObj em z e)
+     else if !(litBytes e).isEmpty then codeOk (emStrLit em z (litBytes e))
+     else if e.s == "" then codeOk (i64Const profile.emptyStr ++ ls z) else codeFail)
+  else if e.op == opCtor then
+    let info := infoOf e
+    -- with narrow fields a constant constructor's word has to fit a field: one that does not (the code of a
+    -- closure of a function numbered 32768 or more, lib/lrc/Closures.rsd `lwCode`) is not written
+    if info.isScalar then (if em.fw == 4 && 2 * info.cidx + 1 >= 4294967296 then codeFail else codeOk (i64Const (2 * info.cidx + 1 : Nat) ++ ls z))
+    else codeOk (emAlloc em z info ++ emFields em.fw z 0 e.ys)
+  else if e.op == opReset then codeOk (emReset em (intAt 0 binds).toNat (resetVar e) (resetN e))
+  else if e.op == opReuse then codeOk (emReuse em (intAt 0 binds).toNat (reuseVar e) (infoOf e) (reuseUpdt e) (reuseArgs e))
+  else if e.op == opProj then codeOk (lg (loc1 (projVar e)) ++ wWrap ++ fldLoad em.fw (8 + em.fw * projIdx e) ++ ls z)
+  else if e.op == opSProj then
+    codeOk (lg (loc1 (sprojVar e)) ++ wWrap
+      ++ scRead em.fw (sprojWidth e) (8 + em.fw * sprojN e + sprojOff e)
+      ++ ls z)
+  else if e.op == opFap then codeOk (emCall em (fapFn e) (fapSame e) (fapDepth e) e.ys ++ (if em.conv == 0 then emResults 0 binds else emPops binds))
+  else if e.op == opPrim then emPrim em (primOp e) e.b e.ys z
+  else if e.op == opIsShared then codeOk (emIsShared (loc1 (isSharedVar e)) ++ ls z)
+  else codeFail
+
+/-! ## Bodies (EmitC:597 emitBlock)
+
+`labels` lists the open wasm labels, the innermost first. A join point is a block that encloses
+the code that jumps to it; its body follows the block (IR/Basic.lean:252). A label nothing jumps
+to by name (the arm of a test) has index -1; the function's loop has -2. -/
+
+structure Lbl where
+  j : Int
+  ps : List Param
+  deriving Inhabited
+
+def lblAnon : Lbl := { j := -1, ps := [] }
+
+def labelDepth (j : Int) : List Lbl → Nat
+  | [] => 0
+  | l :: ls => if l.j == j then 0 else 1 + labelDepth j ls
+
+def labelParams (j : Int) : List Lbl → List Param
+  | [] => []
+  | l :: ls => if l.j == j then l.ps else labelParams j ls
+
+-- the result words onto the stack, in order
+def emRetVals : List Int → List Int
+  | [] => []
+  | y :: ys => (if y < 0 then [] else emArg y) ++ emRetVals ys
+
+-- the result words into the result block
+def emRet : Nat → List Int → List Int
+  | _, [] => []
+  | i, y :: ys => (if y < 0 then [] else blkSet (profile.resAt + 8 * (i : Int)) (emArg y)) ++ emRet (i + 1) ys
+
+-- pop the stack into the locals of the parameters, the last first
+def emSetParams : List Param → List Int
+  | [] => []
+  | p :: ps => emSetParams ps ++ ls (loc1 p.x)
+
+-- the alternatives that name a constructor without fields; is one of them the default
+def scalarAlts : List N → Nat
+  | [] => 0
+  | alt :: alts => (if !altIsDefault alt && (infoOf alt).isScalar then 1 else 0) + scalarAlts alts
+
+def anyDefault : List N → Bool
+  | [] => false
+  | alt :: alts => altIsDefault alt || anyDefault alts
+
+-- is `ys` the return of exactly the variables that `binds` binds (EmitUtil.lean `isTailCallTo`)
+def retsBinds : List Int → List Int → Bool
+  | [], [] => true
+  | x :: _ :: rest, y :: ys => x == y && retsBinds rest ys
+  | _, _ => false
+
+def liveBinds : List Int → List Int
+  | x :: ty :: rest => if tyIsIrr ty then liveBinds rest else x :: ty :: liveBinds rest
+  | _ => []
+
+/-! ## A test and the case that reads it are one branch
+
+EmitC writes `x = a == b; if (x == 0)` and the C compiler makes one compare and one branch of it. A wasm engine
+runs what stands here, so the word of the test is not made where only the case that follows reads it
+(lib/lrc/JoinOnce.rsd `condDown` brings the two together): the test is the condition of the `if`. -/
+
+-- is e a test whose word is 0 or 1: the comparisons, `not`, the test of a small number, `isShared`
+def emIsTest (e : N) : Bool :=
+  e.op == opIsShared ||
+    (e.op == opPrim &&
+      (primOp e == primLt || primOp e == primGt || primOp e == primEq || primOp e == primNot || primOp e == primIsScalar))
+
+-- the test as a wasm condition (an i32 that is not 0 where the word would be 1)
+def emTest (e : N) : List Int :=
+  let a := loc1 (intAt 0 e.ys).toNat
+  let b := loc1 (intAt 1 e.ys).toNat
+  if e.op == opIsShared then lg (loc1 (isSharedVar e)) ++ wWrap ++ wLoad32 0 ++ i64Const 1 ++ wNe
+  else if primOp e == primLt then lg a ++ lg b ++ wLtS
+  else if primOp e == primGt then lg a ++ lg b ++ wGtS
+  else if primOp e == primEq then lg a ++ lg b ++ wEq
+  else if primOp e == primNot then lg a ++ wEqz
+  else lg a ++ i64Const 1 ++ wAnd ++ wWrap
+
+-- the two bodies of a case on a truth value, for 0 and for 1 (`ok`: the alternatives are those two)
+structure EmTwo where
+  ok : Bool
+  zero : N
+  one : N
+  deriving Inhabited
+
+def emTwo (alts : List N) : EmTwo :=
+  match alts with
+  | [a, b] =>
+    if !altIsDefault a && !altIsDefault b then
+      (if a.a == 0 && b.a == 1 then { ok := true, zero := altBody a, one := altBody b }
+       else if a.a == 1 && b.a == 0 then { ok := true, zero := altBody b, one := altBody a }
+       else { ok := false, zero := a, one := b })
+    else if !altIsDefault a && altIsDefault b then
+      (if a.a == 0 then { ok := true, zero := altBody a, one := altBody b }
+       else if a.a == 1 then { ok := true, zero := altBody b, one := altBody a }
+       else { ok := false, zero := a, one := b })
+    else if altIsDefault a && !altIsDefault b then
+      (if b.a == 0 then { ok := true, zero := altBody b, one := altBody a }
+       else if b.a == 1 then { ok := true, zero := altBody a, one := altBody b }
+       else { ok := false, zero := a, one := b })
+    else { ok := false, zero := a, one := b }
+  | _ => { ok := false, zero := n0 opUnreachable, one := n0 opUnreachable }
+
+-- is the binding n a test that only the case directly below reads
+def emTestCase (n : N) : Bool :=
+  let e := vdeclExpr n
+  let k := bodyOf n
+  n.ys.isEmpty && emIsTest e && k.op == opCase && k.a == n.a && tyIsScalar (caseTy k) && (emTwo (caseAlts k)).ok
+    && !hasFreeVar (emTwo (caseAlts k)).zero n.a.toNat && !hasFreeVar (emTwo (caseAlts k)).one n.a.toNat
+
+mutual
+partial def emBody (em : Em) (labels : List Lbl) (n : N) : Code :=
+  if n.op == opVDecl then
+    let e := vdeclExpr n
+    let k := bodyOf n
+    let binds := vdeclBinds n
+    -- a call of the function itself whose results are returned at once is a jump to its start
+    -- (EmitC:551 emitTailCall): the callee would run at fuel - 1 and refuse at zero
+    if e.op == opFap && fapFn e == em.self && fapDepth e == 0 && k.op == opRet && retsBinds (liveBinds binds) (retArgs k)
+        && e.ys.length == em.params.length then
+      codeOk ((if isOwnFn em.nImg em.self || fapSame e then []
+          -- the test is left out where the fuel is known to be above 1 (lib/lrc/GuardElim.rsd `fuelKnown`)
+          else (if e.c == 1 then [] else lg 1 ++ i64Const 2 ++ wLtU ++ wIf ++ emRefuse em.conv profile.tagFuel profile.detNone ++ wEnd)
+            ++ lg 1 ++ i64Const 1 ++ wSub ++ ls 1)
+        ++ emArgs e.ys ++ emSetParams em.params ++ wBr (labelDepth (-2) labels))
+    else if emTestCase n then
+      let two := emTwo (caseAlts k)
+      let a := emBody em (lblAnon :: labels) two.one
+      let z := emBody em (lblAnon :: labels) two.zero
+      { ok := a.ok && z.ok, code := emTest e ++ wIf ++ a.code ++ wElse ++ z.code ++ wEnd }
+    else
+      let c := emExpr em binds e
+      let r := emBody em labels k
+      { ok := c.ok && r.ok, code := c.code ++ r.code }
+  else if n.op == opJDecl then
+    let b := emBody em ({ j := (jdeclId n : Int), ps := jdeclParams n } :: labels) (bodyOf n)
+    let v := emBody em labels (jdeclBody n)
+    { ok := b.ok && v.ok, code := wBlock ++ b.code ++ wEnd ++ v.code }
+  else if n.op == opSet then
+    let r := emBody em labels (bodyOf n)
+    -- the field's index in a variable: the address is the object's, plus the index times a field's bytes
+    if setIsAt n then
+      { r with code := lg (loc1 (setVar n)) ++ lg (loc1 (setAtVar n)) ++ i64Const (fldShift em.fw) ++ wShl ++ wAdd ++ wWrap
+                         ++ emArg (setArg n) ++ fldStore em.fw 8 ++ r.code }
+    else
+    { r with code := lg (loc1 (setVar n)) ++ wWrap ++ emArg (setArg n) ++ fldStore em.fw (8 + em.fw * setIdx n) ++ r.code }
+  else if n.op == opSetTag then
+    let r := emBody em labels (bodyOf n)
+    { r with code := lg (loc1 n.a.toNat) ++ wWrap ++ i64Const n.b ++ wStore8 7 ++ r.code }
+  else if n.op == opSSet then
+    let r := emBody em labels (bodyOf n)
+    let pos : Nat := 8 + em.fw * ssetN n + ssetOff n
+    let store := scWrite em.fw (tyWidth n.d) pos
+    { r with code := lg (loc1 (ssetVar n)) ++ wWrap ++ lg (loc1 (ssetArg n)) ++ store ++ r.code }
+  else if n.op == opInc then
+    let r := emBody em labels (bodyOf n)
+    { r with code := emInc em (rcVar n) (rcN n) (rcCheck n) ++ r.code }
+  else if n.op == opDec then
+    let r := emBody em labels (bodyOf n)
+    { r with code := emDec em (rcVar n) (rcCheck n) ++ r.code }
+  else if n.op == opDel then
+    let r := emBody em labels (bodyOf n)
+    -- with the stage's heap the cell goes back on its size's list here, as lean.h's
+    -- `lean_free_small_object` is inline in Lean's code
+    { r with code := (if em.heap == 0 then lg 0 ++ lg (loc1 n.a.toNat) ++ callFn rtFree else hpPush (loc1 n.a.toNat) em.t0) ++ r.code }
+  else if n.op == opMData then
+    let r := emBody em labels (bodyOf n)
+    -- a fuel guard: the replaced call needed fuel above its depth
+    let guard := lg 1 ++ i64Const n.b ++ wLeU ++ wIf ++ emRefuse em.conv profile.tagFuel profile.detNone ++ wEnd
+    if n.a == 1 then { r with code := guard ++ r.code } else r
+  else if n.op == opCase then
+    let x := loc1 (caseVar n)
+    if tyIsObj (caseTy n) then
+      let alts0 := caseAlts n
+      if alts0.length == 2 && !anyDefault alts0 && scalarAlts alts0 == 1 then
+        -- One constructor without fields and one with (a list, an option): the value is a boxed
+        -- scalar or a pointer, and its low bit says which (lean.h `lean_is_scalar`); no tag is read.
+        let first := (infoOf (kidAt 0 alts0)).isScalar
+        let a := emBody em (lblAnon :: labels) (altBody (kidAt (if first then 1 else 0) alts0))
+        let b := emBody em (lblAnon :: labels) (altBody (kidAt (if first then 0 else 1) alts0))
+        { ok := a.ok && b.ok, code := lg x ++ i64Const 1 ++ wAnd ++ wEqz ++ wIf ++ a.code ++ wElse ++ b.code ++ wEnd }
+      else if !anyDefault alts0 && scalarAlts alts0 == 0 then
+        -- every constructor has fields: the value is a pointer, its tag is the header's byte
+        let alts := emAlts em labels em.t1 alts0
+        { alts with code := lg x ++ wWrap ++ wLoad8 7 ++ ls em.t1 ++ alts.code }
+      else
+      let alts := emAlts em labels em.t1 alts0
+      { alts with code := emTag x em.t1 ++ alts.code }
+    else emAlts em labels x (caseAlts n)
+  else if n.op == opRet then
+    codeOk (if em.conv == 0 then emRet 0 (retArgs n) ++ i64Const 0 ++ wReturn else emRetVals (retArgs n) ++ wReturn)
+  else if n.op == opJmp then
+    let j : Int := (jmpId n : Int)
+    codeOk (emArgs (jmpArgs n) ++ emSetParams (labelParams j labels) ++ wBr (labelDepth j labels))
+  else if n.op == opUnreachable then codeOk (emRefuse em.conv profile.tagStuck stTypeMismatch)
+  else codeFail
+
+-- the alternatives as a chain of tests on the tag in local t; the last one needs no test
+partial def emAlts (em : Em) (labels : List Lbl) (t : Nat) : List N → Code
+  | [] => codeOk (emRefuse em.conv profile.tagStuck stTypeMismatch)
+  | [alt] => emBody em labels (altBody alt)
+  | alt :: alts =>
+    -- a default before the end: the constructors are tested first
+    if altIsDefault alt then emAlts em labels t (alts ++ [alt])
+    else
+      let a := emBody em (lblAnon :: labels) (altBody alt)
+      let r := emAlts em (lblAnon :: labels) t alts
+      { ok := a.ok && r.ok, code := lg t ++ i64Const alt.a ++ wEq ++ wIf ++ a.code ++ wElse ++ r.code ++ wEnd }
+end
+
+/-! ## Functions -/
+
+-- The internal function of a declaration. Its parameters are the declaration's, each one word.
+-- The body is a loop only so that a call of itself in tail position can jump to its start.
+-- the number of result words that exist
+def liveCount : List Int → Nat
+  | [] => 0
+  | t :: ts => (if tyIsIrr t then 0 else 1) + liveCount ts
+
+def emDecl (fnBase nImg heap conv : Nat) (lits : List Int) (d : Decl) (fw : Nat := 8) : Code :=
+  let nvars := declMaxIndex d
+  let em : Em := { self := d.f, fnBase := fnBase, params := d.xs, nImg := nImg, heap := heap, conv := conv, lits := lits, t0 := nvars + 2, t1 := nvars + 3,
+                   fw := fw }
+  let b := emBody em [{ j := -2, ps := [] }] d.body
+  let entry := if isOwnFn nImg d.f then [] else if conv == 0 then fuelPrologue
+    else lg 1 ++ wEqz ++ wIf ++ emRefuse conv profile.tagFuel profile.detNone ++ wEnd
+  -- every path of the loop returns, jumps to its start or refuses; what follows it is never run
+  { ok := b.ok, code := entry ++ wLoop ++ b.code ++ wEnd ++ (if conv == 0 then i64Const 0 else wUnreachable) ++ [opEnd] }
+
+def emDeclFn (fnBase nImg heap conv : Nat) (lits : List Int) (d : Decl) (fw : Nat := 8) : WFn :=
+  let nvars := declMaxIndex d
+  { params := emI64s (2 + d.xs.length), results := (if conv == 0 then [vtI64] else emI64s (liveCount d.rets)),
+    locals := emI64s (nvars - d.xs.length + 2), code := (emDecl fnBase nImg heap conv lits d fw).code }
+
+/-! ### The public entry of a function
+
+Function f keeps the wire's signature at the module's boundary: (base, fuel, every word of every
+parameter), the result's words in the result block. The entry passes the words that exist in the
+IR, runs the internal function at the same fuel, and puts an irrelevant result word back as the
+empty list. -/
+
+-- the argument locals of the live words of one parameter run, from wasm local `i`
+def pubRun : Nat → List Int → List Int
+  | _, [] => []
+  | i, t :: ts => (if tyIsIrr t then [] else lg i) ++ pubRun (i + 1) ts
+
+def pubArgs : Nat → List (List Int) → List Int
+  | _, [] => []
+  | i, ts :: rest => pubRun i ts ++ pubArgs (i + ts.length) rest
+
+def flatWords : List (List Int) → Nat
+  | [] => 0
+  | ts :: rest => ts.length + flatWords rest
+
+-- The internal function wrote its live result words at the front of the result block. Word k of
+-- the wire's result: an irrelevant word is the empty list, a live word comes from its place among
+-- the live ones (`li`). One code chunk per word, in order.
+def pubMoves : Nat → Nat → List Int → List (List Int)
+  | _, _, [] => []
+  | k, li, t :: ts =>
+    (if tyIsIrr t then blkSet (profile.resAt + 8 * (k : Int)) (i64Const profile.emptyAt)
+     else if k == li then []
+     else blkSet (profile.resAt + 8 * (k : Int)) (blkGet (profile.resAt + 8 * (li : Int))))
+      :: pubMoves (k + 1) (if tyIsIrr t then li else li + 1) ts
+
+-- the chunks in reverse order: a live word moves up, so the last word is written first
+def catRev : List (List Int) → List Int → List Int
+  | [], acc => acc
+  | c :: cs, acc => catRev cs (c ++ acc)
+
+def flatTs : List (List Int) → List Int
+  | [] => []
+  | ts :: rest => ts ++ flatTs rest
+
+-- An entry owns the words it is given, as a function of the wire does. Where borrow inference
+-- left a parameter of the internal function borrowed, the entry releases that object after the
+-- call (the runtime's drop, which passes over a boxed scalar). `i` is the word's wasm local;
+-- the live words are the declaration's parameters in order.
+def pubDrops (heap t0 : Nat) : Nat → List Int → List Param → List Int
+  | _, [], _ => []
+  | i, t :: ts, ps =>
+    if tyIsIrr t then pubDrops heap t0 (i + 1) ts ps
+    else
+      match ps with
+      | p :: rest =>
+        (if p.borrow && !tyIsScalar p.ty then (if heap == 0 then lg 0 ++ lg i ++ callFn 7 else emDecLoc heap t0 i true) else [])
+          ++ pubDrops heap t0 (i + 1) ts rest
+      | [] => []
+
+-- the public entry of function f, whose internal function is wasm function `fnBase + f` and has
+-- the parameters `ps`
+-- the k result words of the internal call from the stack into the front of the result block
+def pubStore (tmp : Nat) : Nat → List Int
+  | 0 => []
+  | k + 1 => ls tmp ++ blkSet (profile.resAt + 8 * (k : Int)) (lg tmp) ++ pubStore tmp k
+
+def emPublic (fnBase heap conv f : Nat) (sg : SigR) (ps : List Param) : WFn :=
+  let words := flatWords sg.params
+  let st := 2 + words
+  let args := pubArgs 2 sg.params
+  let call := lg 0 ++ lg 1 ++ (if args.isEmpty then i64Const 1 else args) ++ callFn (fnBase + f)
+  -- with convention 1 the entry is where a refusal is caught: its status is in the block
+  let run := if conv == 0 then call
+    else wTryI64 ++ call ++ pubStore (st + 1) (liveCount sg.result) ++ i64Const 0 ++ wCatchAll ++ blkGet offStatus ++ wEnd
+  { params := emI64s (2 + words), results := [vtI64], locals := [vtI64, vtI64],
+    code := run ++ ls st
+      ++ pubDrops heap (st + 1) 2 (flatTs sg.params) ps
+      ++ lg st ++ wEqz ++ wIf ++ catRev (pubMoves 0 0 sg.result) [] ++ wEnd
+      ++ lg st ++ [opEnd] }
+
+-- a function the stage does not hold (a reserved form, or a helper of one): its entry refuses
+-- with the capacity status and the representation detail, as the present emitter refuses a list
+-- operator on the arena (rsc/rsc.rsd, `detRepr`)
+def emRefusing (words : Nat) : WFn :=
+  { params := emI64s (2 + words), results := [vtI64], locals := [],
+    code := refuseTo profile.tagCapacity detRepr ++ i64Const 0 ++ [opEnd] }
+
+-- the parameters of the declaration at place `t`, or `xs` when there is none
+def declXs (xs : List Param) (t : Nat) (all : List Decl) : List Param :=
+  match declAt t all with
+  | some d => d.xs
+  | none => xs
+
+mutual
+-- does a body have an array primitive
+partial def arrUseGo (n : N) : Bool :=
+  if n.op == opVDecl then
+    let e := vdeclExpr n
+    (e.op == opPrim && primOp e >= primIsArr && primOp e <= primArrSlice) || arrUseGo (bodyOf n)
+  else if n.op == opJDecl then arrUseGo (jdeclBody n) || arrUseGo (bodyOf n)
+  else if n.op == opCase then arrUseAlts (caseAlts n)
+  else if n.op == opJmp || n.op == opRet || n.op == opUnreachable then false
+  else arrUseGo (bodyOf n)
+partial def arrUseAlts : List N → Bool
+  | [] => false
+  | alt :: alts => arrUseGo (altBody alt) || arrUseAlts alts
+end
+
+-- Does a function of the image have one. The stage's own functions are not asked: the two that
+-- test for an array (lib/lrc/FromWire.rsd `declLenA`) are in every module and need nothing of the heap.
+def declsUseArr (nImg : Nat) : List Decl → Bool
+  | [] => false
+  | d :: ds => (!d.ext && !isOwnFn nImg d.f && arrUseGo d.body) || declsUseArr nImg ds
+
+structure EmitR where
+  ok : Bool
+  -- the function that could not be emitted, when not ok
+  fn : Nat
+  publics : List WFn
+  internals : List WFn
+  deriving Inhabited
+
+-- the words of a public entry's parameters: the boundary's (lib/lrc/FromWire.rsd `fwSigB`)
+def sigWords (g : Dg) (sig : List Int) : Nat :=
+  let sg := fwSigB g sig
+  if sg.ok then flatWords sg.params else sigCount sig
+
+-- The image's functions: n public entries, then the internal functions in the image's order, the
+-- stage's own list functions (index n and up, no entry) after them. `pubs` gives the boundary
+-- twins (pairs: function, twin's place), `all` is the whole list of declarations.
+-- `rtBase` is the number of runtime functions before them in the module; `heap` is `Em.heap`, `fw` is `Em.fw`.
+def emitFns (g : Dg) (sigs : List (List Int)) (rtBase n heap conv : Nat) (lits : List Int) (pubs : List Int) (all : List Decl) (fw : Nat) : List Decl → EmitR
+  | [] => { ok := true, fn := 0, publics := [], internals := [] }
+  | d :: ds =>
+    let r := emitFns g sigs rtBase n heap conv lits pubs all fw ds
+    if !r.ok then r
+    else if d.ext then
+      { r with publics := emRefusing (sigWords g (sigOf sigs d.f)) :: r.publics, internals := emRefusing 0 :: r.internals }
+    else
+      let c := emDecl (rtBase + n) n heap conv lits d fw
+      if !c.ok then { ok := false, fn := d.f, publics := [], internals := [] }
+      else if d.f >= n then { r with internals := emDeclFn (rtBase + n) n heap conv lits d fw :: r.internals }
+      -- a sum in the signature: the boundary's words are not the stage's (lib/lrc/FromWire.rsd
+      -- `tyHasSumWord`); the function is there for the image's own calls, its public entry refuses
+      else if sigHasSumWord g (sigCount (sigOf sigs d.f)) (sigParams (sigOf sigs d.f)) then
+        { r with publics := emRefusing 0 :: r.publics, internals := emDeclFn (rtBase + n) n heap conv lits d fw :: r.internals }
+      else
+        -- the entry runs the function's boundary twin when it has one (lib/lrc/FromWire.rsd "The boundary"):
+        -- the entry and the twin have the boundary's words, and the twin its own borrowed parameters. A function
+        -- without a twin has the same words inside the stage as at the boundary.
+        let t := pubEntry pubs d.f
+        { r with publics := emPublic (rtBase + n) heap conv t (fwSigB g (sigOf sigs d.f)) (declXs d.xs t all) :: r.publics,
+                 internals := emDeclFn (rtBase + n) n heap conv lits d fw :: r.internals }
+
+end Lrc

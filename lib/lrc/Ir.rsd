@@ -1,0 +1,653 @@
+-- LRC, the lambda-RC stage of the backend: the IR.
+-- A port of Lean 4.14.0 src/lean/Lean/Compiler/IR/Basic.lean, cited below as Basic:LINE.
+-- closure_claim = 0.
+--
+-- One recursive structure, `N`, holds expressions, bodies and alternatives. rsdc admits a
+-- recursive structure with integer, list and child-list fields (lib/AvlMap.rsd is the same
+-- shape); an inductive constructor is limited to three integer fields, which Basic:194 `Expr`
+-- and Basic:248 `FnBody` exceed. The constructor of each IR form is a `mk*` function below and
+-- its fields are read back with the accessors that follow it; no pass builds an `N` by hand.
+--
+-- Variables and join points are indices (Basic:25 VarId, Basic:30 JoinPointId), unique within
+-- one function. An argument (Basic:138 Arg) is a variable index, or `argIrr` for `irrelevant`.
+--
+-- What differs from Basic.lean, and why:
+-- * No `uproj`, `uset`, `pap`, `ap`, `box`, `unbox` (Basic:206, 258, 212, 214, 217, 219): the wire
+--   language is first-order and monomorphic, and the object layout has no usize area.
+-- * `prim`: an operator of the wire language applied to variables. Lean reaches such operators
+--   through `fap` of a builtin constant (Basic:210); here they are a separate form because they
+--   are emitted inline and may fail with a status.
+-- * A `vdecl` of a `fap` may bind more than one result (a wire function returns a flat record
+--   as several words). The first result is the `vdecl`'s variable; the others are in `extra`.
+-- * `ret` takes a list of arguments for the same reason.
+-- * `mdata` (Basic:269) carries one kind of datum: a fuel guard (see `mkGuard`).
+namespace Lrc
+
+structure N where
+  op : Nat
+  a : Int
+  b : Int
+  c : Int
+  d : Int
+  ys : List Int
+  s : String
+  kids : List N
+  deriving Inhabited
+
+def n0 (op : Nat) : N := { op := op, a := 0, b := 0, c := 0, d := 0, ys := [], s := "", kids := [] }
+
+-- Basic:81 IRType. The wire has one scalar width: an i64 word (int, bool).
+def tyI64 : Int := 0
+def tyObj : Int := 2
+def tyTObj : Int := 3
+def tyIrr : Int := 4
+
+-- Basic:106 IRType.isScalar, Basic:115 isObj, Basic:120 isIrrelevant.
+-- Codes 10 to 14 are Lean's other scalar widths (uint8, uint16, uint32, usize, float). The wire has
+-- none of them; instruments/lrc-host/Oracle.rsd uses them to carry Lean's own IR through the ported passes.
+def tyIsScalar (t : Int) : Bool := t == 0 || t >= 10
+def tyIsObj (t : Int) : Bool := t == 2 || t == 3
+def tyIsIrr (t : Int) : Bool := t == 4
+
+-- Basic:138 Arg
+def argIrr : Int := -1
+-- In a map from variables to variables (lib/lrc/NormIds.rsd `renIdx`) this value says "the
+-- irrelevant argument": a parameter that a call or a jump binds to `argIrr` is `argIrr` at each of
+-- its uses in the body. No variable has this index: a function's indices stay below it
+-- (lib/lrc/Classes.rsd `ocVarSpan`, lib/lrc/ElimDeadBranches.rsd `edbKey`).
+def irrIdx : Nat := 16777216
+def argIsVar (y : Int) : Bool := y >= 0
+
+-- operation codes: expressions (Basic:194 Expr)
+def opCtor : Nat := 30
+def opReset : Nat := 31
+def opReuse : Nat := 32
+def opProj : Nat := 33
+def opSProj : Nat := 34
+def opFap : Nat := 35
+def opPrim : Nat := 36
+def opLit : Nat := 37
+def opLitStr : Nat := 38
+def opIsShared : Nat := 39
+-- bodies (Basic:248 FnBody)
+def opVDecl : Nat := 1
+def opJDecl : Nat := 2
+def opSet : Nat := 3
+def opSetTag : Nat := 4
+def opSSet : Nat := 5
+def opInc : Nat := 6
+def opDec : Nat := 7
+def opDel : Nat := 8
+def opMData : Nat := 9
+def opCase : Nat := 10
+def opRet : Nat := 11
+def opJmp : Nat := 12
+def opUnreachable : Nat := 13
+-- alternatives (Basic:244 AltCore)
+def opAltCtor : Nat := 20
+def opAltDefault : Nat := 21
+
+def kidAt : Nat → List N → N
+  | _, [] => n0 opUnreachable
+  | 0, k :: _ => k
+  | i + 1, _ :: ks => kidAt i ks
+
+def intAt : Nat → List Int → Int
+  | _, [] => 0
+  | 0, x :: _ => x
+  | i + 1, _ :: xs => intAt i xs
+
+/-! ## Constructor information (Basic:174 CtorInfo)
+
+`cidx` is the constructor's tag, `size` its number of object fields, `ssize` the bytes of its
+scalar area, `tid` the type it belongs to (Lean compares the name's prefix, ResetReuse.lean:32 `mayReuse`, its test at :38).
+A structure of four integers; in an `N` it occupies the fields a, b, c, d. -/
+structure CtorInfo where
+  cidx : Nat
+  size : Nat
+  ssize : Nat
+  tid : Nat
+  deriving BEq, Inhabited
+
+-- Basic:188 CtorInfo.isRef, Basic:191 isScalar
+def CtorInfo.isRef (i : CtorInfo) : Bool := i.size > 0 || i.ssize > 0
+def CtorInfo.isScalar (i : CtorInfo) : Bool := !i.isRef
+
+def infoOf (n : N) : CtorInfo :=
+  { cidx := n.a.toNat, size := n.b.toNat, ssize := n.c.toNat, tid := n.d.toNat }
+
+def withInfo (n : N) (i : CtorInfo) : N :=
+  { n with a := (i.cidx : Int), b := (i.size : Int), c := (i.ssize : Int), d := (i.tid : Int) }
+
+/-! ## Expressions (Basic:194) -/
+
+-- Basic:292 `ctor i ys`: ys are the object fields; scalars follow by `sset`.
+def mkCtor (i : CtorInfo) (ys : List Int) : N := { withInfo (n0 opCtor) i with ys := ys }
+def ctorArgs (e : N) : List Int := e.ys
+
+-- Basic:199 `reset n x`
+def mkReset (n : Nat) (x : Nat) : N := { n0 opReset with a := (n : Int), ys := [(x : Int)] }
+def resetN (e : N) : Nat := e.a.toNat
+def resetVar (e : N) : Nat := (intAt 0 e.ys).toNat
+
+-- Basic:201 `reuse x i updtHeader ys`: ys of the node is x :: updtHeader :: object fields
+def mkReuse (x : Nat) (i : CtorInfo) (updtHeader : Bool) (ys : List Int) : N :=
+  { withInfo (n0 opReuse) i with ys := (x : Int) :: (if updtHeader then 1 else 0) :: ys }
+def reuseVar (e : N) : Nat := (intAt 0 e.ys).toNat
+def reuseUpdt (e : N) : Bool := intAt 1 e.ys == 1
+def reuseArgs (e : N) : List Int := e.ys.drop 2
+
+-- Basic:204 `proj i x`
+def mkProj (i : Nat) (x : Nat) : N := { n0 opProj with a := (i : Int), ys := [(x : Int)] }
+def projIdx (e : N) : Nat := e.a.toNat
+def projVar (e : N) : Nat := (intAt 0 e.ys).toNat
+
+-- Basic:208 `sproj n offset x`: the scalar at byte 8 * n + offset of x's fields
+def mkSProj (n : Nat) (offset : Nat) (x : Nat) : N :=
+  { n0 opSProj with a := (n : Int), b := (offset : Int), ys := [(x : Int)] }
+def sprojN (e : N) : Nat := e.a.toNat
+def sprojOff (e : N) : Nat := e.b.toNat
+def sprojVar (e : N) : Nat := (intAt 0 e.ys).toNat
+-- the scalar is one byte (lib/lrc/Pack.rsd); Lean has the width in the bound variable's type
+def sprojByte (e : N) : Bool := e.c == 1
+
+-- Basic:210 `fap c ys`: c is the index of a function of the image
+def mkFap (f : Nat) (ys : List Int) : N := { n0 opFap with a := (f : Int), ys := ys }
+-- the same call written `depth` calls below its place (`fapDepth`)
+def mkFapAt (depth : Nat) (f : Nat) (ys : List Int) : N := { n0 opFap with a := (f : Int), b := (depth : Int), ys := ys }
+def fapFn (e : N) : Nat := e.a.toNat
+def fapArgs (e : N) : List Int := e.ys
+-- How many calls deeper than its place this call stands, for the wire's fuel (the depth of calls):
+-- 0 as the producer writes it; an inlined body's calls are one deeper for each call that was
+-- replaced around them (lib/lrc/Inline.rsd). The callee runs at the fuel less 1 + this depth.
+def fapDepth (e : N) : Nat := e.b.toNat
+-- A call whose callee runs at the caller's own fuel (field b is -1): the call of a loop that the
+-- stage wrote as a function of its own (lib/lrc/FromWire.rsd, "Loops"). The wire's fold and
+-- fixpoint keep the fuel over their rounds (lean/rsd-cert/Residua/Bootstrap/SCM.lean
+-- `evalSCMFold`, `evalSCMFix`), so the loop function is entered with the fuel of the function it
+-- was lifted from, and its call of itself in tail position is a jump that counts nothing down.
+-- The callee still takes fuel as an image function does: its own calls of image functions run at
+-- that fuel less 1. Inlining the caller k calls deep adds k to b (lib/lrc/Inline.rsd `ilDeepen`),
+-- which makes the call an ordinary one at depth k - 1: the fuel the lifted loop had.
+def mkFapSame (f : Nat) (ys : List Int) : N := { n0 opFap with a := (f : Int), b := -1, ys := ys }
+def fapSame (e : N) : Bool := e.op == opFap && e.b < 0
+-- The stage's own list functions (lib/lrc/FromWire.rsd `helperDecls`) follow the nImg functions
+-- of the image. They take no fuel: the wire's fuel is the depth of source calls, and they stand
+-- for one operator. A function after them is a loop lifted out of an image function
+-- (lib/lrc/FromWire.rsd "Loops"; it is entered by `mkFapSame`), a second form of an image function
+-- (lib/lrc/Trmc.rsd) or a clone of one (lib/lrc/Range.rsd): each takes fuel as an image function does.
+def nHelpers : Nat := 20
+def isOwnFn (nImg f : Nat) : Bool := f >= nImg && f < nImg + nHelpers
+
+-- An operator of the wire language: `p` is its code (lib/lrc/Prim.rsd), `i1`, `i2` its immediates.
+def mkPrim (p : Nat) (i1 i2 : Int) (ys : List Int) : N := { n0 opPrim with a := (p : Int), b := i1, c := i2, ys := ys }
+def primOp (e : N) : Nat := e.a.toNat
+def primArgs (e : N) : List Int := e.ys
+
+-- Basic:220 `lit v`, Basic:152 LitVal
+def mkLit (v : Int) : N := { n0 opLit with a := v }
+def mkLitStr (v : String) : N := { n0 opLitStr with s := v }
+-- A string literal of the wire, by its UTF-8 bytes (the frontend's subset builds no String from
+-- bytes). They sit in a node of their own under the expression, so that nothing that walks an
+-- expression's arguments meets them; no bytes is the empty string.
+-- the longest literal, in bytes, that the emitter writes (lib/lrc/Emit.rsd builds one that the pool
+-- does not hold byte by byte). The translation refuses a longer string (lib/lrc/FromWire.rsd
+-- `Residue.literalTooLong`) and no pass makes a longer constant cell (lib/lrc/Closed.rsd).
+def litMax : Nat := 4000
+
+def mkLitBytes (bs : List Int) : N := { n0 opLitStr with kids := [{ n0 opLit with ys := bs }] }
+def litBytes (e : N) : List Int := (kidAt 0 e.kids).ys
+-- A constant cell (lib/lrc/Closed.rsd): a constructor without object fields whose scalar area is
+-- known when the program is compiled. It is a literal as a string is and has the same op; field
+-- a = 1 tells them apart, b is the constructor's tag, the first kid holds the bytes of the scalar
+-- area, the second its fields as triples offset, type, value.
+def mkLitObj (cidx : Nat) (bs : List Int) (fields : List Int) : N :=
+  { n0 opLitStr with a := 1, b := (cidx : Int), kids := [{ n0 opLit with ys := bs }, { n0 opLit with ys := fields }] }
+def isLitObj (e : N) : Bool := e.op == opLitStr && e.a == 1
+def litObjTag (e : N) : Nat := e.b.toNat
+def litObjFields (e : N) : List Int := (kidAt 1 e.kids).ys
+
+-- Basic:222 `isShared x`
+def mkIsShared (x : Nat) : N := { n0 opIsShared with ys := [(x : Int)] }
+def isSharedVar (e : N) : Nat := (intAt 0 e.ys).toNat
+
+/-! ## Parameters (Basic:235 Param): triples x, borrow, ty in one list -/
+
+structure Param where
+  x : Nat
+  borrow : Bool
+  ty : Int
+  deriving BEq, Inhabited
+
+def paramsOf : List Int → List Param
+  | x :: bw :: ty :: rest => { x := x.toNat, borrow := bw == 1, ty := ty } :: paramsOf rest
+  | _ => []
+
+def paramsTo : List Param → List Int
+  | [] => []
+  | p :: ps => (p.x : Int) :: (if p.borrow then 1 else 0) :: p.ty :: paramsTo ps
+
+/-! ## Bodies (Basic:248) -/
+
+-- Basic:250 `vdecl x ty e b`. `extra` lists further results of a `fap`: x2, ty2, x3, ty3, ...
+def mkVDecl (x : Nat) (ty : Int) (e : N) (b : N) : N :=
+  { n0 opVDecl with a := (x : Int), b := ty, kids := [e, b] }
+def mkVDecls (x : Nat) (ty : Int) (extra : List Int) (e : N) (b : N) : N :=
+  { n0 opVDecl with a := (x : Int), b := ty, ys := extra, kids := [e, b] }
+def vdeclVar (n : N) : Nat := n.a.toNat
+def vdeclTy (n : N) : Int := n.b
+def vdeclExtra (n : N) : List Int := n.ys
+def vdeclExpr (n : N) : N := kidAt 0 n.kids
+
+-- every variable a `vdecl` binds, with its type: pairs x, ty
+def vdeclBinds (n : N) : List Int := n.a :: n.b :: n.ys
+
+-- Basic:252 `jdecl j xs v b`: v is the join point's body
+def mkJDecl (j : Nat) (xs : List Param) (v : N) (b : N) : N :=
+  { n0 opJDecl with a := (j : Int), ys := paramsTo xs, kids := [v, b] }
+def jdeclId (n : N) : Nat := n.a.toNat
+def jdeclParams (n : N) : List Param := paramsOf n.ys
+def jdeclBody (n : N) : N := kidAt 0 n.kids
+
+-- Basic:255 `set x i y b`
+def mkSet (x : Nat) (i : Nat) (y : Int) (b : N) : N :=
+  { n0 opSet with a := (x : Int), b := (i : Int), ys := [y], kids := [b] }
+def setVar (n : N) : Nat := n.a.toNat
+def setIdx (n : N) : Nat := n.b.toNat
+def setArg (n : N) : Int := intAt 0 n.ys
+-- The same with the field's index in a variable i: the field a destination-passing function
+-- fills (lib/lrc/Trmc.rsd). Lean's IR has no such form. c = 1, and i follows y in ys.
+def mkSetAt (x : Nat) (i : Nat) (y : Int) (b : N) : N :=
+  { n0 opSet with a := (x : Int), c := 1, ys := [y, (i : Int)], kids := [b] }
+def setIsAt (n : N) : Bool := n.c == 1
+def setAtVar (n : N) : Nat := (intAt 1 n.ys).toNat
+
+-- Basic:256 `setTag x cidx b`
+def mkSetTag (x : Nat) (cidx : Nat) (b : N) : N :=
+  { n0 opSetTag with a := (x : Int), b := (cidx : Int), kids := [b] }
+
+-- Basic:261 `sset x n offset y ty b`
+def mkSSet (x : Nat) (n : Nat) (offset : Nat) (y : Nat) (ty : Int) (b : N) : N :=
+  { n0 opSSet with a := (x : Int), b := (n : Int), c := (offset : Int), d := ty, ys := [(y : Int)], kids := [b] }
+def ssetVar (n : N) : Nat := n.a.toNat
+def ssetN (n : N) : Nat := n.b.toNat
+def ssetOff (n : N) : Nat := n.c.toNat
+def ssetArg (n : N) : Nat := (intAt 0 n.ys).toNat
+
+-- Basic:264 `inc x n c persistent b`, Basic:267 `dec`. c: the value may be a scalar, test before counting.
+def mkInc (x : Nat) (n : Nat) (c : Bool) (persistent : Bool) (b : N) : N :=
+  { n0 opInc with a := (x : Int), b := (n : Int), c := (if c then 1 else 0), d := (if persistent then 1 else 0), kids := [b] }
+def mkDec (x : Nat) (n : Nat) (c : Bool) (persistent : Bool) (b : N) : N :=
+  { n0 opDec with a := (x : Int), b := (n : Int), c := (if c then 1 else 0), d := (if persistent then 1 else 0), kids := [b] }
+def rcVar (n : N) : Nat := n.a.toNat
+def rcN (n : N) : Nat := n.b.toNat
+def rcCheck (n : N) : Bool := n.c == 1
+def rcPersistent (n : N) : Bool := n.d == 1
+
+-- Basic:268 `del x b`
+def mkDel (x : Nat) (b : N) : N := { n0 opDel with a := (x : Int), kids := [b] }
+
+-- Basic:269 `mdata d b`. The one datum: a fuel guard. Execution fails with the fuel status when
+-- the function's fuel is at most `depth`; it stands where a source call was replaced by inline code.
+def mkGuard (depth : Nat) (b : N) : N := { n0 opMData with a := 1, b := (depth : Int), kids := [b] }
+def guardDepth (n : N) : Nat := n.b.toNat
+
+-- Basic:270 `case tid x xType alts`
+def mkCase (x : Nat) (xType : Int) (alts : List N) : N :=
+  { n0 opCase with a := (x : Int), b := xType, kids := alts }
+def caseVar (n : N) : Nat := n.a.toNat
+def caseTy (n : N) : Int := n.b
+def caseAlts (n : N) : List N := n.kids
+
+-- Basic:271 `ret x`
+def mkRet (ys : List Int) : N := { n0 opRet with ys := ys }
+def retArgs (n : N) : List Int := n.ys
+
+-- Basic:273 `jmp j ys`
+def mkJmp (j : Nat) (ys : List Int) : N := { n0 opJmp with a := (j : Int), ys := ys }
+def jmpId (n : N) : Nat := n.a.toNat
+def jmpArgs (n : N) : List Int := n.ys
+
+-- Basic:274 `unreachable`
+def mkUnreachable : N := n0 opUnreachable
+
+/-! ## Alternatives (Basic:244) -/
+
+def mkAltCtor (i : CtorInfo) (b : N) : N := { withInfo (n0 opAltCtor) i with kids := [b] }
+def mkAltDefault (b : N) : N := { n0 opAltDefault with kids := [b] }
+-- Basic:340 AltCore.body, Basic:344 setBody, Basic:356 Alt.isDefault
+def altBody (alt : N) : N := kidAt 0 alt.kids
+def altSetBody (alt : N) (b : N) : N := { alt with kids := [b] }
+def altIsDefault (alt : N) : Bool := alt.op == opAltDefault
+
+-- Basic:606 mkIf: a case on a `uint8`, the type Lean gives the result of `isShared`. The
+-- alternative for `false` comes first. Type 0 is Bool: constructor 0 false, constructor 1 true.
+def tyU8 : Int := 10
+-- The bytes a scalar of IR type `ty` takes in an object's scalar area, where lib/lrc/Pack.rsd found that every
+-- value stored there has the type: lean.h's uint8, uint16 and uint32 (the codes 10, 11, 12: `tyU8` here,
+-- `tyU16C` and `tyU32C` below); any other scalar is a word of 8 bytes. A `sset` names the type (field `d`); a
+-- `sproj` names the bytes it reads in field `c`: 1, 2 or 4, and 0 for a word.
+def tyWidth (ty : Int) : Nat := if ty == 10 then 1 else if ty == 11 then 2 else if ty == 12 then 4 else 8
+def tyOfWidth (w : Nat) : Int := if w == 1 then 10 else if w == 2 then 11 else if w == 4 then 12 else 0
+def sprojWidth (e : N) : Nat := if e.c == 1 then 1 else if e.c == 2 then 2 else if e.c == 4 then 4 else 8
+def boolInfo (v : Nat) : CtorInfo := { cidx := v, size := 0, ssize := 0, tid := 0 }
+def mkIf (x : Nat) (t e : N) : N :=
+  mkCase x tyU8 [mkAltCtor (boolInfo 0) e, mkAltCtor (boolInfo 1) t]
+-- the same on a boolean of the wire, which is an i64 word
+def mkIfW (x : Nat) (t e : N) : N :=
+  mkCase x tyI64 [mkAltCtor (boolInfo 0) e, mkAltCtor (boolInfo 1) t]
+
+/-! ## Shape of a body -/
+
+-- Basic:297 FnBody.isTerminal
+def isTerminal (n : N) : Bool :=
+  n.op == opCase || n.op == opRet || n.op == opJmp || n.op == opUnreachable
+
+-- Basic:304 FnBody.body: the rest of the body after one instruction
+def bodyOf (n : N) : N :=
+  if n.op == opVDecl || n.op == opJDecl then kidAt 1 n.kids
+  else if isTerminal n then n
+  else kidAt 0 n.kids
+
+-- Basic:317 FnBody.setBody
+def setBody (n : N) (b : N) : N :=
+  if n.op == opVDecl || n.op == opJDecl then { n with kids := [kidAt 0 n.kids, b] }
+  else if isTerminal n then n
+  else { n with kids := [b] }
+
+-- Basic:364 flattenAux, Basic:368 FnBody.flatten: the instructions before the terminal, in
+-- order, each with its rest cut off, and the terminal.
+structure Flat where
+  bs : List N
+  term : N
+  deriving Inhabited
+
+partial def flattenAux (n : N) (acc : List N) : Flat :=
+  if isTerminal n then { bs := acc.reverse, term := n }
+  else flattenAux (bodyOf n) (setBody n mkUnreachable :: acc)
+
+def flatten (n : N) : Flat := flattenAux n []
+
+-- Basic:379 reshape
+def reshapeRev : List N → N → N
+  | [], b => b
+  | i :: is, b => reshapeRev is (setBody i b)
+
+def reshape (bs : List N) (term : N) : N := reshapeRev bs.reverse term
+
+-- Basic:382 modifyJPs has no counterpart: rsdc admits no function-typed parameter of a user
+-- function, so a pass that rewrites join point bodies maps over `bs` itself, with `jdeclSetBody`.
+def jdeclSetBody (n : N) (v : N) : N := { n with kids := [v, kidAt 1 n.kids] }
+
+/-! ## Declarations (Basic:400 Decl)
+
+`ext` marks a declaration without a body (Basic:402 `extern`): only its signature is used. -/
+structure Decl where
+  f : Nat
+  xs : List Param
+  rets : List Int
+  body : N
+  ext : Bool
+  deriving Inhabited
+
+def declAt : Nat → List Decl → Option Decl
+  | _, [] => none
+  | f, d :: ds => if d.f == f then some d else declAt f ds
+
+/-! ## The declarations by function number
+
+A program's declaration i is function i: the image's functions in order, then the stage's own. A
+pass that looks a callee up does it in a 32-way tree of the declarations, as Lean's
+`PersistentArray` holds them (src/lean/Lean/Data/PersistentArray.lean: `PersistentArrayNode`, the
+same tree without the tail), and not by walking the list, which is what `declAt` does: with the
+image's 16718 declarations of the chain's front end every lookup in the list was half the
+program. The tree has four levels, written as lists of lists (rsdc keeps a list of structures out
+of a recursive structure's fields): declaration i is at
+root[i / 32768][i / 1024 % 32][i / 32 % 32][i % 32], which holds 1048576 declarations. A list that
+is not in the order of the function numbers, or is longer, is kept as a list (`rest`) and
+searched as before. -/
+
+structure DeclTab where
+  root : List (List (List (List Decl)))
+  size : Nat
+  -- the declarations of a list that the tree does not hold
+  rest : List Decl
+  deriving Inhabited
+
+def dtAt1 : Nat → List Decl → Option Decl
+  | _, [] => none
+  | 0, d :: _ => some d
+  | i + 1, _ :: ds => dtAt1 i ds
+
+def dtAt2 : Nat → List (List Decl) → List Decl
+  | _, [] => []
+  | 0, x :: _ => x
+  | i + 1, _ :: xs => dtAt2 i xs
+
+def dtAt3 : Nat → List (List (List Decl)) → List (List Decl)
+  | _, [] => []
+  | 0, x :: _ => x
+  | i + 1, _ :: xs => dtAt3 i xs
+
+def dtAt4 : Nat → List (List (List (List Decl))) → List (List (List Decl))
+  | _, [] => []
+  | 0, x :: _ => x
+  | i + 1, _ :: xs => dtAt4 i xs
+
+-- the declaration of function f
+def dtFind (tab : DeclTab) (f : Nat) : Option Decl :=
+  if !tab.rest.isEmpty then declAt f tab.rest
+  else if f >= tab.size then none
+  else dtAt1 (f % 32) (dtAt2 (f / 32 % 32) (dtAt3 (f / 1024 % 32) (dtAt4 (f / 32768) tab.root)))
+
+def dtPut1 : Nat → Decl → List Decl → List Decl
+  | _, _, [] => []
+  | 0, d, _ :: ds => d :: ds
+  | i + 1, d, x :: ds => x :: dtPut1 i d ds
+
+def dtPut2 (f : Nat) (d : Decl) : Nat → List (List Decl) → List (List Decl)
+  | _, [] => []
+  | 0, x :: xs => dtPut1 (f % 32) d x :: xs
+  | i + 1, x :: xs => x :: dtPut2 f d i xs
+
+def dtPut3 (f : Nat) (d : Decl) : Nat → List (List (List Decl)) → List (List (List Decl))
+  | _, [] => []
+  | 0, x :: xs => dtPut2 f d (f / 32 % 32) x :: xs
+  | i + 1, x :: xs => x :: dtPut3 f d i xs
+
+def dtPut4 (f : Nat) (d : Decl) : Nat → List (List (List (List Decl))) → List (List (List (List Decl)))
+  | _, [] => []
+  | 0, x :: xs => dtPut3 f d (f / 1024 % 32) x :: xs
+  | i + 1, x :: xs => x :: dtPut4 f d i xs
+
+def declListSet : List Decl → Decl → List Decl
+  | [], _ => []
+  | x :: ds, d => if x.f == d.f then d :: ds else x :: declListSet ds d
+
+-- the declaration of function d.f replaced by d
+def dtSet (tab : DeclTab) (d : Decl) : DeclTab :=
+  if !tab.rest.isEmpty then { tab with rest := declListSet tab.rest d }
+  else if d.f >= tab.size then tab
+  else { tab with root := dtPut4 d.f d (d.f / 32768) tab.root }
+
+-- up to n elements off the front of a list (reversed in `acc`), and what is left: one for each level
+structure DtCut1 where
+  head : List Decl
+  rest : List Decl
+  deriving Inhabited
+
+def dtCut1 : Nat → List Decl → List Decl → DtCut1
+  | 0, acc, ds => { head := acc.reverse, rest := ds }
+  | _, acc, [] => { head := acc.reverse, rest := [] }
+  | n + 1, acc, d :: ds => dtCut1 n (d :: acc) ds
+
+partial def dtChunk1 (ds : List Decl) (acc : List (List Decl)) : List (List Decl) :=
+  if ds.isEmpty then acc.reverse
+  else
+    let c := dtCut1 32 [] ds
+    dtChunk1 c.rest (c.head :: acc)
+
+structure DtCut2 where
+  head : List (List Decl)
+  rest : List (List Decl)
+  deriving Inhabited
+
+def dtCut2 : Nat → List (List Decl) → List (List Decl) → DtCut2
+  | 0, acc, xs => { head := acc.reverse, rest := xs }
+  | _, acc, [] => { head := acc.reverse, rest := [] }
+  | n + 1, acc, x :: xs => dtCut2 n (x :: acc) xs
+
+partial def dtChunk2 (xs : List (List Decl)) (acc : List (List (List Decl))) : List (List (List Decl)) :=
+  if xs.isEmpty then acc.reverse
+  else
+    let c := dtCut2 32 [] xs
+    dtChunk2 c.rest (c.head :: acc)
+
+structure DtCut3 where
+  head : List (List (List Decl))
+  rest : List (List (List Decl))
+  deriving Inhabited
+
+def dtCut3 : Nat → List (List (List Decl)) → List (List (List Decl)) → DtCut3
+  | 0, acc, xs => { head := acc.reverse, rest := xs }
+  | _, acc, [] => { head := acc.reverse, rest := [] }
+  | n + 1, acc, x :: xs => dtCut3 n (x :: acc) xs
+
+partial def dtChunk3 (xs : List (List (List Decl))) (acc : List (List (List (List Decl)))) : List (List (List (List Decl))) :=
+  if xs.isEmpty then acc.reverse
+  else
+    let c := dtCut3 32 [] xs
+    dtChunk3 c.rest (c.head :: acc)
+
+-- is declaration i function i, for every i
+def declsDense : Nat → List Decl → Bool
+  | _, [] => true
+  | i, d :: ds => d.f == i && declsDense (i + 1) ds
+
+def dtOfList (ds : List Decl) : DeclTab :=
+  if declsDense 0 ds && ds.length <= 1048576 then
+    { root := dtChunk3 (dtChunk2 (dtChunk1 ds [] ) []) [], size := ds.length, rest := [] }
+  else { root := [], size := 0, rest := ds }
+
+-- the declarations of the tree in order
+def dtFlat2 : List (List Decl) → List Decl
+  | [] => []
+  | x :: xs => x ++ dtFlat2 xs
+
+def dtFlat3 : List (List (List Decl)) → List Decl
+  | [] => []
+  | x :: xs => dtFlat2 x ++ dtFlat3 xs
+
+def dtFlat4 : List (List (List (List Decl))) → List Decl
+  | [] => []
+  | x :: xs => dtFlat3 x ++ dtFlat4 xs
+
+def dtToList (tab : DeclTab) : List Decl :=
+  if !tab.rest.isEmpty then tab.rest else dtFlat4 tab.root
+
+end Lrc
+
+namespace Lrc
+
+/-! ## The lambda-RC IR at revision 2 (WAIST-0 r2)
+
+lib/lrc/Ir.rsd's `Lrc.N` plus the six forms it does not have (its header names them: Basic:206,
+258, 212, 214, 217, 219): `uproj`, `uset`, `pap`, `ap`, `box`, `unbox`. Each form is an
+operation code on the same node structure `Lrc.N`, the way Ir.rsd makes its own forms. The r1
+codes are unchanged (expressions 30 to 39, bodies 1 to 13, alternatives 20 and 21); r2 adds
+expression codes 40 to 44 and body code 14. A program of the r1 IR is one that uses none of the
+r2 codes and no usize constructor (`Lrc.Sem.r1Node`), and a usize count rides in `kids` so that
+an r1 constructor is an r2 constructor unchanged. closure_claim = 0.
+
+The forms are ported, never invented:
+* src/lean/Lean/Compiler/IR/Basic.lean, elan leanprover--lean4---v4.14.0 (commit 410fab728470):
+  `Expr` :194-222, `FnBody` :250-274, `CtorInfo` with its `usize` count :174-178 and `isRef`
+  counting it :187-191.
+* src/lean/Lean/Compiler/IR/EmitC.lean 4.14.0: `emitUSet` :309, `emitUProj` :381,
+  `emitPartialApp` :430-437, `emitApp` :438-443, `emitBoxFn`/`emitBox`/`emitUnbox` :445-459,
+  `emitVDecl` :502-517 (an `unbox`'s type is the bound variable's :515, so it is kept in the
+  node, field `a`).
+* include/lean/lean.h 4.14.0: `lean_box`/`lean_unbox` :290-291, `lean_ctor_get_usize` :572,
+  `lean_ctor_set_usize` :602, `LeanClosure` 245 :70, `lean_alloc_closure` :638-647,
+  `lean_closure_get`/`lean_closure_set` :648-655; src/include/lean/lean.h 4.14.0:
+  `lean_box_uint32`/`lean_unbox_uint32` :1948-1967, `lean_box_uint64`/`lean_unbox_uint64`
+  :1970-1978, `lean_box_usize`/`lean_unbox_usize` :1980-1988, `lean_box_float`/`unbox_float`
+  :1990-1999.
+* src/runtime/apply.cpp 4.14.0 (generated): `fix_args` and `lean_apply_1`..`lean_apply_16`,
+  `lean_apply_m`, `lean_apply_n` — see the `.ap` arm below for what each does.
+* Ullrich and de Moura, "Counting Immutable Beans" (IFL 2019): lambda-RC with pap and
+  application. -/
+
+-- expression operation codes (r1 ends at `opIsShared` = 39)
+def opPap : Nat := 40
+def opAp : Nat := 41
+def opBox : Nat := 42
+def opUnbox : Nat := 43
+def opUProj : Nat := 44
+-- body operation codes (r1 ends at `opUnreachable` = 13)
+def opUSet : Nat := 14
+
+-- lean.h:70 `LeanClosure`: the tag of a closure object in the heap
+def cloTag : Nat := 245
+
+-- the carried scalar type codes (lib/lrc/Ir.rsd `tyU8` :325, `tyIsScalar` :48: scalars are 0 or >= 10)
+def tyU8C : Int := 10
+def tyU16C : Int := 11
+def tyU32C : Int := 12
+def tyUSizeC : Int := 13
+def tyFloatC : Int := 14
+
+/-! ### Expressions -/
+
+-- Basic:212 `Expr.pap c ys`: a closure of function c (its index, as `fap`'s) holding the captured
+-- arguments `ys`, strictly fewer than c's arity (lean.h:639 `assert(num_fixed < arity)`).
+def mkPap (f : Nat) (ys : List Int) : N := { n0 opPap with a := (f : Int), ys := ys }
+def papFn (e : N) : Nat := e.a.toNat
+def papArgs (e : N) : List Int := e.ys
+
+-- Basic:214 `Expr.ap x ys`: the application of the closure value `x` to `ys`.
+def mkAp (x : Nat) (ys : List Int) : N := { n0 opAp with a := (x : Int), ys := ys }
+def apVar (e : N) : Nat := e.a.toNat
+def apArgs (e : N) : List Int := e.ys
+
+-- Basic:217 `Expr.box ty x`: the scalar `x` of type `ty` as an object. For usize, uint64 and
+-- float a constructor of tag 0 with one scalar lane (lean.h:1970, :1980, :1990); for the smaller
+-- scalar types the tagged word (lean.h:290, :1948 on 64-bit).
+def mkBox (ty : Int) (x : Nat) : N := { n0 opBox with a := ty, ys := [(x : Int)] }
+def boxTy (e : N) : Int := e.a
+def boxVar (e : N) : Nat := (intAt 0 e.ys).toNat
+
+-- Basic:219 `Expr.unbox x`: the scalar of the object word `x`. The Expr carries no type; EmitC
+-- reads the bound variable's (`emitVDecl` :515 `emitUnbox z t x`), which the node keeps in `a`.
+def mkUnbox (ty : Int) (x : Nat) : N := { n0 opUnbox with a := ty, ys := [(x : Int)] }
+def unboxTy (e : N) : Int := e.a
+def unboxVar (e : N) : Nat := (intAt 0 e.ys).toNat
+
+-- Basic:206 `Expr.uproj i x`: the usize word at `sizeof(void*)*i` of `x` (lean.h:572
+-- `lean_ctor_get_usize`; i counts from the object fields, so usize slot j stands at index
+-- size + j).
+def mkUProj (i : Nat) (x : Nat) : N := { n0 opUProj with a := (i : Int), ys := [(x : Int)] }
+def uprojIdx (e : N) : Nat := e.a.toNat
+def uprojVar (e : N) : Nat := (intAt 0 e.ys).toNat
+
+/-! ### Bodies -/
+
+-- Basic:258 `FnBody.uset x i y b`: the usize word `y` at `sizeof(void*)*i` of `x`; same shape as
+-- `mkSet` (a = x, b = i, ys = [y], kids = [b]).
+def mkUSet (x : Nat) (i : Nat) (y : Int) (b : N) : N :=
+  { n0 opUSet with a := (x : Int), b := (i : Int), ys := [y], kids := [b] }
+def usetVar (n : N) : Nat := n.a.toNat
+def usetIdx (n : N) : Nat := n.b.toNat
+def usetArg (n : N) : Nat := (intAt 0 n.ys).toNat
+
+/-! ### The usize constructor count -/
+
+-- Basic:174 `CtorInfo` has a `usize` count between `size` and `ssize` that our port dropped (the
+-- wire has none). The count rides in `kids`: `mkUCtor i u ys` is `ctor i ys` whose first kid is
+-- the literal count. An r1 constructor has no kids, so `ctorUsize` reads 0 for it and an r1
+-- program is an r2 program unchanged.
+def mkUCtor (i : CtorInfo) (usize : Nat) (ys : List Int) : N :=
+  { withInfo (n0 opCtor) i with ys := ys, kids := [mkLit (usize : Int)] }
+def ctorUsize (e : N) : Nat := (kidAt 0 e.kids).a.toNat
+
+end Lrc

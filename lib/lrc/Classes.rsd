@@ -1,0 +1,444 @@
+-- LRC: which objects may be one another, and so which constructors an object may have.
+-- closure_claim = 0.
+--
+-- Why. rsdc numbers the constructors inside each inductive type and the node record carries only
+-- that number (docs/OBJECT-ABI.md "Cib.Heap node"), so two types of one image share tags. A match
+-- whose last alternative is not tested (`if n.f0 == 0 then A else B`, B reads the fields of the
+-- type's other constructor) is decided by lib/lrc/FromWire.rsd only when the image has one tag left;
+-- with several types it has several. The source's types are not on the wire. This module finds a
+-- partition of the objects that the source's types refine: it puts two objects in one class when
+-- the code lets one stand where the other stands. Then the constructors of a class are the ones
+-- built into it, and the alternative left over is decided inside the class.
+--
+-- Method: unification of classes over the whole image, as type inference does it without
+-- generalisation (Milner, "A theory of type polymorphism in programming", JCSS 1978, algorithm W
+-- restricted to monomorphic terms; the classes are kept in a union-find forest with union by
+-- size, Tarjan, JACM 1975). One walk over every body:
+--   x := ctor ys      a field of x's class and the argument are one class (by field index; for a
+--                     sum by constructor and field index); a list cell and its tail are one class
+--   x := node ys      (`primNodeNew`) a child of x's class and the argument are one class, by tag
+--                     and the child's number, and only the children: the string and the list of
+--                     integers a node may hold are no objects of the source's inductive types;
+--                     children given as one list are the class of the tag's list of children;
+--                     the node's tag is added to the class
+--   z := proj[i] x    z is the class of field i of x's class
+--   z := kids x       (`primNodeKids`) z is the class of the list of children of x's tag
+--   call, jump, ret   an argument and its parameter are one class, a result and what is returned
+--   the stage's list functions: the result of drop, reverse and append is its arguments' class
+--   an array (lib/lrc/FromWire.rsd "Arrays"): push and set are a cell of the element before the
+--                     array; the array of a list, the list of an array and a slice are the
+--                     argument's class; an element read at an index is the class of a cell's head
+-- A read of a child or of the children whose constructor is not known at the read waits: it is
+-- the class of child i (of the list of children) of the one tag its node's class leaves when the
+-- tags tested before the read are taken away, and it is joined when there is one such tag. Where
+-- a class and tag has a list of children, each of its numbered children is an element of that
+-- list. The joins, these reads and these lists are taken round and round until nothing changes
+-- (the least solution). A read whose node's class
+-- leaves no tag then stands where no object arrives: by induction on a run, the first read that
+-- an object reached with a tag outside its class would have every earlier read joined rightly,
+-- and then the object's constructor is in the class. A read left with several tags is not
+-- joined, and the user of the classes refuses the image (lib/lrc/FromWire.rsd "Layout").
+-- Nothing else moves an object. The walk runs on the image as lib/lrc/FromWire.rsd writes it,
+-- before the nodes are laid out and before any pass. Unification joins at least what flows together, so every object of a class
+-- built by the code has one of the class's tags; two source types may fall into one class (a
+-- function used at both), which only leaves more tags to choose from.
+--
+-- A projection written outside an alternative of its object (the read of a list element's box,
+-- of a cell known by a fact) has no constructor at hand and takes the field index alone. For a
+-- class of sums that would miss the fields keyed by constructor, so a class that holds both a
+-- sum's constructor and such a projection makes the whole result unusable (`bad`), and so does
+-- a class with list cells of both shapes.
+import AvlMap
+import Lib.Lrc.Prim
+
+namespace Lrc
+
+/-! ## The forest -/
+
+structure Oc where
+  -- an object's parent in the tree of its class; a root holds minus the size of its tree, and
+  -- an object that is absent is a root of size 1
+  par : Map
+  -- for a root, in the node's list: the kinds of constructor of the class (`clk*`)
+  kinds : Map
+  -- for a root, in the node's list: the tags of the node constructors of the class
+  tags : Map
+  -- for a root, in the node's list: pairs key, class of the field
+  flds : Map
+  -- the next unused object number
+  next : Nat
+  bad : Bool
+  deriving Inhabited
+
+def ockNode : Int := 1
+def ockCellScalar : Int := 2
+def ockCellObject : Int := 3
+def ockBox : Int := 4
+def ockSum : Int := 8
+def ockPlainProj : Int := 16
+
+-- variable x of function f; result i of function f; the objects made up for fields come after.
+-- A function with more variables than `ocVarSpan` leaves nothing to conclude (`ocDecls`).
+def ocVarSpan : Nat := 16777216
+def ocVar (f x : Nat) : Nat := f * ocVarSpan + x
+def ocRetId (f i : Nat) : Nat := 17592186044416 + f * 64 + i
+def ocFirstFresh : Nat := 35184372088832
+
+def oc0 : Oc := { par := map0 0, kinds := map0 0, tags := map0 0, flds := map0 0, next := ocFirstFresh, bad := false }
+
+partial def ocFind (c : Oc) (x : Nat) : Nat :=
+  let p := mapVal c.par (x : Int)
+  if p < 0 then x else ocFind c p.toNat
+
+def ocSize (c : Oc) (r : Nat) : Nat :=
+  let p := mapVal c.par (r : Int)
+  if p < -1 then (0 - p).toNat else 1
+
+def ocListOf (m : Map) (r : Nat) : List Int := mapXs m (r : Int)
+
+def ocUnionList : List Int → List Int → List Int
+  | [], ys => ys
+  | x :: xs, ys => ocUnionList xs (if ys.contains x then ys else x :: ys)
+
+def ocFldFind (key : Int) : List Int → Int
+  | k :: id :: rest => if k == key then id else ocFldFind key rest
+  | _ => -1
+
+def ocKindsBad (ks : List Int) : Bool :=
+  (ks.contains ockSum && ks.contains ockPlainProj) || (ks.contains ockCellScalar && ks.contains ockCellObject)
+
+structure OcMerge where
+  flds : List Int
+  work : List Int
+  deriving Inhabited
+
+-- the fields of the smaller class entered into the larger one's: a key both have makes the two
+-- field classes one (a pair for the work list)
+def ocMergeFlds : List Int → OcMerge → OcMerge
+  | k :: id :: rest, m =>
+    let got := ocFldFind k m.flds
+    if got >= 0 then ocMergeFlds rest { m with work := id :: got :: m.work }
+    else ocMergeFlds rest { m with flds := k :: id :: m.flds }
+  | _, m => m
+
+-- the pairs of `work` made one class each, and what follows from it
+partial def ocUnionGo (c : Oc) : List Int → Oc
+  | a :: b :: rest =>
+    let ra := ocFind c a.toNat
+    let rb := ocFind c b.toNat
+    if ra == rb then ocUnionGo c rest
+    else
+      let big := if ocSize c ra >= ocSize c rb then ra else rb
+      let small := if big == ra then rb else ra
+      let size : Int := ((ocSize c ra + ocSize c rb : Nat) : Int)
+      let par := mapPut (mapPut c.par (small : Int) (big : Int) 0 0 []) (big : Int) (0 - size) 0 0 []
+      let ks := ocUnionList (ocListOf c.kinds small) (ocListOf c.kinds big)
+      let ts := ocUnionList (ocListOf c.tags small) (ocListOf c.tags big)
+      let m := ocMergeFlds (ocListOf c.flds small) { flds := ocListOf c.flds big, work := [] }
+      ocUnionGo { c with par := par,
+                         kinds := mapPut c.kinds (big : Int) 1 0 0 ks,
+                         tags := mapPut c.tags (big : Int) 1 0 0 ts,
+                         flds := mapPut c.flds (big : Int) 1 0 0 m.flds,
+                         bad := c.bad || ocKindsBad ks } (m.work ++ rest)
+  | _ => c
+
+def ocUnion (c : Oc) (a b : Nat) : Oc := ocUnionGo c [(a : Int), (b : Int)]
+
+structure OcR where
+  c : Oc
+  id : Nat
+  deriving Inhabited
+
+-- the class of field `key` of x's class, made when the class has none yet
+def ocField (c : Oc) (x : Nat) (key : Nat) : OcR :=
+  let r := ocFind c x
+  let fs := ocListOf c.flds r
+  let got := ocFldFind (key : Int) fs
+  if got >= 0 then { c := c, id := got.toNat }
+  else { c := { c with flds := mapPut c.flds (r : Int) 1 0 0 ((key : Int) :: (c.next : Int) :: fs), next := c.next + 1 }, id := c.next }
+
+def ocAddKind (c : Oc) (x : Nat) (k : Int) : Oc :=
+  let r := ocFind c x
+  let ks := ocListOf c.kinds r
+  if ks.contains k then c else { c with kinds := mapPut c.kinds (r : Int) 1 0 0 (k :: ks), bad := c.bad || ocKindsBad (k :: ks) }
+
+def ocAddTag (c : Oc) (x : Nat) (t : Int) : Oc :=
+  let r := ocFind c x
+  let ts := ocListOf c.tags r
+  if ts.contains t then c else { c with tags := mapPut c.tags (r : Int) 1 0 0 (t :: ts) }
+
+/-! ## The walk -/
+
+-- the key of field `fi` of a constructor: a sum's fields are apart by constructor
+def ocKey (sumCidx : Int) (fi : Nat) : Nat := if sumCidx >= 0 then (sumCidx.toNat + 1) * 1024 + fi else fi
+
+-- the key of child i of the node constructor of tag t, and of the tag's list of children
+def ocNodeKey (t : Int) (i : Nat) : Nat := (t.toNat + 1) * 1024 + i
+def ocListKey : Nat := 1023
+
+structure OcS where
+  c : Oc
+  -- the projections taken by the field index alone: triples object, field index, result
+  projs : List Int
+  -- the reads that wait for their node's tag: for each, the node (as an object), the child's
+  -- number (`ocListKey` for the list of children), the result (as an object), then the tags
+  -- tested before the read
+  later : List (List Int)
+  -- the nodes with a list of children whose tag is known: pairs node (as an object), tag
+  lists : List Int
+  deriving Inhabited
+
+structure OcCx where
+  nImg : Nat
+  decls : DeclTab
+  self : Nat
+  deriving Inhabited
+
+-- the object fields of constructor x and their arguments
+def ocCtorFields (self x : Nat) (sumCidx : Int) : Nat → List Int → Oc → Oc
+  | _, [], c => c
+  | fi, y :: ys, c =>
+    if y < 0 then ocCtorFields self x sumCidx (fi + 1) ys c
+    else
+      let f := ocField c x (ocKey sumCidx fi)
+      ocCtorFields self x sumCidx (fi + 1) ys (ocUnion f.c f.id (ocVar self y.toNat))
+
+-- the children of the node x of tag t, child i first
+def ocNodeKids (self x : Nat) (t : Int) : Nat → List Int → Oc → Oc
+  | _, [], c => c
+  | i, y :: ys, c =>
+    if y < 0 then ocNodeKids self x t (i + 1) ys c
+    else
+      let f := ocField c x (ocNodeKey t i)
+      ocNodeKids self x t (i + 1) ys (ocUnion f.c f.id (ocVar self y.toNat))
+
+-- the allocation `e` of node x (lib/lrc/Prim.rsd `primNodeNew`: the children are the arguments from the eighth on)
+def ocNodeNew (self x : Nat) (e : N) (c : Oc) : Oc :=
+  let c1 := ocAddTag (ocAddKind c x ockNode) x e.b
+  if e.c >= 0 then ocNodeKids self x e.b 0 (e.ys.drop 7) c1
+  else
+    let f := ocField c1 x (ocNodeKey e.b ocListKey)
+    let l := intAt 7 e.ys
+    if l < 0 then f.c else ocUnion f.c f.id (ocVar self l.toNat)
+
+def ocCtor (self x : Nat) (i : CtorInfo) (ys : List Int) (c : Oc) : Oc :=
+  let isCell := (i.tid == 2 || i.tid == 3) && i.isRef
+  let kind : Int := if isCell then (if i.size == 1 then ockCellScalar else ockCellObject) else if i.tid >= 4096 then ockSum else ockBox
+  -- nil and the other constants of a list or a sum say nothing about the class's cells
+  let c1 := if (i.tid == 2 || i.tid == 3) && !i.isRef then c else ocAddKind c x kind
+  let c3 := ocCtorFields self x (if i.tid >= 4096 then (i.cidx : Int) else -1) 0 ys c1
+  let tail := intAt (i.size - 1) ys
+  if isCell && tail >= 0 then ocUnion c3 x (ocVar self tail.toNat) else c3
+
+-- the constructor of sum x in the alternative walked, or -1: pairs variable, constructor
+def ocSumOf (x : Int) : List Int → Int
+  | y :: k :: rest => if y == x then k else ocSumOf x rest
+  | _ => -1
+
+def ocArgs (self f : Nat) : List Int → List Param → Oc → Oc
+  | y :: ys, p :: ps, c =>
+    ocArgs self f ys ps (if y < 0 || tyIsScalar p.ty || tyIsIrr p.ty then c else ocUnion c (ocVar self y.toNat) (ocVar f p.x))
+  | _, _, c => c
+
+-- the variables a call binds and the callee's results: pairs x, ty
+def ocResults (self f : Nat) : Nat → List Int → Oc → Oc
+  | i, x :: ty :: rest, c =>
+    ocResults self f (i + 1) rest (if tyIsScalar ty || tyIsIrr ty then c else ocUnion c (ocVar self x.toNat) (ocRetId f i))
+  | _, _, c => c
+
+def ocRets (self : Nat) : Nat → List Int → List Int → Oc → Oc
+  | i, y :: ys, ty :: tys, c =>
+    ocRets self (i + 1) ys tys (if y < 0 || tyIsScalar ty || tyIsIrr ty then c else ocUnion c (ocVar self y.toNat) (ocRetId self i))
+  | _, _, _, c => c
+
+def ocJpParams (j : Int) : List N → List Param
+  | [] => []
+  | n :: ns => if n.a == j then jdeclParams n else ocJpParams j ns
+
+def ocCall (cx : OcCx) (n e : N) (c : Oc) : Oc :=
+  let f := fapFn e
+  let x := ocVar cx.self (vdeclVar n)
+  if isOwnFn cx.nImg f then
+    -- the stage's list functions (lib/lrc/FromWire.rsd `helperDecls`): len; drop k xs; rev xs acc; app a b;
+    -- the equality of two lists, whose result is a word
+    let k := f - cx.nImg
+    if k < 2 || k >= 8 then c
+    else if k < 4 then (if intAt 1 e.ys < 0 then c else ocUnion c x (ocVar cx.self (intAt 1 e.ys).toNat))
+    else
+      let c1 := if intAt 0 e.ys < 0 then c else ocUnion c x (ocVar cx.self (intAt 0 e.ys).toNat)
+      if intAt 1 e.ys < 0 then c1 else ocUnion c1 x (ocVar cx.self (intAt 1 e.ys).toNat)
+  else
+    match dtFind cx.decls f with
+    | some d => ocResults cx.self f 0 (vdeclBinds n) (ocArgs cx.self f e.ys d.xs c)
+    | none => { c with bad := true }
+
+-- the tags of variable h in a list of pairs h, tag
+def ocTagsFor (h : Int) : List Int → List Int
+  | x :: t :: rest => if x == h then t :: ocTagsFor h rest else ocTagsFor h rest
+  | _ => []
+
+-- the node tags the constructor alternatives of a case test
+def ocAltTags : List N → List Int
+  | [] => []
+  | alt :: alts => (if alt.op == opAltCtor && (infoOf alt).tid == 1 then [((infoOf alt).cidx : Int)] else []) ++ ocAltTags alts
+
+def ocPairs (h : Int) : List Int → List Int
+  | [] => []
+  | t :: ts => h :: t :: ocPairs h ts
+
+def ocMinus : List Int → List Int → List Int
+  | [], _ => []
+  | t :: ts, out => if out.contains t then ocMinus ts out else t :: ocMinus ts out
+
+mutual
+-- sums: the constructor of each sum whose alternative is being walked; jps: the join points in scope;
+-- known, excl: for a node variable, the tag of the alternative walked, and the tags the
+-- alternatives before a default one tested (pairs variable, tag)
+partial def ocGo (cx : OcCx) (rets : List Int) (sums known excl : List Int) (jps : List N) (s : OcS) (n : N) : OcS :=
+  if n.op == opVDecl then
+    let e := vdeclExpr n
+    let x := ocVar cx.self (vdeclVar n)
+    let s1 : OcS :=
+      if e.op == opCtor then { s with c := ocCtor cx.self x (infoOf e) e.ys s.c }
+      else if e.op == opPrim && primOp e == primNodeNew then
+        { s with c := ocNodeNew cx.self x e s.c, lists := (if e.c < 0 then (x : Int) :: e.b :: s.lists else s.lists) }
+      else if e.op == opProj then
+        let y := ocVar cx.self (projVar e)
+        let k := ocSumOf (projVar e : Int) sums
+        let f := ocField s.c y (ocKey k (projIdx e))
+        let c1 := ocUnion f.c x f.id
+        if k >= 0 then { s with c := c1 }
+        else { s with c := ocAddKind c1 y ockPlainProj, projs := (y : Int) :: (projIdx e : Int) :: (x : Int) :: s.projs }
+      else if e.op == opFap then { s with c := ocCall cx n e s.c }
+      else if e.op == opPrim && (primOp e == primArrPush || primOp e == primArrSet) then
+        -- An array with one element more, or with one replaced (lib/lrc/FromWire.rsd "Arrays"): for
+        -- the classes it is a cell of that element before the array. The immediate is the cell's shape.
+        let v := if primOp e == primArrPush then intAt 1 e.ys else intAt 2 e.ys
+        let cell : CtorInfo := if e.b == 0 then { cidx := 1, size := 1, ssize := 8, tid := 2 } else { cidx := 1, size := 2, ssize := 0, tid := 3 }
+        { s with c := ocCtor cx.self x cell (if e.b == 0 then [intAt 0 e.ys] else [v, intAt 0 e.ys]) s.c }
+      else if e.op == opPrim && (primOp e == primArrOfList || primOp e == primArrToList || primOp e == primArrSlice) then
+        -- the same elements, or some of them, in another form: the argument's class
+        (if intAt 0 e.ys < 0 then s else { s with c := ocUnion s.c x (ocVar cx.self (intAt 0 e.ys).toNat) })
+      else if e.op == opPrim && primOp e == primArrGet && e.b != 0 && intAt 0 e.ys >= 0 then
+        -- an element that is an object: the class of the head of the list's cells
+        let y := ocVar cx.self (intAt 0 e.ys).toNat
+        let f := ocField s.c y (ocKey (-1) 0)
+        { s with c := ocAddKind (ocUnion f.c x f.id) y ockPlainProj }
+      else if e.op == opPrim && (primOp e == primNodeKid || primOp e == primNodeKids) then
+        -- child i, or the children, of a node: joined at once under an alternative that gives
+        -- the tag, kept for later otherwise
+        let h := intAt 0 e.ys
+        let i : Int := if primOp e == primNodeKids then (ocListKey : Int) else e.b
+        let k := ocSumOf h known
+        if k >= 0 then
+          let f := ocField s.c (ocVar cx.self h.toNat) (ocNodeKey k i.toNat)
+          { s with c := ocUnion f.c x f.id,
+                   lists := (if primOp e == primNodeKids then (ocVar cx.self h.toNat : Int) :: k :: s.lists else s.lists) }
+        else { s with later := ((ocVar cx.self h.toNat : Int) :: i :: (x : Int) :: ocTagsFor h excl) :: s.later }
+      else s
+    ocGo cx rets sums known excl jps s1 (bodyOf n)
+  else if n.op == opJDecl then
+    let v := ocGo cx rets sums known excl (n :: jps) s (jdeclBody n)
+    ocGo cx rets sums known excl (n :: jps) v (bodyOf n)
+  else if n.op == opCase then ocAlts cx rets sums known excl jps (caseVar n : Int) (ocAltTags (caseAlts n)) (caseAlts n) s
+  else if n.op == opRet then { s with c := ocRets cx.self 0 n.ys rets s.c }
+  else if n.op == opJmp then { s with c := ocArgs cx.self cx.self n.ys (ocJpParams n.a jps) s.c }
+  else if isTerminal n then s
+  else ocGo cx rets sums known excl jps s (bodyOf n)
+-- `tested`: the node tags the case's constructor alternatives test
+partial def ocAlts (cx : OcCx) (rets : List Int) (sums known excl : List Int) (jps : List N) (x : Int) (tested : List Int) : List N → OcS → OcS
+  | [], s => s
+  | alt :: alts, s =>
+    let info := infoOf alt
+    let sums1 := if alt.op == opAltCtor && info.tid >= 4096 then x :: (info.cidx : Int) :: sums else sums
+    let known1 := if alt.op == opAltCtor && info.tid == 1 then x :: (info.cidx : Int) :: known else known
+    let excl1 := if alt.op == opAltDefault && !tested.isEmpty then ocPairs x tested ++ excl else excl
+    ocAlts cx rets sums known excl jps x tested alts (ocGo cx rets sums1 known1 excl1 jps s (altBody alt))
+end
+
+def ocDecls (nImg : Nat) (all : DeclTab) : List Decl → OcS → OcS
+  | [], s => s
+  | d :: ds, s =>
+    ocDecls nImg all ds (if d.ext then s
+      else if declMaxIndex d >= ocVarSpan then { s with c := { s.c with bad := true } }
+      else ocGo { nImg := nImg, decls := all, self := d.f } d.rets [] [] [] [] s d.body)
+
+structure OcT where
+  c : Oc
+  changed : Bool
+  deriving Inhabited
+
+-- one round over the projections by index alone: the tail of a cell is the cell's class
+def ocTailRound : List Int → OcT → OcT
+  | y :: fi :: x :: rest, t =>
+    let ks := ocListOf t.c.kinds (ocFind t.c y.toNat)
+    let tail : Int := if ks.contains ockCellScalar then 0 else if ks.contains ockCellObject then 1 else -1
+    if fi == tail && ocFind t.c x.toNat != ocFind t.c y.toNat then ocTailRound rest { c := ocUnion t.c x.toNat y.toNat, changed := true }
+    else ocTailRound rest t
+  | _, t => t
+
+partial def ocTails (projs : List Int) (c : Oc) : Oc :=
+  let t := ocTailRound projs { c := c, changed := false }
+  if t.changed then ocTails projs t.c else t.c
+
+-- one round over the child reads that wait: a read whose node's class leaves one tag is joined
+-- to that tag's child
+def ocLaterRound : List (List Int) → OcT → OcT
+  | [], t => t
+  | (h :: i :: x :: tested) :: rest, t =>
+    match ocMinus (ocListOf t.c.tags (ocFind t.c h.toNat)) tested with
+    | [tag] =>
+      let f := ocField t.c h.toNat (ocNodeKey tag i.toNat)
+      if ocFind f.c x.toNat != ocFind f.c f.id then ocLaterRound rest { c := ocUnion f.c x.toNat f.id, changed := true }
+      else ocLaterRound rest { t with c := f.c }
+    | _ => ocLaterRound rest t
+  | _ :: rest, t => ocLaterRound rest t
+
+-- the numbered children of tag t among the fields `fs` (pairs key, class) made the class `elem`
+def ocKidsToElem (t : Int) (elem : Nat) : List Int → OcT → OcT
+  | k :: id :: rest, a =>
+    if k >= (ocNodeKey t 0 : Int) && k < (ocNodeKey t ocListKey : Int) && ocFind a.c id.toNat != ocFind a.c elem then
+      ocKidsToElem t elem rest { c := ocUnion a.c id.toNat elem, changed := true }
+    else ocKidsToElem t elem rest a
+  | _, a => a
+
+-- node h of tag t has a list of children: each numbered child of the tag is an element of the
+-- list (the head of a cell of objects is the cell's field 0)
+def ocListOne (h : Nat) (t : Int) (a : OcT) : OcT :=
+  let fs := ocListOf a.c.flds (ocFind a.c h)
+  let l := ocFldFind (ocNodeKey t ocListKey : Int) fs
+  if l < 0 then a
+  else
+    let e := ocField a.c l.toNat 0
+    ocKidsToElem t e.id fs { a with c := e.c }
+
+-- one round over the nodes with a list of children: the ones whose tag was known, then the
+-- waiting reads of the children whose class leaves one tag
+def ocListRound : List Int → OcT → OcT
+  | h :: t :: rest, a => ocListRound rest (ocListOne h.toNat t a)
+  | _, a => a
+def ocListLater : List (List Int) → OcT → OcT
+  | [], a => a
+  | (h :: i :: _ :: tested) :: rest, a =>
+    if i != (ocListKey : Int) then ocListLater rest a
+    else
+      match ocMinus (ocListOf a.c.tags (ocFind a.c h.toNat)) tested with
+      | [tag] => ocListLater rest (ocListOne h.toNat tag a)
+      | _ => ocListLater rest a
+  | _ :: rest, a => ocListLater rest a
+
+-- the waiting reads, the tails and the lists of children, until none changes anything
+partial def ocSettle (later : List (List Int)) (lists : List Int) (projs : List Int) (c : Oc) : Oc :=
+  let a := ocLaterRound later { c := ocTails projs c, changed := false }
+  let b := ocListLater later (ocListRound lists a)
+  if b.changed then ocSettle later lists projs b.c else b.c
+
+-- the classes of the image's objects; `bad` when nothing may be concluded from them
+def classesOf (nImg : Nat) (decls : List Decl) : Oc :=
+  let s := ocDecls nImg (dtOfList decls) decls { c := oc0, projs := [], later := [], lists := [] }
+  ocSettle s.later s.lists s.projs s.c
+
+-- the tags a node held by variable x of function f may have: the ones built into its class
+def ocTagsOf (c : Oc) (f x : Nat) : List Int := ocListOf c.tags (ocFind c (ocVar f x))
+
+end Lrc

@@ -1,0 +1,146 @@
+import RscBase
+
+-- Integer interval abstract interpretation (Cousot and Cousot, POPL 1977),
+-- carried as checked typed-IR metadata (TIL, Tarditi et al., PLDI 1996).
+-- Claims never enter the derived-range cache. Unknown is conservative.
+-- Association lists cache each table node; references do not expand a DAG.
+-- All arithmetic below is checked BEFORE computing a result, including in
+-- the compiler's own signed-i64 implementation. closure_claim = 0.
+
+structure TfRange where
+  known : Bool
+  lo : Int
+  hi : Int
+  rest : List Int
+
+def tfUnknown : TfRange := { known := false, lo := 0, hi := 0, rest := [] }
+def tfMax : Int := 9223372036854775807
+def tfIn (x : Int) : Bool := x >= minI64 && x <= tfMax
+def tfRange (lo hi : Int) (rest : List Int) : TfRange :=
+  if tfIn lo && tfIn hi && lo <= hi then { known := true, lo := lo, hi := hi, rest := rest }
+  else tfUnknown
+
+def tfAddSafe (a b : Int) : Bool :=
+  if b > 0 then a <= tfMax - b else if b < 0 then a >= minI64 - b else true
+def tfSubSafe (a b : Int) : Bool :=
+  if b > 0 then a >= minI64 + b else if b < 0 then a <= tfMax + b else true
+
+-- ceil(minI64 / b), with positive b; no negation of minI64.
+def tfMinQuot (b : Int) : Int :=
+  let q := minI64 / b
+  if minI64 % b == 0 then q else q + 1
+
+def tfMulSafe (a b : Int) : Bool :=
+  if a == 0 || b == 0 then true
+  else if a > 0 then
+    if b > 0 then a <= tfMax / b else b >= tfMinQuot a
+  else if b > 0 then a >= tfMinQuot b
+  -- Euclidean division by a negative denominator rounds this positive
+  -- numerator upward: exactly the threshold needed for a negative a.
+  else a >= tfMax / b
+
+def tfMin (a b : Int) : Int := if a < b then a else b
+def tfMaxOf (a b : Int) : Int := if a > b then a else b
+
+def tfBinary (tag : Int) (a b : TfRange) : TfRange :=
+  if !a.known || !b.known then tfUnknown
+  else if tag == 6 then
+    if tfAddSafe a.lo b.lo && tfAddSafe a.hi b.hi then tfRange (a.lo + b.lo) (a.hi + b.hi) b.rest
+    else tfUnknown
+  else if tag == 7 then
+    if tfSubSafe a.lo b.hi && tfSubSafe a.hi b.lo then tfRange (a.lo - b.hi) (a.hi - b.lo) b.rest
+    else tfUnknown
+  else if tag == 8 then
+    if tfMulSafe a.lo b.lo && tfMulSafe a.lo b.hi && tfMulSafe a.hi b.lo && tfMulSafe a.hi b.hi then
+      let p := a.lo * b.lo
+      let q := a.lo * b.hi
+      let r := a.hi * b.lo
+      let s := a.hi * b.hi
+      tfRange (tfMin (tfMin p q) (tfMin r s)) (tfMaxOf (tfMaxOf p q) (tfMaxOf r s)) b.rest
+    else tfUnknown
+  else tfUnknown
+
+-- Five bytes bound annotation/reference indices below 2^35. An overlong
+-- index is ignored, without overflowing the compiler's own arithmetic.
+def tfIndex (bs : List Int) : Rd := readLebGo 5 0 1 bs
+
+def tfExpr (g : Dg) : Nat → List Int → TfRange
+  | 0, _ => tfUnknown
+  | k + 1, rest =>
+    match rest with
+    | 53 :: bs =>
+      let i := tfIndex bs
+      if i.ok != profile.cOk || i.n < 0 || i.n >= (g.n : Int) then tfUnknown
+      else
+        let r := factGet g.ranges i.n
+        if r.v != 1 then tfUnknown else tfRange r.hit.sa r.hit.sb i.rest
+    | 0 :: bs =>
+      let r := readLeafI64 bs
+      if r.ok == profile.cOk then tfRange r.n r.n r.rest else tfUnknown
+    | 9 :: bs =>
+      let a := tfExpr g k bs
+      if !a.known || a.lo == minI64 then tfUnknown else tfRange (0 - a.hi) (0 - a.lo) a.rest
+    | tag :: bs =>
+      if tag == 6 || tag == 7 || tag == 8 then
+        let a := tfExpr g k bs
+        if !a.known then tfUnknown else tfBinary tag a (tfExpr g k a.rest)
+      else tfUnknown
+    | [] => tfUnknown
+
+def tfRemember (g : Dg) (bs : List Int) : Dg :=
+  let r := tfExpr g 128 bs
+  if !r.known then g
+  else
+    match r.rest with
+    | [] => { g with ranges := factPut g.ranges (g.n : Int) r.lo r.hi }
+    | _ => g
+
+-- Signed LEB64. The tenth group is handled without constructing 2^63 as
+-- a positive signed-i64 value. Non-i64 encodings are ignored.
+def tfSignedGo : Nat → Int → Int → List Int → Rd
+  | 0, _, _, bs => rdFail profile.cBody bs
+  | _, _, _, [] => rdFail profile.cTrunc []
+  | k + 1, acc, place, b :: bs =>
+    if b < 0 || b > 255 then rdFail profile.cBody bs
+    else if b < 128 then rdOk (acc + (if b >= 64 then b - 128 else b) * place) bs
+    else
+      let acc2 := acc + (b - 128) * place
+      if k == 0 then
+        match bs with
+        | 0 :: tail => rdOk acc2 tail
+        | 127 :: tail => rdOk (acc2 + minI64) tail
+        | _ => rdFail profile.cBody bs
+      else tfSignedGo k acc2 (place * 128) bs
+
+def tfSigned (bs : List Int) : Rd := tfSignedGo 9 0 1 bs
+
+def tfAnnotation (g : Dg) (bs : List Int) : Dg :=
+  match bs with
+  | 1 :: 0 :: rest =>
+    let i := tfIndex rest
+    if i.ok != profile.cOk || i.n < 0 || i.n >= (g.n : Int) then g
+    else
+      let lo := tfSigned i.rest
+      let hi := tfSigned lo.rest
+      if lo.ok != profile.cOk || hi.ok != profile.cOk || lo.n > hi.n then g
+      else
+        match hi.rest with
+        | [] =>
+          let r := factGet g.ranges i.n
+          if r.v == 1 && lo.n <= r.hit.sa && hi.n >= r.hit.sb then
+            { g with certs := factPut g.certs i.n lo.n hi.n }
+          else g
+        | _ => g
+  | _ => g
+
+-- Only the exact referenced, independently rechecked target has authority.
+-- Inline nodes, type nodes, annotations and unknown facts have none.
+def tfCertifiedWithLayers (lay : Layers) (g : Dg) (rest : List Int) : Bool :=
+  if !g.on || !lay.facts then false
+  else
+    match rest with
+    | 53 :: bs =>
+      let i := tfIndex bs
+      i.ok == profile.cOk && i.n >= 0 && i.n < (g.n : Int) && (factGet g.certs i.n).v == 1
+    | _ => false
+

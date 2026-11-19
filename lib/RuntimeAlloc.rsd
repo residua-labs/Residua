@@ -1,0 +1,300 @@
+import RuntimeLower
+import RuntimeInline
+import ObjectStorage
+
+-- O2: group only canonical, stack-neutral allocation packets. Unknown
+-- instructions end a segment. A guard miss executes the original bytes,
+-- including their failure order. Calls, control flow and unknown stores
+-- never lie between a guard and the allocations it admits.
+structure RaItem where
+  alloc : Bool := false
+  code : List Int := []
+  rest : List Int := []
+  dest : Nat := 0
+  bytes : Nat := 0
+  tag : Nat := 0
+  other : Nat := 0
+  otherCode : List Int := []
+
+def raSmall (bs : List Int) : RgI :=
+  match bs with
+  | 66 :: rest =>
+    let l := rgLebGo 2 0 1 [] rest
+    if l.ok && i64Const (l.n : Int) == 66 :: l.bs then l else rgFail
+  | _ => rgFail
+
+def raLocal (types : List Int) (n : Nat) : Bool :=
+  n < types.length && types.getD n 0 == vtI64
+
+def raAlloc (types : List Int) (bs : List Int) : RaItem :=
+  let base := rgStep bs
+  let bytes := raSmall base.rest
+  let tag := raSmall bytes.rest
+  let other := raSmall tag.rest
+  let call := rgStep other.rest
+  let dst := rgStep call.rest
+  if !base.ok || base.op != 32 || base.n != 0 || !raLocal types 0
+      || !bytes.ok || bytes.n < 8 || bytes.n > 4096 || !tag.ok || tag.n > 250
+      || !other.ok || other.n > 255 || (tag.n == 250 && (bytes.n != 32 || other.n != 0))
+      || !call.ok || call.op != 16 || call.n != 0 || !dst.ok || dst.op != 33
+      || dst.n == 0 || !raLocal types dst.n then {}
+  else
+    let code := storageAlloc dst.n (bytes.n : Int) (tag.n : Int) (other.n : Int)
+    if bs.take code.length != code then {}
+    else { alloc := true, code := code, rest := bs.drop code.length, dest := dst.n, bytes := bytes.n, tag := tag.n, other := other.n }
+
+def raForget (known : List (Nat × Nat)) (n : Nat) : List (Nat × Nat) :=
+  known.filter (fun p => p.1 != n)
+
+def raKnown : List (Nat × Nat) → Nat → Nat
+  | [], _ => 0
+  | p :: ps, n => if p.1 == n then p.2 else raKnown ps n
+
+-- A value packet consumes none of the caller's previous operand stack.
+def raValue (types : List Int) (bs : List Int) : RgI :=
+  let i := rgStep bs
+  if i.ok && ((i.op == 32 && raLocal types i.n) || i.op == 66) then i else rgFail
+
+-- Runtime source calls do not contain storageAlloc's program failure packet.
+-- Match only stack-neutral, constant-size/tag calls; keep the following
+-- source failure branch in place. Dynamic metadata is checked before use.
+def raRuntimeAlloc (types : List Int) (bs : List Int) : RaItem :=
+  let base := rgStep bs
+  let bytes := raSmall base.rest
+  let tag := raSmall bytes.rest
+  let other := raValue types tag.rest
+  let call := rgStep other.rest
+  let dst := rgStep call.rest
+  if !base.ok || base.op != 32 || base.n != 0 || !raLocal types 0
+      || !bytes.ok || bytes.n < 8 || bytes.n > 4096 || !tag.ok || tag.n >= 250
+      || !other.ok || !call.ok || call.op != 16 || call.n != 0
+      || !dst.ok || dst.op != 33 || dst.n == 0 || !raLocal types dst.n then {}
+  else
+    { alloc := true
+      code := bs.take (bs.length - dst.rest.length)
+      rest := dst.rest
+      dest := dst.n
+      bytes := bytes.n
+      tag := tag.n
+      otherCode := other.bs }
+
+def raMove (types : List Int) (bs : List Int) : RaItem :=
+  let value := raValue types bs
+  let dst := rgStep value.rest
+  if !value.ok || !dst.ok || dst.op != 33 || dst.n == 0 || !raLocal types dst.n then {}
+  else { code := value.bs ++ dst.bs, rest := dst.rest, dest := dst.n }
+
+def raStore (types : List Int) (known : List (Nat × Nat)) (bs : List Int) : RaItem :=
+  let p := rgStep bs
+  if !p.ok || p.op != 32 || !raLocal types p.n then {}
+  else
+    match p.rest with
+    | 167 :: rest =>
+      let value := raValue types rest
+      if !value.ok then {}
+      else
+        match value.rest with
+        | op :: align :: offsets =>
+          let off := rgLebGo 2 0 1 [] offsets
+          let width := if op == 55 && align >= 0 && align <= 3 then 8 else if op == 60 && align == 0 then 1 else 0
+          if !off.ok || width == 0 || off.n < 8 || off.n + width > raKnown known p.n
+              || lebU off.n != off.bs then {}
+          else { code := p.bs ++ [167] ++ value.bs ++ [op, align] ++ off.bs, rest := off.rest }
+        | _ => {}
+    | _ => {}
+
+structure RaSegment where
+  items : List RaItem := []
+  rest : List Int := []
+
+def raSegment (types : List Int) : Nat → List (Nat × Nat) → List RaItem → List Int → RaSegment
+  | 0, _, items, bs => { items := items.reverse, rest := bs }
+  | fuel + 1, known, items, bs =>
+    let a := raAlloc types bs
+    if a.alloc then
+      raSegment types fuel ((a.dest, a.bytes) :: raForget known a.dest) (a :: items) a.rest
+    else
+      let move := raMove types bs
+      if !move.code.isEmpty then
+        raSegment types fuel (raForget known move.dest) (move :: items) move.rest
+      else
+        let store := raStore types known bs
+        if !store.code.isEmpty then raSegment types fuel known (store :: items) store.rest
+        else { items := items.reverse, rest := bs }
+
+def raRounded (bytes : Nat) : Nat := ((bytes + 7) / 8) * 8
+
+def raClasses : List RaItem → List Nat → List Nat
+  | [], classes => classes.reverse
+  | a :: rest, classes =>
+    let size := raRounded a.bytes
+    raClasses rest (if a.alloc && !(classes.contains size) then size :: classes else classes)
+
+def raCount (size : Nat) (items : List RaItem) : Nat :=
+  (items.filter (fun a => a.alloc && raRounded a.bytes == size)).length
+
+-- Specialize only the private templates' trailing UInt64 parameters. The
+-- unspecialized source is checked first; assignments to a static parameter
+-- and exhausted walks refuse. No target byte sequence implements a runtime
+-- operation here. The one folded comparison is the static tail-zero test.
+def raSpecialNode : Nat → Nat → List Int → RtNode → RtNode
+  | 0, _, _, _ => { rtNil with tag := -1 }
+  | fuel + 1, keep, values, node =>
+    let np := keep + values.length
+    if node.tag == 1 && node.val >= (keep : Int) && node.val < (np : Int) then
+      { tag := 0, val := values.getD (node.val.toNat - keep) 0, ty := node.ty, args := [] }
+    else if node.tag == 6 && node.val >= (keep : Int) && node.val < (np : Int) then
+      { rtNil with tag := -1 }
+    else
+      let args := node.args.map (raSpecialNode fuel keep values)
+      let n := { node with args := args, val := if (node.tag == 1 || node.tag == 6) && node.val >= (np : Int) then node.val - (values.length : Int) else node.val }
+      if n.tag == 2 && n.val == rtPrimIndex 0 rtPrimitives "RT.gtU64" && args.length == 2
+          && (rtAt 0 args).tag == 0 && (rtAt 1 args).tag == 0
+          && (rtAt 0 args).val >= 0 && (rtAt 0 args).val <= 4096
+          && (rtAt 1 args).val >= 0 && (rtAt 1 args).val <= 4096 then
+        { tag := 0, val := if (rtAt 0 args).val > (rtAt 1 args).val then 1 else 0, ty := 4, args := [] }
+      else if n.tag == 4 && n.ty == 2 && (rtAt 0 args).tag == 0 && (rtAt 0 args).ty == 4 then
+        if (rtAt 0 args).val == 1 then rtAt 1 args else rtAt 2 args
+      else n
+
+def raTemplate (source : RtFunction) (keep : Nat) (values : List Int) : WFn :=
+  if source.params.length != keep + values.length || source.params.any (fun t => t != 0)
+      || (rtLowerFunction true [] source).error != 0 then
+    { params := [], results := [], locals := [], code := [] }
+  else
+    let fn := { source with params := source.params.take keep, body := raSpecialNode 1000 keep values source.body }
+    if (rtLowerFunction true [] fn).error != 0 then { params := [], results := [], locals := [], code := [] }
+    else rtWasmFunction true [] fn
+
+def raExpand (fn : WFn) (base : Nat) : RiCode :=
+  if fn.results != [vtI64] || (fn.params ++ fn.locals).any (fun t => t != vtI64 && t != vtI32) then {}
+  else
+    let body := riBody (fn.code.length + 1) base (fn.params.length + fn.locals.length) 0 [] fn.code
+    { ok := body.ok, code := riSaveArgs base fn.params.length ++ riZero (base + fn.params.length) fn.locals
+      ++ [2, vtI64] ++ body.code }
+
+def raClassIndex : Nat → Nat → List Nat → Nat
+  | _, i, [] => i
+  | size, i, x :: xs => if size == x then i else raClassIndex size (i + 1) xs
+
+structure RaCode where
+  ok : Bool := false
+  code : List Int := []
+  sites : Nat := 0
+  checks : Nat := 0
+
+def raGuards (guard : RtFunction) (items : List RaItem) (base pages : Nat) : Nat → List Nat → RaCode
+  | _, [] => { ok := true }
+  | i, size :: sizes =>
+    let fn := raTemplate guard 1 [((size - 8) : Int), ((size + 8) : Int), (((raCount size items + 1) * (size + 8)) : Int), (raCount size items : Int)]
+    let e := raExpand fn base
+    let rest := raGuards guard items base pages (i + 1) sizes
+    { ok := e.ok && rest.ok, code := lg 0 ++ e.code ++ ls (pages + i) ++ rest.code, checks := rest.checks + 1 }
+
+def raConditions (pages : Nat) : Nat → List Nat → List Int
+  | _, [] => []
+  | i, _ :: sizes => lg (pages + i) ++ [80, 69] ++ raConditions pages (i + 1) sizes ++ (if sizes.isEmpty then [] else [113])
+
+def raFastItems (bump : RtFunction) (base pages : Nat) (classes : List Nat) : List RaItem → RaCode
+  | [] => { ok := true }
+  | a :: items =>
+    let rest := raFastItems bump base pages classes items
+    if !a.alloc then { rest with code := a.code ++ rest.code }
+    else
+      let rounded := raRounded a.bytes
+      let fn := raTemplate bump 3 [(rounded : Int), ((rounded + 8) : Int)]
+      let e := raExpand fn base
+      { rest with ok := e.ok && rest.ok, code := lg 0 ++ lg (pages + raClassIndex rounded 0 classes)
+        ++ i64Const (storageHeader 1 (a.tag : Int) (a.other : Int)) ++ e.code ++ ls a.dest ++ rest.code, sites := rest.sites + 1 }
+
+structure RaWalk where
+  ok : Bool := false
+  code : List Int := []
+  sites : Nat := 0
+  checks : Nat := 0
+  pageSlots : Nat := 0
+
+def raWalk (guard bump : RtFunction) (types : List Int) (guardBase bumpBase pages : Nat) :
+    Nat → RaWalk → List (List Int) → List Int → RaWalk
+  | 0, _, _, _ => {}
+  | _ + 1, state, acc, [] => { state with ok := true, code := riJoin acc }
+  | fuel + 1, state, acc, bs =>
+    let a := raAlloc types bs
+    if a.alloc then
+      let segment := raSegment types (bs.length + 1) [] [] bs
+      let classes := raClasses segment.items []
+      let guards := raGuards guard segment.items guardBase pages 0 classes
+      let hot := raFastItems bump bumpBase pages classes segment.items
+      if !guards.ok || !hot.ok then {}
+      else
+        let cold := (segment.items.map (fun x => x.code)).flatten
+        let code := guards.code ++ raConditions pages 0 classes ++ [4, 64] ++ hot.code ++ [5] ++ cold ++ [11]
+        raWalk guard bump types guardBase bumpBase pages fuel
+          { state with sites := state.sites + hot.sites, checks := state.checks + guards.checks, pageSlots := max state.pageSlots classes.length } (code :: acc) segment.rest
+    else
+      let i := rgStep bs
+      if !i.ok then {} else raWalk guard bump types guardBase bumpBase pages fuel state (i.bs :: acc) i.rest
+
+def raFunction (guard bump : RtFunction) (fn : WFn) : WFn :=
+  let types := fn.params ++ fn.locals
+  let guardBase := types.length
+  let guardLocals := 1 + guard.locals.length
+  let bumpBase := guardBase + guardLocals
+  let bumpLocals := 3 + bump.locals.length
+  let pages := bumpBase + bumpLocals
+  let r := raWalk guard bump types guardBase bumpBase pages (fn.code.length + 1) {} [] fn.code
+  if !r.ok || r.sites == 0 then fn
+  else { fn with code := r.code, locals := fn.locals ++ List.replicate (guardLocals + bumpLocals + r.pageSlots) vtI64 }
+
+def raRuntimeWalk (guard bump : RtFunction) (types : List Int) (guardBase bumpBase page : Nat) :
+    Nat → RaWalk → List (List Int) → List Int → RaWalk
+  | 0, _, _, _ => {}
+  | _ + 1, state, acc, [] => { state with ok := true, code := riJoin acc }
+  | fuel + 1, state, acc, bs =>
+    let a := raRuntimeAlloc types bs
+    if a.alloc then
+      -- A runtime function with multiple eligible sites stays cold for now.
+      -- The admitted function has one site, hence one size-class limit check
+      -- in its basic block (including each iteration of a source loop).
+      if state.sites != 0 then {}
+      else
+        let size := raRounded a.bytes
+        let g := raExpand (raTemplate guard 1 [((size - 8) : Int), ((size + 8) : Int), (2 * (size + 8) : Int), 1]) guardBase
+        let b := raExpand (raTemplate bump 3 [(size : Int), ((size + 8) : Int)]) bumpBase
+        if !g.ok || !b.ok then {}
+        else
+          let header := a.otherCode ++ i64Const 48 ++ [134]
+            ++ i64Const (storageHeader 1 (a.tag : Int) 0) ++ [132]
+          let code := lg 0 ++ g.code ++ ls page
+            ++ lg page ++ [80, 69] ++ a.otherCode ++ i64Const 255 ++ [88, 113, 4, 64]
+            ++ lg 0 ++ lg page ++ header ++ b.code ++ ls a.dest ++ [5] ++ a.code ++ [11]
+          raRuntimeWalk guard bump types guardBase bumpBase page fuel
+            { state with sites := 1, checks := 1, pageSlots := 1 } (code :: acc) a.rest
+    else
+      let i := rgStep bs
+      if !i.ok then {} else raRuntimeWalk guard bump types guardBase bumpBase page fuel state (i.bs :: acc) i.rest
+
+def raRuntimeFunction (guard bump : RtFunction) (fn : WFn) : WFn :=
+  let types := fn.params ++ fn.locals
+  let guardBase := types.length
+  let guardLocals := 1 + guard.locals.length
+  let bumpBase := guardBase + guardLocals
+  let bumpLocals := 3 + bump.locals.length
+  let page := bumpBase + bumpLocals
+  let r := raRuntimeWalk guard bump types guardBase bumpBase page (fn.code.length + 1) {} [] fn.code
+  if !r.ok || r.sites != 1 then fn
+  else { fn with code := r.code, locals := fn.locals ++ List.replicate (guardLocals + bumpLocals + 1) vtI64 }
+
+def runtimeAllocFns (lay : Layers) (rtCount : Nat) (templates : List RtFunction) (fns : List WFn) : List WFn :=
+  if !lay.rc || !lay.alloc || templates.length != 2 then fns
+  else
+    let empty : RtFunction := { name := "", params := [], result := 2, locals := [], body := rtNil }
+    let guard := templates.getD 0 empty
+    let bump := templates.getD 1 empty
+    if guard.name != "rsd_rt_alloc_guard" || bump.name != "rsd_rt_alloc_bump"
+        || guard.params != [0, 0, 0, 0, 0] || bump.params != [0, 0, 0, 0, 0]
+        || guard.locals.any (fun t => t != 0) || bump.locals.any (fun t => t != 0) then fns
+    else (fns.zip (List.range fns.length)).map fun (fn, i) =>
+      if i == 0 then fn
+      else if i < rtCount then raRuntimeFunction guard bump fn
+      else raFunction guard bump fn

@@ -1,0 +1,203 @@
+/-!
+# H1Valid as an executable oracle
+
+`H1Valid.ValidHead` is a proposition about bytes, a request line and field
+lines. This file makes it decidable and reads the request line and field
+lines back from the bytes, so that it can be run on a corpus:
+
+* `accept_sound`: what `accept` returns is a `ValidHead` of the bytes;
+* `accept_complete`: every `ValidHead` is accepted, read back with `canon`
+  on its fields (with an empty value the two whitespace runs of a field are
+  one run, so the bytes do not determine how it is divided);
+* `accept_iff`: `accept` succeeds exactly on the valid heads;
+* `acceptChunked_iff`: `acceptChunked` returns `P` exactly when the bytes are
+  a `ValidChunked` with payload `P`.
+
+Written for residua (P2-WEB-0, COLLIDE-H5I r1); not part of h5i.
+-/
+namespace H1Valid.Decide
+open H1Valid
+
+theorem pctRun_append {ok : Nat → Bool} :
+    ∀ p q, pctRun ok p = true → pctRun ok q = true → pctRun ok (p ++ q) = true
+  | [], _ => fun _ h => h
+  | c :: r, q => by
+    intro hp hq
+    by_cases hc : c = 37
+    · subst hc
+      match r, hp with
+      | a :: b :: r', hp =>
+        rw [pctRun_pct] at hp
+        show pctRun ok (37 :: a :: b :: (r' ++ q)) = true
+        rw [pctRun_pct]
+        simp only [Bool.and_eq_true] at hp ⊢
+        exact ⟨hp.1, pctRun_append r' q hp.2 hq⟩
+      | [], hp => rw [pctRun, if_pos rfl] at hp; simp at hp
+      | [_], hp => rw [pctRun, if_pos rfl] at hp; simp at hp
+    · rw [pctRun_cons_ne hc] at hp
+      show pctRun ok (c :: (r ++ q)) = true
+      rw [pctRun_cons_ne hc]
+      simp only [Bool.and_eq_true] at hp ⊢
+      exact ⟨hp.1, pctRun_append r q hp.2 hq⟩
+
+def targetClass (b : Nat) : Bool := pcharByte b || b == 47 || b == 63
+
+def originFormB : List Nat → Bool
+  | [] => false
+  | c :: rest => c == 47 && pctRun targetClass rest
+
+theorem originForm_iff (t : List Nat) : originForm t ↔ originFormB t = true := by
+  constructor
+  · rintro ⟨p, q, rfl, ⟨rest, rfl, hp⟩, hq⟩
+    have hp' : pctRun targetClass rest = true :=
+      pctRun_mono (fun b h => by simp only [targetClass, Bool.or_eq_true] at h ⊢; exact Or.inl h) rest hp
+    have hq' : pctRun targetClass q = true := by
+      rcases hq with rfl | ⟨q', rfl, hq'⟩
+      · exact pctRun_nil _
+      · rw [pctRun_cons_ne (by decide)]
+        simp only [Bool.and_eq_true]
+        exact ⟨by decide, hq'⟩
+    show (47 == 47 && pctRun targetClass (rest ++ q)) = true
+    simp [pctRun_append rest q hp' hq']
+  · intro h
+    match t, h with
+    | c :: rest, h =>
+      simp only [originFormB, Bool.and_eq_true, beq_iff_eq] at h
+      obtain ⟨rfl, h⟩ := h
+      exact originForm_of_run h
+
+instance (t : List Nat) : Decidable (originForm t) := decidable_of_iff _ (originForm_iff t).symm
+
+theorem eq_dropLast_concat : ∀ (l : List Nat) (a : Nat), l.getLast? = some a → l = l.dropLast ++ [a]
+  | [], _ => fun h => by simp at h
+  | [x], a => fun h => by simp at h; simp [h]
+  | x :: y :: t, a => fun h => by
+    have h' : (y :: t).getLast? = some a := by simpa [List.getLast?_cons_cons] using h
+    have ih := eq_dropLast_concat (y :: t) a h'
+    show x :: y :: t = x :: ((y :: t).dropLast ++ [a])
+    rw [← ih]
+
+def ipLiteralB : List Nat → Bool
+  | [] => false
+  | c :: t => c == 91 && t.getLast? == some 93 &&
+      (t.dropLast != [] && t.dropLast.all (fun b => unreserved b || subDelims b || b == 58))
+
+theorem ipLiteral_iff (h : List Nat) : ipLiteral h ↔ ipLiteralB h = true := by
+  constructor
+  · rintro ⟨x, rfl, hx⟩
+    simp only [ipLiteralB, List.getLast?_append, List.dropLast_concat]
+    simpa using hx
+  · intro hh
+    match h, hh with
+    | c :: t, hh =>
+      simp only [ipLiteralB, Bool.and_eq_true, beq_iff_eq] at hh
+      obtain ⟨⟨rfl, hl⟩, hx⟩ := hh
+      refine ⟨t.dropLast, ?_, by simpa using hx⟩
+      rw [← eq_dropLast_concat t 93 hl]
+
+instance (h : List Nat) : Decidable (ipLiteral h) := decidable_of_iff _ (ipLiteral_iff h).symm
+instance (h : List Nat) : Decidable (regName h) := by unfold regName; infer_instance
+
+def portB : List Nat → Bool
+  | [] => true
+  | c :: ds => c == 58 && ds.all isDigit
+
+theorem port_iff (p : List Nat) : (p = [] ∨ ∃ ds, p = 58 :: ds ∧ ds.all isDigit = true) ↔ portB p = true := by
+  cases p with
+  | nil => simp [portB]
+  | cons c ds =>
+    simp only [portB, Bool.and_eq_true, beq_iff_eq]
+    constructor
+    · rintro (h | ⟨ds', h, hd⟩)
+      · cases h
+      · cases h; exact ⟨rfl, hd⟩
+    · rintro ⟨rfl, hd⟩; exact Or.inr ⟨ds, rfl, hd⟩
+
+def hostValueB (v : List Nat) : Bool :=
+  (List.range (v.length + 1)).any fun i =>
+    (decide (regName (v.take i)) || ipLiteralB (v.take i)) && portB (v.drop i)
+
+theorem hostValue_iff (v : List Nat) : hostValue v ↔ hostValueB v = true := by
+  constructor
+  · rintro ⟨h, p, rfl, hh, hp⟩
+    simp only [hostValueB, List.any_eq_true, List.mem_range]
+    refine ⟨h.length, by simp; omega, ?_⟩
+    simp only [List.take_left', List.drop_left', Bool.and_eq_true, Bool.or_eq_true, decide_eq_true_eq]
+    exact ⟨hh.imp id (ipLiteral_iff h).1, (port_iff p).1 hp⟩
+  · intro hv
+    simp only [hostValueB, List.any_eq_true, List.mem_range, Bool.and_eq_true, Bool.or_eq_true,
+      decide_eq_true_eq] at hv
+    obtain ⟨i, _, hh, hp⟩ := hv
+    exact ⟨v.take i, v.drop i, (List.take_append_drop i v).symm, hh.imp id (ipLiteral_iff _).2, (port_iff _).2 hp⟩
+
+instance (v : List Nat) : Decidable (hostValue v) := decidable_of_iff _ (hostValue_iff v).symm
+
+instance (v : List Nat) : Decidable (fieldValue v) := by
+  unfold fieldValue
+  cases h1 : v.head? <;> cases h2 : v.getLast? <;> simp <;> infer_instance
+
+instance (f : FieldLine) : Decidable f.ok := by unfold FieldLine.ok; infer_instance
+
+instance (mh mb : Nat) (H : List Nat) (r : RequestLine) (fs : List FieldLine) :
+    Decidable (ValidHead mh mb H r fs) := by unfold ValidHead; infer_instance
+
+/-! ## Reading the head back from its bytes -/
+
+def splitLines : List Nat → List Nat → List (List Nat)
+  | cur, [] => [cur.reverse]
+  | cur, b :: t =>
+    if b = 10 ∧ cur.head? = some 13 then cur.tail.reverse :: splitLines [] t
+    else splitLines (b :: cur) t
+
+def parseRequestLine (l : List Nat) : RequestLine :=
+  let rest := (l.dropWhile (· != 32)).drop 1
+  ⟨l.takeWhile (· != 32), rest.takeWhile (· != 32),
+    (((rest.dropWhile (· != 32)).drop 8).headD 48) - 48⟩
+
+def parseField (l : List Nat) : FieldLine :=
+  let rest := (l.dropWhile (· != 58)).drop 1
+  let vr := (rest.dropWhile isWs).reverse
+  ⟨l.takeWhile (· != 58), rest.takeWhile isWs, (vr.dropWhile isWs).reverse, (vr.takeWhile isWs).reverse⟩
+
+def fieldLines : List (List Nat) → Option (List FieldLine)
+  | [] => none
+  | l :: rest =>
+    if l = [] then (if rest = [[]] then some [] else none)
+    else (fieldLines rest).map (parseField l :: ·)
+
+def split (H : List Nat) : Option (RequestLine × List FieldLine) :=
+  match splitLines [] H with
+  | [] => none
+  | l :: rest => (fieldLines rest).map (parseRequestLine l, ·)
+
+/-- The oracle: the head read back from `H`, when it is a `ValidHead`. -/
+def accept (mh mb : Nat) (H : List Nat) : Option (RequestLine × List FieldLine) :=
+  match split H with
+  | none => none
+  | some (r, fs) => if ValidHead mh mb H r fs then some (r, fs) else none
+
+def canon (f : FieldLine) : FieldLine :=
+  if f.value = [] then ⟨f.name, f.ows1 ++ f.ows2, [], []⟩ else f
+
+instance (ds : List Nat) : Decidable (chunkSize ds) := by unfold chunkSize; infer_instance
+instance (c : Chunk) : Decidable c.ok := by unfold Chunk.ok; infer_instance
+
+def readChunks : Nat → List Nat → Option (List Chunk × List Nat)
+  | 0, _ => none
+  | fuel + 1, W =>
+    let size := W.takeWhile isHexDig
+    let rest := (W.dropWhile isHexDig).drop 2
+    if size.all (· == 48) then some ([], size)
+    else (readChunks fuel ((rest.drop (hexNumber size)).drop 2)).map
+      fun p => (⟨size, rest.take (hexNumber size)⟩ :: p.1, p.2)
+
+/-- The oracle for a chunked body: its payload, when `W` is a `ValidChunked`. -/
+def acceptChunked (mb : Nat) (W : List Nat) : Option (List Nat) :=
+  match readChunks (W.length + 1) W with
+  | none => none
+  | some (cs, z) =>
+    if W = chunkedBytes cs z ∧ (∀ c ∈ cs, c.ok) ∧ chunkSize z ∧ z.all (· == 48) = true ∧
+        ((cs.map Chunk.data).flatten).length ≤ mb then some (cs.map Chunk.data).flatten
+    else none
+
+end H1Valid.Decide

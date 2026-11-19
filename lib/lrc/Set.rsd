@@ -1,0 +1,97 @@
+-- LRC: sets and maps keyed by a variable or join point index.
+-- Lean uses red-black trees (IR/Basic.lean:445 IndexSet, :603 VarIdSet, :512 IndexRenaming); here the
+-- persistent AVL map of lib/AvlMap.rsd carries them. A key maps to 1 when it is a member and to 0
+-- after an erase; a key never inserted reads -1 (AvlMap's own missing-key value).
+-- closure_claim = 0.
+import AvlMap
+
+namespace Lrc
+
+/-! The map of lib/AvlMap.rsd read and written without the record its `get` and `ins` build at
+every level of the tree (the value, the steps, the entry): the passes read a map at every
+instruction of a program. `mapNode` is the entry of a key, an empty map (tag 0) when there is
+none; `mapPut` is `ins` with the same balancing, so the tree is the one `ins` builds. -/
+
+partial def mapNode (m : Map) (k : Int) : Map :=
+  if m.tag == 0 || k == m.key then m
+  else
+    match (if k < m.key then m.left else m.right) with
+    | [] => map0 0
+    | c :: _ => mapNode c k
+
+-- the value of key k, -1 when the map has no such key (as `get`)
+def mapVal (m : Map) (k : Int) : Int :=
+  let n := mapNode m k
+  if n.tag == 0 then -1 else n.val
+
+def mapXs (m : Map) (k : Int) : List Int := (mapNode m k).extra
+
+partial def mapPut (m : Map) (k v sa sb : Int) (xs : List Int) : Map :=
+  if m.tag == 0 then mk 0 (map0 0) k v sa sb xs (map0 0)
+  else if k == m.key then mk 0 (kid 0 m.left) k v sa sb xs (kid 0 m.right)
+  else if k < m.key then
+    bal 0 (match m.left with
+           | [] => mk 0 (map0 0) k v sa sb xs (map0 0)
+           | c :: _ => mapPut c k v sa sb xs) m.key m.val m.sa m.sb m.extra (kid 0 m.right)
+  else
+    bal 0 (kid 0 m.left) m.key m.val m.sa m.sb m.extra (match m.right with
+           | [] => mk 0 (map0 0) k v sa sb xs (map0 0)
+           | c :: _ => mapPut c k v sa sb xs)
+
+structure VSet where
+  m : Map
+  deriving Inhabited
+
+def vsEmpty : VSet := { m := map0 0 }
+
+def vsContains (s : VSet) (x : Nat) : Bool := mapVal s.m (x : Int) == 1
+
+def vsInsert (s : VSet) (x : Nat) : VSet :=
+  if vsContains s x then s else { m := mapPut s.m (x : Int) 1 0 0 [] }
+
+def vsErase (s : VSet) (x : Nat) : VSet :=
+  if vsContains s x then { m := mapPut s.m (x : Int) 0 0 0 [] } else s
+
+-- the members in increasing order; `acc` is the list that follows them
+partial def mapMembers (m : Map) (acc : List Nat) : List Nat :=
+  if m.tag == 0 then acc
+  else
+    let r := mapMembers (kid 0 m.right) acc
+    let r := if m.val == 1 then m.key.toNat :: r else r
+    mapMembers (kid 0 m.left) r
+
+def vsToList (s : VSet) : List Nat := mapMembers s.m []
+
+def vsIsEmpty (s : VSet) : Bool := (vsToList s).isEmpty
+
+def vsInsertAll : VSet → List Nat → VSet
+  | s, [] => s
+  | s, x :: xs => vsInsertAll (vsInsert s x) xs
+
+def vsEraseAll : VSet → List Nat → VSet
+  | s, [] => s
+  | s, x :: xs => vsEraseAll (vsErase s x) xs
+
+def vsUnion (a b : VSet) : VSet := vsInsertAll a (vsToList b)
+
+def vsOfList (xs : List Nat) : VSet := vsInsertAll vsEmpty xs
+
+-- the variables among a list of arguments (IR/Basic.lean:138: an argument is a variable or irrelevant)
+def vsInsertArgs : VSet → List Int → VSet
+  | s, [] => s
+  | s, y :: ys => vsInsertArgs (if y >= 0 then vsInsert s y.toNat else s) ys
+
+/-! A map from an index to a natural number. `imFind` returns -1 for a key that is absent. -/
+structure IMap where
+  m : Map
+  deriving Inhabited
+
+def imEmpty : IMap := { m := map0 0 }
+
+def imFind (t : IMap) (k : Nat) : Int := mapVal t.m (k : Int)
+
+def imInsert (t : IMap) (k : Nat) (v : Nat) : IMap := { m := mapPut t.m (k : Int) (v : Int) 0 0 [] }
+
+def imContains (t : IMap) (k : Nat) : Bool := imFind t k >= 0
+
+end Lrc

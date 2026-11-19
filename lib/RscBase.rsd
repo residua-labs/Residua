@@ -1,0 +1,2100 @@
+import AvlMap
+import ObjectLayout
+import Fuel
+
+
+-- rsc.rsd: RSCM bytes to wasm bytes, written once.
+-- Design: docs/SELF_COMPILE.md (c108491), docs/LANG_OPT_DESIGN.md, contract
+-- LANG-OPT-RSC-0. closure_claim = 0.
+-- C1 is the encoder: a module structure becomes wasm bytes.
+-- Bytes are a list of words. Sections join by append, not by a recursive
+-- walk: a walk of the whole module is deeper than the chain's call fuel.
+-- Host glue, named: `main` below. It writes the module and runs wasmtime.
+-- Nothing else in this file reads the clock, the disk, or the process table.
+
+-- One profile value. Every limit is a field, read where the immediate is
+-- generated. A use site names the field.
+
+structure Profile where
+  fnMin : Nat
+  fnMax : Nat
+  arityMax : Nat
+  fieldMax : Nat
+  skipFuel : Nat
+  lebUFuel : Nat
+  lebSFuel : Nat
+  i64Bytes : Nat
+  lowerMul : Nat
+  lowerAdd : Nat
+  places : Nat
+  flushChunk : Nat
+  flushBatch : Nat
+  rtFns : Nat
+  memoAt : Int
+  memoSlots : Nat
+  memoKeyMax : Nat
+  cteSteps : Nat
+  resAt : Int
+  resWords : Nat
+  initPages : Nat
+  emptyAt : Int
+  emptyStr : Int
+  blockAt : Int
+  heapAt : Int
+  cOk : Int
+  cTrunc : Int
+  cHeader : Int
+  cType : Int
+  cBody : Int
+  cTrail : Int
+  cVar : Int
+  cCall : Int
+  cArity : Int
+  cWide : Int
+  cUnsup : Int
+  tagResidue : Int
+  tagFuel : Int
+  tagStuck : Int
+  tagCapacity : Int
+  detNone : Int
+  detDiv0 : Int
+  detInexact : Int
+  detOverflow : Int
+  detGrow : Int
+  cTmpl : Int
+  cHole : Int
+  cLayerBits : Int
+  cRef : Int
+  cRefKind : Int
+  cTypeMis : Int
+  cBudgetExhausted : Int
+  cReuseFieldCapacity : Int
+  v2Fuel : Nat
+
+def profile : Profile := {
+  fnMin := 1
+  fnMax := 4096
+  arityMax := 64
+  fieldMax := 4096
+  skipFuel := 64
+  lebUFuel := 10
+  lebSFuel := 12
+  i64Bytes := 8
+  lowerMul := 4
+  lowerAdd := 8
+  places := 4
+  flushChunk := 200
+  flushBatch := 4096
+  rtFns := 14
+  memoAt := 1024
+  memoSlots := 1024
+  memoKeyMax := 4
+  cteSteps := 4096
+  resAt := 96
+  -- 27: the arena checker's 26-slot cert node (fu1 arena_v2 wire) is a
+  -- record result; 20 refused it `[result_too_wide]`. 27 words still sit far
+  -- inside the 64 KiB before heapAt, so the base block layout is unchanged
+  -- for every other program (ATS-LAYERS-0 enabling commit).
+  resWords := 27
+  initPages := 1
+  emptyAt := 1
+  emptyStr := 768
+  blockAt := 24
+  heapAt := 65536
+  cOk := 0
+  cTrunc := 1
+  cHeader := 2
+  cType := 3
+  cBody := 5
+  cTrail := 6
+  cVar := 7
+  cCall := 8
+  cArity := 9
+  cWide := 10
+  cUnsup := 400
+  tagResidue := 1
+  tagFuel := 2
+  tagStuck := 3
+  tagCapacity := 4
+  detNone := 0
+  detDiv0 := 0
+  detInexact := 2
+  detOverflow := 1
+  detGrow := 1
+  cTmpl := 11
+  cHole := 12
+  cLayerBits := 13
+  cRef := 20
+  cRefKind := 21
+  cTypeMis := 22
+  cBudgetExhausted := 612
+  cReuseFieldCapacity := 611
+  v2Fuel := 1000000000000
+}
+
+-- The wire code is an encoding of the one shared cause. It is not a
+-- second fuel decision. The walker still recurses structurally on its
+-- semantic remaining count; its zero arm projects Fuel.step at zero.
+def rscFuelCode (residue : Option Lib.Fuel.Residue) : Int :=
+  if residue.isNone then profile.cOk else profile.cBudgetExhausted
+
+def rscFuelFailure (request : Lib.Fuel.Request) : Int :=
+  rscFuelCode (Lib.Fuel.step request { remaining := 0 }).residue
+
+def skipFuelRequest (kind n : Nat) (rest : List Int) : Lib.Fuel.Request :=
+  { spender := "rsc.skipEGo", nodeQ := (kind : Int) :: (n : Int) :: rest }
+
+-- Frame the local spending point. These are diagnostic Fuel keys, not
+-- memo keys for a walker's result; Fuel.step decides from remaining only.
+-- Signed wire words cannot impersonate a boundary between framed lists.
+def rscFuelList (xs : List Int) : List Int := (xs.length : Int) :: xs
+
+def rscFuelListsGo : List (List Int) → List Int
+  | [] => []
+  | xs :: xss => rscFuelList xs ++ rscFuelListsGo xss
+
+def rscFuelLists (xss : List (List Int)) : List Int :=
+  (xss.length : Int) :: rscFuelListsGo xss
+
+def reuseSlotsFuelRequest (slot : Nat) (wanted : List Int)
+    (types : List (List Int)) : Lib.Fuel.Request :=
+  { spender := "rsc.reuseTypeSlots",
+    nodeQ := (slot : Int) :: (rscFuelList wanted ++ rscFuelLists types) }
+
+def reuseFieldFuelRequest (kind n : Nat) (index : Int)
+    (ty rest : List Int) : Lib.Fuel.Request :=
+  { spender := "rsc.reuseFieldUse",
+    nodeQ := [(kind : Int), (n : Int), index] ++ rscFuelList ty ++ rscFuelList rest }
+
+def reuseArgsFuelRequest (borrowedOnly : Bool) (env : List Int)
+    (tys : List (List Int)) (types rest : List Int) : Lib.Fuel.Request :=
+  { spender := "rsc.biArgKeeps",
+    nodeQ := (if borrowedOnly then 1 else 0) ::
+      (rscFuelList env ++ rscFuelLists tys ++ rscFuelList types ++ rscFuelList rest) }
+
+def storageFlatFuelRequest (ty : List Int) : Lib.Fuel.Request :=
+  { spender := "rsc.storageFlatObject", nodeQ := rscFuelList ty }
+
+def storageFieldsFuelRequest (old mask dst src next : Nat)
+    (fields : List (List Int)) (offsets : List Int) : Lib.Fuel.Request :=
+  { spender := "rsc.storageReuseFields",
+    nodeQ := [(old : Int), (mask : Int), (dst : Int), (src : Int), (next : Int)] ++
+      rscFuelLists fields ++ rscFuelList offsets }
+
+-- Compile flags, read from RSC_LAYERS (comma or space separated). Unset is
+-- all off. Names: arr (3b), reg (local coalescing), tail (4, tail calls),
+-- qbe (6), cte (7), all, off.
+-- Flat values (3a, 0d00ad2) stay on: wordsOf has no boxed mode, and the
+-- other layers read that layout, so 3a is grouped with the base (status,
+-- result area, bare words). A self tail call is a jump to the function's
+-- own loop in every configuration: fuel bounds its iterations, so a plain
+-- call would grow the host stack where the source semantics has none.
+-- `tail` adds the mutual tail-call group and wasm return_call for the
+-- other calls in tail position. `reg` coalesces locals
+-- (liveness as Binaryen's CoalesceLocals, slots by Poletto and Sarkar's
+-- linear scan; below, `rgFn`). Structural
+-- equality (3c) is a feature, always on; the template table is the one
+-- lowering (LAYER-WIRING-0: the inline lowering and its `tmpl` switch were
+-- unreachable since dabf80d and are removed). A name outside this list
+-- (`eq` and `tmpl` among them) is refused as `[layer_flag] <name>`.
+structure Layers where
+  arr : Bool
+  reg : Bool
+  tail : Bool
+  qbe : Bool
+  cte : Bool
+  fuse : Bool
+  facts : Bool
+  rc : Bool := false
+  borrow : Bool := false
+  dropSpec : Bool := false
+  reuse : Bool := false
+  static : Bool := false
+  alloc : Bool := false
+  ctor : Bool := false
+  -- object fields of four bytes in a module of the stage with its own heap (docs/OBJECT-ABI.md "Narrow fields")
+  narrow : Bool := false
+  deriving BEq
+
+def layersOff : Layers := { arr := false, reg := false, tail := false, qbe := false, cte := false, fuse := false, facts := false }
+
+-- Reset/reuse extends the source runtime only when enabled. The existing
+-- prefix stays byte-identical for every configuration without this bit.
+def runtimeCountWithLayers (lay : Layers) : Nat :=
+  if lay.rc && lay.reuse then profile.rtFns + 3 else profile.rtFns
+
+-- REUSE r2 default entry: only bit 10 is added. `all` stays its explicit
+-- switch word; `off` still starts from layersOff.
+def layersDefault : Layers := { layersOff with rc := true, borrow := true, dropSpec := true, reuse := true }
+
+
+def layersOn : Layers := { arr := true, reg := true, tail := true, qbe := true, cte := true, fuse := true, facts := true, rc := true, borrow := true, dropSpec := true }
+
+-- Explicit compiler-entry ABI: bits 0..4 retain the micro switches,
+-- bit 5 selects fusion, bit 6 certified type facts, bit 7 RC,
+-- bit 8 borrow inference, bit 9 drop specialization, bit 10 reset/reuse,
+-- bit 11 persistent ground objects, bit 12 the batched allocator fast path,
+-- bit 13 constructor-object access (BACKEND-OPT-0 T2; opt-in),
+-- bit 14 narrow object fields (docs/OBJECT-ABI.md "Narrow fields"; opt-in).
+-- The allocator bit is opt-in until its whole-program gates pass. Existing
+-- configuration words, including the default and `all`, keep their meaning.
+-- Reject unknown bits
+-- before reading input. The environment stays in the native wrapper only.
+def layersFromBits (bits : Int) : Option Layers :=
+  if bits < 0 || bits >= 32768 then none
+  else some { arr := bits % 2 == 1
+            , reg := (bits / 2) % 2 == 1
+            , tail := (bits / 4) % 2 == 1
+            , qbe := (bits / 8) % 2 == 1
+            , cte := (bits / 16) % 2 == 1
+            , fuse := (bits / 32) % 2 == 1
+            , facts := (bits / 64) % 2 == 1
+            , rc := (bits / 128) % 2 == 1
+            , borrow := (bits / 256) % 2 == 1
+            , dropSpec := (bits / 512) % 2 == 1
+            , reuse := (bits / 1024) % 2 == 1
+            , static := (bits / 2048) % 2 == 1
+            , alloc := (bits / 4096) % 2 == 1
+            , ctor := (bits / 8192) % 2 == 1
+            , narrow := (bits / 16384) % 2 == 1 }
+
+def addLayer (lay : Layers) (n : String) : Option Layers :=
+  if n == "" then some lay
+  else if n == "arr" then some { lay with arr := true }
+  else if n == "reg" then some { lay with reg := true }
+  else if n == "tail" then some { lay with tail := true }
+  else if n == "qbe" then some { lay with qbe := true }
+  else if n == "cte" then some { lay with cte := true }
+  else if n == "fuse" then some { lay with fuse := true }
+  else if n == "facts" then some { lay with facts := true }
+  else if n == "rc" then some { lay with rc := true }
+  else if n == "borrow" then some { lay with borrow := true }
+  else if n == "drop" then some { lay with dropSpec := true }
+  else if n == "reuse" then some { lay with reuse := true }
+  else if n == "static" then some { lay with static := true }
+  else if n == "alloc" then some { lay with alloc := true }
+  else if n == "ctor" then some { lay with ctor := true }
+  else if n == "narrow" then some { lay with narrow := true }
+  else if n == "all" then some layersOn
+  else if n == "off" then some layersOff
+  else none
+
+def parseGo (lay : Layers) : List String → Option Layers
+  | [] => some lay
+  | n :: ns =>
+    match addLayer lay n with
+    | none => none
+    | some lay2 => parseGo lay2 ns
+
+def layerNames (s : String) : List String :=
+  s.split (fun c => c == ',' || c == ' ' || c == '+')
+
+def parseLayers (s : String) : Option Layers :=
+  parseGo layersDefault (layerNames s)
+
+
+def badLayer : List String → String
+  | [] => ""
+  | n :: ns =>
+    match addLayer layersOff n with
+    | none => n
+    | some _ => badLayer ns
+
+
+
+
+
+def revAppend : List Int → List Int → List Int
+  | [], ys => ys
+  | x :: xs, ys => revAppend xs (x :: ys)
+
+def reverse (xs : List Int) : List Int :=
+  revAppend xs []
+
+-- A body is reversed chunks: the head is the last chunk. `push` conses one
+-- chunk, so growing at the end does not copy the bytes already written.
+-- `join` shares the left spine. `flushN` copies one profile batch, then
+-- returns: the chain counts every tail call against source fuel.
+structure Bat where
+  rest : List (List Int)
+  acc : List Int
+
+def push (code : List (List Int)) (chunk : List Int) : List (List Int) :=
+  match chunk with
+  | [] => code
+  | _ => chunk :: code
+
+def join (left right : List (List Int)) : List (List Int) :=
+  right ++ left
+
+def flushN : Nat → List (List Int) → List Int → Bat
+  | _, [], acc => { rest := [], acc := acc }
+  | 0, cs, acc => { rest := cs, acc := acc }
+  | n + 1, c :: cs, acc => flushN n cs (c ++ acc)
+
+-- `fuel` is the batch count. It decreases, so this is structural. The walk
+-- stops when the chunks run out. Each batch returns before the next.
+def flushAllGo : Nat → List (List Int) → List Int → List Int
+  | _, [], acc => acc
+  | 0, _, acc => acc
+  | n + 1, cs, acc =>
+    let b := flushN profile.flushChunk cs acc
+    flushAllGo n b.rest b.acc
+
+def flushAll (cs : List (List Int)) (acc : List Int) : List Int :=
+  flushAllGo profile.flushBatch cs acc
+
+-- Forward bytes: [167, 4, 126] ++ th ++ [5] ++ el ++ [11].
+def wasmIfC (th el : List (List Int)) : List (List Int) :=
+  push (join (push (join (push [] [167, 4, 126]) th) [5]) el) [11]
+
+-- The condition is already i32. Both arms leave an i64.
+def wasmIfRaw (th el : List (List Int)) : List (List Int) :=
+  push (join (push (join (push [] [4, 126]) th) [5]) el) [11]
+
+def puts (acc chunk : List Int) : List Int :=
+  acc ++ chunk
+
+def finish (acc : List Int) : List Int :=
+  acc
+
+-- Unsigned LEB128. `fuel` counts bytes and is the profile's. The low group
+-- is consed first. 128^5 already passes 2^32.
+def lebUGo : Nat → Nat → List Int → List Int
+  | 0, _, acc => reverse acc
+  | k + 1, n, acc =>
+    let q := n / 128
+    let r := n - q * 128
+    if q == 0 then reverse ((r : Int) :: acc)
+    else lebUGo k q (((r + 128 : Nat) : Int) :: acc)
+
+def lebU (n : Nat) : List Int :=
+  lebUGo profile.lebUFuel n []
+
+-- Signed LEB128. Lean's `/` and `%` on Int are Euclidean, and for a positive
+-- power of two that is an arithmetic shift and the low 7 bits.
+def lebSGo : Nat → Int → List Int → List Int
+  | 0, _, acc => reverse acc
+  | k + 1, n, acc =>
+    let q := n / 128
+    let r := (n % 128).toNat
+    let done := (q == 0 && r < 64) || (q == -1 && r ≥ 64)
+    if done then reverse ((r : Int) :: acc)
+    else lebSGo k q (((r + 128 : Nat) : Int) :: acc)
+
+def lebS (n : Int) : List Int :=
+  lebSGo profile.lebSFuel n []
+
+def vtI32 : Int := 127
+def vtI64 : Int := 126
+def opEnd : Int := 11
+def opI32Const : Int := 65
+def opI64Const : Int := 66
+
+def i32Const (n : Int) : List Int :=
+  opI32Const :: lebS n
+
+def i64Const (n : Int) : List Int :=
+  opI64Const :: lebS n
+
+structure WFn where
+  params : List Int
+  results : List Int
+  locals : List Int
+  code : List Int
+
+structure WEx where
+  name : List Int
+  idx : Nat
+
+-- Persistent initializers, in reverse allocation order. Boxing this state
+-- in Cen keeps the compiler's flat result ABI within profile.resWords.
+structure GroundPool where
+  next : Int := profile.heapAt
+  chunks : List (List Int) := []
+  cache : List Map := []
+  objects : Nat := 0
+  hits : Nat := 0
+
+def groundPoolOf : List GroundPool → GroundPool
+  | [] => {}
+  | p :: _ => p
+
+structure WMod where
+  fns : List WFn
+  exps : List WEx
+  ground : List GroundPool := []
+  -- exception tags, each without a payload (the exception-handling proposal's tag section, id 13);
+  -- their type `() -> ()` follows the functions' types. 0: no tag section, the bytes as before.
+  tags : Nat := 0
+  -- bytes that stand from `profile.memoAt` on when the module starts: persistent objects of a
+  -- module that has no memo tables and no ground pool (lib/lrc/Emit.rsd "String literals")
+  lowData : List Int := []
+
+def typeOf (f : WFn) : List Int :=
+  96 :: lebU f.params.length ++ f.params ++ lebU f.results.length ++ f.results
+
+def typesOf : List WFn → List Int
+  | [] => []
+  | f :: fs => typeOf f ++ typesOf fs
+
+def encodeTypes (fs : List WFn) : List Int :=
+  lebU fs.length ++ typesOf fs
+
+def funcIdxs : Nat → List WFn → List Int
+  | _, [] => []
+  | i, _ :: fs => lebU i ++ funcIdxs (i + 1) fs
+
+def encodeFuncs (fs : List WFn) : List Int :=
+  lebU fs.length ++ funcIdxs 0 fs
+
+-- "memory"
+def nameMem : List Int := [109, 101, 109, 111, 114, 121]
+
+def exportMem : List Int :=
+  lebU nameMem.length ++ nameMem ++ [2, 0]
+
+def exportOne (e : WEx) : List Int :=
+  lebU e.name.length ++ e.name ++ [0] ++ lebU e.idx
+
+def exportsOf : List WEx → List Int
+  | [] => []
+  | e :: es => exportOne e ++ exportsOf es
+
+def encodeExports (es : List WEx) : List Int :=
+  lebU (es.length + 1) ++ exportsOf es ++ exportMem
+
+def localGroups : List Int → List Int
+  | [] => []
+  | t :: ts => lebU 1 ++ [t] ++ localGroups ts
+
+def encodeLocals (ts : List Int) : List Int :=
+  lebU ts.length ++ localGroups ts
+
+def encodeCode (f : WFn) : List Int :=
+  let body := encodeLocals f.locals ++ f.code
+  lebU body.length ++ body
+
+def codesOf : List WFn → List Int
+  | [] => []
+  | f :: fs => encodeCode f ++ codesOf fs
+
+def encodeCodes (fs : List WFn) : List Int :=
+  lebU fs.length ++ codesOf fs
+
+-- `section` is a Lean keyword, so the wasm section is `wsec`.
+def wsec (id : Nat) (payload : List Int) : List Int :=
+  (id : Int) :: lebU payload.length ++ payload
+
+def magic : List Int :=
+  [0, 97, 115, 109, 1, 0, 0, 0]
+
+-- One memory, no maximum, one page to start. Allocation grows it.
+-- No global section: the block whose base is local 0 holds the bump and the limit.
+def encodeMemory : List Int :=
+  wsec 5 ([1, 0] ++ lebU profile.initPages)
+
+-- Static rc-0 empty String and Array. Data lies beyond block results,
+-- RC free lists and counters, before memoAt; no runtime initialization.
+def objectEmptyArray : Int := 832
+
+def objectInitialPayload : List Int :=
+  let str := [0, 0, 0, 0, 0, 0, 0, 249] ++ [1, 0, 0, 0, 0, 0, 0, 0]
+    ++ [1, 0, 0, 0, 0, 0, 0, 0] ++ List.replicate 16 0
+  let arr := [0, 0, 0, 0, 0, 0, 0, 246] ++ List.replicate 16 0
+  [0] ++ i32Const profile.emptyStr ++ [11] ++ lebU str.length ++ str
+    ++ [0] ++ i32Const objectEmptyArray ++ [11] ++ lebU arr.length ++ arr
+
+def objectInitialData : List Int :=
+  wsec 11 ([2] ++ objectInitialPayload)
+
+def groundDataBytes : List (List Int) → List Int → List Int
+  | [], acc => acc
+  | c :: cs, acc => groundDataBytes cs (c ++ acc)
+
+-- __heap_base is the usual wasm linker boundary. A static-aware host
+-- starts its input objects and bump here; ordinary modules add no global.
+def groundHeapName : List Int := [95, 95, 104, 101, 97, 112, 95, 98, 97, 115, 101]
+
+def groundI32 (n : Int) : List Int :=
+  i32Const (if n >= 2147483648 then n - 4294967296 else n)
+
+def groundGlobals (p : GroundPool) : List Int :=
+  if p.chunks.isEmpty then [] else wsec 6 ([1, 127, 0] ++ groundI32 p.next ++ [11])
+
+def groundMemory (p : GroundPool) : List Int :=
+  if p.chunks.isEmpty then encodeMemory
+  else wsec 5 ([1, 0] ++ lebU ((p.next.toNat + 65535) / 65536))
+
+def groundExports (p : GroundPool) (es : List WEx) : List Int :=
+  if p.chunks.isEmpty then encodeExports es
+  else lebU (es.length + 2) ++ exportsOf es ++ exportMem
+    ++ lebU groundHeapName.length ++ groundHeapName ++ [3, 0]
+
+def groundData (p : GroundPool) : List Int :=
+  if p.chunks.isEmpty then objectInitialData
+  else
+    let data := groundDataBytes p.chunks []
+    wsec 11 ([3] ++ objectInitialPayload ++ [0] ++ groundI32 profile.heapAt
+      ++ [11] ++ lebU data.length ++ data)
+
+def tagEntries (ty : Nat) : Nat → List Int
+  | 0 => []
+  | k + 1 => 0 :: lebU ty ++ tagEntries ty k
+
+def encode (m : WMod) : List Int :=
+  let p := groundPoolOf m.ground
+  let types := if m.tags == 0 then encodeTypes m.fns else lebU (m.fns.length + 1) ++ typesOf m.fns ++ [96, 0, 0]
+  let tagSec := if m.tags == 0 then [] else wsec 13 (lebU m.tags ++ tagEntries m.fns.length m.tags)
+  finish (puts (puts (puts (puts (puts (puts (puts (puts (puts [] magic)
+    (wsec 1 types))
+    (wsec 3 (encodeFuncs m.fns)))
+    (groundMemory p))
+    tagSec)
+    (groundGlobals p))
+    (wsec 7 (groundExports p m.exps)))
+    (wsec 10 (encodeCodes m.fns)))
+    (if m.lowData.isEmpty then groundData p
+     else wsec 11 ([3] ++ objectInitialPayload ++ [0] ++ groundI32 profile.memoAt ++ [11] ++ lebU m.lowData.length ++ m.lowData)))
+
+-- "main"
+def nameMain : List Int := [109, 97, 105, 110]
+
+-- Decimal digits of n, at most the profile's places.
+def digitsGo : Nat → Nat → List Int
+  | 0, _ => []
+  | k + 1, n =>
+    let q := n / 10
+    let d : Int := (48 + n % 10 : Nat)
+    if q == 0 then [d] else digitsGo k q ++ [d]
+
+def digits (n : Nat) : List Int :=
+  digitsGo profile.places n
+
+def funExps : Nat → Nat → List WEx
+  | _, 0 => []
+  | i, k + 1 => { name := (102 : Int) :: digits i, idx := i } :: funExps (i + 1) k
+
+-- Every function as fN, and the last one also as main, so a one-function module
+-- still answers `--invoke main`.
+def expsFor (n : Nat) : List WEx :=
+  funExps 0 n ++ [{ name := nameMain, idx := n - 1 }]
+
+def mod42 : WMod :=
+  { fns := [{ params := [], results := [vtI32], locals := [], code := i32Const 42 ++ [opEnd] }]
+  , exps := [{ name := nameMain, idx := 0 }] }
+
+-- Source parameters, locals and result areas use flat i64 word runs.
+-- Heap fields are boxed and packed by ObjectStorage using ObjectLayout.
+-- The local ABI therefore does not determine an object's byte offsets.
+--
+-- Convention (item 1): source function i is wasm function rtBase + i with
+-- params (base, fuel, p1 .. pk words) and one i64 result, the status: 0 value,
+-- 1 residue, 2 sourceFuelExhausted, 3 sourceStuck, 4 capacity (block ABI v2,
+-- docs/BLOCK_ABI.md). Fuel is an unsigned u64: zero is refused at entry and
+-- every fuel comparison is unsigned. The detail word is block+24 and the
+-- status is also written to block+16. A callee stores its result words at the result
+-- area [base + resAt + 8j] right before `return 0`; the caller loads them into
+-- locals right after the call, before any other call, so one area serves every
+-- depth. Every expression lowers into locals: `Lw.slot` is the first local of
+-- its value, and a variable or a field is an alias, not a copy.
+--
+-- Heap storage follows docs/OBJECT-ABI.md: an 8-byte Lean-style header,
+-- object slots before scalar fields; 64-bit slots hold wasm32 offsets.
+-- List nil is immediate 1; strings are compact UTF-8; scalar arrays are flat.
+-- lib/rt/V1.rsd supplies allocation and RC slow paths without host calls.
+
+def minI64 : Int := -9223372036854775808
+
+structure Rd where
+  ok : Int
+  n : Int
+  rest : List Int
+
+-- Expression lowering carries a compact code DAG beside the census.
+-- Census membership and insertion order are unchanged by this state wrapper.
+structure LowerMemo where
+  -- Single-child boxes keep the compiler's own Lw result within the
+  -- existing result-word ABI; the maps remain persistent AVL trees.
+  entries : List Map
+  fragments : List Map
+  n : Nat
+  enabled : Bool
+  lowered : Nat
+  hits : Nat
+  words : Nat
+  scopes : Nat := 0
+  -- Shape-only reuse facts are independent of local ownership. This table
+  -- shares the existing per-function lowering memo's lifetime and context.
+  reuseShapes : List Map := []
+
+def lowerMemoEmpty : LowerMemo :=
+  { entries := [], fragments := [], n := 0, enabled := true,
+    lowered := 0, hits := 0, words := 0 }
+
+structure Cen where
+  es : List (List Int)
+  memo : LowerMemo := lowerMemoEmpty
+  ground : List GroundPool := []
+
+def cenEmpty : Cen := { es := [] }
+
+structure Lw where
+  ok : Int
+  rest : List Int
+  code : List (List Int)
+  nxt : Nat
+  slot : Nat
+  cen : Cen
+  release : List (List Int) := []
+  resultOwned : Bool := false
+
+
+def rdOk (n : Int) (rest : List Int) : Rd :=
+  { ok := profile.cOk, n := n, rest := rest }
+
+def rdFail (c : Int) (rest : List Int) : Rd :=
+  { ok := c, n := 0, rest := rest }
+
+def lwFail (c : Int) (rest : List Int) : Lw :=
+  { ok := c, rest := rest, code := [], nxt := 0, slot := 0, cen := cenEmpty }
+
+def lwOk (rest : List Int) (code : List (List Int)) (nxt slot : Nat) (cen : Cen) : Lw :=
+  { ok := profile.cOk, rest := rest, code := code, nxt := nxt, slot := slot, cen := cen }
+
+def readLebGo : Nat → Int → Int → List Int → Rd
+  | _, _, _, [] => rdFail profile.cTrunc []
+  | 0, _, _, rest => rdFail profile.cTrunc rest
+  | k + 1, acc, place, b :: bs =>
+    let low := if b ≥ 128 then b - 128 else b
+    let acc2 := acc + low * place
+    if b < 128 then rdOk acc2 bs else readLebGo k acc2 (place * 128) bs
+
+def readLeb (rest : List Int) : Rd :=
+  readLebGo profile.lebUFuel 0 1 rest
+
+-- The 8th byte is signed, so the accumulator never leaves i64.
+def readI64Go : Nat → Int → Int → List Int → Rd
+  | _, _, _, [] => rdFail profile.cTrunc []
+  | 0, acc, _, rest => rdOk acc rest
+  | 1, acc, place, b :: bs =>
+    let contrib := if b ≥ 128 then (b - 256) * place else b * place
+    rdOk (acc + contrib) bs
+  | k + 1, acc, place, b :: bs =>
+    readI64Go k (acc + b * place) (place * 256) bs
+
+def readLeafI64 : List Int → Rd
+  | [] => rdFail profile.cTrunc []
+  | b :: bs => if b != 0 then rdFail profile.cType bs else readI64Go profile.i64Bytes 0 1 bs
+
+def eatAll : List Int → List Int → Rd
+  | [], rest => rdOk 0 rest
+  | _, [] => rdFail profile.cTrunc []
+  | w :: ws, b :: bs => if b == w then eatAll ws bs else rdFail profile.cHeader bs
+
+def skipBytes : Nat → List Int → Rd
+  | 0, rest => rdOk 0 rest
+  | _, [] => rdFail profile.cTrunc []
+  | k + 1, _ :: bs =>
+    let r := skipBytes k bs
+    if r.ok != profile.cOk then r else rdOk (r.n + 1) r.rest
+
+-- Bytes of one unsigned leb at the head of `rest`; same fuel and refusals
+-- as `readLebGo`. Returns the span, so callers do not measure `List.length`
+-- of the remaining input (that walk made compile time quadratic).
+def lebSpanGo : Nat → List Int → Rd
+  | _, [] => rdFail profile.cTrunc []
+  | 0, rest => rdFail profile.cTrunc rest
+  | k + 1, b :: bs =>
+    if b < 128 then rdOk 1 bs
+    else
+      let s := lebSpanGo k bs
+      if s.ok != profile.cOk then s else rdOk (s.n + 1) s.rest
+
+def lebSpan (rest : List Int) : Rd :=
+  lebSpanGo profile.lebUFuel rest
+
+-- `name` on the wire is a bytes leaf: 01, leb(length), bytes.
+-- `n` is the whole leaf's byte count (tag, leb, payload).
+def skipName : List Int → Rd
+  | [] => rdFail profile.cTrunc []
+  | 1 :: bs =>
+    let n := readLeb bs
+    if n.ok != profile.cOk then rdFail n.ok n.rest
+    else if n.n < 0 then rdFail profile.cBody n.rest
+    else
+      let sp := lebSpan bs
+      if sp.ok != profile.cOk then rdFail sp.ok sp.rest
+      else
+        let r := skipBytes n.n.toNat n.rest
+        if r.ok != profile.cOk then r else rdOk (sp.n + r.n + 1) r.rest
+  | _ :: bs => rdFail profile.cBody bs
+
+structure Bytes where
+  ok : Int
+  n : Int
+  bs : List Int
+  rest : List Int
+
+def bytesFail (c : Int) (rest : List Int) : Bytes :=
+  { ok := c, n := 0, bs := [], rest := rest }
+
+def takeBytes : Nat → Int → List Int → List Int → Bytes
+  | 0, n, acc, rest => { ok := profile.cOk, n := n, bs := reverse acc, rest := rest }
+  | _, _, _, [] => bytesFail profile.cTrunc []
+  | k + 1, n, acc, b :: bs => takeBytes k n (b :: acc) bs
+
+-- The bytes of a `litS`. Length 0 leaves `rest` on the leaf's end.
+def readStr : List Int → Bytes
+  | [] => bytesFail profile.cTrunc []
+  | 1 :: bs =>
+    let n := readLeb bs
+    if n.ok != profile.cOk then bytesFail n.ok n.rest
+    else if n.n < 0 then bytesFail profile.cBody n.rest
+    else if n.n == 0 then { ok := profile.cOk, n := 0, bs := [], rest := n.rest }
+    else takeBytes n.n.toNat n.n [] n.rest
+  | _ :: bs => bytesFail profile.cBody bs
+
+structure FactEntry where
+  key : Int
+  sa : Int
+  sb : Int
+
+structure FactFound where
+  v : Int
+  hit : FactEntry
+
+def factGet : List FactEntry → Int → FactFound
+  | [], _ => { v := -1, hit := { key := 0, sa := 0, sb := 0 } }
+  | x :: xs, key =>
+    if x.key == key then { v := 1, hit := x } else factGet xs key
+
+def factPut (xs : List FactEntry) (key lo hi : Int) : List FactEntry :=
+  { key := key, sa := lo, sb := hi } :: xs
+
+structure Dg where
+  on : Bool
+  nodes : Map
+  n : Nat
+  ranges : List FactEntry
+  certs : List FactEntry
+  typeIndex : Map := map0 0
+  nodeUse : List Int := []
+
+def dgNone : Dg := { on := false, nodes := map0 0, n := 0, ranges := [], certs := [] }
+def dgEmpty : Dg := { dgNone with on := true }
+
+def dgAt (g : Dg) (i : Nat) : List Int :=
+  if i >= g.n then [] else (get g.nodes (i : Int)).xs
+
+def dgPush (g : Dg) (e : List Int) : Dg :=
+  { g with nodes := (ins g.nodes (g.n : Int) 1 0 0 e).m, n := g.n + 1 }
+
+-- A type is read as its own wire bytes: `bytes` is the type, `rest` follows it.
+-- One function, not a `mutual` block: Lean 4.14 gives a mutual group no
+-- `_sunfold`, and the emitter refuses a callee without one. `kind` 0 is a
+-- type, 1 a group, 2 a field run. `n` is the remaining count for 1 and 2.
+-- `acc` holds the consumed bytes reversed.
+structure Ty where
+  ok : Int
+  acc : List Int
+  rest : List Int
+  span : Int := 0
+  need : Int := 0
+
+def tyFail (c : Int) (rest : List Int) : Ty :=
+  { ok := c, acc := [], rest := rest }
+
+def pushBytes : List Int → List Int → List Int
+  | [], acc => acc
+  | b :: bs, acc => pushBytes bs (b :: acc)
+
+-- An explicit parser work stack, rather than source call-stack depth. A
+-- group frame describes its remaining children without allocating n tasks.
+-- The depth is metadata for old v2 node records, never an admission limit.
+structure TyWork where
+  kind : Nat
+  n : Nat
+  depth : Int
+
+def readTyIter (g : Dg) (fuel : Nat) (work : List TyWork) (acc : List Int)
+    (span need : Int) (rest : List Int) : Ty :=
+  match fuel with
+  | 0 => tyFail profile.cType rest
+  | k + 1 =>
+    match work with
+    | [] => { ok := profile.cOk, acc := reverse acc, rest := rest, span := span, need := need }
+    | w :: ws =>
+      if w.kind != 0 then
+        match w.n with
+        | 0 => readTyIter g k ws acc span need rest
+        | m + 1 =>
+          let nm := if w.kind == 2 then skipName rest else rdOk 0 rest
+          if nm.ok != profile.cOk then tyFail nm.ok nm.rest
+          else
+            let a := if w.kind == 2 then pushBytes (takeBytes nm.n.toNat 0 [] rest).bs acc else acc
+            readTyIter g k ({ kind := 0, n := 0, depth := w.depth + 1 } ::
+              { w with n := m, depth := w.depth + 1 } :: ws)
+              a (span + nm.n) need nm.rest
+      else
+        match rest with
+        | [] => tyFail profile.cTrunc []
+        | 54 :: bs =>
+          let r := readLeb bs
+          if !g.on then tyFail profile.cType bs
+          else if r.ok != profile.cOk then tyFail r.ok r.rest
+          else if r.n < 0 then tyFail profile.cRef r.rest
+          else
+            match dgAt g r.n.toNat with
+            | [] => tyFail profile.cRef r.rest
+            | 0 :: childNeed :: id :: _ :: _ =>
+              let nd := childNeed + w.depth - 1
+              readTyIter g k ws (pushBytes (54 :: lebU id.toNat) acc)
+                (span + 1 + (lebSpan bs).n) (if nd > need then nd else need) r.rest
+            | _ => tyFail profile.cRefKind r.rest
+        | 11 :: _ :: bs =>
+          let nd := if w.depth > need then w.depth else need
+          readTyIter g k ws (0 :: acc) (span + 2) nd bs
+        | 10 :: _ :: _ :: bs =>
+          let nd := if w.depth > need then w.depth else need
+          readTyIter g k ({ kind := 0, n := 0, depth := w.depth + 1 } :: ws)
+            (4 :: acc) (span + 3) nd bs
+        | t :: bs =>
+          let nd := if w.depth > need then w.depth else need
+          if t == 0 || t == 1 || t == 2 || t == 3 then
+            readTyIter g k ws (t :: acc) (span + 1) nd bs
+          else if t == 4 || t == 8 || t == 9 then
+            readTyIter g k ({ kind := 0, n := 0, depth := w.depth + 1 } :: ws)
+              (t :: acc) (span + 1) nd bs
+          else if t == 5 then
+            readTyIter g k ({ kind := 0, n := 0, depth := w.depth + 1 } ::
+              { kind := 0, n := 0, depth := w.depth + 1 } :: ws)
+              (t :: acc) (span + 1) nd bs
+          else if t == 6 || t == 7 then
+            let r := readLeb bs
+            if r.ok != profile.cOk then tyFail r.ok r.rest
+            else if r.n < 0 then tyFail profile.cType r.rest
+            else
+              let sp := lebSpan bs
+              if sp.ok != profile.cOk then tyFail sp.ok sp.rest
+              else
+                readTyIter g k ({ kind := (if t == 6 then 1 else 2), n := r.n.toNat, depth := w.depth + 1 } :: ws)
+                  (pushBytes (takeBytes sp.n.toNat 0 [] bs).bs (t :: acc))
+                  (span + 1 + sp.n) nd r.rest
+          else tyFail profile.cType bs
+
+-- One pass returns both bytes and span. This bound counts parser steps;
+-- it imposes no depth-64 refusal and does not measure the remaining stream.
+def readTy (rest : List Int) : Ty :=
+  readTyIter dgNone profile.v2Fuel [{ kind := 0, n := 0, depth := 1 }] [] 0 0 rest
+
+def skipTy (rest : List Int) : Rd :=
+  let t := readTy rest
+  if t.ok != profile.cOk then rdFail t.ok t.rest else rdOk 0 t.rest
+
+def envTy : List (List Int) → Nat → List Int
+  | [], _ => []
+  | x :: _, 0 => x
+  | _ :: xs, k + 1 => envTy xs k
+
+def csAt : List (List (List Int)) → Nat → List (List Int)
+  | [], _ => []
+  | x :: _, 0 => x
+  | _ :: xs, k + 1 => csAt xs k
+
+/-! ## RSCM-NF-1: the v2 node table, read natively
+
+`RSCM 2`, leb `K`, then `K` nodes `kind leb(len) content` (kind 0 a type,
+1 an expression; children precede parents), then the v1 tail with every
+type position `54 leb(k) | inline type` and every expression position
+`53 leb(k) | inline expression`. Method: hash-consing (Filliatre and
+Conchon, ML 2006) written as Lean's .olean compaction (each object once,
+by index). The grammar note and the encoder are emitter/evallean/RscmNF.lean.
+
+Read natively, never expanded to the v1 stream: each node is decoded once
+into the indexed table `Dg`. Type nodes keep compact child references,
+canonical type identity and a structural digest. Equal types share that
+identity, including equivalent inline and indexed child encodings. A type
+reference stays an index when read. An expression node keeps its content
+(`1 :: need :: content`); `need` records the source traversal bound.
+A dangling or forward reference is `[rscm_bad_ref]`; a reference to the
+wrong kind of node is `[rscm_ref_kind]`. -/
+
+-- Fact caches use the ordinary first-match association-list representation.
+-- Entries are nonrecursive records, so the typed emitter can represent Dg.
+-- New bindings shadow old ones, as in the previous AVL map insertion.
+def maxZ (a b : Int) : Int := if a > b then a else b
+
+-- Open the expression reference at the head of `rest` in place.
+def drE (g : Dg) (rest : List Int) : List Int :=
+  match g.on, rest with
+  | true, 53 :: bs =>
+    let r := readLeb bs
+    if r.ok != profile.cOk || r.n < 0 then rest
+    else
+      match dgAt g r.n.toNat with
+      | 1 :: _ :: c => c ++ r.rest
+      | _ => rest
+  | _, _ => rest
+
+-- A type position returns a canonical index, not the referenced subtree.
+-- Inline v1 types remain accepted at the compatibility boundary.
+def readTyD (g : Dg) (rest : List Int) : Ty :=
+  readTyIter g profile.v2Fuel [{ kind := 0, n := 0, depth := 1 }] [] 0 0 rest
+
+-- Resolve one type head. Child positions stay references in the pool.
+def tyView (g : Dg) (ty : List Int) : List Int :=
+  match ty with
+  | 54 :: bs =>
+    let r := readLeb bs
+    match dgAt g r.n.toNat with
+    | 0 :: _ :: _ :: _ :: body => body
+    | _ => []
+  | _ => ty
+
+def skipTyD (g : Dg) (rest : List Int) : Rd :=
+  let t := readTyD g rest
+  if t.ok != profile.cOk then rdFail t.ok t.rest else rdOk 0 t.rest
+
+-- The fuel `readTyGo` spends on a plain type: kind 0 one type, 1 a run of
+-- `n` types, 2 a run of `n` named fields. Same refusals as `readTyGo`.
+def tyNeedGo (fuel : Nat) (kind : Nat) (n : Nat) (rest : List Int) : Rd :=
+  match fuel with
+  | 0 => rdFail profile.cType rest
+  | k + 1 =>
+    if kind == 1 || kind == 2 then
+      match n with
+      | 0 => rdOk 0 rest
+      | m + 1 =>
+        let nm := if kind == 2 then skipName rest else rdOk 0 rest
+        if nm.ok != profile.cOk then nm
+        else
+          let a := tyNeedGo k 0 0 nm.rest
+          if a.ok != profile.cOk then a
+          else
+            let b := tyNeedGo k kind m a.rest
+            if b.ok != profile.cOk then b else rdOk (1 + maxZ a.n b.n) b.rest
+    else
+      match rest with
+      | [] => rdFail profile.cTrunc []
+      | 11 :: _ :: bs => rdOk 1 bs
+      | 10 :: _ :: _ :: bs =>
+        let a := tyNeedGo k 0 0 bs
+        if a.ok != profile.cOk then a else rdOk (1 + a.n) a.rest
+      | t :: bs =>
+        if t == 0 || t == 1 || t == 2 || t == 3 then rdOk 1 bs
+        else if t == 4 || t == 8 || t == 9 then
+          let a := tyNeedGo k 0 0 bs
+          if a.ok != profile.cOk then a else rdOk (1 + a.n) a.rest
+        else if t == 5 then
+          let a := tyNeedGo k 0 0 bs
+          if a.ok != profile.cOk then a
+          else
+            let b := tyNeedGo k 0 0 a.rest
+            if b.ok != profile.cOk then b else rdOk (1 + maxZ a.n b.n) b.rest
+        else if t == 6 || t == 7 then
+          let r := readLeb bs
+          if r.ok != profile.cOk then r
+          else if r.n < 0 then rdFail profile.cType r.rest
+          else
+            let a := tyNeedGo k (if t == 6 then 1 else 2) r.n.toNat r.rest
+            if a.ok != profile.cOk then a else rdOk (1 + a.n) a.rest
+        else rdFail profile.cType bs
+
+-- A type node's content: its head over compact type positions.
+-- `acc` holds the compact bytes reversed; `need` is traversal metadata.
+structure Tn where
+  ok : Int
+  need : Int
+  acc : List Int
+  rest : List Int
+
+def tnFail (c : Int) (rest : List Int) : Tn :=
+  { ok := c, need := 0, acc := [], rest := rest }
+
+-- One type position into `acc`: a reference (the stored bytes) or a plain type.
+def tpOne (g : Dg) (acc : List Int) (rest : List Int) : Tn :=
+  match rest with
+  | 54 :: bs =>
+    let r := readLeb bs
+    if r.ok != profile.cOk then tnFail r.ok r.rest
+    else if r.n < 0 then tnFail profile.cRef r.rest
+    else
+      match dgAt g r.n.toNat with
+      | [] => tnFail profile.cRef r.rest
+      | 0 :: need :: id :: _ :: _ => { ok := profile.cOk, need := need, acc := pushBytes (54 :: lebU id.toNat) acc, rest := r.rest }
+      | _ => tnFail profile.cRefKind r.rest
+  | _ =>
+    let t := readTy rest
+    if t.ok != profile.cOk then tnFail t.ok t.rest
+    else
+      { ok := profile.cOk, need := t.need, acc := pushBytes t.acc acc, rest := t.rest }
+
+-- A run of `n` type positions (named: each after a bytes leaf); `need` as
+-- `readTyGo`'s kind 1 and 2.
+def tpRun (g : Dg) (named : Bool) : Nat → List Int → List Int → Tn
+  | 0, acc, rest => { ok := profile.cOk, need := 0, acc := acc, rest := rest }
+  | m + 1, acc, rest =>
+    let nm := if named then skipName rest else rdOk 0 rest
+    if nm.ok != profile.cOk then tnFail nm.ok nm.rest
+    else
+      let acc2 := if named then pushBytes (takeBytes nm.n.toNat 0 [] rest).bs acc else acc
+      let a := tpOne g acc2 nm.rest
+      if a.ok != profile.cOk then a
+      else
+        let b := tpRun g named m a.acc a.rest
+        if b.ok != profile.cOk then b else { b with need := 1 + maxZ a.need b.need }
+
+def tyNode (g : Dg) (rest : List Int) : Tn :=
+  match rest with
+  | [] => tnFail profile.cTrunc []
+  | 11 :: _ :: bs => { ok := profile.cOk, need := 1, acc := [0], rest := bs }
+  | 10 :: _ :: _ :: bs =>
+    let a := tpOne g [4] bs
+    if a.ok != profile.cOk then a else { a with need := 1 + a.need }
+  | t :: bs =>
+    if t == 0 || t == 1 || t == 2 || t == 3 then { ok := profile.cOk, need := 1, acc := [t], rest := bs }
+    else if t == 4 || t == 8 || t == 9 then
+      let a := tpOne g [t] bs
+      if a.ok != profile.cOk then a else { a with need := 1 + a.need }
+    else if t == 5 then
+      let a := tpOne g [t] bs
+      if a.ok != profile.cOk then a
+      else
+        let b := tpOne g a.acc a.rest
+        if b.ok != profile.cOk then b else { b with need := 1 + maxZ a.need b.need }
+    else if t == 6 || t == 7 then
+      let r := readLeb bs
+      if r.ok != profile.cOk then tnFail r.ok r.rest
+      else if r.n < 0 then tnFail profile.cType r.rest
+      else
+        let sp := lebSpan bs
+        let a := tpRun g (t == 7) r.n.toNat (pushBytes (takeBytes sp.n.toNat 0 [] bs).bs [t]) r.rest
+        if a.ok != profile.cOk then a else { a with need := 1 + a.need }
+    else tnFail profile.cType bs
+
+-- Word equality on byte lists: the array census compares types.
+def eqW : List Int → List Int → Bool
+  | [], [] => true
+  | x :: xs, y :: ys => x == y && eqW xs ys
+  | _, _ => false
+
+def memW : List (List Int) → List Int → Bool
+  | [], _ => false
+  | t :: ts, ty => eqW t ty || memW ts ty
+
+-- Hash-consing uses exact compact contents after a hash bucket lookup.
+-- Hash collisions never identify different types.
+-- Keep the bounded rolling state in Nat. Lean's native Int multiplication
+-- otherwise allocates a bignum before reducing even a 31-bit hash state.
+def dagHashResidue (x : Int) : Nat :=
+  if x >= 0 then x.toNat % 2147483647
+  else (2147483647 - ((-x).toNat % 2147483647)) % 2147483647
+
+def dagHashGo (mul bump : Nat) : List Int → Nat → Nat
+  | [], h => h
+  | x :: xs, h => dagHashGo mul bump xs
+      ((h * mul + dagHashResidue x + bump) % 2147483647)
+
+def typeHash : List Int → Int → Int
+  | [], h => h
+  | b :: bs, h => (dagHashGo 257 1 (b :: bs) (dagHashResidue h) : Int)
+
+-- Work records contain two closed type positions. Indexed operands compare
+-- by canonical node id. Synthetic/inline operands are compared a head at a
+-- time; no expanded type is allocated.
+structure TypePair where
+  a : List Int
+  b : List Int
+
+structure TypeParts where
+  ok : Bool
+  names : List Int
+  children : List (List Int)
+
+def typeParts (g : Dg) (named : Bool) : Nat → List Int → List Int → List (List Int) → TypeParts
+  | 0, _, names, children => { ok := true, names := names, children := children }
+  | k + 1, rest, names, children =>
+    let nm := if named then readStr rest else { ok := profile.cOk, n := 0, bs := [], rest := rest : Bytes }
+    let t := readTyD g nm.rest
+    if nm.ok != profile.cOk || t.ok != profile.cOk then { ok := false, names := [], children := [] }
+    else typeParts g named k t.rest (if named then (nm.n :: nm.bs) ++ names else names) (t.acc :: children)
+
+def typePairs : List (List Int) → List (List Int) → List TypePair → List TypePair
+  | [], [], work => work
+  | a :: as, b :: bs, work => typePairs as bs ({ a := a, b := b } :: work)
+  | _, _, work => { a := [], b := [0] } :: work
+
+def typeEqWork (g : Dg) : Nat → List TypePair → Bool
+  | 0, _ => false
+  | _ + 1, [] => true
+  | k + 1, p :: work =>
+    if eqW p.a p.b then typeEqWork g k work
+    else if p.a.headD (-1) == 54 && p.b.headD (-1) == 54 then false
+    else
+      let a := tyView g p.a
+      let b := tyView g p.b
+      match a, b with
+      | ta :: ar, tb :: br =>
+        if ta != tb then false
+        else if ta <= 3 then ar.isEmpty && br.isEmpty && typeEqWork g k work
+        else if ta == 4 || ta == 8 || ta == 9 then typeEqWork g k ({ a := ar, b := br } :: work)
+        else if ta == 5 then
+          let aa := readTyD g ar
+          let ba := readTyD g br
+          if aa.ok != profile.cOk || ba.ok != profile.cOk then false
+          else typeEqWork g k ({ a := aa.acc, b := ba.acc } :: { a := aa.rest, b := ba.rest } :: work)
+        else if ta == 6 || ta == 7 then
+          let an := readLeb ar
+          let bn := readLeb br
+          if an.ok != profile.cOk || bn.ok != profile.cOk || an.n != bn.n || an.n < 0 then false
+          else
+            let ap := typeParts g (ta == 7) an.n.toNat an.rest [] []
+            let bp := typeParts g (ta == 7) bn.n.toNat bn.rest [] []
+            ap.ok && bp.ok && eqW ap.names bp.names && typeEqWork g k (typePairs ap.children bp.children work)
+        else false
+      | _, _ => false
+
+def typeEq (g : Dg) (a b : List Int) : Bool :=
+  typeEqWork g profile.v2Fuel [{ a := a, b := b }]
+
+def memT (g : Dg) : List (List Int) → List Int → Bool
+  | [], _ => false
+  | t :: ts, ty => typeEq g t ty || memT g ts ty
+
+-- A structural digest consumes inline children once and reads a cached
+-- digest for each reference. Exact equality resolves any hash collision.
+def typeDigest (g : Dg) (fuel kind n : Nat) (h : Int) (rest : List Int) : Rd :=
+  match fuel with
+  | 0 => rdFail profile.cType rest
+  | k + 1 =>
+    if kind != 0 then
+      match n with
+      | 0 => rdOk h rest
+      | m + 1 =>
+        let nm := if kind == 2 then readStr rest else { ok := profile.cOk, n := 0, bs := [], rest := rest : Bytes }
+        if nm.ok != profile.cOk then rdFail nm.ok nm.rest
+        else
+          let a := typeDigest g k 0 0 0 nm.rest
+          if a.ok != profile.cOk then a
+          else typeDigest g k kind m (typeHash [a.n] (if kind == 2 then typeHash (nm.n :: nm.bs) h else h)) a.rest
+    else
+      match rest with
+      | [] => rdFail profile.cTrunc []
+      | 54 :: bs =>
+        let r := readLeb bs
+        match dgAt g r.n.toNat with
+        | 0 :: _ :: _ :: hash :: _ => rdOk hash r.rest
+        | _ => rdFail profile.cRef r.rest
+      | 11 :: _ :: bs => rdOk (typeHash [0] 0) bs
+      | 10 :: _ :: _ :: bs =>
+        let h := typeHash [4] 0
+        let a := typeDigest g k 0 0 0 bs
+        if a.ok != profile.cOk then a else rdOk (typeHash [a.n] h) a.rest
+      | t :: bs =>
+        let h := typeHash [t] 0
+        if t <= 3 then rdOk h bs
+        else if t == 4 || t == 8 || t == 9 then
+          let a := typeDigest g k 0 0 0 bs
+          if a.ok != profile.cOk then a else rdOk (typeHash [a.n] h) a.rest
+        else if t == 5 then typeDigest g k 1 2 h bs
+        else if t == 6 || t == 7 then
+          let r := readLeb bs
+          if r.ok != profile.cOk || r.n < 0 then rdFail profile.cType r.rest
+          else typeDigest g k (if t == 6 then 1 else 2) r.n.toNat (typeHash [r.n] h) r.rest
+        else rdFail profile.cType bs
+
+def typeFind (g : Dg) (body : List Int) : List Int → Int
+  | [] => -1
+  | id :: ids =>
+    match dgAt g id.toNat with
+    | 0 :: _ :: _ :: _ :: stored => if typeEq g body stored then id else typeFind g body ids
+    | _ => typeFind g body ids
+
+def dgPushType (g : Dg) (need : Int) (body : List Int) : Dg :=
+  let h := (typeDigest g profile.v2Fuel 0 0 0 body).n
+  let bucket := get g.typeIndex h
+  let old := typeFind g body bucket.xs
+  let id := if old < 0 then (g.n : Int) else old
+  let next := dgPush g (0 :: need :: id :: h :: body)
+  if old >= 0 then next
+  else { next with typeIndex := (ins g.typeIndex h 1 0 0 (id :: bucket.xs)).m }
+
+-- `arr` lists the list types in the array representation (item 3). Sizes and
+-- pointer maps follow the type bytes; `fuel` is structural on the bytes.
+-- The map is a list of 0/1 words, one per value word.
+structure Sz where
+  ok : Int
+  n : Nat
+  map : List Int
+  rest : List Int
+
+def szFail (c : Int) (rest : List Int) : Sz :=
+  { ok := c, n := 0, map := [], rest := rest }
+
+def zeros : Nat → List Int
+  | 0 => []
+  | k + 1 => (0 : Int) :: zeros k
+
+-- The arena node record (Lib.Arena intrinsic, below): a `list` of it is the
+-- arena value, one packed scalar word (version offset, count). Blocks live outside
+-- the bump heap, so the word is not a pointer for any map.
+def arenaNodeFields : List (List Int) := [[0], [4, 0], [0], [0], [0], [1], [1], [2]]
+
+def fieldsOk (tg : Dg) (rest : List Int) (fs : List (List Int)) : Bool :=
+  match fs with
+  | [] => rest.isEmpty
+  | f :: fs =>
+    let nm := skipName rest
+    if nm.ok != profile.cOk then false
+    else
+      let t := (readTyD tg) nm.rest
+      t.ok == profile.cOk && (typeEq tg) t.acc f && (fieldsOk tg) t.rest fs
+
+def isArenaNode (tg : Dg) (r : List Int) : Bool :=
+  match (tyView tg) r with
+  | 7 :: 8 :: bs => (fieldsOk tg) bs arenaNodeFields
+  | _ => false
+
+-- Reserved nominal handle: the field name identifies the node layout.
+-- A source integer is never promoted to a reference by its numeric value.
+def heapHandleTy : List Int := [7, 1, 1, 16, 99, 105, 98, 95, 104, 101, 97, 112, 95, 110, 111, 100, 101, 95, 118, 49, 0]
+def heapHandleTy2 : List Int := [7, 1, 1, 16, 99, 105, 98, 95, 104, 101, 97, 112, 95, 110, 111, 100, 101, 95, 118, 50, 0]
+def isHeapHandle (tg : Dg) (ty : List Int) : Bool := (typeEq tg) ty heapHandleTy || (typeEq tg) ty heapHandleTy2
+
+def heapHandleOf (tg : Dg) (node : List Int) : List Int :=
+  if ((tyView tg) node).take 2 == [7, 9] then heapHandleTy2 else heapHandleTy
+
+def isHeapNode (tg : Dg) (r : List Int) : Bool :=
+  match (tyView tg) r with
+  | 7 :: 8 :: bs => (fieldsOk tg) bs [[0], 4 :: heapHandleTy, [0], [0], [0], [1], [1], [2]]
+  | 7 :: 9 :: bs => (fieldsOk tg) bs [[0], 4 :: heapHandleTy2, [0], [0], [0], [1], [1], [2], [4, 0]]
+  | _ => false
+
+-- First-generation nine-field arenas carry the v1 nominal handle. This
+-- recognizes their public linked-list boundary only: it does not admit a
+-- storage intrinsic or change the packed-array representation.
+def isLegacyArenaBoundaryNode (tg : Dg) (r : List Int) : Bool :=
+  match (tyView tg) r with
+  | 7 :: 9 :: bs => (fieldsOk tg) bs [[0], 4 :: heapHandleTy, [0], [0], [0], [1], [1], [2], [4, 0]]
+  | _ => false
+
+-- NF-0 decision surface for the boundary mark. The request is the canonical
+-- pair of representation facts; non-arena words and packed descriptors stay
+-- unchanged. Laws are compiled rows in AnvilArenaBoundaryRows.lean.
+namespace ArenaBoundaryNF
+structure Request where
+  arena : Bool
+  packed : Bool
+inductive Residue where
+  | packedDescriptor
+  | nonArenaWord
+  deriving DecidableEq, Repr
+def q (r : Request) : List Bool := [r.arena, r.packed]
+def sigma (r : Request) : Request := r
+def admit (r : Request) : Bool := r.arena && !r.packed
+def residue? (r : Request) : Option Residue :=
+  if r.packed then some .packedDescriptor
+  else if r.arena then none else some .nonArenaWord
+def step (r : Request) : Except Residue Int :=
+  match residue? r with
+  | none => .ok 1
+  | some .packedDescriptor => .error .packedDescriptor
+  | some .nonArenaWord => .error .nonArenaWord
+def mark (r : Request) : Int :=
+  match step r with
+  | .ok w => w
+  | .error .packedDescriptor => 0
+  | .error .nonArenaWord => 0
+end ArenaBoundaryNF
+
+def isStorageNodeWithLayers (tg : Dg) (lay : Layers) (r : List Int) : Bool :=
+  if lay.rc then (isHeapNode tg) r else (isArenaNode tg) r
+
+-- kind 0: one type; kind 1: a group of n types, summed; kind 2: n fields, summed.
+-- mode 0 builds the pointer map (0/1 per word); mode 1 builds the equality
+-- kinds: 0 scalar, 1 string, 2 + i the i-th list type of `eqt` (an array's
+-- offset word is -1 and belongs to the pointer before it).
+
+
+def eqIdx (tg : Dg) : List (List Int) → List Int → Int → Int
+  | [], _, _ => -1
+  | t :: ts, ty, i => if (typeEq tg) t ty then i else (eqIdx tg) ts ty (i + 1)
+
+def isArenaListWithLayers (tg : Dg) (lay : Layers) (ty : List Int) : Bool :=
+  match (tyView tg) ty with
+  | 4 :: r => ((isStorageNodeWithLayers tg) lay) r
+  | _ => false
+
+
+
+-- Both emitter generations expose an arena as one word, even when it
+-- is implemented by ordinary linked-list operations in this configuration.
+def isNodeArenaList (g : Dg) (ty : List Int) : Bool :=
+  match (tyView g) ty with
+  | 4 :: r => (isArenaNode g) r || (isHeapNode g) r
+  | _ => false
+
+-- Mode 3 marks ordinary arena-list words at exported boundaries. Host zero
+-- becomes linked-list nil; packed descriptors and scalar zero stay unchanged.
+def sizeGoWithLayers (tg : Dg) (lay : Layers) (fuel : Nat) (arr : List (List Int)) (mode : Nat) (eqt : List (List Int)) (kind : Nat) (n : Nat) (acc : Nat) (map : List Int) (rest : List Int) : Sz :=
+  match fuel with
+  | 0 => if kind != 0 && n == 0 then { ok := profile.cOk, n := acc, map := map, rest := rest } else szFail profile.cType rest
+  | k + 1 =>
+    if kind == 1 then
+      match n with
+      | 0 => { ok := profile.cOk, n := acc, map := map, rest := rest }
+      | m + 1 =>
+        let a := ((sizeGoWithLayers tg) lay) k arr mode eqt 0 0 acc map rest
+        if a.ok != profile.cOk then a else ((sizeGoWithLayers tg) lay) k arr mode eqt 1 m a.n a.map a.rest
+    else if kind == 2 then
+      match n with
+      | 0 => { ok := profile.cOk, n := acc, map := map, rest := rest }
+      | m + 1 =>
+        let nm := skipName rest
+        if nm.ok != profile.cOk then szFail nm.ok nm.rest
+        else
+          let a := ((sizeGoWithLayers tg) lay) k arr mode eqt 0 0 acc map nm.rest
+          if a.ok != profile.cOk then a else ((sizeGoWithLayers tg) lay) k arr mode eqt 2 m a.n a.map a.rest
+    else if rest.headD (-1) == 54 then
+      let t := (readTyD tg) rest
+      if t.ok != profile.cOk then szFail t.ok t.rest
+      else
+        let a := ((sizeGoWithLayers tg) lay) k arr mode eqt 0 0 acc map ((tyView tg) t.acc)
+        { a with rest := t.rest }
+    else if lay.rc && (isHeapHandle tg) ((readTyD tg) rest).acc then
+      let t := (readTyD tg) rest
+      { ok := profile.cOk, n := acc + 1, map := map ++ [if mode == 0 then 1 else 0], rest := t.rest }
+    else
+      match rest with
+      | [] => szFail profile.cTrunc []
+      | 11 :: _ :: bs => ((sizeGoWithLayers tg) lay) k arr mode eqt 0 0 acc map (0 :: bs)
+      | 10 :: _ :: _ :: bs => ((sizeGoWithLayers tg) lay) k arr mode eqt 0 0 acc map (4 :: bs)
+      | t :: bs =>
+        if t == 0 || t == 1 then { ok := profile.cOk, n := acc + 1, map := map ++ [0], rest := bs }
+        else if t == 2 then { ok := profile.cOk, n := acc + 1, map := map ++ [if mode == 2 || mode == 3 then 0 else 1], rest := bs }
+        else if t == 3 then
+          -- bytes is the checked `list i64`; equality walks that list.
+          let k : Int := if mode == 0 then 1 else if mode == 2 || mode == 3 then 0 else 2 + (eqIdx tg) eqt [4, 0] 0
+          { ok := profile.cOk, n := acc + 1, map := map ++ [k], rest := bs }
+        else if t == 4 then
+          let e := (readTyD tg) bs
+          if e.ok != profile.cOk then szFail e.ok e.rest
+          else if ((isStorageNodeWithLayers tg) lay) e.acc then { ok := profile.cOk, n := acc + 1, map := map ++ [if mode == 2 then 1 else 0], rest := e.rest }
+          else
+            let w : Int := if mode == 0 then 1 else if mode == 2 then 0
+              else if mode == 3 then ArenaBoundaryNF.mark {
+                arena := (isArenaNode tg) e.acc || (isHeapNode tg) e.acc || (isLegacyArenaBoundaryNode tg) e.acc,
+                packed := (memT tg) arr (t :: e.acc) }
+              else 2 + (eqIdx tg) eqt (t :: e.acc) 0
+            if (memT tg) arr (t :: e.acc) then { ok := profile.cOk, n := acc + 2, map := map ++ [w, (if mode == 0 then 0 else -1)], rest := e.rest }
+            else { ok := profile.cOk, n := acc + 1, map := map ++ [w], rest := e.rest }
+        else if t == 8 then ((sizeGoWithLayers tg) lay) k arr mode eqt 0 0 (acc + 1) (map ++ [0]) bs
+        else if t == 9 then
+          let a := ((sizeGoWithLayers tg) lay) k arr mode eqt 0 0 (acc + 1) (map ++ [0]) bs
+          if a.ok != profile.cOk then a else { a with n := a.n + 1, map := a.map ++ [0] }
+        else if t == 5 then
+          let a := ((sizeGoWithLayers tg) lay) k arr mode eqt 0 0 acc map bs
+          if a.ok != profile.cOk then a else ((sizeGoWithLayers tg) lay) k arr mode eqt 0 0 a.n a.map a.rest
+        else if t == 6 || t == 7 then
+          let r := readLeb bs
+          if r.ok != profile.cOk then szFail r.ok r.rest
+          else if r.n < 0 then szFail profile.cType r.rest
+          else if t == 6 then ((sizeGoWithLayers tg) lay) k arr mode eqt 1 r.n.toNat (acc + 1) (map ++ [0]) r.rest
+          else ((sizeGoWithLayers tg) lay) k arr mode eqt 2 r.n.toNat acc map r.rest
+        else szFail profile.cType bs
+
+
+
+def sizeOfWithLayers (tg : Dg) (lay : Layers) (arr : List (List Int)) (ty : List Int) : Sz :=
+  ((sizeGoWithLayers tg) lay) profile.v2Fuel arr 0 [] 0 0 0 [] ty
+
+
+
+def wordsOfWithLayers (tg : Dg) (lay : Layers) (arr : List (List Int)) (ty : List Int) : Nat :=
+  (((sizeOfWithLayers tg) lay) arr ty).n
+
+
+
+def kindsOfWithLayers (tg : Dg) (lay : Layers) (arr eqt : List (List Int)) (ty : List Int) : List Int :=
+  (((sizeGoWithLayers tg) lay) profile.v2Fuel arr 1 eqt 0 0 0 [] ty).map
+
+-- The list types inside a type, outermost first, each once.
+
+
+structure Lt where
+  ok : Int
+  acc : List (List Int)
+  rest : List Int
+  seen : Map := map0 0
+
+def ltFail (c : Int) (rest : List Int) : Lt :=
+  { ok := c, acc := [], rest := rest }
+
+def addT (tg : Dg) (acc : List (List Int)) (t : List Int) : List (List Int) :=
+  if (memT tg) acc t then acc else acc ++ [t]
+
+def listTysGo (tg : Dg) (fuel : Nat) (kind : Nat) (n : Nat) (seen : Map) (acc : List (List Int)) (rest : List Int) : Lt :=
+  match fuel with
+  | 0 => if kind != 0 && n == 0 then { ok := profile.cOk, acc := acc, rest := rest, seen := seen } else ltFail profile.cType rest
+  | k + 1 =>
+    if kind == 1 then
+      match n with
+      | 0 => { ok := profile.cOk, acc := acc, rest := rest, seen := seen }
+      | m + 1 =>
+        let a := (listTysGo tg) k 0 0 seen acc rest
+        if a.ok != profile.cOk then a else (listTysGo tg) k 1 m a.seen a.acc a.rest
+    else if kind == 2 then
+      match n with
+      | 0 => { ok := profile.cOk, acc := acc, rest := rest, seen := seen }
+      | m + 1 =>
+        let nm := skipName rest
+        if nm.ok != profile.cOk then ltFail nm.ok nm.rest
+        else
+          let a := (listTysGo tg) k 0 0 seen acc nm.rest
+          if a.ok != profile.cOk then a else (listTysGo tg) k 2 m a.seen a.acc a.rest
+    else if rest.headD (-1) == 54 then
+      let t := (readTyD tg) rest
+      if t.ok != profile.cOk then ltFail t.ok t.rest
+      else
+        let id := (readLeb t.acc.tail).n
+        if (get seen id).v >= 0 then { ok := profile.cOk, acc := acc, rest := t.rest, seen := seen }
+        else
+          let next := (ins seen id 1 0 0 []).m
+          let a := (listTysGo tg) k 0 0 next acc ((tyView tg) t.acc)
+          { a with rest := t.rest }
+    else
+      match rest with
+      | [] => ltFail profile.cTrunc []
+      | 11 :: _ :: bs => (listTysGo tg) k 0 0 seen acc (0 :: bs)
+      | 10 :: _ :: _ :: bs => (listTysGo tg) k 0 0 seen acc (4 :: bs)
+      | t :: bs =>
+        if t == 0 || t == 1 || t == 2 then { ok := profile.cOk, acc := acc, rest := bs, seen := seen }
+        else if t == 3 then { ok := profile.cOk, acc := (addT tg) acc [4, 0], rest := bs, seen := seen }
+        else if t == 4 then
+          let e := (readTyD tg) bs
+          if e.ok != profile.cOk then ltFail e.ok e.rest
+          else (listTysGo tg) k 0 0 seen ((addT tg) acc (t :: e.acc)) bs
+        else if t == 8 || t == 9 then (listTysGo tg) k 0 0 seen acc bs
+        else if t == 5 then
+          let a := (listTysGo tg) k 0 0 seen acc bs
+          if a.ok != profile.cOk then a else (listTysGo tg) k 0 0 a.seen a.acc a.rest
+        else if t == 6 || t == 7 then
+          let r := readLeb bs
+          if r.ok != profile.cOk then ltFail r.ok r.rest
+          else if r.n < 0 then ltFail profile.cType r.rest
+          else if t == 6 then (listTysGo tg) k 1 r.n.toNat seen acc r.rest
+          else (listTysGo tg) k 2 r.n.toNat seen acc r.rest
+        else ltFail profile.cType bs
+
+def listTysIn (tg : Dg) (acc : List (List Int)) (ty : List Int) : List (List Int) :=
+  ((listTysGo tg) profile.v2Fuel 0 0 (map0 0) acc ty).acc
+
+def hasEqOf : List (List Int) → Bool
+  | [] => false
+  | (7 :: _) :: _ => true
+  | _ :: rest => hasEqOf rest
+
+-- Every list type under the compared types `7 :: ty` of the census.
+def eqTysOf (tg : Dg) (cen : List (List Int)) : List (List Int) → List (List Int)
+  | [] => []
+  | (7 :: ty) :: rest => (listTysIn tg) ((eqTysOf tg) cen rest) ty
+  | _ :: rest => (eqTysOf tg) cen rest
+
+def mapOfWithLayers (tg : Dg) (lay : Layers) (arr : List (List Int)) (ty : List Int) : List Int :=
+  (((sizeOfWithLayers tg) lay) arr ty).map
+
+-- The arena-count words of a value (1 where the word is an arena value).
+
+
+def arenaMapOfWithLayers (tg : Dg) (lay : Layers) (arr : List (List Int)) (ty : List Int) : List Int :=
+  (((sizeGoWithLayers tg) lay) profile.v2Fuel arr 2 [] 0 0 0 [] ty).map
+
+-- A record's fields: offset of field i and its type. `kind` 0 counts, 1 lands.
+
+
+structure Fld where
+  ok : Int
+  off : Nat
+  ty : List Int
+
+def fldFail (c : Int) : Fld :=
+  { ok := c, off := 0, ty := [] }
+
+def fieldAtWithLayers (tg : Dg) (lay : Layers) (fuel : Nat) (arr : List (List Int)) (i : Nat) (off : Nat) (rest : List Int) : Fld :=
+  match fuel with
+  | 0 => fldFail profile.cType
+  | k + 1 =>
+    let nm := skipName rest
+    if nm.ok != profile.cOk then fldFail nm.ok
+    else
+      let t := (readTyD tg) nm.rest
+      if t.ok != profile.cOk then fldFail t.ok
+      else
+        match i with
+        | 0 => { ok := profile.cOk, off := off, ty := t.acc }
+        | j + 1 => ((fieldAtWithLayers tg) lay) k arr j (off + ((wordsOfWithLayers tg) lay) arr t.acc) t.rest
+
+-- Field i of a record type `7 leb(n) fields`: the leb is skipped first.
+
+
+def recFieldWithLayers (tg : Dg) (lay : Layers) (arr : List (List Int)) (i : Nat) (recTy : List Int) : Fld :=
+  match (tyView tg) recTy with
+  | 7 :: bs =>
+    let r := readLeb bs
+    if r.ok != profile.cOk then fldFail r.ok
+    else ((fieldAtWithLayers tg) lay) profile.fieldMax arr i 0 r.rest
+  | _ => fldFail profile.cType
+
+-- Arm i of a sum type `6 leb(n) types`: the offset counts the tag word.
+
+
+def armAtWithLayers (tg : Dg) (lay : Layers) (fuel : Nat) (arr : List (List Int)) (i : Nat) (off : Nat) (rest : List Int) : Fld :=
+  match fuel with
+  | 0 => fldFail profile.cType
+  | k + 1 =>
+    let t := (readTyD tg) rest
+    if t.ok != profile.cOk then fldFail t.ok
+    else
+      match i with
+      | 0 => { ok := profile.cOk, off := off, ty := t.acc }
+      | j + 1 => ((armAtWithLayers tg) lay) k arr j (off + ((wordsOfWithLayers tg) lay) arr t.acc) t.rest
+
+
+
+def sumArmWithLayers (tg : Dg) (lay : Layers) (arr : List (List Int)) (i : Nat) (sumTy : List Int) : Fld :=
+  match (tyView tg) sumTy with
+  | 6 :: bs =>
+    let r := readLeb bs
+    if r.ok != profile.cOk then fldFail r.ok
+    else ((armAtWithLayers tg) lay) profile.fieldMax arr i 1 r.rest
+  | _ => fldFail profile.cType
+
+-- The payload type of list, option, and residue; the two parts of a pair.
+
+
+def innerTy (tg : Dg) (ty : List Int) : List Int :=
+  match (tyView tg) ty with
+  | _ :: bs => bs
+  | [] => []
+
+def pairSnd (tg : Dg) (ty : List Int) : List Int :=
+  match (tyView tg) ty with
+  | _ :: bs => ((readTyD tg) bs).rest
+  | [] => []
+
+def revN : List Nat → List Nat → List Nat
+  | [], ys => ys
+  | x :: xs, ys => revN xs (x :: ys)
+
+def revW : List (List Int) → List (List Int) → List (List Int)
+  | [], ys => ys
+  | x :: xs, ys => revW xs (x :: ys)
+
+-- Signatures as bytes: `count :: types`, parameters then the result.
+structure Sigs where
+  ok : Int
+  ss : List (List Int)
+  rest : List Int
+
+def sigFail (c : Int) (rest : List Int) : Sigs :=
+  { ok := c, ss := [], rest := rest }
+
+def readTys (g : Dg) : Nat → List Int → List Int → Ty
+  | 0, acc, rest => { ok := profile.cOk, acc := acc, rest := rest }
+  | k + 1, acc, rest =>
+    let t := readTyD g rest
+    if t.ok != profile.cOk then t else readTys g k (acc ++ t.acc) t.rest
+
+def readSigs (g : Dg) : Nat → List (List Int) → List Int → Sigs
+  | 0, acc, rest => { ok := profile.cOk, ss := revW acc [], rest := rest }
+  | k + 1, acc, rest =>
+    let r := readLeb rest
+    if r.ok != profile.cOk then sigFail r.ok r.rest
+    else if r.n < 0 || r.n > (profile.arityMax : Int) then sigFail profile.cArity r.rest
+    else
+      let t := readTys g (r.n.toNat + 1) [] r.rest
+      if t.ok != profile.cOk then sigFail t.ok t.rest
+      else readSigs g k ((r.n :: t.acc) :: acc) t.rest
+
+def sigOf : List (List Int) → Nat → List Int
+  | [], _ => []
+  | s :: _, 0 => s
+  | _ :: ss, k + 1 => sigOf ss k
+
+-- The declared width in bits of the fixed-width scalar type that a type's stream begins with (tag 11 and its width
+-- byte: contracts/tasks/WIRE-SEQ-0.md revision 2), 0 for any other type. `readTyD` gives such a type as the word it
+-- means, so whoever wants the width reads it here, beside it.
+def tyRawWidth : List Int → Int
+  | 11 :: w :: _ => w
+  | _ => 0
+
+-- the widths of k types in a row
+def readTyWs (g : Dg) : Nat → List Int → List Int
+  | 0, _ => []
+  | k + 1, rest => tyRawWidth rest :: readTyWs g k (readTyD g rest).rest
+
+-- For each function its signature's declared widths, the parameters' and then the result's: the stream `readSigs`
+-- reads, read beside it (lib/lrc/FromWire.rsd lays a node's fields out by them). Where a signature does not read,
+-- the lists end (`readSigs` names the cause).
+def readSigWs (g : Dg) : Nat → List Int → List (List Int)
+  | 0, _ => []
+  | k + 1, rest =>
+    let r := readLeb rest
+    if r.ok != profile.cOk || r.n < 0 || r.n > (profile.arityMax : Int) then []
+    else
+      let t := readTys g (r.n.toNat + 1) [] r.rest
+      if t.ok != profile.cOk then [] else readTyWs g (r.n.toNat + 1) r.rest :: readSigWs g k t.rest
+
+-- The i-th type of a run of types.
+def nthTy (tg : Dg) : Nat → List Int → List Int
+  | 0, rest => ((readTyD tg) rest).acc
+  | k + 1, rest => (nthTy tg) k ((readTyD tg) rest).rest
+
+def sigParams (sig : List Int) : List Int :=
+  match sig with
+  | _ :: bs => bs
+  | [] => []
+
+def sigCount (sig : List Int) : Nat :=
+  match sig with
+  | n :: _ => n.toNat
+  | [] => 0
+
+def sigResult (tg : Dg) (sig : List Int) : List Int :=
+  (nthTy tg) (sigCount sig) (sigParams sig)
+
+-- The parameter types alone, without the result.
+def paramTys (tg : Dg) (sig : List Int) : List Int :=
+  (readTys tg (sigCount sig) [] (sigParams sig)).acc
+
+-- Parameter words: the sum of the parameter sizes.
+def paramWordsWithLayers (tg : Dg) (lay : Layers) (arr : List (List Int)) : Nat → List Int → Nat
+  | 0, _ => 0
+  | k + 1, rest =>
+    let t := (readTyD tg) rest
+    ((wordsOfWithLayers tg) lay) arr t.acc + ((paramWordsWithLayers tg) lay) arr k t.rest
+
+-- The 27-word fixed area is the direct-call limit. A wider individual
+-- parameter is one borrowed pointer to flat words, rather than wasm locals.
+-- The sum of several narrow parameters does not change their convention.
+def abiParamWords (tg : Dg) (lay : Layers) (arr : List (List Int)) : Nat → List Int → Nat
+  | 0, _ => 0
+  | k + 1, rest =>
+    let t := readTyD tg rest
+    let w := wordsOfWithLayers tg lay arr t.acc
+    (if w > profile.resWords then 1 else w) + abiParamWords tg lay arr k t.rest
+
+def abiIndirectWords (tg : Dg) (lay : Layers) (arr : List (List Int)) : Nat → List Int → Nat
+  | 0, _ => 0
+  | k + 1, rest =>
+    let t := readTyD tg rest
+    let w := wordsOfWithLayers tg lay arr t.acc
+    (if w > profile.resWords then w else 0) + abiIndirectWords tg lay arr k t.rest
+
+def abiWideSignature (tg : Dg) (lay : Layers) (arr : List (List Int)) (sig : List Int) : Bool :=
+  wordsOfWithLayers tg lay arr (sigResult tg sig) > profile.resWords
+    || abiParamWords tg lay arr (sigCount sig) (sigParams sig)
+      < paramWordsWithLayers tg lay arr (sigCount sig) (sigParams sig)
+
+-- Word offset of parameter `idx` under this layout. A list that is an array
+-- occupies two words, so every later parameter moves.
+
+
+def paramStartWithLayers (tg : Dg) (lay : Layers) (arr : List (List Int)) : Nat → Nat → List Int → Nat
+  | 0, _, _ => 0
+  | _, 0, _ => 0
+  | j + 1, k + 1, rest =>
+    let t := (readTyD tg) rest
+    ((wordsOfWithLayers tg) lay) arr t.acc + ((paramStartWithLayers tg) lay) arr j k t.rest
+
+-- The pointer map of the parameter words, in order.
+
+
+def paramMapWithLayers (tg : Dg) (lay : Layers) (arr : List (List Int)) : Nat → List Int → List Int
+  | 0, _ => []
+  | k + 1, rest =>
+    let t := (readTyD tg) rest
+    ((mapOfWithLayers tg) lay) arr t.acc ++ ((paramMapWithLayers tg) lay) arr k t.rest
+
+-- The arena-count map of the parameter words, in order.
+
+
+def paramAMapWithLayers (tg : Dg) (lay : Layers) (arr : List (List Int)) : Nat → List Int → List Int
+  | 0, _ => []
+  | k + 1, rest =>
+    let t := (readTyD tg) rest
+    ((arenaMapOfWithLayers tg) lay) arr t.acc ++ ((paramAMapWithLayers tg) lay) arr k t.rest
+
+
+
+def envGet : List Int → Nat → Int
+  | [], _ => -1
+  | x :: _, 0 => x
+  | _ :: xs, k + 1 => envGet xs k
+
+-- Parameters start at local 2, each at its own word run.
+structure Env where
+  env : List Int
+  tys : List (List Int)
+  nxt : Nat
+
+def envFromWithLayers (tg : Dg) (lay : Layers) (arr : List (List Int)) : Nat → Nat → List Int → List Int → List (List Int) → Env
+  | 0, nxt, _, env, tys => { env := env, tys := tys, nxt := nxt }
+  | k + 1, nxt, rest, env, tys =>
+    let t := (readTyD tg) rest
+    ((envFromWithLayers tg) lay) arr k (nxt + ((wordsOfWithLayers tg) lay) arr t.acc) t.rest ((nxt : Int) :: env) (t.acc :: tys)
+
+
+
+def loc (op : Int) (i : Nat) : List Int :=
+  op :: lebU i
+
+def lg (i : Nat) : List Int := loc 32 i
+def ls (i : Nat) : List Int := loc 33 i
+
+def voidIf (inner : List Int) : List Int :=
+  [4, 64] ++ inner ++ [11]
+
+-- Block words, little-endian, at the base in local 0. The host writes them.
+-- 0 bump, 8 limit, 16 status, 24 detail, 32 abump, 40 cap. The result area starts at resAt.
+def offBump : Int := 0
+def offLimit : Int := 8
+def offStatus : Int := 16
+def offDetail : Int := 24
+def offCap : Int := 40
+-- The latest packed arena descriptor, or 0; not a heap pointer.
+def offArena : Int := 56
+-- The low edge of the top space holding the arena block (0 = no top space
+-- yet, the limit is the edge). The bump never crosses it; a grow moves the
+-- block to the new top (revision 5: the block is outside every region).
+def offABump : Int := 32
+-- Set when an arena element stores a heap pointer: the block then reaches
+-- into the bump heap and no region may be reset (tail jump, scalar return).
+def offPin : Int := 328
+
+def i64LoadAt (off : Int) : List Int :=
+  [41, 3] ++ lebS off
+
+def i64StoreAt (off : Int) : List Int :=
+  [55, 3] ++ lebS off
+
+def blkGet (off : Int) : List Int :=
+  lg 0 ++ [167] ++ i64LoadAt off
+
+def blkSet (off : Int) (v : List Int) : List Int :=
+  lg 0 ++ [167] ++ v ++ i64StoreAt off
+
+-- R010 stopgap layout: low 32 bits = count, high 32 bits = version, the
+-- byte distance of the block from memory's end. Every retained block moves
+-- by the memory growth delta, so that distance and every old descriptor
+-- remain valid. No descriptor is rewritten on a fork. S3 replaces this
+-- version check with RC'd Array uniqueness. See docs/BLOCK_ABI.md.
+def arenaMask : Int := 4294967295
+
+def memoryEnd : List Int := [63, 0, 173] ++ i64Const 65536 ++ [126]
+
+def arenaLen (ar : List Int) : List Int := ar ++ i64Const arenaMask ++ [131]
+
+def arenaVersion (ar : List Int) : List Int := ar ++ i64Const 32 ++ [136]
+
+def arenaBlock (ar : List Int) : List Int := memoryEnd ++ arenaVersion ar ++ [125]
+
+-- Latest allocation count, used only as the conservative region mark.
+def arenaCount : List Int :=
+  arenaLen (blkGet offArena)
+
+-- Copy n words of locals, zero n words, load and store word runs.
+def cpW : Nat → Nat → Nat → List Int
+  | _, _, 0 => []
+  | src, dst, k + 1 => lg src ++ ls dst ++ cpW (src + 1) (dst + 1) k
+
+def zeroW : Nat → Nat → List Int
+  | _, 0 => []
+  | dst, k + 1 => i64Const 0 ++ ls dst ++ zeroW (dst + 1) k
+
+def ldW (p : Nat) (off : Int) : List Int :=
+  lg p ++ [167] ++ i64LoadAt off
+
+def stW (p : Nat) (off : Int) (v : List Int) : List Int :=
+  lg p ++ [167] ++ v ++ i64StoreAt off
+
+def ldWs : Nat → Int → Nat → Nat → List Int
+  | _, _, _, 0 => []
+  | p, off, dst, k + 1 => ldW p off ++ ls dst ++ ldWs p (off + 8) (dst + 1) k
+
+def stWs : Nat → Int → Nat → Nat → List Int
+  | _, _, _, 0 => []
+  | p, off, src, k + 1 => stW p off (lg src) ++ stWs p (off + 8) (src + 1) k
+
+-- Block ABI v2 (docs/BLOCK_ABI.md, table docs/block_abi.tsv). Tags are
+-- Bootstrap's Wasm0PacketTag codes: 1 residue, 2 sourceFuelExhausted,
+-- 3 sourceStuck; then 4 capacity and 5 machineClock (host-written). A refusal's
+-- detail word is abiDetailBase + d: the version in the top byte, as Bootstrap's
+-- outcome kind word (version * 2^56 + code), so a v1 decoder refuses it instead
+-- of reading it. d is Wasm0Residue's index for tag 1, Wasm0StuckReason's for 3.
+def abiVersion : Int := 2
+def abiDetailBase : Int := 144115188075855872
+def tagClock : Int := 5
+def stIntegerRange : Int := 0
+def stTypeMismatch : Int := 2
+def stEmptyDelimiter : Int := 3
+def stInvalidIntegerText : Int := 4
+def stMissingSumBranch : Int := 8
+def stInvalidBytes : Int := 11
+def stInvalidByteSliceBounds : Int := 12
+def stNegativeFixBound : Int := 13
+def stChecked : Int := 14
+-- Capacity details: 1 memory (cap demand, grow fail), 2 representation (a
+-- fixed target layout the source value does not fit; the source may succeed).
+def detRepr : Int := 2
+-- Capacity detail 3: the engine's call stack is exhausted. Written by the
+-- host (STACK-DEPTH-0), as machineClock is; the program never emits it.
+def detStack : Int := 3
+
+-- Packed arena count/version does not fit; never truncate or wrap.
+def detArenaLayout : Int := 4
+
+-- The status is the function's result and is also written.
+def refuseVal (tag detail ret : Int) : List Int :=
+  blkSet offStatus (i64Const tag) ++ blkSet offDetail (i64Const (abiDetailBase + detail)) ++ i64Const ret ++ [15]
+
+def refuseTo (tag detail : Int) : List Int :=
+  refuseVal tag detail tag
+
+-- Local 1 is source fuel. A call passes it minus one, by value.
+-- Fuel zero matches evalSCM's `| 0, _, _ => none` and is checked at entry.
+def fuelPrologue : List Int :=
+  lg 1 ++ [80] ++ voidIf (refuseTo profile.tagFuel profile.detNone)
+
+def passBase : List Int :=
+  lg 0
+
+def passFuel : List Int :=
+  lg 1 ++ i64Const 1 ++ [125]
+
+-- A nonzero status returns at once; `st` holds the callee's status.
+def prop (st : Nat) : List Int :=
+  ls st ++ lg st ++ [80, 69] ++ voidIf (lg st ++ [15])
+
+def callFn (idx : Nat) : List Int :=
+  16 :: lebU idx
+
+-- One save-and-check frame over operand locals a, b into d. The opcode 124
+-- on add is the mutant site.
+def checkedFrame (op : Int) (a b d : Nat) (check : List Int) : List Int :=
+  lg a ++ lg b ++ [op] ++ ls d ++ check
+
+def overflowIf (rel : Int) (a b d : Nat) : List Int :=
+  lg a ++ lg b ++ [133, 66, 0, rel]
+    ++ voidIf (lg a ++ lg d ++ [133, 66, 0, 83] ++ voidIf (refuseTo profile.tagStuck stChecked))
+
+def mulGuard (a b d : Nat) : List Int :=
+  lg b ++ [80, 69]
+    ++ voidIf (
+        lg a ++ i64Const minI64 ++ [81]
+          ++ voidIf (lg b ++ i64Const (-1) ++ [81] ++ voidIf (refuseTo profile.tagStuck stChecked))
+          ++ lg d ++ lg b ++ [127] ++ lg a ++ [82] ++ voidIf (refuseTo profile.tagStuck stChecked))
+
+def checkedAdd (a b d : Nat) : List Int :=
+  checkedFrame 124 a b d (overflowIf 89 a b d)
+
+def checkedSub (a b d : Nat) : List Int :=
+  checkedFrame 125 a b d (overflowIf 83 a b d)
+
+def checkedMul (a b d : Nat) : List Int :=
+  checkedFrame 126 a b d (mulGuard a b d)
+
+def checkedNeg (a d : Nat) : List Int :=
+  lg a ++ i64Const minI64 ++ [81] ++ voidIf (refuseTo profile.tagStuck stChecked)
+    ++ i64Const 0 ++ lg a ++ [125] ++ ls d
+
+-- divE is exact. Zero, a nonzero remainder, and min/-1 are residues, not traps.
+-- modE is floor modulus. `i64.rem_s` has the sign of the dividend.
+def checkedDiv (a b d : Nat) : List Int :=
+  lg b ++ [80] ++ voidIf (refuseTo profile.tagResidue profile.detDiv0)
+    ++ lg a ++ lg b ++ [129] ++ ls d
+    ++ lg d ++ i64Const 0 ++ [82] ++ voidIf (refuseTo profile.tagResidue profile.detInexact)
+    ++ lg a ++ i64Const minI64 ++ [81]
+    ++ voidIf (lg b ++ i64Const (-1) ++ [81] ++ voidIf (refuseTo profile.tagResidue profile.detOverflow))
+    ++ lg a ++ lg b ++ [127] ++ ls d
+
+def checkedMod (a b d : Nat) : List Int :=
+  lg b ++ [80] ++ voidIf (refuseTo profile.tagResidue profile.detDiv0)
+    ++ lg a ++ lg b ++ [129] ++ ls d
+    ++ lg d ++ [80, 69]
+    ++ voidIf (lg a ++ lg b ++ [133, 66, 0, 83]
+        ++ voidIf (lg d ++ lg b ++ [124] ++ ls d))
+
+-- Allocation: function 0 takes (base, bytes) and returns the pointer, or 0
+-- after writing the capacity status. `d` receives the pointer.
+def allocTo (d : Nat) (bytes : List Int) : List Int :=
+  lg 0 ++ bytes ++ i64Const 0 ++ i64Const 0 ++ callFn 0 ++ ls d ++ lg d ++ [80] ++ voidIf (i64Const profile.tagCapacity ++ [15])
+
+-- Pointer masks describe flat locals and parameters, not heap headers.
+def allZero : List Int → Bool
+  | [] => true
+  | w :: ws => w == 0 && allZero ws
+
+-- OBJECT-ABI heap fields are packed; locals remain flat. Each cell has
+-- a tail object slot and one head slot, with scalars after object slots.
+def cellWordsWithLayers (_tg : Dg) (_lay : Layers) (_arr : List (List Int)) (_elem : List Int) : Nat := 3
+
+def cellPayWithLayers (tg : Dg) (_lay : Layers) (_arr : List (List Int)) (elem : List Int) : Int :=
+  if objectSlotClass ((tyView tg elem).headD (-1)) == 0 then 8 else 16
+
+def tailOffWithLayers (tg : Dg) (_lay : Layers) (_arr : List (List Int)) (elem : List Int) : Int :=
+  if objectSlotClass ((tyView tg elem).headD (-1)) == 0 then 16 else 8
+
+def arrStrideWithLayers (tg : Dg) (_lay : Layers) (_arr : List (List Int)) (elem : List Int) : Nat :=
+  (objectSlotWidth (objectSlotClass ((tyView tg elem).headD (-1)))).toNat
+
+def arrPayWithLayers (_tg : Dg) (_lay : Layers) (_arr : List (List Int)) (_elem : List Int) : Int := 24
+
+def arrCountWithLayers (_tg : Dg) (_lay : Layers) (_arr : List (List Int)) (_elem : List Int) (p d : Nat) : List Int :=
+  ldW p 8 ++ ls d
+
+def arrLenWithLayers (tg : Dg) (lay : Layers) (arr : List (List Int)) (elem : List Int) (p d : Nat) : List Int :=
+  arrCountWithLayers tg lay arr elem p d ++ lg d ++ lg (p + 1) ++ [125] ++ ls d
+
+def arrAddrWithLayers (tg : Dg) (lay : Layers) (arr : List (List Int)) (elem : List Int) (p d : Nat) : List Int :=
+  lg p ++ lg (p + 1) ++ i64Const (arrStrideWithLayers tg lay arr elem : Int) ++ [126, 124] ++ ls d
+
+-- The census: `1 :: ty` is a list type built by singleton or append;
+-- `2 :: ty` has an append whose right operand is neither empty nor a
+-- singleton, so the array would copy a long right operand. A type is an
+-- array when it is built and never forced.
+
+
+def cenAdd (k : Int) (ty : List Int) (cen : Cen) : Cen :=
+  if memW cen.es (k :: ty) then cen else { cen with es := (k :: ty) :: cen.es }
+
+-- Type-bearing census entries compare interned identities. Other census
+-- payloads are source coordinates or runtime ids and keep byte equality.
+def cenHasType (g : Dg) (tag : Int) (ty : List Int) : List (List Int) → Bool
+  | [] => false
+  | (k :: t) :: rest => (k == tag && typeEq g ty t) || cenHasType g tag ty rest
+  | _ :: rest => cenHasType g tag ty rest
+
+def cenAddType (g : Dg) (k : Int) (ty : List Int) (cen : Cen) : Cen :=
+  if cenHasType g k ty cen.es then cen else { cen with es := (k :: ty) :: cen.es }
+
+def arrOf (g : Dg) (cen : List (List Int)) : List (List Int) → List (List Int)
+  | [] => []
+  | (1 :: ty) :: rest => if cenHasType g 2 ty cen then arrOf g cen rest else ty :: arrOf g cen rest
+  | _ :: rest => arrOf g cen rest
+
+-- Remove `3 :: ty`-marked types from an admitted list: the arena intrinsic's
+-- one-word handle must keep its list type flat or parameters widen past the
+-- host's argument count.
+def stripArr (g : Dg) : List (List Int) → List (List Int) → List (List Int) → List (List Int)
+  | [], _, acc => revW acc []
+  | t :: ts, cen, acc => stripArr g ts cen (if cenHasType g 3 t cen || isNodeArenaList g t then acc else t :: acc)
+
+-- QBE at paying sites (item 6; ADR_QUOTIENT_BEFORE_EXECUTION). sigma of a
+-- function is the set of parameter words its body reads: a variable read
+-- marks the parameter, a field of a parameter marks that field only, so
+-- f = f . sigma by construction. The census carries
+-- `4 :: f :: paramIndex :: field` with field < 0 for the whole parameter.
+-- Those are source coordinates. Words come from the final layout.
+def paramIndexWithLayers (tg : Dg) (lay : Layers) (arr : List (List Int)) (pb slot : Nat) : Nat → List Int → Int
+  | 0, _ => -1
+  | k + 1, rest =>
+    let t := (readTyD tg) rest
+    let w := ((wordsOfWithLayers tg) lay) arr t.acc
+    if slot ≥ pb && slot < pb + w then (0 : Int)
+    else
+      let r := ((paramIndexWithLayers tg) lay) arr (pb + w) slot k t.rest
+      if r < 0 then -1 else r + 1
+
+
+
+def markReadWithLayers (tg : Dg) (lay : Layers) (arr : List (List Int)) (f pb npw slot : Nat) (sig : List Int) (field : Int) (cen : Cen) : Cen :=
+  if slot ≥ pb && slot < pb + npw then
+    let pi := ((paramIndexWithLayers tg) lay) arr pb slot (sigCount sig) (sigParams sig)
+    if pi < 0 then cen else cenAdd 4 [(f : Int), pi, field] cen
+  else cen
+
+-- One level of `skipEGo`: a node over its children, and a leaf.
+
+
+def rdUp (r : Rd) : Rd := if r.ok != profile.cOk then r else rdOk (1 + r.n) r.rest
+
+def rdLeaf (r : Rd) : Rd := if r.ok != profile.cOk then r else rdOk 1 r.rest
+
+def skipEGo (g : Dg) (fuel : Nat) (kind : Nat) (n : Nat) (rest : List Int) : Rd :=
+  match fuel with
+  | 0 => rdFail (rscFuelFailure (skipFuelRequest kind n rest)) rest
+  | k + 1 =>
+    if kind == 2 then
+      match n with
+      | 0 => rdOk 1 rest
+      | m + 1 =>
+        let a := skipEGo g k 0 0 rest
+        if a.ok != profile.cOk then a
+        else
+          let b := skipEGo g k 2 m a.rest
+          if b.ok != profile.cOk then b else rdOk (1 + maxZ a.n b.n) b.rest
+    else if kind == 1 then
+      match rest with
+      | 0 :: bs => rdOk 1 bs
+      | 1 :: bs =>
+        let a := skipEGo g k 0 0 bs
+        if a.ok != profile.cOk then a
+        else
+          let b := skipEGo g k 1 0 a.rest
+          if b.ok != profile.cOk then b else rdOk (1 + maxZ a.n b.n) b.rest
+      | _ => rdFail profile.cBody rest
+    else
+      match rest with
+      | [] => rdFail profile.cTrunc []
+      | tag :: bs =>
+        if tag == 53 && g.on then
+          let r := readLeb bs
+          if r.ok != profile.cOk then r
+          else if r.n < 0 then rdFail profile.cRef r.rest
+          else
+            match dgAt g r.n.toNat with
+            | [] => rdFail profile.cRef r.rest
+            | 1 :: need :: _ => if need > ((k + 1 : Nat) : Int) then rdFail (rscFuelFailure (skipFuelRequest kind n rest)) r.rest else rdOk need r.rest
+            | _ => rdFail profile.cRefKind r.rest
+        else if tag == 0 then rdLeaf (skipBytes 9 bs)
+        else if tag == 1 then rdLeaf (skipBytes 1 bs)
+        else if tag == 2 then rdLeaf (skipName bs)
+        else if tag == 3 then rdLeaf (readLeb bs)
+        else if tag == 4 then let t := skipTyD g bs; if t.ok != profile.cOk then t else rdUp (skipEGo g k 2 2 t.rest)
+        else if tag == 5 || tag == 20 || tag == 48 then rdUp (skipEGo g k 2 3 bs)
+        else if tag == 6 || tag == 7 || tag == 8 || tag == 10 || tag == 11 || tag == 12 || tag == 13 || tag == 15 || tag == 16
+            || tag == 19 || tag == 26 || tag == 27 || tag == 28 || tag == 47 then rdUp (skipEGo g k 2 2 bs)
+        else if tag == 9 || tag == 17 || tag == 18 || tag == 21 || tag == 23 || tag == 25 || tag == 36 || tag == 39 || tag == 40
+            || tag == 44 || tag == 45 || tag == 46 || tag == 49 then rdUp (skipEGo g k 2 1 bs)
+        else if tag == 14 || tag == 24 || tag == 29 || tag == 30 || tag == 38 || tag == 42 || tag == 43 then
+          let t := skipTyD g bs
+          if t.ok != profile.cOk then t else rdUp (skipEGo g k 2 (if tag == 14 then 2 else 1) t.rest)
+        else if tag == 22 || tag == 33 || tag == 37 then rdOk 1 bs
+        else if tag == 41 then rdLeaf (skipBytes 9 bs)
+        else if tag == 31 then let r := readLeb bs; if r.ok != profile.cOk then r else rdUp (skipEGo g k 2 1 r.rest)
+        else if tag == 32 then
+          let t := skipTyD g bs
+          if t.ok != profile.cOk then t
+          else
+            let a := skipEGo g k 0 0 t.rest
+            if a.ok != profile.cOk then a
+            else
+              let b := skipEGo g k 1 0 a.rest
+              if b.ok != profile.cOk then b else rdOk (1 + maxZ a.n b.n) b.rest
+        else if tag == 34 then let nm := skipName bs; if nm.ok != profile.cOk then nm else rdUp (skipEGo g k 2 2 nm.rest)
+        else if tag == 35 then
+          let t := skipTyD g bs
+          if t.ok != profile.cOk then t
+          else let r := readLeb t.rest; if r.ok != profile.cOk then r else rdUp (skipEGo g k 2 1 r.rest)
+        else if tag == 50 then let t := skipTyD g bs; if t.ok != profile.cOk then t else rdUp (skipEGo g k 2 3 t.rest)
+        else if tag == 51 then let t := skipTyD g bs; if t.ok != profile.cOk then t else rdUp (skipEGo g k 2 4 t.rest)
+        else if tag == 52 then let r := readLeb bs; if r.ok != profile.cOk then r else rdUp (skipEGo g k 1 0 r.rest)
+        else rdFail (profile.cUnsup + tag) bs
+
+-- Skip one expression on the wire (the untaken branch of a compile-time if).
+-- kind 0: one expression; 1: an argument or branch list; 2: n children.
+-- `n` of the result is the fuel the walk needed (RSCM-NF-1: a node's `need`).
+def skipE (g : Dg) (fuel : Nat) (rest : List Int) : Rd :=
+  skipEGo g fuel 0 0 rest

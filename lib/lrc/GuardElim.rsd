@@ -1,0 +1,146 @@
+-- LRC: removal of fuel guards that an earlier test already decided.
+-- closure_claim = 0.
+--
+-- The wire's fuel is the depth of calls, and within one activation of a function it does not
+-- change. A guard of depth d (lib/lrc/Ir.rsd `mkGuard`) refuses when the fuel is at most d. So on
+-- a path where the fuel is already known to be above k, a guard of depth d <= k never refuses and
+-- is removed; nothing else moves, so every budget ends as before. What makes the fuel known:
+--   the function's entry: above 0 (lib/RscBase.rsd `fuelPrologue`; a call of the function itself
+--     in tail position restarts the body only with fuel above 0, lib/lrc/Emit.rsd `emBody`);
+--   a guard of depth d that was passed: above d;
+--   a call of an image function at depth k that returned: above k + 1, because the callee ran at
+--     the fuel less k + 1 and would have refused at 0.
+-- A join point's body starts from what is known where the join point is declared: every jump to
+-- it comes later on a path through that place.
+-- Before that, a guard moves up over the bindings in front of it that cannot refuse and have no
+-- effect a refusal could show (a field read, a literal, a constructor, a total operator;
+-- lib/lrc/Prim.rsd `primTotal`): the same budgets refuse, with the same fuel status, a few
+-- instructions earlier. Two guards that meet become the deeper one, which refuses whenever
+-- either does.
+-- Why it matters beyond the tests saved: lib/lrc/FromWire.rsd leaves a guard for every reserved
+-- form, and a guard between a field's read, its count and the reset stops the scan that lets the
+-- unique path take the field without counting it (ExpandResetReuse.lean:54 eraseProjIncForAux).
+import Lib.Lrc.Ir
+import Lib.Lrc.Prim
+
+namespace Lrc
+
+def geIsGuard (n : N) : Bool := n.op == opMData && n.a == 1
+
+-- an expression that cannot refuse
+def geTotalExpr (e : N) : Bool :=
+  e.op == opProj || e.op == opSProj || e.op == opLit || e.op == opLitStr || e.op == opCtor || (e.op == opPrim && primTotal (primOp e))
+
+-- a binding that cannot refuse
+def geTotal (n : N) : Bool := n.op == opVDecl && geTotalExpr (vdeclExpr n)
+
+mutual
+-- every guard moved up over the total bindings in front of it; guards that meet merged
+partial def geFloat (n : N) : N :=
+  if geIsGuard n then
+    let b := geFloat (bodyOf n)
+    if geIsGuard b then { b with b := if n.b > b.b then n.b else b.b } else { n with kids := [b] }
+  else if n.op == opVDecl then
+    let b := geFloat (bodyOf n)
+    if geTotal n && geIsGuard b then { b with kids := [{ n with kids := [vdeclExpr n, bodyOf b] }] }
+    else { n with kids := [vdeclExpr n, b] }
+  else if n.op == opJDecl then { n with kids := [geFloat (jdeclBody n), geFloat (bodyOf n)] }
+  else if n.op == opCase then { n with kids := geFloatAlts (caseAlts n) }
+  else if isTerminal n then n
+  else setBody n (geFloat (bodyOf n))
+partial def geFloatAlts : List N → List N
+  | [] => []
+  | alt :: alts => altSetBody alt (geFloat (altBody alt)) :: geFloatAlts alts
+end
+
+mutual
+-- `known`: the fuel is above it here; nImg: the number of the image's functions
+partial def geGo (nImg : Nat) (known : Nat) (n : N) : N :=
+  if n.op == opMData && n.a == 1 then
+    if n.b.toNat <= known then geGo nImg known (bodyOf n)
+    else { n with kids := [geGo nImg n.b.toNat (bodyOf n)] }
+  else if n.op == opVDecl then
+    let e := vdeclExpr n
+    -- (a call at this function's own fuel, `fapSame`, tells nothing new: its callee ran above 0, as this body does)
+    let after := if e.op == opFap && !fapSame e && nImg > 0 && !isOwnFn nImg (fapFn e) && fapDepth e + 1 > known then fapDepth e + 1 else known
+    { n with kids := [e, geGo nImg after (bodyOf n)] }
+  else if n.op == opJDecl then { n with kids := [geGo nImg known (jdeclBody n), geGo nImg known (bodyOf n)] }
+  else if n.op == opCase then { n with kids := geAlts nImg known (caseAlts n) }
+  else if isTerminal n then n
+  else setBody n (geGo nImg known (bodyOf n))
+partial def geAlts (nImg : Nat) (known : Nat) : List N → List N
+  | [] => []
+  | alt :: alts => altSetBody alt (geGo nImg known (altBody alt)) :: geAlts nImg known alts
+end
+
+def declGuardElim (nImg : Nat) (d : Decl) : Decl :=
+  if d.ext then d else { d with body := geGo nImg 0 (geFloat d.body) }
+
+def guardElim (nImg : Nat) : List Decl → List Decl
+  | [] => []
+  | d :: ds => declGuardElim nImg d :: guardElim nImg ds
+
+/-! ## The fuel a self tail call needs, known
+
+A call of the function itself in tail position is a jump that first refuses when the fuel is
+below 2 and then counts it down (lib/lrc/Emit.rsd `emBody`, lib/RscBase.rsd fuelPrologue for the
+callee it replaces). That test is a guard of depth 1. Where the fuel is known to be above 1 at the
+call, by a guard or by a call that returned, the test never fires: the call is marked (field c of
+the `fap`) and the jump only counts. Guards that the same knowledge covers go too. Nothing is
+moved here; the pass runs last, after the passes that make tail calls (lib/lrc/Trmc.rsd). -/
+
+-- does function f take fuel (lib/lrc/Ir.rsd `isOwnFn`); with nImg = 0 nothing is assumed
+def fkTakesFuel (nImg f : Nat) : Bool := nImg > 0 && !isOwnFn nImg f
+
+/-! A guard in front of a `case` whose branches have guards of their own is tested on every path
+and then again in those branches (rbtree's insert: one test at the head of its loop, a second
+where the node is not a leaf). Such a guard moves into the branches, where `geFloat` merges it
+with the branch's own. Between its old place and the new one stand only bindings that cannot
+refuse and the `case` itself, so every budget refuses where it did or at the merged test, which
+stands for both. A guard no branch would merge stays: moving it would only copy it. -/
+
+-- the body after the bindings in front that cannot refuse
+partial def fkAfterTotal (n : N) : N := if geTotal n then fkAfterTotal (bodyOf n) else n
+
+def fkAnyLeadingGuard : List N → Bool
+  | [] => false
+  | alt :: alts => geIsGuard (fkAfterTotal (altBody alt)) || fkAnyLeadingGuard alts
+
+def fkSinkAlts (g : N) : List N → List N
+  | [] => []
+  | alt :: alts => altSetBody alt (geFloat { g with kids := [altBody alt] }) :: fkSinkAlts g alts
+
+-- the guard g in front of every alternative of the case that ends n's leading bindings
+partial def fkSink (g : N) (n : N) : N :=
+  if geTotal n then { n with kids := [vdeclExpr n, fkSink g (bodyOf n)] }
+  else { n with kids := fkSinkAlts g (caseAlts n) }
+
+mutual
+partial def fkGo (nImg self known : Nat) (n : N) : N :=
+  if n.op == opMData && n.a == 1 then
+    let t := fkAfterTotal (bodyOf n)
+    if n.b.toNat <= known then fkGo nImg self known (bodyOf n)
+    else if t.op == opCase && fkAnyLeadingGuard (caseAlts t) then fkGo nImg self known (fkSink n (bodyOf n))
+    else { n with kids := [fkGo nImg self n.b.toNat (bodyOf n)] }
+  else if n.op == opVDecl then
+    let e := vdeclExpr n
+    let e2 := if e.op == opFap && !fapSame e && fapFn e == self && fapDepth e == 0 && known >= 1 then { e with c := 1 } else e
+    let after := if e.op == opFap && !fapSame e && fkTakesFuel nImg (fapFn e) && fapDepth e + 1 > known then fapDepth e + 1 else known
+    { n with kids := [e2, fkGo nImg self after (bodyOf n)] }
+  else if n.op == opJDecl then { n with kids := [fkGo nImg self known (jdeclBody n), fkGo nImg self known (bodyOf n)] }
+  else if n.op == opCase then { n with kids := fkAlts nImg self known (caseAlts n) }
+  else if isTerminal n then n
+  else setBody n (fkGo nImg self known (bodyOf n))
+partial def fkAlts (nImg self known : Nat) : List N → List N
+  | [] => []
+  | alt :: alts => altSetBody alt (fkGo nImg self known (altBody alt)) :: fkAlts nImg self known alts
+end
+
+-- is the fuel of this self call known to be above 1
+def fapFuelKnown (e : N) : Bool := e.c == 1
+
+def fuelKnown (nImg : Nat) : List Decl → List Decl
+  | [] => []
+  | d :: ds => (if d.ext then d else { d with body := fkGo nImg d.f 0 d.body }) :: fuelKnown nImg ds
+
+end Lrc

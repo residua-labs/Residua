@@ -1,0 +1,269 @@
+import RscmAny
+import ValText
+import Residua.Bootstrap.Semantics
+import Residua.Bootstrap.SCM
+
+/-!
+gates/semalign/SemAlign.rsd — the `sem_aligned` dual-eval driver
+(GATE-HARNESS-0 r2, item g6; method: gates/semalign/METHOD.md).
+
+Per invocation, for one corpus row (`<file.rscm> <entry> <fuel> [args]`):
+
+  A = rscm's meaning  := `Residua.Bootstrap.SCM.evalSCM`   (chain evaluator)
+  B = scm's evalLF    := `Residua.Bootstrap.Semantics.eval lawsA`  (= evalBoot)
+  M = planted op      := `eval lawsMutant`  (committed mutant bundle)
+  P = planted op      := `eval lawsPlanted` (gate-local: law A, addF wraps)
+
+Both sides evaluate the SAME decoded program. `BootExpr`/`Programs` are
+ctor-for-ctor `SCMExpr`/`SCMPrograms` (three constructor renames); the
+bridge below is that mechanical map. Results compare in `SCMVal` after
+`semToSCM` normalizes scm-side pair/inj/bytes to `evalSCM`'s own encodings;
+equality is the chain's `scmValEq`. No semantics is redefined here.
+
+Usage:
+  semalign run <file.rscm> <entry-index> <fuel> [argtext ...]
+prints one line:  A=<v|none> B=<v|none> equal=<0|1> M=<v|none> m=<0|1> P=<v|none> p=<0|1>
+where m/p mark "mutant result differs from A".
+-/
+
+open Residua.EvalLean
+open Residua.Bootstrap
+open Residua.Bootstrap.IR
+open Residua.Bootstrap.SCM
+open Residua.Bootstrap.Semantics
+open Residua.Bootstrap.EvalBootSeparators (i64Min i64Max)
+
+namespace SemAlign
+
+/-- i64 truncating wrap, used only by the planted laws below. -/
+def i64Wrap (n : Int) : Int :=
+  i64Min + (n - i64Min) % (i64Max - i64Min + 1)
+
+/-- law A with `add` computing truncating wrap (i64) — a wrong core op. -/
+def lawsPlanted : ArithLaws :=
+  { lawsA with addF := fun x y => some (i64Wrap (x + y)) }
+
+mutual
+/-- scm-side `Val` → chain `SCMVal`, under `evalSCM`'s own encodings:
+    pair = 2-list, inj = {tag,val} record, bytes = int list. -/
+def semToSCM : Val → SCMVal
+  | .int n => .int n
+  | .bool b => .bool b
+  | .str s => .str s
+  | .bytes bs => .list (bs.map (fun b => .int (b.toNat : Int)))
+  | .list vs => .list (semToSCMList vs)
+  | .pair a b => .list [semToSCM a, semToSCM b]
+  | .inj i v => .record [("tag", .int (i : Int)), ("val", semToSCM v)]
+  | .recV fs => .record (semToSCMFlds fs)
+  | .someV v => .someV (semToSCM v)
+  | .noneV => .noneV
+  | .ok v => .ok (semToSCM v)
+  | .res c => .res c
+termination_by v => sizeOf v
+
+def semToSCMList : List Val → List SCMVal
+  | [] => []
+  | v :: rest => semToSCM v :: semToSCMList rest
+termination_by vs => sizeOf vs
+
+def semToSCMFlds : List (String × Val) → List (String × SCMVal)
+  | [] => []
+  | (k, v) :: rest => (k, semToSCM v) :: semToSCMFlds rest
+termination_by fs => sizeOf fs
+end
+
+mutual
+/-- chain `SCMVal` → scm-side `Val` (entry arguments). -/
+def scmToSem : SCMVal → Val
+  | .int n => .int n
+  | .bool b => .bool b
+  | .str s => .str s
+  | .list vs => .list (scmToSemList vs)
+  | .record fs => .recV (scmToSemFlds fs)
+  | .someV v => .someV (scmToSem v)
+  | .noneV => .noneV
+  | .ok v => .ok (scmToSem v)
+  | .res c => .res c
+termination_by v => sizeOf v
+
+def scmToSemList : List SCMVal → List Val
+  | [] => []
+  | v :: rest => scmToSem v :: scmToSemList rest
+termination_by vs => sizeOf vs
+
+def scmToSemFlds : List (String × SCMVal) → List (String × Val)
+  | [] => []
+  | (k, v) :: rest => (k, scmToSem v) :: scmToSemFlds rest
+termination_by fs => sizeOf fs
+end
+
+mutual
+/-- Mechanical re-typing: `SCMExpr` → `BootExpr` (same constructors;
+    let1→letE, boundedFold→foldE, boundedFix→fixE). -/
+def bridgeExpr : SCMExpr S G t → BootExpr S G t
+  | .litI n => .litI n
+  | .litB b => .litB b
+  | .litS s => .litS s
+  | .var i => .var i
+  | .let1 a b => .letE (bridgeExpr a) (bridgeExpr b)
+  | .ifE c t e => .ifE (bridgeExpr c) (bridgeExpr t) (bridgeExpr e)
+  | .add a b => .add (bridgeExpr a) (bridgeExpr b)
+  | .sub a b => .sub (bridgeExpr a) (bridgeExpr b)
+  | .mul a b => .mul (bridgeExpr a) (bridgeExpr b)
+  | .neg a => .neg (bridgeExpr a)
+  | .divE a b => .divE (bridgeExpr a) (bridgeExpr b)
+  | .modE a b => .modE (bridgeExpr a) (bridgeExpr b)
+  | .lt a b => .lt (bridgeExpr a) (bridgeExpr b)
+  | .gt a b => .gt (bridgeExpr a) (bridgeExpr b)
+  | .eqE a b => .eqE (bridgeExpr a) (bridgeExpr b)
+  | .andE a b => .andE (bridgeExpr a) (bridgeExpr b)
+  | .orE a b => .orE (bridgeExpr a) (bridgeExpr b)
+  | .notE a => .notE (bridgeExpr a)
+  | .strLen a => .strLen (bridgeExpr a)
+  | .strSplit a b => .strSplit (bridgeExpr a) (bridgeExpr b)
+  | .strSubstring a b c => .strSubstring (bridgeExpr a) (bridgeExpr b) (bridgeExpr c)
+  | .strToInt a => .strToInt (bridgeExpr a)
+  | .emptyList => .emptyList
+  | .listSingleton a => .listSingleton (bridgeExpr a)
+  | .listLen a => .listLen (bridgeExpr a)
+  | .listFirst a => .listFirst (bridgeExpr a)
+  | .listAppend a b => .listAppend (bridgeExpr a) (bridgeExpr b)
+  | .listDrop n a => .listDrop (bridgeExpr n) (bridgeExpr a)
+  | .pairE a b => .pairE (bridgeExpr a) (bridgeExpr b)
+  | .fstE a => .fstE (bridgeExpr a)
+  | .sndE a => .sndE (bridgeExpr a)
+  | .inj i a => .inj i (bridgeExpr a)
+  | .matchE a bs => .matchE (bridgeExpr a) (bridgeBranches bs)
+  | .recNil => .recNil
+  | .recCons n a rest => .recCons n (bridgeExpr a) (bridgeExpr rest)
+  | .field a i => .field (bridgeExpr a) i
+  | .someE a => .someE (bridgeExpr a)
+  | .noneE => .noneE
+  | .isSomeE a => .isSomeE (bridgeExpr a)
+  | .unwrapSome a => .unwrapSome (bridgeExpr a)
+  | .okE a => .okE (bridgeExpr a)
+  | .residueE c => .residueE c
+  | .isResidueE a => .isResidueE (bridgeExpr a)
+  | .getResidue a => .getResidue (bridgeExpr a)
+  | .getOk a => .getOk (bridgeExpr a)
+  | .packBytes a => .packBytes (bridgeExpr a)
+  | .bytesLen a => .bytesLen (bridgeExpr a)
+  | .bytesConcat a b => .bytesConcat (bridgeExpr a) (bridgeExpr b)
+  | .bytesSlice a b c => .bytesSlice (bridgeExpr a) (bridgeExpr b) (bridgeExpr c)
+  | .contentHash a => .contentHash (bridgeExpr a)
+  | .boundedFold xs z s => .foldE (bridgeExpr xs) (bridgeExpr z) (bridgeExpr s)
+  | .boundedFix st sp i b =>
+      .fixE (bridgeExpr st) (bridgeExpr sp) (bridgeExpr i) (bridgeExpr b)
+  | .call f xs => .call f (bridgeArgs xs)
+termination_by e => sizeOf e
+decreasing_by
+  simp_wf
+  all_goals
+    try simp only [
+      SCMExpr.let1.sizeOf_spec, SCMExpr.ifE.sizeOf_spec, SCMExpr.add.sizeOf_spec,
+      SCMExpr.sub.sizeOf_spec, SCMExpr.mul.sizeOf_spec, SCMExpr.neg.sizeOf_spec,
+      SCMExpr.divE.sizeOf_spec, SCMExpr.modE.sizeOf_spec, SCMExpr.lt.sizeOf_spec,
+      SCMExpr.gt.sizeOf_spec, SCMExpr.eqE.sizeOf_spec, SCMExpr.andE.sizeOf_spec,
+      SCMExpr.orE.sizeOf_spec, SCMExpr.notE.sizeOf_spec, SCMExpr.strLen.sizeOf_spec,
+      SCMExpr.strSplit.sizeOf_spec, SCMExpr.strSubstring.sizeOf_spec,
+      SCMExpr.strToInt.sizeOf_spec, SCMExpr.listSingleton.sizeOf_spec,
+      SCMExpr.listLen.sizeOf_spec, SCMExpr.listFirst.sizeOf_spec,
+      SCMExpr.listAppend.sizeOf_spec, SCMExpr.listDrop.sizeOf_spec,
+      SCMExpr.pairE.sizeOf_spec, SCMExpr.fstE.sizeOf_spec, SCMExpr.sndE.sizeOf_spec,
+      SCMExpr.inj.sizeOf_spec, SCMExpr.matchE.sizeOf_spec, SCMExpr.recCons.sizeOf_spec,
+      SCMExpr.field.sizeOf_spec, SCMExpr.someE.sizeOf_spec, SCMExpr.isSomeE.sizeOf_spec,
+      SCMExpr.unwrapSome.sizeOf_spec, SCMExpr.okE.sizeOf_spec,
+      SCMExpr.isResidueE.sizeOf_spec, SCMExpr.getResidue.sizeOf_spec,
+      SCMExpr.getOk.sizeOf_spec, SCMExpr.packBytes.sizeOf_spec,
+      SCMExpr.bytesLen.sizeOf_spec, SCMExpr.bytesConcat.sizeOf_spec,
+      SCMExpr.bytesSlice.sizeOf_spec, SCMExpr.contentHash.sizeOf_spec,
+      SCMExpr.boundedFold.sizeOf_spec, SCMExpr.boundedFix.sizeOf_spec,
+      SCMExpr.call.sizeOf_spec]
+    all_goals omega
+
+def bridgeArgs : SCMArgs S G ts → Args S G ts
+  | .nil => .nil
+  | .cons a rest => .cons (bridgeExpr a) (bridgeArgs rest)
+termination_by a => sizeOf a
+
+def bridgeBranches : SCMBranches S G ts r → Branches S G ts r
+  | .nil => .nil
+  | .cons a rest => .cons (bridgeExpr a) (bridgeBranches rest)
+termination_by b => sizeOf b
+
+def bridgePrograms : SCMPrograms S T → Programs S T
+  | .nil => .nil
+  | .cons a rest => .cons (bridgeExpr a) (bridgePrograms rest)
+termination_by p => sizeOf p
+end
+
+def showOpt : Option SCMVal → String
+  | some v => valShow v
+  | none => "none"
+
+/-- one corpus row: decode, bridge, run all four evaluators, print the row. -/
+def runOne (path : System.FilePath) (entry fuel : Nat) (argText : List String) :
+    IO UInt32 := do
+  let ba ← IO.FS.readBinFile path
+  match rscmDAny ba.data with
+  | .error e =>
+    IO.println s!"gap=decode refused={e}"
+    return 0
+  | .ok pp =>
+    let S := pp.1
+    let progs := pp.2
+    match Nat.decLt entry S.length with
+    | isFalse _ =>
+      IO.println s!"gap=entry entry={entry} siglen={S.length}"
+      return 0
+    | isTrue he =>
+      let sig := S.get ⟨entry, he⟩
+      if sig.1.length != argText.length then
+        IO.println s!"gap=argc want={sig.1.length} got={argText.length}"
+        return 0
+      else do
+        let mut envA : SCMEnv := []
+        for a in argText do
+          match valParse a with
+          | .error e =>
+            IO.println s!"gap=argparse arg={a} refused={e}"
+            return 0
+          | .ok v => envA := envA ++ [v]
+        let bodyA := getSCMProgram progs ⟨entry, he⟩
+        let progsB := bridgePrograms progs
+        let envB : EnvV := envA.map scmToSem
+        let bodyB := bridgeExpr bodyA
+        let rA := evalSCM progs fuel envA bodyA
+        let rB := eval lawsA progsB fuel envB bodyB
+        let rM := eval lawsMutant progsB fuel envB bodyB
+        let rP := eval lawsPlanted progsB fuel envB bodyB
+        let a' := showOpt rA
+        let b' := showOpt (rB.map semToSCM)
+        let m' := showOpt (rM.map semToSCM)
+        let p' := showOpt (rP.map semToSCM)
+        let eq := match rA, rB.map semToSCM with
+          | some x, some y => scmValEq x y
+          | none, none => true
+          | _, _ => false
+        let md := match rA, rM.map semToSCM with
+          | some x, some y => !scmValEq x y
+          | none, none => false
+          | _, _ => true
+        let pd := match rA, rP.map semToSCM with
+          | some x, some y => !scmValEq x y
+          | none, none => false
+          | _, _ => true
+        IO.println s!"A={a'} B={b'} equal={if eq then 1 else 0} M={m'} m={if md then 1 else 0} P={p'} p={if pd then 1 else 0}"
+        return 0
+
+end SemAlign
+
+def main (argv : List String) : IO UInt32 := do
+  match argv with
+  | ["run", file, entS, fuelS] =>
+    SemAlign.runOne file entS.toNat! fuelS.toNat! []
+  | "run" :: file :: entS :: fuelS :: args =>
+    SemAlign.runOne file entS.toNat! fuelS.toNat! args
+  | _ =>
+    IO.eprintln "usage: semalign run <file.rscm> <entry-index> <fuel> [argtext ...]"
+    return 2

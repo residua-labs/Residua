@@ -1,0 +1,122 @@
+import Lean
+import NF
+
+/-!
+gates/semalign/StepScope.rsd — probes for the `def step` scoping rule of
+lib/NF.rsd (AUDIT-SWE-RESIDUES-13-R2 r1 §4, residue
+`step_column0_name_admitted`).
+
+The gate refuses `def step` wherever stock Lean scopes it inside an NF
+instance's namespace tree — column 0, any indentation, nested namespaces,
+sections and mutual blocks — and admits declarations the scope rule does
+not cover.
+
+Two probe families:
+
+1. admit probes: run `Lib.NF.admit` on a conforming fixture mutated by
+   string surgery (same recipe as reports/nf-align/AdmitProbes.rsd).
+   Expected `nf_step_role` for every step placement; the non-step controls
+   expect `OK`.
+2. stock probes: hand the same scoping shapes to the pinned `lean`
+   binary and confirm the declaration lands under the name the gate
+   assumes (`Ind.step`, `Ind.Inner.step`).
+
+Usage (from repo root):
+  lean -o gates/semalign/out/NF.olean lib/NF.rsd
+  LEAN_PATH=gates/semalign/out lean --run gates/semalign/StepScope.rsd
+Prints one verdict per probe and `step_scope ok=<ok>/<total> bad=<bad>`;
+exit 0 iff bad=0.
+-/
+
+def probeBytes (s : String) : List Int := s.toList.map (fun ch => Int.ofNat ch.toNat)
+
+def probeVerdict (r : Except Lib.NF.Residue (List Lib.NF.Instance)) : String :=
+  match r with
+  | .ok insts => "OK " ++ toString insts.length
+  | .error e => Lib.NF.residueName e
+
+def runProbe (name expected src : String) : IO Bool := do
+  let actual := probeVerdict (Lib.NF.admit (probeBytes src))
+  if actual == expected then
+    IO.println s!"{name} {actual}"
+    return true
+  IO.eprintln s!"BAD {name} expected={expected} actual={actual}"
+  return false
+
+/-- conforming NF instance (same shape as NFCheck's fixtureConforming) -/
+def base : String :=
+  "namespace T.Fixture\ninductive Residue where\n  | rejected\ndef residueName : Residue -> String\n  | Residue.rejected => \"nf_rejected\"\nstructure S where\n  v : Nat\ndef q (r : S) : Nat := r.v\ndef admit (n : Nat) : Except Residue Nat := if n == 0 then Except.error Residue.rejected else Except.ok (n + 1)\nend T.Fixture\n"
+
+/-- stock-Lean scoping evidence: elaborate the snippet, grep the #check
+    output for the expected fully scoped declaration name. -/
+def stockProbe (name expected src : String) : IO Bool := do
+  IO.FS.createDirAll "gates/semalign/out/stock"
+  let path : System.FilePath := s!"gates/semalign/out/stock/{name}.lean"
+  IO.FS.writeFile path (src ++ "\n")
+  let r ← IO.Process.output { cmd := "lean", args := #[path.toString] }
+  if (r.stdout.splitOn expected).length > 1 then
+    IO.println s!"stock:{name} {expected}"
+    return true
+  IO.eprintln s!"BAD stock:{name} expected '{expected}' rc={r.exitCode} stdout={r.stdout.trim} stderr={r.stderr.trim}"
+  return false
+
+def main : IO UInt32 := do
+  let ev ← IO.FS.readFile "rsdc/laws/r2/LawEvidenceNF.rsd"
+  let cases : List (String × String × String) := [
+    ("base", "OK 1", base),
+    ("col0-step", "nf_step_role",
+      base.replace "\ndef admit" "\ndef step (k : Nat) : Nat := k\ndef admit"),
+    ("indent-step", "nf_step_role",
+      base.replace "\ndef admit" "\n  def step (k : Nat) : Nat := k\ndef admit"),
+    ("glued-namespace", "nf_step_role",
+      base.replace "namespace T.Fixture\n" "namespace T.Fixture\n  def step (k : Nat) : Nat := k\n"),
+    ("glued-end", "nf_step_role",
+      base.replace "\nend T.Fixture" "\nnamespace Inner\nend Inner\n  def step (k : Nat) : Nat := k\nend T.Fixture"),
+    ("nested-ns", "nf_step_role",
+      base.replace "\nend T.Fixture" "\nnamespace Inner\ndef step (k : Nat) : Nat := k\nend Inner\nend T.Fixture"),
+    ("nested-ns-indent", "nf_step_role",
+      base.replace "\nend T.Fixture" "\nnamespace Inner\n  def step (k : Nat) : Nat := k\nend Inner\nend T.Fixture"),
+    ("unclosed-nested", "nf_step_role",
+      base.replace "\nend T.Fixture" "\nnamespace Inner\ndef step (k : Nat) : Nat := k"),
+    ("section", "nf_step_role",
+      base.replace "\ndef admit" "\nsection S\ndef step (k : Nat) : Nat := k\nend S\ndef admit"),
+    ("section-indent", "nf_step_role",
+      base.replace "\ndef admit" "\nsection S\n  def step (k : Nat) : Nat := k\nend S\ndef admit"),
+    ("after-end-section", "nf_step_role",
+      base.replace "\ndef admit" "\nsection S\nend S\ndef step (k : Nat) : Nat := k\ndef admit"),
+    ("mutual", "nf_step_role",
+      base.replace "\ndef admit" "\nmutual\ndef step (k : Nat) : Nat := k\nend\ndef admit"),
+    ("private-step", "nf_step_role",
+      base.replace "\ndef admit" "\nprivate\ndef step (k : Nat) : Nat := k\ndef admit"),
+    ("control-step2", "OK 1",
+      base.replace "\ndef admit" "\ndef stepTwo (k : Nat) : Nat := k\ndef admit"),
+    ("control-sibling-ns", "OK 1",
+      "namespace T.Helper\ndef step (n : Nat) : Nat := n\nend T.Helper\n" ++ base),
+    ("control-toplevel-step", "OK 1",
+      "def step (n : Nat) : Nat := n\n" ++ base),
+    ("control-outside-end", "OK 1",
+      base ++ "def step (n : Nat) : Nat := n\n"),
+    ("evidence-base", "OK 1", ev),
+    ("evidence-ns-indent", "nf_step_role",
+      ev.replace "namespace Rsdc.Laws.LawEvidenceNF\n" "namespace Rsdc.Laws.LawEvidenceNF\n  def step (k : Nat) : Nat := k\n")
+  ]
+  let mut ok := 0
+  let mut bad := 0
+  for (name, expected, src) in cases do
+    if ← runProbe name expected src then ok := ok + 1 else bad := bad + 1
+  -- stock-Lean scoping: the names the gate assumes are the names Lean makes
+  for (name, expected, src) in [
+    ("ns", "Ind.step",
+      "namespace Ind\n  def step (k : Nat) : Nat := k\nend Ind\n#check Ind.step"),
+    ("ns-nested", "Ind.Inner.step",
+      "namespace Ind\nnamespace Inner\n  def step (k : Nat) : Nat := k\nend Inner\nend Ind\n#check Ind.Inner.step"),
+    ("section", "Ind.step",
+      "namespace Ind\nsection S\n  def step (k : Nat) : Nat := k\nend S\nend Ind\n#check Ind.step"),
+    ("mutual", "Ind.step",
+      "namespace Ind\nmutual\n  def step (k : Nat) : Nat := k\nend\nend Ind\n#check Ind.step"),
+    ("sibling", "T.Helper.step",
+      "namespace T.Helper\n  def step (k : Nat) : Nat := k\nend T.Helper\nnamespace Ind\nend Ind\n#check T.Helper.step")
+  ] do
+    if ← stockProbe name expected src then ok := ok + 1 else bad := bad + 1
+  IO.println s!"step_scope ok={ok}/{cases.length + 5} bad={bad}"
+  return if bad == 0 then 0 else 1

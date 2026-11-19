@@ -1,0 +1,115 @@
+-- LRC: constant cells. A constructor without object fields whose scalars are all literals is one
+-- persistent object in the module's data instead of a cell built at every evaluation.
+-- closure_claim = 0.
+--
+-- Lean does this for every closed term: its compiler makes the term a constant (the names are kept
+-- by Lean/Compiler/ClosedTermCache.lean), which the module's initialiser builds once and marks
+-- persistent (EmitC:692 emitDeclInit, `lean_mark_persistent` at EmitC:688). Here the
+-- cell's bytes are known when the program is compiled, so it needs no initialiser: it stands in
+-- the data as a string literal does (lib/lrc/Emit.rsd "String literals as persistent objects"),
+-- with count 0, which no dup or drop changes and no release reaches.
+--
+-- What it removes: the allocation and the stores of the cell, and its 16 or more bytes for
+-- every evaluation that stays live (deriv's `val 0`, `val 1`, `val (-1)`: a leaf of the result is
+-- then a pointer to one shared cell).
+--
+-- A cell is taken when
+--   * its constructor has no object field and a scalar area (`ctor` with no argument);
+--   * the `sset`s that follow the `ctor` directly all store literals;
+--   * nothing later writes to it (no `set`, `sset` or `setTag` on its variable).
+-- The result is a literal of the IR (lib/lrc/Ir.rsd `mkLitObj`), so every pass treats it as it
+-- treats a string literal: a value without arguments that cannot refuse.
+--
+-- A persistent cell is never unique: where the program would have updated the fresh cell in
+-- place, it now builds a new one (lean.h `lean_is_exclusive` is false for a count of 0). It runs
+-- after the byte fields are laid out (lib/lrc/Pack.rsd) and before the common subexpressions, so
+-- that two calls that pass the same constant are one call.
+import Lib.Lrc.FreeVars
+
+namespace Lrc
+
+-- the literals bound on this path: pairs x, value
+def clHas (x : Int) : List Int → Bool
+  | y :: _ :: rest => x == y || clHas x rest
+  | _ => false
+
+def clVal (x : Int) : List Int → Int
+  | y :: v :: rest => if x == y then v else clVal x rest
+  | _ => 0
+
+-- the k low bytes of v, the lowest first
+def clBytesNat : Nat → Nat → List Int
+  | 0, _ => []
+  | k + 1, v => ((v % 256 : Nat) : Int) :: clBytesNat k (v / 256)
+
+def clInv : List Int → List Int
+  | [] => []
+  | b :: bs => (255 - b) :: clInv bs
+
+-- the same of a word in two's complement: a negative v is the complement of -(v + 1)
+def clBytes (k : Nat) (v : Int) : List Int :=
+  if v >= 0 then clBytesNat k v.toNat else clInv (clBytesNat k (-(v + 1)).toNat)
+
+-- bs written into img from byte `off`
+def clPut : List Int → Nat → List Int → List Int
+  | img, _, [] => img
+  | [], _, _ => []
+  | _ :: img, 0, b :: bs => b :: clPut img 0 bs
+  | x :: img, off + 1, bs => x :: clPut img off bs
+
+-- the scalar area from its fields: triples offset, type, value
+def clImage (img : List Int) : List Int → List Int
+  | off :: ty :: v :: rest => clImage (clPut img off.toNat (clBytes (tyWidth ty) v)) rest
+  | _ => img
+
+-- the `sset`s on x that follow directly: ok when each stores a literal
+structure ClRun where
+  ok : Bool
+  fields : List Int
+  rest : N
+  deriving Inhabited
+
+partial def clRun (x : Int) (lits : List Int) (n : N) : ClRun :=
+  if n.op == opSSet && n.a == x then
+    let y : Int := ((ssetArg n : Nat) : Int)
+    let r := clRun x lits (bodyOf n)
+    { ok := r.ok && clHas y lits, fields := ((ssetOff n : Nat) : Int) :: n.d :: clVal y lits :: r.fields, rest := r.rest }
+  else { ok := true, fields := [], rest := n }
+
+mutual
+-- does the body write to x
+partial def clWrites (x : Int) (n : N) : Bool :=
+  if n.op == opVDecl then clWrites x (bodyOf n)
+  else if n.op == opJDecl then clWrites x (jdeclBody n) || clWrites x (bodyOf n)
+  else if n.op == opCase then clWritesAlts x (caseAlts n)
+  else if n.op == opRet || n.op == opJmp || n.op == opUnreachable then false
+  else ((n.op == opSet || n.op == opSSet || n.op == opSetTag) && n.a == x) || clWrites x (bodyOf n)
+partial def clWritesAlts (x : Int) : List N → Bool
+  | [] => false
+  | alt :: alts => clWrites x (altBody alt) || clWritesAlts x alts
+end
+
+mutual
+partial def clGo (lits : List Int) (n : N) : N :=
+  if n.op == opVDecl then
+    let e := vdeclExpr n
+    let lits2 := if e.op == opLit && n.ys.isEmpty then n.a :: e.a :: lits else lits
+    let info := infoOf e
+    let r := clRun n.a lits (bodyOf n)
+    if e.op == opCtor && info.size == 0 && info.ssize > 0 && info.ssize <= litMax && e.ys.isEmpty && r.ok && !clWrites n.a r.rest then
+      { n with kids := [mkLitObj info.cidx (clImage (List.replicate info.ssize 0) r.fields) r.fields, clGo lits r.rest] }
+    else { n with kids := [e, clGo lits2 (bodyOf n)] }
+  else if n.op == opJDecl then { n with kids := [clGo lits (jdeclBody n), clGo lits (bodyOf n)] }
+  else if n.op == opCase then { n with kids := clAlts lits (caseAlts n) }
+  else if n.op == opRet || n.op == opJmp || n.op == opUnreachable then n
+  else setBody n (clGo lits (bodyOf n))
+partial def clAlts (lits : List Int) : List N → List N
+  | [] => []
+  | alt :: alts => altSetBody alt (clGo lits (altBody alt)) :: clAlts lits alts
+end
+
+def closedCells : List Decl → List Decl
+  | [] => []
+  | d :: ds => (if d.ext then d else { d with body := clGo [] d.body }) :: closedCells ds
+
+end Lrc

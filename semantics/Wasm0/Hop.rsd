@@ -1,0 +1,25 @@
+-- semantics/Wasm0/Hop.rsd: the hop lambda-RC -> wasm0, as a statement (hole 15). closure_claim = 0.
+-- Read with lib/lrc/Ir.rsd, semantics/Lrc/Sem.rsd and semantics/Wasm0/Sem.rsd:
+--   cat lib/lrc/Ir.rsd semantics/Lrc/Sem.rsd semantics/Wasm0/Sem.rsd semantics/Wasm0/Hop.rsd > /tmp/hop.lean && lean /tmp/hop.lean
+--
+-- The concrete emitter is lib/lrc/Emit.rsd with the chain's calling convention (lib/RscBase.rsd
+-- "Convention (item 1)": function i takes (base, fuel, parameter words), returns a status, and
+-- writes its result words at base + resAt). They are parameters here, so that this statement does
+-- not depend on the emitter's modules:
+--   * `emit ds nImg` is the module and the index of each IR function in it;
+--   * `enter args fuel` is the argument list of the call (base, fuel, the words of the arguments);
+--   * `readback` reads the call's outcome (status and result block) as the IR's observable outcome.
+-- Validate's per-form templates (interface 2) are this simulation's translation-validation form.
+namespace Wasm0.Hop
+
+def lrcToWasmStatement (emit : List Lrc.Decl → Nat → Wasm0.Module × (Nat → Nat))
+    (enter : List Int → Nat → List Wasm0.Val)
+    (readback : Wasm0.Outcome → Lrc.Sem.Outcome) : Prop :=
+  ∀ (ds : List Lrc.Decl) (f : Nat) (args : List Int) (fuel steps nImg : Nat) (t : String),
+    Lrc.Sem.runEntry ds f args fuel steps .counted nImg = .value t →
+      ∃ steps', readback (Wasm0.invoke (emit ds nImg).1 ((emit ds nImg).2 f) (enter args fuel) steps'
+        (Wasm0.store0 (emit ds nImg).1)) = .value t
+
+end Wasm0.Hop
+
+#print axioms Wasm0.Hop.lrcToWasmStatement

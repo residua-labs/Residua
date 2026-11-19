@@ -1,0 +1,85 @@
+import RscBase
+
+-- One decoder shared by local coalescing and source-runtime inlining.
+structure RgI where
+  ok : Bool
+  op : Int
+  n : Nat
+  bs : List Int
+  rest : List Int
+
+def rgFail : RgI := { ok := false, op := 0, n := 0, bs := [], rest := [] }
+
+def rgLebGo : Nat → Nat → Nat → List Int → List Int → RgI
+  | 0, _, _, _, _ => rgFail
+  | _, _, _, _, [] => rgFail
+  | k + 1, v, place, acc, b :: bs =>
+    let low : Int := if b ≥ 128 then b - 128 else b
+    let v2 := v + low.toNat * place
+    if b < 128 then { ok := true, op := 0, n := v2, bs := reverse (b :: acc), rest := bs }
+    else rgLebGo k v2 (place * 128) (b :: acc) bs
+
+def rgLeb (bs : List Int) : RgI :=
+  rgLebGo profile.lebSFuel 0 1 [] bs
+
+-- Constant immediates and memory operands are copied, not interpreted by
+-- this pass. A signed i64 LEB can occupy ten bytes; accumulating its
+-- unsigned value or the next radix place would overflow the target Int.
+def rgSkipLebGo : Nat → List Int → List Int → RgI
+  | 0, _, _ => rgFail
+  | _, _, [] => rgFail
+  | k + 1, acc, b :: bs =>
+    if b < 128 then { ok := true, op := 0, n := 0, bs := reverse (b :: acc), rest := bs }
+    else rgSkipLebGo k (b :: acc) bs
+
+def rgSkipLeb (bs : List Int) : RgI :=
+  rgSkipLebGo profile.lebSFuel [] bs
+
+def rgLebs : Nat → List Int → List Int → RgI
+  | 0, acc, bs => { ok := true, op := 0, n := 0, bs := reverse acc, rest := bs }
+  | k + 1, acc, bs =>
+    let l := rgSkipLeb bs
+    if !l.ok then rgFail else rgLebs k (revAppend l.bs acc) l.rest
+
+def rgOne (b : Int) (n : Nat) (bs rest : List Int) : RgI :=
+  { ok := true, op := b, n := n, bs := b :: bs, rest := rest }
+
+-- One instruction of the set rsc emits: its opcode, index, bytes, rest.
+def rgStep : List Int → RgI
+  | [] => rgFail
+  | b :: r =>
+    if b == 65 || b == 66 then
+      let l := rgSkipLeb r
+      if !l.ok then rgFail else rgOne b 0 l.bs l.rest
+    -- 8: `throw` and its tag (lib/lrc/Emit.rsd "How a function ends"); like `return`, it leaves
+    -- the function, so no local is read after it
+    else if b == 32 || b == 33 || b == 34 || b == 12 || b == 13 || b == 16 || b == 18 || b == 8 then
+      let l := rgLeb r
+      if !l.ok then rgFail else rgOne b l.n l.bs l.rest
+    else if b == 2 || b == 3 || b == 4 then
+      match r with
+      | t :: r2 => if t == 64 || (t ≥ 123 && t ≤ 127) then rgOne b 0 [t] r2 else rgFail
+      | [] => rgFail
+    else if b ≥ 40 && b ≤ 62 then
+      let l := rgLebs 2 [] r
+      if !l.ok then rgFail else rgOne b 0 l.bs l.rest
+    else if b == 63 || b == 64 then
+      match r with
+      | 0 :: r2 => rgOne b 0 [0] r2
+      | _ => rgFail
+    else if b == 14 then
+      let c := rgLeb r
+      if !c.ok then rgFail
+      else
+        let l := rgLebs (c.n + 1) [] c.rest
+        if !l.ok then rgFail else rgOne b 0 (c.bs ++ l.bs) l.rest
+    else if b == 252 then
+      match r with
+      | 10 :: 0 :: 0 :: r2 => rgOne b 0 [10, 0, 0] r2
+      | 11 :: 0 :: r2 => rgOne b 0 [11, 0] r2
+      | _ => rgFail
+    else if b == 0 || b == 1 || b == 5 || b == 11 || b == 15 || b == 26 || b == 27 || (b ≥ 69 && b ≤ 196) then
+      rgOne b 0 [] r
+    else rgFail
+
+

@@ -1,0 +1,159 @@
+namespace Web.Net.Rows
+open Web.Net
+open Lean
+abbrev Reply := Completions.Completion
+
+structure Check where
+  name : String
+  pass : Bool
+
+def cfg : Config := {}
+def initial : State := {}
+def bytes (xs : List Nat) : ByteArray := ⟨(xs.map UInt8.ofNat).toArray⟩
+def ok {α ε : Type} : Except ε α → Bool | .ok _ => true | .error _ => false
+
+def sameRequest (a b : Submission) : Bool :=
+  a.id == b.id && a.op == b.op && a.handle == b.handle && a.argument == b.argument && a.payload.data == b.payload.data
+
+def sameReply (a b : Reply) : Bool :=
+  a.id == b.id && a.op == b.op && a.handle == b.handle && a.status == b.status &&
+  a.result == b.result && a.errno == b.errno && a.payload.data == b.payload.data
+
+def refused (s : State) (rs : List Submission) (residue : Web.Net.Residue) : Bool :=
+  match Web.Net.runNF ⟨cfg, s, rs⟩ with
+  | .error failure => failure.residue == residue
+  | _ => false
+
+def submitted (s : State) (requests : List Submission) : Except String State := do
+  let next ← (Web.Net.runNF ⟨cfg, s, requests⟩).mapError (fun e => "submit:" ++ reprStr e)
+  if !stateValid cfg next then throw "submit-state-invariant"
+  return next
+
+def reaped (s : State) (replies : List Reply) : Except String State := do
+  let next ← (Web.Net.Completions.runNF ⟨cfg, s, replies⟩).mapError (fun e => "reap:" ++ reprStr e)
+  if !stateValid cfg next then throw "reap-state-invariant"
+  return next
+
+def listen (id : Nat) : Submission := ⟨id, .listen, 0, 0, ByteArray.empty⟩
+def accept (id handle : Nat) : Submission := ⟨id, .accept, handle, 0, ByteArray.empty⟩
+def read (id handle count : Nat) : Submission := ⟨id, .read, handle, count, ByteArray.empty⟩
+def write (id handle : Nat) (payload : ByteArray) : Submission := ⟨id, .write, handle, 0, payload⟩
+def close (id handle : Nat) : Submission := ⟨id, .close, handle, 0, ByteArray.empty⟩
+
+def permutations (a b c : Reply) : List (List Reply) :=
+  [[a,b,c], [a,c,b], [b,a,c], [b,c,a], [c,a,b], [c,b,a]]
+
+-- Exercises the lifetime automaton, not HTTP simulation acceptance. Close may
+-- be reaped before a previously queued success or cancellation; IDs cannot alias.
+def scenario (seed : Nat) : Except String State := do
+  let s ← submitted initial [listen 1]
+  let s ← reaped s [⟨.listen, 1, .success, 1, 7000, 0, ByteArray.empty⟩]
+  let s ← submitted s [accept 2 1]
+  let s ← reaped s [⟨.accept, 2, .success, 2, 0, 0, ByteArray.empty⟩]
+  let payload := bytes [0, seed % 256, 255, 13, 10]
+  let s ← submitted s [read 3 2 5, write 4 2 payload, close 5 2]
+  let r : Reply := if seed % 3 == 0 then ⟨.read, 3, .success, 2, 5, 0, payload⟩
+    else if seed % 3 == 1 then ⟨.read, 3, .eof, 2, 0, 0, ByteArray.empty⟩
+    else ⟨.read, 3, .cancelled, 2, 0, 0, ByteArray.empty⟩
+  let w : Reply := if (seed / 3) % 4 == 0 then ⟨.write, 4, .success, 2, 1, 0, ByteArray.empty⟩
+    else if (seed / 3) % 4 == 1 then ⟨.write, 4, .success, 2, 5, 0, ByteArray.empty⟩
+    else if (seed / 3) % 4 == 2 then ⟨.write, 4, .osError, 2, 0, 54, ByteArray.empty⟩
+    else ⟨.write, 4, .cancelled, 2, 0, 0, ByteArray.empty⟩
+  let cl : Reply := ⟨.close, 5, .success, 2, 0, 0, ByteArray.empty⟩
+  let replies := (permutations r w cl)[(seed / 12) % 6]!
+  let s ← reaped s replies
+  if s.resources.any (fun r => r.handle == 2) then throw "tombstone-not-released"
+  if !s.pending.isEmpty then throw "pending-not-drained"
+  -- A reaped ID cannot complete a second time or become the new stream's ID.
+  if (Completions.completionResidue? s r) != some .unmatchedId then throw "duplicate-completion"
+  let s ← submitted s [accept 6 1]
+  let s ← reaped s [⟨.accept, 6, .success, 6, 0, 0, ByteArray.empty⟩]
+  let s ← submitted s [accept 7 1, close 8 1]
+  let cancel : Reply := ⟨.accept, 7, .cancelled, 1, 0, 0, ByteArray.empty⟩
+  let cl : Reply := ⟨.close, 8, .success, 1, 0, 0, ByteArray.empty⟩
+  let s ← reaped s (if (seed / 72) % 2 == 0 then [cancel, cl] else [cl, cancel])
+  if s.resources.length != 1 || (resource s 6).isNone then throw "listener-closed-live-stream"
+  let s ← submitted s [close 9 6]
+  let s ← reaped s [⟨.close, 9, .success, 6, 0, 0, ByteArray.empty⟩]
+  if !s.resources.isEmpty || !s.pending.isEmpty then throw "resource-leak"
+  return s
+
+def listener : State := { lastId := 1, resources := [⟨1, true, false, false, false⟩] }
+def stream : State := { lastId := 1, resources := [⟨1, false, false, false, false⟩] }
+
+def fixed : List Check := [
+  ⟨"config", configValid cfg⟩,
+  ⟨"initial", stateValid cfg initial⟩,
+  ⟨"batch-empty", refused initial [] .batchCount⟩,
+  ⟨"id-zero", refused initial [listen 0] .idOrder⟩,
+  ⟨"id-reuse", refused listener [accept 1 1] .idOrder⟩,
+  ⟨"id-r1-cap", ok (Web.Net.runNF ⟨cfg, initial, [listen maxId]⟩)⟩,
+  ⟨"id-r1-cap+1", refused initial [listen (maxId + 1)] .integerWidth⟩,
+  ⟨"argument-u32-cap+1", refused stream [read 2 1 (maxU32 + 1)] .integerWidth⟩,
+  ⟨"port-not-authorized", refused initial [⟨1, .listen, 0, 80, ByteArray.empty⟩] .arguments⟩,
+  ⟨"unknown-handle", refused initial [accept 1 1] .unknownHandle⟩,
+  ⟨"read-listener", refused listener [read 2 1 1] .handleKind⟩,
+  ⟨"accept-stream", refused stream [accept 2 1] .handleKind⟩,
+  ⟨"read-zero", refused stream [read 2 1 0] .arguments⟩,
+  ⟨"read-cap", ok (Web.Net.runNF ⟨cfg, stream, [read 2 1 cfg.maxPayload]⟩)⟩,
+  ⟨"read-cap+1", refused stream [read 2 1 (cfg.maxPayload + 1)] .arguments⟩,
+  ⟨"write-zero", refused stream [write 2 1 ByteArray.empty] .arguments⟩,
+  ⟨"duplicate-read", refused stream [read 2 1 1, read 3 1 1] .duplicateOperation⟩,
+  ⟨"read-after-close", refused stream [close 2 1, read 3 1 1] .closing⟩,
+  ⟨"listener-cap+1", refused initial [listen 1, listen 2] .listeners⟩,
+  ⟨"eof-no-more-reads", refused { stream with resources := [⟨1, false, false, false, true⟩] } [read 2 1 1] .readAfterEOF⟩,
+  ⟨"eof-still-writable", ok (Web.Net.runNF ⟨cfg, { stream with resources := [⟨1, false, false, false, true⟩] }, [write 2 1 (bytes [42])]⟩)⟩,
+  ⟨"wire-listen-golden", match Wire.encodeBatch [listen 1] with
+    | .ok b => b.data == (bytes [78,81,83,49,1,0,0,0,1,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]).data
+    | _ => false⟩,
+  ⟨"wire-reap-empty-golden", match CompletionWire.encodeBatch [] with
+    | .ok b => b.data == (bytes [78,81,67,49,0,0,0,0]).data
+    | _ => false⟩,
+  ⟨"wire-reap-empty", ok (CompletionWire.decodeBatch cfg (bytes [78,81,67,49,0,0,0,0]))⟩,
+  ⟨"wire-submit-empty-refuses", !ok (Wire.decodeBatch cfg (bytes [78,81,83,49,0,0,0,0]))⟩]
+
+def fieldRows : List Check := (List.range 4).flatMap fun i =>
+  let width := (#[1,2,4,8])[i]!
+  let bound := 256 ^ width
+  [⟨s!"u{width * 8}-cap-1", ok (Wire.putNat width (bound - 2))⟩,
+   ⟨s!"u{width * 8}-cap", ok (Wire.putNat width (bound - 1))⟩,
+   ⟨s!"u{width * 8}-cap+1", !ok (Wire.putNat width bound)⟩]
+
+def wireRows : List Check := (List.range 256).flatMap fun i =>
+  let request := write (i + 1) 42 (bytes [i, 0, 255, 13, 10])
+  let encoded := Wire.encodeBatch [request]
+  let requestPass := match encoded with
+    | .error _ => false
+    | .ok b => match Wire.decodeBatch cfg b with
+      | .ok [r] => sameRequest request r
+      | _ => false
+  let shortPass := match encoded with
+    | .error _ => false
+    | .ok b => !ok (Wire.decodeBatch cfg (b.extract 0 (b.size - 1)))
+  let trailingPass := match encoded with
+    | .error _ => false
+    | .ok b => !ok (Wire.decodeBatch cfg (b.push 0))
+  let reply : Reply := ⟨.read, i + 1, .success, 42, 5, 0, request.payload⟩
+  let completionPass := match CompletionWire.encodeBatch [reply] with
+    | .error _ => false
+    | .ok b => match CompletionWire.decodeBatch cfg b with
+      | .ok [r] => sameReply reply r
+      | _ => false
+  [⟨s!"request-roundtrip-{i}", requestPass⟩, ⟨s!"request-truncated-{i}", shortPass⟩,
+   ⟨s!"request-trailing-{i}", trailingPass⟩, ⟨s!"completion-roundtrip-{i}", completionPass⟩]
+
+def scenarios : List Check := (List.range 512).map fun seed =>
+  match scenario seed with
+  | .ok _ => ⟨s!"lifetime-seed-{seed}", true⟩
+  | .error e => ⟨s!"lifetime-seed-{seed}:{e}", false⟩
+
+def run : IO UInt32 := do
+  let rows := fixed ++ fieldRows ++ wireRows ++ scenarios
+  let passed := (rows.filter (·.pass)).length
+  IO.println (Json.mkObj [("count", toJson rows.length), ("passed", toJson passed),
+    ("failures", toJson ((rows.filter (fun r => !r.pass)).map fun r =>
+      Json.mkObj [("name", toJson r.name), ("detail", toJson ("" : String))])),
+    ("scope", toJson "pure network model and wire codecs only"), ("closure_claim", toJson (0 : Nat))]).compress
+  return if passed == rows.length then 0 else 1
+end Web.Net.Rows
+

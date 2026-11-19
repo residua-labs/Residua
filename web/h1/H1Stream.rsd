@@ -1,0 +1,60 @@
+/-!
+# From received bytes to a head: one decision, however the bytes arrive
+
+`step` is what the server asks of the bytes received so far on a connection
+that is waiting for a request: read more, refuse with a status, or a head
+with its length and framing. It is `H1Rfc.decide` on the bytes up to the
+first empty line, after the empty lines RFC 9112 §2.2 lets a server ignore.
+
+- `skipEmpty n`: whole CR LF pairs before the request line, at most `n`
+  (§2.2: "SHOULD ignore at least one empty line (CRLF)"). A bare LF or a
+  bare CR is not removed, and the head that follows is refused.
+- `step_head`: a stream that starts with an `RfcHead` gives that head, its
+  length and `H1Valid.framing`, whatever follows it.
+- `step_stable`: once `step` has an answer, more bytes do not change it.
+- `drive_flatten`, `drive_split`: so the answer does not depend on how the
+  bytes were divided into reads.
+-/
+namespace H1Stream
+open H1Valid H1Valid.Decide H1Rfc
+
+/-- The bytes of at most `n` leading CR LF pairs: how many to drop. -/
+def skipEmpty : Nat → List Nat → Nat
+  | n + 1, 13 :: 10 :: t => 2 + skipEmpty n t
+  | _, _ => 0
+
+/-- The length of the shortest prefix that ends with CR LF CR LF. -/
+def findEnd : List Nat → Option Nat
+  | [] => none
+  | a :: t => if a = 13 ∧ t.take 3 = [10, 13, 10] then some 4 else (findEnd t).map (· + 1)
+
+inductive Step where
+  | more
+  | refuse (status : Nat)
+  | head (skipped len : Nat) (r : RequestLine) (fs : List FieldLine) (framing : Framing)
+
+/-- The limits: empty lines ignored, head bytes, body bytes, field lines. -/
+structure Limits where
+  empty : Nat
+  head : Nat
+  body : Nat
+  fields : Nat
+
+def step (c : Limits) (B : List Nat) : Step :=
+  let B' := B.drop (skipEmpty c.empty B)
+  match findEnd B' with
+  | none => if c.head < B'.length then .refuse 431 else .more
+  | some k =>
+    match H1Rfc.decide c.head c.body c.fields (B'.take k) with
+    | .ok (r, fs) => .head (skipEmpty c.empty B) k r fs (framing fs)
+    | .error s => .refuse s
+
+/-! ## Where a head ends -/
+
+def drive (c : Limits) : List Nat → List (List Nat) → Step
+  | B, [] => step c B
+  | B, x :: xs => match step c (B ++ x) with
+    | .more => drive c (B ++ x) xs
+    | s => s
+
+end H1Stream

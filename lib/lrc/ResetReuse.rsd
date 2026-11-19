@@ -1,0 +1,193 @@
+-- LRC: insert reset and reuse.
+-- A port of Lean 4.14.0 src/lean/Lean/Compiler/IR/ResetReuse.lean, cited as ResetReuse:LINE.
+-- closure_claim = 0.
+-- absent: Context M mkFresh N argsContainsVar
+--   (the reader and state monads, the fresh-index wrapper and the argument test: the context is
+--   the record RrCtx passed as a parameter, the fresh index the counter `next` each function
+--   returns beside its result, and the argument test of argsContainsVar is FreeVars' hasIdxArgs
+--   inside rrIsCtorUsing; Lean's PHashSet of found variables is a VSet (lib/lrc/Set.rsd), its
+--   LocalContext of join points a List JP (lib/lrc/LiveVars.rsd), which hasLiveVar takes)
+import Lib.Lrc.LiveVars
+import Lib.Lrc.AlphaEqv
+
+namespace Lrc
+
+-- ResetReuse:32 mayReuse. The name prefix Lean compares (the test in mayReuse's last line) is the
+-- type identity `tid` (CtorInfo, lib/lrc/Ir.rsd); the usize area is always empty in this IR.
+def rrMayReuse (c1 c2 : CtorInfo) (relaxed : Bool) : Bool :=
+  c1.size == c2.size && c1.ssize == c2.ssize && (relaxed || c1.tid == c2.tid)
+
+mutual
+-- ResetReuse:44 S: replace a `ctor` compatible with c by a `reuse` of w in b. The first such
+-- replacement ends the walk (ResetReuse.lean:50): the rest below it is left as it is.
+partial def rrS (w : Nat) (c : CtorInfo) (relaxed : Bool) (b : N) : N :=
+  if b.op == opVDecl then
+    let v := vdeclExpr b
+    let ci := infoOf v
+    if v.op == opCtor && rrMayReuse c ci relaxed then
+      { b with kids := [mkReuse w ci (c.cidx != ci.cidx) (ctorArgs v), bodyOf b] }
+    else { b with kids := [v, rrS w c relaxed (bodyOf b)] }
+  else if b.op == opJDecl then
+    let v' := rrS w c relaxed (jdeclBody b)
+    -- ResetReuse.lean:57: the rest is walked only when the join point's body did not change
+    if bodyEq (jdeclBody b) v' then
+      { b with kids := [jdeclBody b, rrS w c relaxed (bodyOf b)] }
+    else { b with kids := [v', bodyOf b] }
+  else if b.op == opCase then { b with kids := rrSAlts w c relaxed (caseAlts b) }
+  else if isTerminal b then b
+  else setBody b (rrS w c relaxed (bodyOf b))
+partial def rrSAlts (w : Nat) (c : CtorInfo) (relaxed : Bool) : List N → List N
+  | [] => []
+  | alt :: alts => altSetBody alt (rrS w c relaxed (altBody alt)) :: rrSAlts w c relaxed alts
+end
+
+-- ResetReuse:69 Context. The join points in scope (for hasLiveVar), the variables already in a
+-- `reset` on this path, and the reuse mode.
+structure RrCtx where
+  lctx : List JP
+  alreadyFound : VSet
+  relaxed : Bool
+  deriving Inhabited
+
+-- a function's result: the body and the fresh-variable counter (ResetReuse.lean:100 mkFresh)
+structure RrB where
+  next : Nat
+  body : N
+  deriving Inhabited
+
+-- Dmain's result: the body and whether the variable is live in it (ResetReuse.lean:133)
+structure RrD where
+  next : Nat
+  body : N
+  found : Bool
+  deriving Inhabited
+
+structure RrA where
+  next : Nat
+  alts : List N
+  deriving Inhabited
+
+-- ResetReuse:108 tryS: a `reset` of x is placed before b only when S replaced a `ctor` in b.
+-- The fresh w is the counter's value; Lean's structural equality of bodies is bodyEq here, which
+-- sees every change S makes (a `ctor` becomes a `reuse`, a different node).
+def rrTryS (x : Nat) (c : CtorInfo) (ctx : RrCtx) (b : N) (next : Nat) : RrB :=
+  let b' := rrS next c ctx.relaxed b
+  if bodyEq b b' then { next := next + 1, body := b }
+  else { next := next + 1, body := mkVDecl next tyObj (mkReset c.size x) b' }
+
+-- ResetReuse:116 Dfinalize: when the variable is live the body stands, otherwise tryS closes it
+def rrDFinalize (x : Nat) (c : CtorInfo) (ctx : RrCtx) (r : RrD) : RrB :=
+  if r.found then { next := r.next, body := r.body } else rrTryS x c ctx r.body r.next
+
+-- ResetReuse:125 isCtorUsing: the instruction stores x in a constructor's field
+-- (argsContainsVar's test is hasIdxArgs, ResetReuse.lean:120)
+def rrIsCtorUsing (b : N) (x : Nat) : Bool :=
+  b.op == opVDecl && (vdeclExpr b).op == opCtor && hasIdxArgs x (ctorArgs (vdeclExpr b))
+
+mutual
+-- ResetReuse:137 Dmain: delete the last occurrence of x, and place a reset where it pays.
+-- The join points of the enclosing scopes are in ctx for hasLiveVar (LiveVars.lean:79).
+partial def rrDMain (x : Nat) (c : CtorInfo) (ctx : RrCtx) (e : N) (next : Nat) : RrD :=
+  if e.op == opCase then
+    -- ResetReuse.lean:139: each branch is rewritten only when x is live in the whole case
+    if hasLiveVar e ctx.lctx x then
+      let r := rrDMainAlts x c ctx (caseAlts e) next
+      { next := r.next, body := { e with kids := r.alts }, found := true }
+    else { next := next, body := e, found := false }
+  else if e.op == opJDecl then
+    -- ResetReuse.lean:154: the rest with the join point in scope, then the join point's own body;
+    -- the scope entry holds the body as it was, as Lean's addJP does
+    let rb := rrDMain x c { ctx with lctx := { j := jdeclId e, xs := jdeclParams e, body := jdeclBody e } :: ctx.lctx } (bodyOf e) next
+    let rv := rrDMain x c ctx (jdeclBody e) rb.next
+    { next := rv.next, body := { e with kids := [rv.body, rb.body] }, found := rb.found }
+  else if isTerminal e then { next := next, body := e, found := hasLiveVar e ctx.lctx x }
+  else
+    -- ResetReuse.lean:166: a constructor storing x ends the search: reuse would not pay
+    if rrIsCtorUsing e x then { next := next, body := e, found := true }
+    else
+      let instr := setBody e mkUnreachable
+      let r := rrDMain x c ctx (bodyOf e) next
+      if r.found || !hasFreeVar instr x then
+        { next := r.next, body := setBody e r.body, found := r.found }
+      else
+        let t := rrTryS x c ctx r.body r.next
+        { next := t.next, body := setBody e t.body, found := true }
+partial def rrDMainAlts (x : Nat) (c : CtorInfo) (ctx : RrCtx) : List N → Nat → RrA
+  | [], next => { next := next, alts := [] }
+  | alt :: alts, next =>
+    let r := rrDFinalize x c ctx (rrDMain x c ctx (altBody alt) next)
+    let rest := rrDMainAlts x c ctx alts r.next
+    { next := rest.next, alts := altSetBody alt r.body :: rest.alts }
+end
+
+-- ResetReuse:175 D
+def rrD (x : Nat) (c : CtorInfo) (ctx : RrCtx) (b : N) (next : Nat) : RrB :=
+  rrDFinalize x c ctx (rrDMain x c ctx b next)
+
+mutual
+-- ResetReuse:178 R: walk the body; under a case on an object, each constructor alternative that
+-- is not scalar and not already reset gives its memory to D.
+partial def rrR (ctx : RrCtx) (e : N) (next : Nat) : RrB :=
+  if e.op == opCase then
+    -- ResetReuse.lean:180: a variable already in a reset is not reset again
+    let alreadyFound := vsContains ctx.alreadyFound (caseVar e)
+    let ctx' := { ctx with alreadyFound := vsInsert ctx.alreadyFound (caseVar e) }
+    let r := rrRAlts ctx' (caseVar e) alreadyFound (caseAlts e) next
+    { next := r.next, body := { e with kids := r.alts } }
+  else if e.op == opJDecl then
+    -- ResetReuse.lean:199: the join point's body first, then the rest with it in scope
+    let rv := rrR ctx (jdeclBody e) next
+    let rb := rrR { ctx with lctx := { j := jdeclId e, xs := jdeclParams e, body := rv.body } :: ctx.lctx } (bodyOf e) rv.next
+    { next := rb.next, body := { e with kids := [rv.body, rb.body] } }
+  else if isTerminal e then { next := next, body := e }
+  else
+    let r := rrR ctx (bodyOf e) next
+    { next := r.next, body := setBody e r.body }
+partial def rrRAlts (ctx : RrCtx) (x : Nat) (alreadyFound : Bool) : List N → Nat → RrA
+  | [], next => { next := next, alts := [] }
+  | alt :: alts, next =>
+    let r := rrR ctx (altBody alt) next
+    if alt.op == opAltCtor then
+      let ci := infoOf alt
+      -- ResetReuse.lean:193: a scalar constructor or an already-reset variable is left alone
+      if !ci.isScalar && !alreadyFound then
+        let rd := rrD x ci ctx r.body r.next
+        let rest := rrRAlts ctx x alreadyFound alts rd.next
+        { next := rest.next, alts := altSetBody alt rd.body :: rest.alts }
+      else
+        let rest := rrRAlts ctx x alreadyFound alts r.next
+        { next := rest.next, alts := altSetBody alt r.body :: rest.alts }
+    else
+      let rest := rrRAlts ctx x alreadyFound alts r.next
+      { next := rest.next, alts := altSetBody alt r.body :: rest.alts }
+end
+
+mutual
+-- ResetReuse:209 collectResets: the variables a `reset` already clears in b
+partial def rrCollectResets (b : N) (s : VSet) : VSet :=
+  if b.op == opCase then rrCollectResetsAlts (caseAlts b) s
+  else if b.op == opJDecl then rrCollectResets (jdeclBody b) (rrCollectResets (bodyOf b) s)
+  else if b.op == opVDecl && (vdeclExpr b).op == opReset then
+    rrCollectResets (bodyOf b) (vsInsert s (resetVar (vdeclExpr b)))
+  else if isTerminal b then s
+  else rrCollectResets (bodyOf b) s
+partial def rrCollectResetsAlts : List N → VSet → VSet
+  | [], s => s
+  | alt :: alts, s => rrCollectResetsAlts alts (rrCollectResets (altBody alt) s)
+end
+
+-- ResetReuse:222 insertResetReuseCore: on the relaxed run the resets of the strict run's output
+-- are already found, so no cell is reset twice
+def declInsertResetReuseCore (d : Decl) (relaxed : Bool) : Decl :=
+  if d.ext then d
+  else
+    let alreadyFound := if relaxed then rrCollectResets d.body vsEmpty else vsEmpty
+    let r := rrR { lctx := [], alreadyFound := alreadyFound, relaxed := relaxed } d.body (declMaxIndex d + 1)
+    { d with body := r.body }
+
+-- ResetReuse:232 insertResetReuse runs the strict pass over the input, then the relaxed pass
+-- over its output (Lean's issue #4089)
+def declInsertResetReuse (d : Decl) : Decl :=
+  declInsertResetReuseCore (declInsertResetReuseCore d false) true
+
+end Lrc

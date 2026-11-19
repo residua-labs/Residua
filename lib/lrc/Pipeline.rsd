@@ -1,0 +1,188 @@
+-- LRC: the passes of the stage, in Lean's order.
+-- closure_claim = 0.
+--
+-- Lean 4.14.0 src/lean/Lean/Compiler/IR.lean:33 `compileAux` (cited as IR:LINE) runs, on all the
+-- declarations of a module: elimDeadBranches (IR:36), pushProj (IR:38), insertResetReuse (IR:41),
+-- elimDead (IR:43), simpCase (IR:45), normalizeIds (IR:47), inferBorrow (IR:48), explicitBoxing
+-- (IR:50), explicitRC (IR:52), expandResetReuse (IR:55), pushProj (IR:57).
+-- Here: explicitBoxing has no work, the wire is monomorphic and every word has its type. Dead
+-- bindings are removed by `declElimDeadKeep`, which keeps a refusing call or operator that Lean's
+-- total IR would drop (lib/lrc/ElimDead.rsd).
+-- Before them, when asked for, the stage's own first-order pass: inlining (lib/lrc/Inline.rsd).
+-- It is not in the default yet. Measured on GCP (fable-bo-lrc6, f3c9d9bfb, node): with it rbtree at
+-- 1,000,000 inserts takes 1426 ms against 1151 ms, rbtree-ck 1899 against 1675, the other five
+-- programs within 2 percent. Cause: a parameter the callee only borrowed is in the caller an owned
+-- variable, and explicitRC counts every object projected from an owned variable (RC.lean:187, the `proj` case of processVDecl).
+-- It comes back with drop specialization (Perceus), which removes those counts where the variable
+-- is unique. rsc/rsc.rsd turns it on under the cte bit, which the stage does not use otherwise.
+-- Then common subexpressions, calls among them (lib/lrc/Cse.rsd, after Lean's LCNF pass), and the
+-- fuel guards an earlier test already decided are removed (lib/lrc/GuardElim.rsd).
+-- After expandResetReuse, drop specialization (lib/lrc/DropSpec.rsd), which Lean 4.14 does not have.
+-- A declaration without a body goes through every pass as it is.
+import Lib.Lrc.Closures
+import Lib.Lrc.Inline
+import Lib.Lrc.Cse
+import Lib.Lrc.GuardElim
+import Lib.Lrc.ElimDeadBranches
+import Lib.Lrc.PushProj
+import Lib.Lrc.ElimDead
+import Lib.Lrc.SimpCase
+import Lib.Lrc.NormIds
+import Lib.Lrc.Borrow
+import Lib.Lrc.RC
+import Lib.Lrc.ResetReuse
+import Lib.Lrc.ExpandResetReuse
+import Lib.Lrc.DropSpec
+import Lib.Lrc.Trmc
+import Lib.Lrc.Pack
+import Lib.Lrc.SinkProj
+import Lib.Lrc.SinkInc
+import Lib.Lrc.Closed
+import Lib.Lrc.Range
+import Lib.Lrc.JoinOnce
+
+namespace Lrc
+
+def plPushProj : List Decl → List Decl
+  | [] => []
+  | d :: ds => (if d.ext then d else declPushProj d) :: plPushProj ds
+
+def plElimDead : List Decl → List Decl
+  | [] => []
+  | d :: ds => (if d.ext then d else declElimDeadKeep d) :: plElimDead ds
+
+def plSimpCase : List Decl → List Decl
+  | [] => []
+  | d :: ds => (if d.ext then d else declSimpCase d) :: plSimpCase ds
+
+def plNormalizeIds : List Decl → List Decl
+  | [] => []
+  | d :: ds => (if d.ext then d else declNormalizeIds d) :: plNormalizeIds ds
+
+def plInsertResetReuse : List Decl → List Decl
+  | [] => []
+  | d :: ds => (if d.ext then d else declInsertResetReuse d) :: plInsertResetReuse ds
+
+def plDropSpec : List Decl → List Decl
+  | [] => []
+  | d :: ds => declDropSpec d :: plDropSpec ds
+
+def plExpandResetReuse : List Decl → List Decl
+  | [] => []
+  | d :: ds => (if d.ext then d else declExpandResetReuse d) :: plExpandResetReuse ds
+
+mutual
+-- The one result of a call that nothing reads is released after the call. Lean's counting pass
+-- meets no such variable: its elimDead removes the call. The stage keeps a call that may refuse
+-- (lib/lrc/ElimDead.rsd), and a result it leaves unread would stay counted for ever. With several
+-- results the port of the pass does this itself (lib/lrc/RC.rsd `xrAddDecForDeadBinds`); the
+-- case of one result is kept out of the port, so that the port stays what Lean's pass is. It
+-- runs directly after explicitRC.
+partial def drGo (n : N) : N :=
+  if n.op == opVDecl then
+    let e := vdeclExpr n
+    let b := drGo (bodyOf n)
+    if e.op == opFap && n.ys.isEmpty && tyIsObj (vdeclTy n) && !hasFreeVar b (vdeclVar n) then
+      { n with kids := [e, mkDec (vdeclVar n) 1 true false b] }
+    else { n with kids := [e, b] }
+  else if n.op == opJDecl then { n with kids := [drGo (jdeclBody n), drGo (bodyOf n)] }
+  else if n.op == opCase then { n with kids := drAlts (caseAlts n) }
+  else if isTerminal n then n
+  else setBody n (drGo (bodyOf n))
+partial def drAlts : List N → List N
+  | [] => []
+  | alt :: alts => altSetBody alt (drGo (altBody alt)) :: drAlts alts
+end
+
+def plDeadResults : List Decl → List Decl
+  | [] => []
+  | d :: ds => (if d.ext then d else { d with body := drGo d.body }) :: plDeadResults ds
+
+-- IR:33 compileAux. `opts` is a sum. Its part below 4 is the inlining: 0 none, 1 before the passes,
+-- 2 after them (the callee's body then keeps the counting it has as a function: a parameter it
+-- borrows costs nothing in the caller either, and nothing new is reused). 4: a repeated call is not
+-- taken as a common subexpression (lib/lrc/Cse.rsd `cse`). 8: no tail recursion modulo cons
+-- (lib/lrc/Trmc.rsd), which otherwise runs last. 16: no byte fields (lib/lrc/Pack.rsd), which
+-- otherwise runs first. 32: constant cells (lib/lrc/Closed.rsd), after the byte fields; off
+-- unless asked for (Diff.rsd image check: deriv at 6 allocates 21357 cells without them and 19919
+-- with them at the same peak, treebitonic at 6 peaks at 2536 bytes without and 5048 with: a
+-- persistent cell is never updated in place). 64: a function called once is not inlined before the
+-- passes (lib/lrc/Inline.rsd `inlineOnce`), which otherwise happens whenever there is inlining at all.
+-- 128: the count-ups are not sunk (lib/lrc/SinkInc.rsd). 256 and 512: the form of tail recursion
+-- modulo cons is the plain one for every function, or the one with the root for every function
+-- (lib/lrc/Trmc.rsd `trmc`, modes 1 and 2). 1024: no range facts (lib/lrc/Range.rsd).
+-- `nImg` is the number of the image's functions.
+def pipelineWith (opts : Nat) (nImg : Nat) (decls : List Decl) : List Decl :=
+  let inl := opts % 4
+  -- the six r2 forms become r1 forms before anything reads them (lib/lrc/Closures.rsd); an r1 program is unchanged.
+  -- Option 2048: the module's object fields are four bytes (rsc's layer `narrow`), which is another box for a
+  -- scalar of 32 bits here, and a node's scalar fields of two and four bytes below (lib/lrc/Pack.rsd
+  -- `packScalarsW`); no other pass reads the option.
+  let decls := lowerR2N (opts / 2048 % 2 == 1) decls
+  let decls := if opts / 16 % 2 == 0 then packScalarsW (opts / 2048 % 2 == 1) decls else decls
+  -- range facts (lib/lrc/Range.rsd) on the declarations as translated: every scalar still goes
+  -- into a fresh `ctor`; before the constant cells, whose scalars no store shows
+  -- A function called once goes into its caller first: a clone made below would give it a second call.
+  let decls := if inl != 0 && opts / 64 % 2 == 0 then inlineOnce nImg decls else decls
+  -- Then the small functions with only scalar parameters go into their callers (the facts are
+  -- then those of each call); after the facts a join point with one jump left is put in its place.
+  let decls := if opts / 1024 % 2 == 0 && inl != 0 then joinOnce (rangeFacts nImg (inlineScalar nImg decls))
+               else if opts / 1024 % 2 == 0 then rangeFacts nImg decls else decls
+  let decls := if opts / 32 % 2 == 1 then closedCells decls else decls
+  let ds := decls
+  let ds := if inl == 1 then inlineDecls nImg ds else ds
+  let ds := cse (opts / 4 % 2 == 0) ds
+  let ds := guardElim nImg ds
+  let ds := elimDeadBranches ds
+  let ds := plPushProj ds
+  -- The reads go on past the literal and the comparison of a test (lib/lrc/SinkProj.rsd) here too,
+  -- before anything is counted. A match on a nested pattern reads the inner cell's fields and then
+  -- tests its colour or tag; left above the test, every field that some branch consumes is counted
+  -- up there and counted down again in each branch that does not take it (rbtree's balance: two
+  -- such pairs and five loads on the path that rebuilds nothing; a profile of the native route
+  -- has 39 percent of rbtree's time in that function).
+  let ds := sinkProj ds
+  let ds := plInsertResetReuse ds
+  let ds := plElimDead ds
+  let ds := plSimpCase ds
+  -- Once more after simpCase, which Lean does not do. simpCase replaces a case whose alternatives
+  -- are all the same by that one body; when the case's subject was a projection, the projection
+  -- is then dead. Lean's counting pass assumes no dead variable: it counts the projection of an
+  -- owned object up (RC.lean:187) and nothing ever counts it down. Lean's own input does not
+  -- have such a case; here the guards' removal and the rebuilt-constructor rule (lib/lrc/Cse.rsd)
+  -- make alternatives equal (deriv's mulAux under `val 1, f => f`: three cells stayed live).
+  let ds := plElimDead ds
+  let ds := plNormalizeIds ds
+  let ds := inferBorrow ds
+  let ds := plDeadResults (explicitRC ds)
+  -- a count-up goes down to the reset it pairs with (lib/lrc/SinkInc.rsd), so that the expansion
+  -- below erases the pair on the unique path
+  let ds := if opts / 128 % 2 == 0 then sinkInc ds else ds
+  let ds := plExpandResetReuse ds
+  let ds := plDropSpec ds
+  -- Lean's second pushProj, going on past literals and operators (lib/lrc/SinkProj.rsd)
+  let ds := sinkProj ds
+  -- after the inlining the reads go down once more: into the code that followed an inlined call. Before that
+  -- a small join point goes to each of its jumps and what a jump knows is folded (lib/lrc/JoinOnce.rsd
+  -- `joinSmall`, `foldKnown`): the short form of an integer operation jumps with a box.
+  -- The three run twice: `a && b && c` is a join point inside a join point, and the outer one is small
+  -- enough for its jumps only when the inner one has gone to its own (nqueens-kk's `safe`: the jump that
+  -- carries `false` then returns at once, and the other jump is the last, so the test it carries is read
+  -- by a case directly below it).
+  let ds := if inl == 2 then
+      sinkProj (guardElim nImg (joinOnce (foldKnown (joinSmall (joinOnce (foldKnown (joinSmall (inlineDecls nImg ds))))))))
+    else ds
+  let ds := if opts / 8 % 2 == 0 then trmc nImg (opts / 256 % 4) ds else ds
+  -- last: where the fuel is known to be above 1, a self tail call need not test it; and a test stands
+  -- directly before the case that reads it (lib/lrc/JoinOnce.rsd `condDown`)
+  condDown (fuelKnown nImg ds)
+
+-- The options the stage runs with unless a layer bit says otherwise: inlining after the passes.
+-- Measured on one VM (job fable-bo-native2, the native route): rbtree 2973 ms without it, 2651
+-- with it; no row slower. Inlining before the passes stays an option: it made rbtree slower
+-- (a borrowed parameter's projections become counted ones).
+def pipelineDefault : Nat := 2
+
+def pipeline (nImg : Nat) (decls : List Decl) : List Decl := pipelineWith pipelineDefault nImg decls
+
+end Lrc

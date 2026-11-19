@@ -1,0 +1,68 @@
+-- LRC: push projections into the branches of a case.
+-- A port of Lean 4.14.0 src/lean/Lean/Compiler/IR/PushProj.lean, cited as PushProj:LINE.
+-- closure_claim = 0.
+import Lib.Lrc.NormIds
+
+namespace Lrc
+
+structure PushR where
+  bs : List N
+  alts : List N
+  deriving Inhabited
+
+-- PushProj:22: the alternatives that read x receive the projection b in front of their body
+def pushIntoAlts (b : N) (x : Nat) : List N → List VSet → List N
+  | alt :: alts, s :: ss =>
+    (if vsContains s x then altSetBody alt (setBody b (altBody alt)) else alt) :: pushIntoAlts b x alts ss
+  | alts, _ => alts
+
+-- PushProj:25: and their free indices gain those of b
+def pushIntoFree (b : N) (x : Nat) : List VSet → List VSet
+  | [] => []
+  | s :: ss => (if vsContains s x then collectFreeIndices b s else s) :: pushIntoFree b x ss
+
+-- PushProj:13 pushProjs. `bsRev` holds the instructions before the case, the last one first.
+-- `ctx` holds the instructions that stay in front of the case, in order; `ctxF` their free indices
+-- and the scrutinee. Lean pushes onto an array and reverses it at the end; a list built by consing
+-- while walking backwards is already in order.
+partial def pushProjs (bsRev : List N) (alts : List N) (altsF : List VSet) (ctx : List N) (ctxF : VSet) : PushR :=
+  match bsRev with
+  | [] => { bs := ctx, alts := alts }
+  | b :: rest =>
+    let v := vdeclExpr b
+    if b.op == opVDecl && (v.op == opProj || v.op == opSProj) then
+      let x := vdeclVar b
+      if !vsContains ctxF x then pushProjs rest (pushIntoAlts b x alts altsF) (pushIntoFree b x altsF) ctx ctxF
+      else pushProjs rest alts altsF (b :: ctx) (collectFreeIndices b ctxF)
+    else if b.op == opVDecl && v.op == opIsShared then
+      pushProjs rest alts altsF (b :: ctx) (collectFreeIndices b ctxF)
+    else { bs := rest.reverse ++ (b :: ctx), alts := alts }
+
+def altsFree : List N → List VSet
+  | [] => []
+  | alt :: alts => freeIndices (altBody alt) :: altsFree alts
+
+mutual
+-- PushProj:39 FnBody.pushProj
+partial def pushProjBody (b : N) : N :=
+  let f := flatten b
+  let bs := pushProjJPs f.bs
+  if f.term.op == opCase then
+    let alts := caseAlts f.term
+    let r := pushProjs bs.reverse alts (altsFree alts) [] (vsInsert vsEmpty (caseVar f.term))
+    reshape r.bs { f.term with kids := pushProjAlts r.alts }
+  else reshape bs f.term
+-- Basic:382 modifyJPs bs pushProj
+partial def pushProjJPs : List N → List N
+  | [] => []
+  | b :: bs => (if b.op == opJDecl then jdeclSetBody b (pushProjBody (jdeclBody b)) else b) :: pushProjJPs bs
+partial def pushProjAlts : List N → List N
+  | [] => []
+  | alt :: alts => altSetBody alt (pushProjBody (altBody alt)) :: pushProjAlts alts
+end
+
+-- PushProj:52 Decl.pushProj
+def declPushProj (d : Decl) : Decl :=
+  if d.ext then d else declNormalizeIds { d with body := pushProjBody d.body }
+
+end Lrc

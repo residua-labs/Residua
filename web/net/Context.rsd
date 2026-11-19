@@ -1,0 +1,185 @@
+namespace Web.Net.Context
+
+-- Device-specific resolved declarations. This is not the whole EFFECT-ABI-0
+-- Context: a typed program/plan and the generic 9P admission NF remain separate.
+-- Hashes are FORMAT q1 typed RVAL digests, never a document/file hash.
+structure Contract where
+  revision : Nat := 1
+  submissionGrammar : ByteArray
+  completionGrammar : ByteArray
+  admissionMachine : ByteArray
+  completionMachine : ByteArray
+  conformance : ByteArray
+
+structure Profile where
+  revision : Nat := 1
+  msizeOffer : Nat := 8192
+  maxSteps : Nat := 4096
+  maxData : Nat := 8168
+  stepTimeoutMs : Nat := 1000
+
+structure DeviceConfig where
+  revision : Nat := 1
+  bindAddress : ByteArray := ByteArray.mk #[127,0,0,1]
+  limits : Config := {}
+
+structure Mount where
+  name : ByteArray
+  contractQ : ByteArray
+  configQ : ByteArray
+
+structure Namespace where
+  revision : Nat := 1
+  mounts : List Mount
+
+structure Resolved where
+  contract : Contract
+  config : DeviceConfig
+  profile : Profile
+  manifest : Namespace
+  contractQ : ByteArray
+  configQ : ByteArray
+  profileQ : ByteArray
+  namespaceQ : ByteArray
+
+-- Fixed-order FORMAT type declarations. All values below inhabit these types
+-- by construction; bounds are checked before any i64 encoder is called.
+def natBytes (bs : ByteArray) : List Nat := bs.data.toList.map UInt8.toNat
+def bytes (ns : List Nat) : ByteArray := ByteArray.mk (ns.map UInt8.ofNat).toArray
+def name (s : String) : List Nat := Lib.bytesLeaf (natBytes s.toUTF8)
+def recordType (fields : List (String × List Nat)) : List Nat :=
+  [7] ++ Lib.leb fields.length ++ fields.flatMap (fun (n,t) => name n ++ t)
+def canonical (ty value : List Nat) : ByteArray := bytes (Lib.valHeader ++ ty ++ value)
+-- Reuse Receipt's SHA-256 compression, but pad in naturals without truncating
+-- subtraction when the remainder is 57..63. Differential vectors cover it.
+def shaPadding (msg : List Nat) : List Nat :=
+  let n := msg.length * 8
+  let one := msg ++ [128]
+  one ++ Lib.zeros ((120 - one.length % 64) % 64) ++
+    [n / 72057594037927936 % 256,n / 281474976710656 % 256,n / 1099511627776 % 256,
+     n / 4294967296 % 256,n / 16777216 % 256,n / 65536 % 256,n / 256 % 256,n % 256]
+def digest (b : ByteArray) : ByteArray :=
+  let s := Lib.blocks Lib.initH (shaPadding (natBytes b))
+  bytes (Lib.bytes4 s.a ++ Lib.bytes4 s.b ++ Lib.bytes4 s.c ++ Lib.bytes4 s.d ++
+    Lib.bytes4 s.e ++ Lib.bytes4 s.f ++ Lib.bytes4 s.g ++ Lib.bytes4 s.h)
+def byteValue (b : ByteArray) := Lib.bytesLeaf (natBytes b)
+
+def contractType := recordType [("revision",[0]),("submission_grammar",[3]),
+  ("completion_grammar",[3]),("admission_machine",[3]),("completion_machine",[3]),("conformance",[3])]
+def contractBytes (c : Contract) : ByteArray := canonical contractType
+  (Lib.i64Leaf c.revision ++ byteValue c.submissionGrammar ++ byteValue c.completionGrammar ++
+   byteValue c.admissionMachine ++ byteValue c.completionMachine ++ byteValue c.conformance)
+
+def configType := recordType [("revision",[0]),("bind_address",[3]),("ports",[4,0]),
+  ("max_listeners",[0]),("max_connections",[0]),("max_pending",[0]),("max_batch",[0]),
+  ("max_payload",[0]),("max_buffered_bytes",[0]),("reap_wait_ms",[0])]
+def configBytes (c : DeviceConfig) : ByteArray := canonical configType
+  (Lib.i64Leaf c.revision ++ byteValue c.bindAddress ++ Lib.leb c.limits.ports.length ++
+   c.limits.ports.flatMap Lib.i64Leaf ++ [c.limits.maxListeners,c.limits.maxConnections,
+     c.limits.maxPending,c.limits.maxBatch,c.limits.maxPayload,c.limits.maxBufferedBytes,
+     c.limits.reapWaitMs].flatMap Lib.i64Leaf)
+
+def profileType := recordType [("revision",[0]),("msize_offer",[0]),("max_steps",[0]),
+  ("max_data",[0]),("step_timeout_ms",[0])]
+def profileBytes (p : Profile) : ByteArray := canonical profileType
+  ([p.revision,p.msizeOffer,p.maxSteps,p.maxData,p.stepTimeoutMs].flatMap Lib.i64Leaf)
+def mountType := recordType [("name",[3]),("contract_q",[3]),("config_q",[3])]
+def namespaceType := recordType [("revision",[0]),("mounts",[4] ++ mountType)]
+def namespaceBytes (n : Namespace) : ByteArray := canonical namespaceType
+  (Lib.i64Leaf n.revision ++ Lib.leb n.mounts.length ++ n.mounts.flatMap (fun m =>
+    byteValue m.name ++ byteValue m.contractQ ++ byteValue m.configQ))
+
+def eqBytes (a b : ByteArray) : Bool := a.data == b.data
+def contractValid (c : Contract) : Bool := c.revision == 1 &&
+  [c.submissionGrammar,c.completionGrammar,c.admissionMachine,c.completionMachine,c.conformance].all
+    (fun b => 0 < b.size && b.size <= 1048576)
+def profileValid (p : Profile) : Bool := p.revision == 1 &&
+  256 <= p.msizeOffer && p.msizeOffer <= maxU32 && p.maxSteps <= maxId &&
+  p.maxData <= maxU32 && 0 < p.stepTimeoutMs && p.stepTimeoutMs <= maxId
+
+def initialDataCap (p : Profile) : Nat := min p.maxData (p.msizeOffer - 24)
+def configValid (c : DeviceConfig) (p : Profile) : Bool := c.revision == 1 &&
+  eqBytes c.bindAddress (ByteArray.mk #[127,0,0,1]) &&
+  Web.Net.configValid c.limits && c.limits.dataCap == initialDataCap p &&
+  c.limits.reapWaitMs < p.stepTimeoutMs && c.limits.ports.length <= 65536
+
+-- This device deliberately supports one mount. This is not a replacement for
+-- the general sorted-mount namespace validator in EFFECT-ABI-0.
+def namespaceValid (n : Namespace) : Bool := n.revision == 1 && match n.mounts with
+  | [m] => eqBytes m.name "net".toUTF8 && m.contractQ.size == 32 && m.configQ.size == 32
+  | _ => false
+
+def referencesMatch (r : Resolved) : Bool := match r.manifest.mounts with
+  | [m] => eqBytes m.contractQ r.contractQ && eqBytes m.configQ r.configQ
+  | _ => false
+
+inductive Residue where
+  | contractBounds | profileBounds | configBounds | namespaceBounds
+  | digestWidth | contractSubstitution | contractDigest | configDigest
+  | profileDigest | namespaceDigest | mountReference
+  deriving BEq, Repr, DecidableEq
+
+def residueName : Residue → String
+  | .contractBounds => "nf_net_context_contract_bounds"
+  | .profileBounds => "nf_net_context_profile_bounds"
+  | .configBounds => "nf_net_context_config_bounds"
+  | .namespaceBounds => "nf_net_context_namespace_bounds"
+  | .digestWidth => "nf_net_context_digest_width"
+  | .contractSubstitution => "nf_net_context_contract_substitution"
+  | .contractDigest => "nf_net_context_contract_digest"
+  | .configDigest => "nf_net_context_config_digest"
+  | .profileDigest => "nf_net_context_profile_digest"
+  | .namespaceDigest => "nf_net_context_namespace_digest"
+  | .mountReference => "nf_net_context_mount_reference"
+
+-- Identity data comes from the resolved declarations, not a caller-supplied
+-- success flag. Expected is the implementation's pinned contract declaration.
+def firstResidue (expected : Contract) (r : Resolved) : Option Residue :=
+  if !contractValid expected || !contractValid r.contract then some .contractBounds
+  else if !profileValid r.profile then some .profileBounds
+  else if !configValid r.config r.profile then some .configBounds
+  else if !namespaceValid r.manifest then some .namespaceBounds
+  else if ![r.contractQ,r.configQ,r.profileQ,r.namespaceQ].all (·.size == 32) then some .digestWidth
+  else if !eqBytes (contractBytes expected) (contractBytes r.contract) then some .contractSubstitution
+  else if !eqBytes (digest (contractBytes r.contract)) r.contractQ then some .contractDigest
+  else if !eqBytes (digest (configBytes r.config)) r.configQ then some .configDigest
+  else if !eqBytes (digest (profileBytes r.profile)) r.profileQ then some .profileDigest
+  else if !eqBytes (digest (namespaceBytes r.manifest)) r.namespaceQ then some .namespaceDigest
+  else if !referencesMatch r then some .mountReference
+  else none
+
+-- The expected contract is a parameter of this NF and is part of q's preimage.
+-- Normalization never repairs caller-supplied declarations or their digests.
+def q (expected : Contract) (r : Resolved) := (expected, r)
+
+def residue? (expected : Contract) (r : Resolved) : Option Residue := firstResidue expected r
+
+def admissible (expected : Contract) (r : Resolved) : Bool := (residue? expected r).isNone
+
+def runNF (expected : Contract) (r : Resolved) : Except Residue Resolved :=
+  match residue? expected r with
+  | some residue => .error residue
+  | none => .ok r
+
+-- NF-CORRECT-0 r2: the checked decision; runNF retains the original
+-- transition and its failure-state observations for existing callers.
+def admit (observation : Prod Contract Resolved) : Except Residue Resolved :=
+  runNF observation.1 observation.2
+
+def decide (expected : Contract) (r : Resolved) : Except Residue Resolved := runNF expected r
+
+def check (expected : Contract) (r : Resolved) : Except Residue Resolved := runNF expected r
+
+-- Producer helper constructs a declaration and its identities; check never
+-- repairs a supplied declaration. Callers must still check before any IO.
+def declare (c : Contract) (cfg : DeviceConfig) (p : Profile) : Except Residue Resolved := do
+  if !contractValid c then throw .contractBounds
+  if !profileValid p then throw .profileBounds
+  if !configValid cfg p then throw .configBounds
+  let cq := digest (contractBytes c)
+  let dq := digest (configBytes cfg)
+  let ns : Namespace := { mounts := [⟨"net".toUTF8,cq,dq⟩] }
+  return { contract := c, config := cfg, profile := p, manifest := ns,
+           contractQ := cq, configQ := dq, profileQ := digest (profileBytes p), namespaceQ := digest (namespaceBytes ns) }
+
+end Web.Net.Context

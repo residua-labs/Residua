@@ -1,0 +1,67 @@
+-- OBJECT-ABI v1, current-RSCM boundary.  This is the only kind-to-slot
+-- classification.  Kind 0 is a checked 64-bit integer scalar; Int, Nat,
+-- UInt-like and Char source identities have already been collapsed.
+-- OBJECT-ABI rev 3 moves Nat/Int to object slots when D adds bignum kinds.
+-- Classes: 0 object, 16 usize, otherwise the scalar byte width; -1 refuses.
+-- The OCaml bootstrap reads this declaration as data from the same closure.
+def objectSlotClasses : List Int := [8, 1, 0, 0, 0, 0, 0, 0, 0, 0]
+
+def objectSlotClass (kind : Int) : Int :=
+  if kind < 0 then -1 else (objectSlotClasses[kind.toNat]?).getD (-1)
+
+def objectSlotWidth (cls : Int) : Int :=
+  if cls == 0 || cls == 16 then 8 else cls
+
+def objectClassOrder : List Int := [0, 16, 8, 4, 2, 1]
+
+structure ObjectLayout where
+  ok : Bool
+  offsets : List Int
+  objects : Nat
+  usizes : Nat
+  scalarBytes : Nat
+  bytes : Nat
+
+def objectCount (cls : Int) : List Int → Nat
+  | [] => 0
+  | c :: cs => (if c == cls then 1 else 0) + objectCount cls cs
+
+def objectAreaBytes (classes : List Int) : List Int → Int
+  | [] => 0
+  | c :: cs => objectSlotWidth c * (objectCount c classes : Int) + objectAreaBytes classes cs
+
+def objectClassStart (classes : List Int) (cls : Int) : List Int → Int
+  | [] => 8
+  | c :: cs => if c == cls then 8 else
+      objectSlotWidth c * (objectCount c classes : Int) + objectClassStart classes cls cs
+
+def objectOffsets (classes : List Int) : List Int → List Int → List Int
+  | _, [] => []
+  | seen, c :: cs =>
+    (objectClassStart classes c objectClassOrder + objectSlotWidth c * (objectCount c seen : Int))
+      :: objectOffsets classes (c :: seen) cs
+
+def objectLayout (classes : List Int) : ObjectLayout :=
+  let objects := objectCount 0 classes
+  let usizes := objectCount 16 classes
+  let scalarBytes := (objectAreaBytes classes [8, 4, 2, 1]).toNat
+  let bytes := 8 * ((8 + 8 * objects + 8 * usizes + scalarBytes + 7) / 8)
+  { ok := classes.all (fun c => objectClassOrder.contains c) && objects <= 255 &&
+      8 * usizes + scalarBytes < 1024 && bytes <= 4096,
+    offsets := objectOffsets classes [] classes, objects := objects,
+    usizes := usizes, scalarBytes := scalarBytes, bytes := bytes }
+
+-- The runtime queries the same classification.  Its restricted front end
+-- compiles this generated ordinary-rsd decision tree, not a second table.
+-- The source closure includes this file; changing a kind invalidates both
+-- lowering and the compiled runtime.  UInt64 is used only by the machine
+-- dialect wrapper, whose domain is the bounded RSCM kind number.
+def objectSlotCases : Nat → String
+  | 0 => "return 18446744073709551615"
+  | n + 1 =>
+    "if RT.eq64 kind " ++ toString n ++ " then { return " ++
+      toString (objectSlotClass (n : Int)) ++ " }; " ++ objectSlotCases n
+
+def objectSlotRuntimeSource : String :=
+  "partial def rsd_rt_v1_slot_class (kind : UInt64) : RT.M UInt64 := do { " ++
+    objectSlotCases 10 ++ " }\n"

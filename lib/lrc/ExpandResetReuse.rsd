@@ -1,0 +1,287 @@
+-- LRC: expand reset and reuse into a slow and a fast path.
+-- A port of Lean 4.14.0 src/lean/Lean/Compiler/IR/ExpandResetReuse.lean, cited as ExpandResetReuse:LINE.
+-- closure_claim = 0.
+-- absent: ProjMap Collector Context M mkFresh Mask isSelfUSet
+--   (the projection map is a list of ErProj entries and the mask a list of indices with -1 for
+--   none, so the type abbreviations ProjMap and Mask are folded into erCollect's list and the
+--   functions that carry a mask; the reader and state monads Context, M and mkFresh are the
+--   parameter `pm` and the counter `next` each function returns beside its result; the wire has
+--   no unboxed area, so `uproj` and `uset` do not exist in this IR (lib/lrc/Ir.rsd) and
+--   isSelfUSet has nothing to test)
+import Lib.Lrc.NormIds
+
+namespace Lrc
+
+/-! ## The projection map (ExpandResetReuse:13): one entry for each variable bound to a
+`proj` or an `sproj`, built from the declaration before it is expanded. -/
+
+structure ErProj where
+  y : Nat    -- the variable the projection binds
+  op : Nat   -- opProj or opSProj
+  a : Nat    -- proj: the field index; sproj: the scalar's number
+  b : Nat    -- sproj: the byte offset
+  x : Nat    -- the projected variable
+  deriving Inhabited
+
+def erPmInsert (e : ErProj) : List ErProj → List ErProj
+  | [] => [e]
+  | f :: fs => if f.y == e.y then e :: fs else f :: erPmInsert e fs
+
+def erPmFind (y : Nat) : List ErProj → Option ErProj
+  | [] => none
+  | e :: es => if e.y == y then some e else erPmFind y es
+
+mutual
+-- ExpandResetReuse:16 collectVDecl, ExpandResetReuse:23 collectFnBody: the rest of the body is
+-- collected first, then this binding, as Lean's collectors compose right to left
+partial def erCollect (b : N) (m : List ErProj) : List ErProj :=
+  if b.op == opVDecl then
+    let m := erCollect (bodyOf b) m
+    let v := vdeclExpr b
+    if v.op == opProj then
+      erPmInsert { y := vdeclVar b, op := opProj, a := projIdx v, b := 0, x := projVar v } m
+    else if v.op == opSProj then
+      erPmInsert { y := vdeclVar b, op := opSProj, a := sprojN v, b := sprojOff v, x := sprojVar v } m
+    else m
+  else if b.op == opJDecl then erCollect (jdeclBody b) (erCollect (bodyOf b) m)
+  else if b.op == opCase then erCollectAlts (caseAlts b) m
+  else if isTerminal b then m
+  else erCollect (bodyOf b) m
+partial def erCollectAlts : List N → List ErProj → List ErProj
+  | [], m => m
+  | alt :: alts, m => erCollectAlts alts (erCollect (altBody alt) m)
+end
+
+/-! ## The instruction window before a reset -/
+
+mutual
+-- ExpandResetReuse:42 consumed: every branch of the block holds a `dec x` or a `reuse x`
+partial def erConsumed (x : Nat) (b : N) : Bool :=
+  if b.op == opVDecl then
+    let v := vdeclExpr b
+    if v.op == opReuse && reuseVar v == x then true else erConsumed x (bodyOf b)
+  else if b.op == opDec then rcVar b == x || erConsumed x (bodyOf b)
+  else if b.op == opCase then erConsumedAlts x (caseAlts b)
+  else !isTerminal b && erConsumed x (bodyOf b)
+partial def erConsumedAlts (x : Nat) : List N → Bool
+  | [] => true
+  | alt :: alts => erConsumed x (altBody alt) && erConsumedAlts x alts
+end
+
+-- the mask over the fields: -1 for a field the code did not read, else the variable of the `inc`
+-- that was erased over its projection
+def erMaskNone : Nat → List Int
+  | 0 => []
+  | k + 1 => -1 :: erMaskNone k
+
+def erMaskSet : List Int → Nat → Int → List Int
+  | [], _, _ => []
+  | _ :: zs, 0, z => z :: zs
+  | z :: zs, i + 1, v => z :: erMaskSet zs i v
+
+structure ErBsMask where
+  bs : List N     -- the instructions that stay, in order
+  mask : List Int
+  deriving Inhabited
+
+-- ExpandResetReuse:54 eraseProjIncForAux. `bsRev` holds the instructions before the reset, the
+-- last one first; `keep` the kept ones, the earliest at the front. An `inc z n` over `z := proj[i] y`
+-- is erased, the projection kept, and with it an `inc z n-1` when n > 1
+-- (ExpandResetReuse.lean:74); the kept instructions land in the order Lean's `bs ++ keep.reverse`
+-- gives, the reduced `inc` in front of its projection.
+partial def erEraseAux (y : Nat) (bsRev : List N) (mask : List Int) (keep : List N) : ErBsMask :=
+  match bsRev with
+  | h :: h2 :: rest =>
+    let done : ErBsMask := { bs := (h :: h2 :: rest).reverse ++ keep, mask := mask }
+    if h.op == opVDecl then
+      let v := vdeclExpr h
+      if v.op == opSProj then erEraseAux y (h2 :: rest) mask (h :: keep)
+      else done
+    else if h.op == opInc && rcN h != 0 then
+      if h2.op == opVDecl then
+        let v2 := vdeclExpr h2
+        if v2.op == opProj && vdeclVar h2 == rcVar h && y == projVar v2 then
+          let keep2 := h2 :: keep
+          let keep3 := if rcN h == 1 then keep2 else mkInc (rcVar h) (rcN h - 1) (rcCheck h) (rcPersistent h) mkUnreachable :: keep2
+          erEraseAux y rest (erMaskSet mask (projIdx v2) (rcVar h)) keep3
+        else done
+      else done
+    else done
+  | bs => { bs := bs.reverse ++ keep, mask := mask }
+
+-- ExpandResetReuse:87 eraseProjIncFor
+def erEraseProjInc (n : Nat) (y : Nat) (bsRev : List N) : ErBsMask :=
+  erEraseAux y bsRev (erMaskNone n) []
+
+/-! ## The two paths -/
+
+mutual
+-- ExpandResetReuse:91 reuseToCtor: `reuse x c ...` becomes `ctor c ...`, and the `dec x` goes
+partial def erReuseToCtor (x : Nat) (b : N) : N :=
+  if b.op == opDec then
+    if rcVar b == x then bodyOf b else setBody b (erReuseToCtor x (bodyOf b))
+  else if b.op == opVDecl then
+    let v := vdeclExpr b
+    if v.op == opReuse && reuseVar v == x then
+      { b with kids := [mkCtor (infoOf v) (reuseArgs v), bodyOf b] }
+    else { b with kids := [v, erReuseToCtor x (bodyOf b)] }
+  else if b.op == opCase then { b with kids := erReuseToCtorAlts x (caseAlts b) }
+  else if isTerminal b then b
+  else setBody b (erReuseToCtor x (bodyOf b))
+partial def erReuseToCtorAlts (x : Nat) : List N → List N
+  | [] => []
+  | alt :: alts => altSetBody alt (erReuseToCtor x (altBody alt)) :: erReuseToCtorAlts x alts
+end
+
+-- ExpandResetReuse:125 mkSlowPath: the `inc`s of the mask in front, then `dec y`, then the reuse
+-- rewritten into constructors
+def erIncs : List Int → N → N
+  | [], b => b
+  | z :: zs, b => erIncs zs (if z < 0 then b else mkInc z.toNat 1 true false b)
+
+def erMkSlowPath (x y : Nat) (mask : List Int) (b : N) : N :=
+  erIncs mask (mkDec y 1 true false (erReuseToCtor x b))
+
+-- a function's result: the body and the fresh-variable counter (ExpandResetReuse.lean:133 mkFresh)
+structure ErR where
+  next : Nat
+  body : N
+  deriving Inhabited
+
+structure ErA where
+  next : Nat
+  alts : List N
+  deriving Inhabited
+
+-- ExpandResetReuse:136 releaseUnreadFields: a fresh variable reads each field the code did not
+-- touch (the mask's -1 entries, in field order) and releases it at once
+def erReleaseGo (y : Nat) (mask : List Int) (i : Nat) (b : N) (next : Nat) : ErR :=
+  match mask with
+  | [] => { next := next, body := b }
+  | z :: zs =>
+    if z >= 0 then erReleaseGo y zs (i + 1) b next
+    else erReleaseGo y zs (i + 1) (mkVDecl next tyObj (mkProj i y) (mkDec next 1 true false b)) (next + 1)
+
+-- ExpandResetReuse:144 setFields: `set y[i] := zs[i]` for each argument; Lean's fold applies
+-- field 0 first, so its `set` is the innermost one
+def erSetFieldsGo (y : Nat) (zs : List Int) (i : Nat) (acc : N) : N :=
+  match zs with
+  | [] => acc
+  | z :: rest => erSetFieldsGo y rest (i + 1) (mkSet y i z acc)
+
+def erSetFields (y : Nat) (zs : List Int) (b : N) : N := erSetFieldsGo y zs 0 b
+
+-- ExpandResetReuse:148 isSelfSet: `set x[i] := y` where `y := proj[i] x`
+def erIsSelfSet (pm : List ErProj) (x : Nat) (i : Nat) (y : Int) : Bool :=
+  if y < 0 then false
+  else
+    match erPmFind y.toNat pm with
+    | some e => e.op == opProj && e.a == i && e.x == x
+    | none => false
+
+-- ExpandResetReuse:163 isSelfSSet: `sset x[n, i] := y` where `y := sproj[n, i] x`
+def erIsSelfSSet (pm : List ErProj) (x n i y : Nat) : Bool :=
+  match erPmFind y pm with
+  | some e => e.op == opSProj && e.a == n && e.b == i && e.x == x
+  | none => false
+
+mutual
+-- ExpandResetReuse:169 removeSelfSet: drop a `set`/`sset` that writes a field the value it reads
+-- was projected from
+partial def erRemoveSelfSet (pm : List ErProj) (b : N) : N :=
+  if b.op == opSet then
+    if erIsSelfSet pm (setVar b) (setIdx b) (setArg b) then erRemoveSelfSet pm (bodyOf b)
+    else setBody b (erRemoveSelfSet pm (bodyOf b))
+  else if b.op == opSSet then
+    if erIsSelfSSet pm (ssetVar b) (ssetN b) (ssetOff b) (ssetArg b) then erRemoveSelfSet pm (bodyOf b)
+    else setBody b (erRemoveSelfSet pm (bodyOf b))
+  else if b.op == opCase then { b with kids := erRemoveSelfSetAlts pm (caseAlts b) }
+  else if isTerminal b then b
+  else setBody b (erRemoveSelfSet pm (bodyOf b))
+partial def erRemoveSelfSetAlts (pm : List ErProj) : List N → List N
+  | [] => []
+  | alt :: alts => altSetBody alt (erRemoveSelfSet pm (altBody alt)) :: erRemoveSelfSetAlts pm alts
+end
+
+mutual
+-- ExpandResetReuse:189 reuseToSet: `z := reuse x c ...; F` becomes the `set`s of x and F with z
+-- renamed to x, the `dec x` becomes `del y`, and a self-set is dropped
+partial def erReuseToSet (pm : List ErProj) (x y : Nat) (b : N) : N :=
+  if b.op == opDec then
+    if rcVar b == x then mkDel y (bodyOf b)
+    else setBody b (erReuseToSet pm x y (bodyOf b))
+  else if b.op == opVDecl then
+    let v := vdeclExpr b
+    if v.op == opReuse && reuseVar v == x then
+      let b2 := erSetFields y (reuseArgs v) (replaceVar (vdeclVar b) y (bodyOf b))
+      let b3 := if reuseUpdt v then mkSetTag y (infoOf v).cidx b2 else b2
+      erRemoveSelfSet pm b3
+    else { b with kids := [v, erReuseToSet pm x y (bodyOf b)] }
+  else if b.op == opCase then { b with kids := erReuseToSetAlts pm x y (caseAlts b) }
+  else if isTerminal b then b
+  else setBody b (erReuseToSet pm x y (bodyOf b))
+partial def erReuseToSetAlts (pm : List ErProj) (x y : Nat) : List N → List N
+  | [] => []
+  | alt :: alts => altSetBody alt (erReuseToSet pm x y (altBody alt)) :: erReuseToSetAlts pm x y alts
+end
+
+-- ExpandResetReuse:231 mkFastPath
+def erMkFastPath (pm : List ErProj) (x y : Nat) (mask : List Int) (b : N) (next : Nat) : ErR :=
+  erReleaseGo y mask 0 (erReuseToSet pm x y b) next
+
+/-! ## The search -/
+
+mutual
+-- ExpandResetReuse:237 expand: the slow path takes the shared cell (dec y after the reuses have
+-- become constructors), the fast path reuses it, and only the fast path is expanded further
+-- (ExpandResetReuse.lean:245); a fresh `c := isShared y` chooses between them (Basic.lean:606 mkIf)
+partial def erExpand (pm : List ErProj) (bsRev : List N) (x n y : Nat) (b : N) (next : Nat) : ErR :=
+  let r := erEraseProjInc n y bsRev
+  let bSlow := erMkSlowPath x y r.mask b
+  let bFast := erMkFastPath pm x y r.mask b next
+  let rf := erSearch pm bFast.body [] bFast.next
+  { next := rf.next + 1, body := reshape r.bs (mkVDecl rf.next tyU8 (mkIsShared y) (mkIf rf.next bSlow rf.body)) }
+
+-- ExpandResetReuse:250 searchAndExpand. `bsRev` holds the instructions before b, the last one
+-- first; a join point is expanded alone and carried in front of the rest
+-- (ExpandResetReuse.lean:256), and each alternative of a case starts over
+-- (ExpandResetReuse.lean:261)
+partial def erSearch (pm : List ErProj) (b : N) (bsRev : List N) (next : Nat) : ErR :=
+  if b.op == opVDecl then
+    let v := vdeclExpr b
+    if v.op == opReset then
+      -- ExpandResetReuse.lean:252: a reset whose variable is consumed in its body is expanded
+      if erConsumed (vdeclVar b) (bodyOf b) then
+        erExpand pm bsRev (vdeclVar b) (resetN v) (resetVar v) (bodyOf b) next
+      else erSearch pm (bodyOf b) (b :: bsRev) next
+    else erSearch pm (bodyOf b) (b :: bsRev) next
+  else if b.op == opJDecl then
+    let rv := erSearch pm (jdeclBody b) [] next
+    erSearch pm (bodyOf b) (mkJDecl (jdeclId b) (jdeclParams b) rv.body mkUnreachable :: bsRev) rv.next
+  else if b.op == opCase then
+    let r := erSearchAlts pm (caseAlts b) next
+    { next := r.next, body := reshape (bsRev.reverse) ({ b with kids := r.alts }) }
+  else if isTerminal b then { next := next, body := reshape (bsRev.reverse) b }
+  else erSearch pm (bodyOf b) (b :: bsRev) next
+partial def erSearchAlts (pm : List ErProj) : List N → Nat → ErA
+  | [], next => { next := next, alts := [] }
+  | alt :: alts, next =>
+    let r := erSearch pm (altBody alt) [] next
+    let rest := erSearchAlts pm alts r.next
+    { next := rest.next, alts := altSetBody alt r.body :: rest.alts }
+end
+
+-- ExpandResetReuse:266 main; the projection map of ExpandResetReuse:32 mkProjMap is erCollect's
+-- list, and the fresh indices start above the declaration's largest one
+def erMain (d : Decl) : Decl :=
+  if d.ext then d
+  else
+    let pm := erCollect d.body []
+    let r := erSearch pm d.body [] (declMaxIndex d + 1)
+    { d with body := r.body }
+
+-- ExpandResetReuse:278 expandResetReuse: main, then normalizeIds (the two paths may bind the
+-- same indices, NormIds.lean:37)
+def declExpandResetReuse (d : Decl) : Decl := declNormalizeIds (erMain d)
+
+end Lrc

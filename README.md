@@ -2,48 +2,95 @@
 
 English | [中文](README.zh-CN.md)
 
-Residua is infrastructure for using another party's computation or proof without trusting that party. Results are
-identified by the content address (q) of what they are, not by who produced them or which toolchain version built them,
-and they are admitted only by mechanical checking, over a network of formally defined semantics.
+Residua is infrastructure for using another party's computation or proof
+without trusting that party: results are identified by content (q) and
+admitted only by mechanical checking, over a network of formally defined
+semantics. Residua is designed so that computation and proof are one: in
+rsd a program and a proof are meant to be terms of the same dependent
+type theory — one object that is both compiled to fast native or wasm
+code and checked by the kernel, not two systems kept in sync. That unity
+is the design and is not yet demonstrated end to end; release 0.1 ships
+the compilation half of it — the proof-checking half (the R-CIC kernel)
+comes later, see the limits below.
 
-Residua is designed so that computation and proof are one: in rsd, its language, a program and a proof are terms of the
-same dependent type theory, and the same term is both compiled to native or WebAssembly code and checked by the kernel.
-This is not yet demonstrated end to end; version 0.1 ships the compilation half.
+Why it exists — three facts:
 
-## Why
-
-- Re-checking, repair after upstream changes, coordination and review dominate the cost of formal results; the kernel
-  check itself is a small share.
-- Results are bound to toolchain versions: a compiled proof library does not carry across compiler versions, so every
-  upgrade rebuilds and re-checks everything downstream. Residua keeps results and their dependencies as a graph of
-  content addresses: an upgrade re-checks only what changed, and a fact checked once stays the same fact.
-- Most future producers of results will be machines that cannot be trusted. Only mechanical checking and content identity
-  scale to that.
-- Formal semantics are siloed (proof assistants, programming languages, virtual machines); results do not compose
+- Re-checking, repair after upstream changes, coordination and review
+  dominate the cost of formal results; the kernel check is a small share.
+- Most producers will be machines that cannot be trusted; only mechanical
+  checking and content identity scale.
+- Semantics are siloed (Lean, Rocq, K, wasm, EVM); results do not compose
   across them.
 
-## Release 0.1
+## What release 0.1 offers
 
-Version 0.1 is the minimal self-bootstrap closure: a committed WebAssembly seed of the two rsd compilers (`rsdc`, front
-end; `rsc`, back end), the 54 source files the seed was built from, the runtime, the formal semantics of each layer, and
-the documents. It is published as one source archive on the
-[rsd-0.1 release](https://github.com/residua-labs/Residua/releases/tag/rsd-0.1):
+Verifiable-provenance compilation. Given a source and an artifact, anyone
+can rebuild from a committed wasm seed — with a C compiler and no other
+toolchain — and check byte for byte that the artifact comes from the
+source, trusting neither the publisher nor a large binary toolchain.
 
-- `rsd-src.tar`, sha256 `59d0956e3bbaed0ddf176b9bc3ffa0e9fdb401acb1e021400f0e8b99ce110ef1`, 201 files;
-- `rsd-src.tar.sha256`.
+Supporting it:
 
-What it lets you check: on a clean Linux x86-64 machine with a C compiler and the usual shell tools (no Lean, Node or
-OCaml), the recipe in `bootstrap/seed/stage-14274/README.md` rebuilds both compilers from source and reproduces the
-committed seed byte for byte. Start with `release/docs/QUICKSTART`; `release/docs/VERIFY-RELEASE` lists every digest
-check. An independent agent with no prior knowledge of the project reproduced this fixed point from the documents alone
-on a fresh virtual machine.
+- the rsd compiler chain `rsd -> rscm -> wasm` (`rsdc`, `rsc`), whose own
+  sources ship in this archive
+- frozen formal semantics per layer (scm, lambda-RC, wasm0) pinned by
+  content digest, shipped as specification texts under `semantics/`,
+  `gates/semalign/` and `lean/rsd-cert/`
+- a per-version performance record (`release/docs/PERF-RECORD.tsv`;
+  the fixed PERF-RECORD-0 form is described in
+  `release/docs/PERF-RECORD`)
+- two-family seals and a third-party reproduction of the seed recipe
+  (evidence repository-side)
 
-What it does not include: the proof checker, modules, and the agent tools are later versions. `release/docs/RELEASE-NOTES`,
-`TRUST`, `STABILITY` and `RESIDUES` state the limits; `release/docs/PERF-RECORD` gives the measured performance against
-Koka on fixed hardware.
+Start here:
 
-Security reports: use GitHub's private vulnerability reporting on this repository.
+- `release/docs/INSTALL` — the minimum steps
+- `release/docs/QUICKSTART` — the first run, narrated
+- `release/docs/VERIFY-RELEASE` — the full verification protocol
+- `release/docs/OVERVIEW` — what is and is not in 0.1
+- `release/docs/ARCHITECTURE` — the semantic chain, surfaces, identity
+  and trust
+- `release/docs/TRUST`, `GLOSSARY`, `STABILITY`, `FAQ`,
+  `RELATED-WORK`, `CONTRIBUTING-SECURITY` — what 0.1 trusts, the terms
+  it uses, what it promises, and how it relates to other work (each in
+  `release/docs/`, English with a Chinese mirror)
+- `release/MANIFEST.md` — the release requirements this archive was built to
 
-## License
+## Stated limits of 0.1
 
-Apache License 2.0. See LICENSE and NOTICE.
+- single-module programs (no `import`)
+- no I/O execution layer
+- no proof checking (the R-CIC checker is not in this release; shipped
+  `theorem` texts are pinned specification, not checked claims)
+- no UInt64; a 4 GiB address space
+- the q content-identity format is not final
+- no publish/query entry for results
+- the 0.1 `.rsd` surface is a strict bootstrap subset — `theorem`,
+  `axiom`, `class`, `abbrev`, `by` are refused (`release/docs/LANGUAGE`)
+
+0.1 is for reproducible, auditable compilation — supply chain, the step
+before trusted execution — and for research on verified, bootstrappable
+compilers. It is not presented as a general-purpose language.
+
+## Order after 0.1
+
+Each item names its acceptance object; no dates.
+
+1. Using another's result without trusting them, first instance: the
+   R-CIC kernel (Lean Kernel Arena: no invalid input accepted, then
+   init/std, then mathlib within 16 GiB) plus the q format and Jig's
+   publish/query entry — the first point where a stranger can find, check
+   and reuse another's result; it ranks above programming features.
+2. Programming completeness: modules, real programs, UInt64, an
+   execution layer (I/O as typed effects), 64-bit addressing, and the
+   application suites (Cedar, Anvil, Tendril, SQLite) as acceptance.
+3. Cheap confirmation of execution: wasm0 -> AIR -> zk.
+4. The network: generic connectors to external semantics (K/KORE,
+   Lean/Rocq import), ranked by how many semantics one bridge opens.
+
+## Naming
+
+Residua is the project. `rsd` is the language and the toolchain.
+`raisin` stays internal.
+
+closure_claim = 0

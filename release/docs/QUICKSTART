@@ -1,0 +1,65 @@
+# QUICKSTART — first run against the 0.1 release
+
+Release 0.1 is the minimal self-bootstrap closure: the committed wasm
+seed, the `rsdc`/`rsc` source closure, the runtime and these documents.
+There is no `raisin` command, no modules and no execution layer in 0.1 —
+the first run is the seed recipe itself. Every claim names its source.
+This document will change in later versions (0.11+).
+
+## 20 to 45 minutes: rebuild the compilers from the seed
+
+On a clean Linux x86-64 checkout — or the source archive extracted
+into a fresh directory (`mkdir rsd-src && tar -xf rsd-src.tar -C
+rsd-src`; the archive's members sit at its top level) — with GCC,
+GNU binutils, coreutils, Bash, curl and tar, and no Lean, elan, lake,
+Node or OCaml on PATH, run the pinned recipe:
+
+```sh
+env -i PATH=/usr/bin:/bin bash --noprofile --norc
+# then the commands of bootstrap/seed/stage-14274/README.md
+```
+
+(The measured spread is 1154.8 s on the recorded perf host to 2043 s
+on a 4-vCPU Debian 12 guest — `release/docs/PERF-RECORD.tsv`.)
+
+The recipe fetches pinned WABT 1.0.42 and runtime sources (digests in
+`bootstrap/seed/stage-14274/WABT{,-RUNTIME}-SHA256SUMS`), translates the
+two seed executors to C, builds them, and runs all four compiler calls
+in the CPU executables. It rebuilds both RSCM files and both Wasm
+files byte-identical to the committed seeds and exits 0 — the recipe's
+wall and peak are recorded per version in `release/docs/PERF-RECORD.tsv`.
+
+## What just happened
+
+`bootstrap/seed/stage-14274/rsdc.wasm` (sha256 `97e549715d04…ef5933`) read
+the whole-module input `sources/rsdc.rsd` and emitted an RSCM file
+matching the fixpoint digest; `stage-14274/rsc.wasm` (sha256
+`3425f3e9b1b2…d7b82d`) lowered both RSCM files to Wasm matching the
+committed seeds (`stage-14274/README.md`, `REBUILT-SHA256SUMS`,
+`SHA256SUMS`). The 54 source members the seeds were cut from are pinned
+by sha256 in `stage-14274/SOURCE-MEMBERS-SHA256SUMS` — `sha256sum -c`
+verifies them against the checkout.
+
+## Compiling a source
+
+The rebuilt executors are the compiler:
+`$out/rsdc/run rsdc <source.rsd> <out.rscm> 0 cons` compiles, and
+`$out/rsc/run rsc <file.rscm> <out.wasm> 14274 cons` lowers
+(`stage-14274/README.md`, the `rebuild_root` command lines). The
+inputs the recipe demonstrates are the two whole-module sources
+`sources/{rsdc,rsc}.rsd` — "the exact RSD byte streams" of the
+seed cut, including generated runtime definitions
+(`stage-14274/README.md`); the grammar those sources are written in
+is `release/docs/LANGUAGE`, whose probe table refuses `import`,
+`theorem`, `axiom`, `class`, `abbrev`, `variable`, `opaque`, `by`
+(all err=1).
+
+## Not in 0.1
+
+Modules (`import`), the `raisin`/`raisinc` binaries and their
+example programs, the 9P execution layer's device servers,
+theorem checking, the elaborator, the `.rsm`/`.rsj` surfaces, the RSX
+entry and the application suites are named 0.1x work
+(`release/MANIFEST.md`, `release/docs/OVERVIEW`).
+
+closure_claim = 0

@@ -1,0 +1,326 @@
+import RuntimeIR
+import ObjectLayout
+
+-- The compiler-rt front end.  It accepts the ordinary explicit-brace do
+-- subset (typed mutable locals, assignment, if, while/repeat, break,
+-- continue, return) and the OBJECT-ABI primitive names.  It does not
+-- parse wasm opcodes or assembly.  A host must establish lib/rt provenance
+-- before calling this entry; ordinary emitSrc rejects RT names separately.
+structure RtParser where
+  tokens : List String
+  names : List String
+  types : List Int
+  mutableNames : List String
+  signatures : List RtSignature
+  result : Int
+  node : RtNode
+  error : Nat
+  position : Nat
+  declarations : Bool
+  nesting : Nat
+
+structure RtParsed where
+  functions : List RtFunction
+  error : Nat
+  position : Nat
+  deriving Inhabited
+
+-- 13 scope, 14 syntax, 15 type, 16 unknown primitive/call,
+-- 17 duplicate binder, 18 loop scope, 19 fuel, 20 wire.
+def rtFrontRefusal (n : Nat) : String :=
+  if n == 0 then "ok"
+  else if n == 13 then "rsdc_runtime_primitive_scope"
+  else if n == 14 then "rsdc_runtime_syntax"
+  else if n == 15 then "rsdc_runtime_type"
+  else if n == 16 then "rsdc_runtime_name"
+  else if n == 17 then "rsdc_runtime_binder"
+  else if n == 18 then "rsdc_runtime_loop_scope"
+  else if n == 19 then "rsdc_runtime_fuel"
+  else "rsdc_runtime_wire"
+
+def rtWhite (c : Char) : Bool := c == ' ' || c == '\n' || c == '\r' || c == '\t'
+def rtWordChar (c : Char) : Bool :=
+  (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+  (c >= '0' && c <= '9') || c == '_' || c == '.'
+
+def rtLexWord : List Char → List Char → List Char × List Char
+  | [], acc => (acc.reverse, [])
+  | c :: cs, acc =>
+    if rtWordChar c then rtLexWord cs (c :: acc) else (acc.reverse, c :: cs)
+
+def rtLexComment : List Char → List Char
+  | [] => []
+  | c :: cs => if c == '\n' then cs else rtLexComment cs
+
+partial def rtLex : List Char → List String
+  | [] => []
+  | '-' :: '-' :: cs => rtLex (rtLexComment cs)
+  | ':' :: '=' :: cs => ":=" :: rtLex cs
+  | c :: cs =>
+    if rtWhite c then rtLex cs
+    else if rtWordChar c then
+      let w := rtLexWord (c :: cs) []
+      String.mk w.1 :: rtLex w.2
+    else String.singleton c :: rtLex cs
+
+def rtToken (st : RtParser) : String := st.tokens.headD ""
+def rtPop (st : RtParser) : RtParser :=
+  { st with tokens := st.tokens.drop 1, position := st.position + 1 }
+def rtError (st : RtParser) (error : Nat) : RtParser :=
+  if st.error != 0 then st else { st with error := error }
+def rtEat (st : RtParser) (token : String) : RtParser :=
+  if rtToken st == token then rtPop st else rtError st 14
+
+def rtType (name : String) : Int :=
+  if name == "UInt64" || name == "USize" then 0
+  else if name == "UInt32" then 1
+  else if name == "Bool" then 4
+  else if name == "Unit" then 2 else -1
+
+def rtNameIndex : Nat → List String → String → Int
+  | _, [], _ => -1
+  | i, name :: names, wanted =>
+    if name == wanted then (i : Int) else rtNameIndex (i + 1) names wanted
+
+def rtSetNode (st : RtParser) (tag value ty : Int) (args : List RtNode) : RtParser :=
+  { st with node := { tag := tag, val := value, ty := ty, args := args } }
+
+def rtInit (tokens : List String) (signatures : List RtSignature) : RtParser :=
+  { tokens := tokens, names := [], types := [], mutableNames := [],
+    signatures := signatures, result := 2, node := rtNil, error := 0, position := 0, declarations := true, nesting := 0 }
+
+instance : Inhabited RtParser := ⟨rtInit [] []⟩
+
+def rtCompatible (expected actual : Int) : Bool := expected == actual || actual == 3
+
+mutual
+  partial def rtExpr (st : RtParser) (expected : Int) : RtParser :=
+    if st.error != 0 then st
+    else if rtToken st == "(" then
+      let s := rtPop st
+      let s := if rtToken s == "←" then rtPop s else s
+      let s := rtExpr s expected
+      rtEat s ")"
+    else if rtToken st == "pure" then rtExpr (rtPop st) expected
+    else if rtToken st == "do" then
+      let s := rtSeq { (rtPop st) with result := expected } 0 true
+      let s := { s with result := st.result }
+      if rtCompatible expected s.node.ty then s else rtError s 15
+    else if rtToken st == "if" then
+      let s := rtExpr (rtPop st) 4
+      let cond := s.node
+      let s := rtExpr (rtEat s "then") expected
+      let yes := s.node
+      let s := rtExpr (rtEat s "else") expected
+      rtSetNode s 4 0 expected [cond, yes, s.node]
+    else if rtToken st == "-" then
+      -- Stock Lean has no Neg instance for these unsigned types.
+      rtError st 15
+    else
+      let name := rtToken st
+      let s := rtPop st
+      match name.toNat? with
+      | some value =>
+        -- Keep the independent machine-word front's literal bound. UInt32
+        -- OfNat still wraps exactly as stock Lean does within this bound.
+        if expected > 1 || value >= 18446744073709551616 then rtError st 15
+        else rtSetNode s 0 (value : Int) expected []
+      | none =>
+        if name == "RT.rc" then
+          if expected == 4 then rtSetNode s 13 0 4 [] else rtError s 15
+        else if name == "true" || name == "false" then
+          if expected == 4 then rtSetNode s 0 (if name == "true" then 1 else 0) 4 [] else rtError s 15
+        else
+          let localIndex := rtNameIndex 0 st.names name
+          if localIndex >= 0 then
+            let ty := rtTypeAt localIndex.toNat st.types
+            if rtCompatible expected ty then rtSetNode s 1 localIndex ty [] else rtError s 15
+          else
+            let prim := rtPrimIndex 0 rtPrimitives name
+            if prim >= 0 then
+              let signature := rtPrimAt prim.toNat rtPrimitives
+              if !rtCompatible expected signature.result then rtError st 15
+              else
+                let s := rtExprArgs s signature.args []
+                rtSetNode s 2 prim signature.result s.node.args
+            else
+              let call := rtSigIndex 0 st.signatures name
+              if call < 0 then rtError st 16
+              else
+                let signature := rtSigAt call.toNat st.signatures
+                if !rtCompatible expected signature.result then rtError st 15
+                else
+                  let s := rtExprArgs s signature.params []
+                  rtSetNode s 3 call signature.result s.node.args
+
+  partial def rtExprArgs (st : RtParser) (types : List Int) (acc : List RtNode) : RtParser :=
+    match types with
+    | [] => rtSetNode st 5 0 2 acc.reverse
+    | ty :: types =>
+      let s := rtExpr st ty
+      rtExprArgs s types (s.node :: acc)
+
+  partial def rtStatement (st : RtParser) (depth : Nat) (valueBlock : Bool) : RtParser :=
+    if st.error != 0 then st
+    else if rtToken st == "let" then
+      let st := if st.nesting != 1 || !st.declarations then rtError st 17 else st
+      let s := rtEat (rtPop st) "mut"
+      let name := rtToken s
+      let s := rtEat (rtPop s) ":"
+      let ty := rtType (rtToken s)
+      let s := rtEat (rtPop s) ":="
+      if ty != 0 && ty != 1 && ty != 4 then rtError s 15
+      else if rtNameIndex 0 st.names name >= 0 then
+        -- Lean's `let mut p : T := p` makes a parameter mutable; retain
+        -- its physical slot rather than manufacturing a second local.
+        let index := rtNameIndex 0 st.names name
+        if rtToken s != name || rtTypeAt index.toNat st.types != ty || st.mutableNames.contains name then rtError s 17
+        else rtSetNode { (rtPop s) with mutableNames := name :: st.mutableNames } 5 0 2 []
+      else
+        let index := st.names.length
+        -- The initializer sees the old environment, as in Lean.
+        let s := if rtToken s == "default" then rtSetNode (rtPop s) 5 0 2 []
+          else
+            let s := rtExpr s ty
+            rtSetNode s 6 (index : Int) 2 [s.node]
+        { s with names := st.names ++ [name], types := st.types ++ [ty], mutableNames := name :: st.mutableNames }
+    else if rtToken st == "if" then
+      let s := rtExpr (rtPop st) 4
+      let cond := s.node
+      let s := rtSeq (rtEat s "then") depth valueBlock
+      let yes := s.node
+      if rtToken s == "else" then
+        let s := rtSeq (rtPop s) depth valueBlock
+        rtSetNode s 4 0 2 [cond, yes, s.node]
+      else rtSetNode s 4 0 2 [cond, yes]
+    else if rtToken st == "while" then
+      let s := rtExpr (rtPop st) 4
+      let cond := s.node
+      let s := rtSeq (rtEat s "do") (depth + 1) valueBlock
+      rtSetNode s 7 0 2 [cond, s.node]
+    else if rtToken st == "repeat" then
+      let s := rtSeq (rtPop st) (depth + 1) valueBlock
+      let body := s.node
+      if rtToken s == "until" then
+        let s := rtExpr (rtPop s) 4
+        rtSetNode s 8 0 2 [body, s.node]
+      else rtSetNode s 8 0 2 [body]
+    else if rtToken st == "break" || rtToken st == "continue" then
+      if depth == 0 then rtError st 18
+      else rtSetNode (rtPop st) (if rtToken st == "break" then 9 else 10) 0 2 []
+    else if rtToken st == "return" then
+      let s := rtPop st
+      if st.result == 2 then
+        let s := if rtToken s == "(" then rtEat (rtEat s "(") ")" else s
+        rtSetNode s (if valueBlock then 12 else 11) 0 2 []
+      else
+        let s := rtExpr s st.result
+        rtSetNode s (if valueBlock then 12 else 11) 0 st.result [s.node]
+    else
+      let name := rtToken st
+      let index := rtNameIndex 0 st.names name
+      if index >= 0 then
+        if !st.mutableNames.contains name then rtError st 17
+        else
+          let s := rtExpr (rtEat (rtPop st) ":=") (rtTypeAt index.toNat st.types)
+          rtSetNode s 6 index 2 [s.node]
+      else rtExpr st 2
+
+  partial def rtSeq (st : RtParser) (depth : Nat) (valueBlock : Bool) : RtParser :=
+    let s := rtSeqItems { (rtEat st "{") with nesting := st.nesting + 1 } depth valueBlock []
+    { s with nesting := st.nesting }
+
+  partial def rtSeqItems (st : RtParser) (depth : Nat) (valueBlock : Bool) (acc : List RtNode) : RtParser :=
+    if st.error != 0 then st
+    else if rtToken st == "}" then
+      let nodes := acc.reverse
+      let ty := if valueBlock then (acc.headD rtNil).ty else 2
+      rtSetNode (rtPop st) 5 (if valueBlock then 1 else 0) ty nodes
+    else
+      let st := if rtToken st == "let" then st else { st with declarations := false }
+      let s := rtStatement st depth valueBlock
+      let s := if rtToken s == ";" then rtPop s else s
+      rtSeqItems s depth valueBlock (s.node :: acc)
+end
+
+partial def rtBinders (st : RtParser) : RtParser :=
+  if rtToken st != "(" then st
+  else
+    let s := rtPop st
+    let name := rtToken s
+    let s := rtEat (rtPop s) ":"
+    let ty := rtType (rtToken s)
+    let s := rtEat (rtPop s) ")"
+    if ty != 0 && ty != 1 && ty != 4 then rtError s 15
+    else if st.names.contains name then rtError s 17
+    else rtBinders { s with names := st.names ++ [name], types := st.types ++ [ty] }
+
+def rtFunctionHeader (st : RtParser) : RtParser :=
+  let s := rtBinders st
+  let s := rtEat s ":"
+  let s := rtEat s "RT.M"
+  let ty := rtType (rtToken s)
+  if ty < 0 then rtError s 15 else { (rtPop s) with result := ty }
+
+-- First collect all signatures, so forward calls have the same meaning as
+-- backward calls.  Bodies are skipped structurally, not by text searching.
+partial def rtSkipBody (depth : Nat) (st : RtParser) : RtParser :=
+  if st.error != 0 || rtToken st == "" then rtError st 14
+  else if rtToken st == "}" && depth == 1 then rtPop st
+  else if rtToken st == "}" then rtSkipBody (depth - 1) (rtPop st)
+  else if rtToken st == "{" then rtSkipBody (depth + 1) (rtPop st)
+  else rtSkipBody depth (rtPop st)
+
+partial def rtSignatures (st : RtParser) (acc : List RtSignature) : RtParser :=
+  if st.error != 0 || rtToken st == "" then { st with signatures := acc.reverse }
+  else
+    let s := if rtToken st == "partial" then rtPop st else st
+    let s := rtEat s "def"
+    let name := rtToken s
+    let s := rtFunctionHeader { (rtPop s) with names := [], types := [] }
+    if rtSigIndex 0 acc name >= 0 then rtError s 17
+    else
+      let signature := { name := name, params := s.types, result := s.result : RtSignature }
+      let s := rtEat (rtEat s ":=") "do"
+      let s := rtSkipBody 0 s
+      rtSignatures s (signature :: acc)
+
+partial def rtParseFunctions (st : RtParser) (acc : List RtFunction) : RtParsed :=
+  if st.error != 0 then { functions := [], error := st.error, position := st.position }
+  else if rtToken st == "" then { functions := acc.reverse, error := 0, position := st.position }
+  else
+    let s := if rtToken st == "partial" then rtPop st else st
+    let s := rtEat s "def"
+    let name := rtToken s
+    let s := rtFunctionHeader { (rtPop s) with names := [], types := [], mutableNames := [], declarations := true, nesting := 0 }
+    let params := s.types
+    let s := rtSeq (rtEat (rtEat s ":=") "do") 0 false
+    let fn : RtFunction := { name := name, params := params, result := s.result, locals := s.types.drop params.length, body := s.node }
+    rtParseFunctions s (fn :: acc)
+
+def rtSourceTokens (source : String) : List String :=
+  let chars := source.toList
+  let rawTokens := rtLex chars
+  let tokens := if rawTokens.headD "" == "mutual" then
+      if rawTokens.getLast?.getD "" == "end" then (rawTokens.drop 1).take (rawTokens.length - 2)
+      else ["<syntax>"]
+    else rawTokens
+  -- A generated query of the one shared RSCM layout function.  It is
+  -- appended (rather than prepended) to keep source function indices stable.
+  let tokens := if tokens.contains "rsd_rt_v1_slot_class" then
+      tokens ++ rtLex objectSlotRuntimeSource.toList else tokens
+  tokens
+
+-- Runtime extensions use the already checked prefix signatures. Calls in
+-- their wire therefore retain their absolute runtime-function indices.
+def rtParseExtension (prefixFns : List RtFunction) (source : String) : RtParsed :=
+  let tokens := rtSourceTokens source
+  let signatures := rtSignatures (rtInit tokens []) (rtSignaturesOf prefixFns).reverse
+  if signatures.error != 0 then { functions := [], error := signatures.error, position := signatures.position }
+  else rtParseFunctions (rtInit tokens signatures.signatures) []
+
+def rtParseSource (source : String) : RtParsed := rtParseExtension [] source
+
+def rtEmitSource (source : String) : List Int :=
+  let parsed := rtParseSource source
+  if parsed.error == 0 then rtModuleWire parsed.functions else []

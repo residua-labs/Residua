@@ -1,0 +1,355 @@
+import ObjectStorage
+
+-- Lean's SimpleGroundExpr/ExtractClosed literal fragment. Recognition is
+-- transactional: a miss leaves both the input and the persistent pool alone.
+-- A lexical let map follows known components through variables/projections.
+-- Calls, arithmetic, and nominal arena handles remain unknown and run normally.
+structure Ground where
+  kind : Int
+  ty : List Int
+  value : Int
+  bytes : List Int
+  args : List Ground
+  built : Bool
+
+def groundZero : Ground :=
+  { kind := 0, ty := [0], value := 0, bytes := [], args := [], built := false }
+
+def groundUnknown (ty : List Int) : Ground :=
+  { groundZero with kind := -1, ty := ty }
+
+structure GroundBinding where
+  slot : Int
+  node : Ground
+
+structure GroundContext where
+  env : List Int := []
+  tys : List (List Int) := []
+  bindings : List GroundBinding := []
+  locals : List Ground := []
+
+def groundBound (ty : List Int) (slot : Int) : List GroundBinding → Ground
+  | [] => groundUnknown ty
+  | a :: more => if a.slot == slot then a.node else groundBound ty slot more
+
+def groundVar (g : Dg) (ctx : GroundContext) (ty : List Int) :
+    Nat → List Ground → Ground
+  | i, [] =>
+    if i >= ctx.env.length || !(typeEq g) (envTy ctx.tys i) ty then groundUnknown []
+    else groundBound ty (ctx.env.getD i (-1)) ctx.bindings
+  | 0, a :: _ => if typeEq g a.ty ty then a else groundUnknown []
+  | i + 1, _ :: more => groundVar g ctx ty i more
+
+def groundReady : Nat → Ground → Bool
+  | 0, _ => false
+  | k + 1, a => a.kind >= 0 && a.args.all (groundReady k)
+
+structure GroundRead where
+  ok : Bool := false
+  -- Dropping this expression must not drop an unknown computation. A
+  -- partial record can be tracked while its initializer still runs.
+  safe : Bool := false
+  rest : List Int := []
+  node : Ground := groundZero
+
+def groundReadOk (kind : Int) (ty : List Int) (value : Int) (bytes : List Int)
+    (args : List Ground) (built : Bool) (rest : List Int) : GroundRead :=
+  { ok := true, safe := true, rest := rest,
+    node := { kind := kind, ty := ty, value := value, bytes := bytes, args := args, built := built } }
+
+def groundRecordTail (g : Dg) (ty : List Int) : List Int :=
+  let body := tyView g ty
+  let n := readLeb body.tail
+  let a := readTyD g (skipName n.rest).rest
+  7 :: lebU (n.n.toNat - 1) ++ a.rest
+
+def groundMiss (g : Dg) (ty rest : List Int) : GroundRead :=
+  let after := skipE g profile.skipFuel rest
+  { ok := after.ok == profile.cOk, rest := after.rest, node := groundUnknown ty }
+
+def groundRead (g : Dg) (lay : Layers) (ctx : GroundContext) : Nat → List Int → List Int → GroundRead
+  | 0, _, _ => {}
+  | k + 1, ty, rest =>
+    let kind := (tyView g ty).headD (-1)
+    if isHeapHandle g ty || isStorageNodeWithLayers g lay ty || isArenaListWithLayers g lay ty then
+      groundMiss g ty rest
+    else match drE g rest with
+    | [] => {}
+    | tag :: bs =>
+      if tag == 0 && kind == 0 then
+        let a := readLeafI64 bs
+        if a.ok != profile.cOk then {} else groundReadOk 0 ty a.n [] [] false a.rest
+      else if tag == 1 && kind == 1 then
+        match bs with
+        | b :: after => if b == 0 || b == 1 then groundReadOk 1 ty b [] [] false after else {}
+        | [] => {}
+      else if tag == 2 && kind == 2 then
+        let a := readStr bs
+        if a.ok != profile.cOk then {} else groundReadOk 2 ty 0 a.bs [] false a.rest
+      else if tag == 3 then
+        let ix := readLeb bs
+        let a := groundVar g ctx ty ix.n.toNat ctx.locals
+        if ix.ok != profile.cOk || ix.n < 0 || !(typeEq g) a.ty ty then {}
+        else { ok := true, safe := true, rest := ix.rest, node := a }
+      else if tag == 4 then
+        let t := readTyD g bs
+        if t.ok != profile.cOk then {} else
+          let a := groundRead g lay ctx k t.acc t.rest
+          if !a.ok then {} else
+            let b := groundRead g lay { ctx with locals := a.node :: ctx.locals } k ty a.rest
+            { b with safe := a.safe && groundReady k a.node && b.safe }
+      else if tag == 22 && kind == 4 then groundReadOk 4 ty 0 [] [] false bs
+      else if tag == 23 && kind == 4 then
+        let a := groundRead g lay ctx k (readTyD g (innerTy g ty)).acc bs
+        if !a.ok then {} else
+          { (groundReadOk 4 ty 0 [] [a.node] true a.rest) with safe := a.safe && groundReady k a.node }
+      else if tag == 26 && kind == 4 then
+        let a := groundRead g lay ctx k ty bs
+        if !a.ok then {} else
+          let b := groundRead g lay ctx k ty a.rest
+          if !b.ok then {} else if a.node.kind != 4 || b.node.kind != 4 then
+            { ok := true, rest := b.rest, node := groundUnknown ty }
+          else { (groundReadOk 4 ty 0 [] (a.node.args ++ b.node.args) true b.rest) with
+            safe := a.safe && b.safe && groundReady k a.node && groundReady k b.node }
+      else if tag == 28 && kind == 5 then
+        let a := groundRead g lay ctx k (readTyD g (innerTy g ty)).acc bs
+        if !a.ok then {} else
+          let b := groundRead g lay ctx k (pairSnd g ty) a.rest
+          if !b.ok then {} else
+            { (groundReadOk 5 ty 0 [] [a.node, b.node] false b.rest) with safe := a.safe && b.safe }
+      else if tag == 33 && kind == 7 && (storageFields g ty).isEmpty then
+        groundReadOk 7 ty 0 [] [] false bs
+      else if tag == 34 && kind == 7 && !(storageFields g ty).isEmpty then
+        let name := skipName bs
+        let a := groundRead g lay ctx k ((storageFields g ty).headD []) name.rest
+        if name.ok != profile.cOk || !a.ok then {} else
+          let b := groundRead g lay ctx k (groundRecordTail g ty) a.rest
+          if !b.ok then {} else if b.node.kind != 7 then
+            { ok := true, rest := b.rest, node := groundUnknown ty }
+          else { (groundReadOk 7 ty 0 [] (a.node :: b.node.args) false b.rest) with safe := a.safe && b.safe }
+      else if tag == 35 then
+        let t := readTyD g bs
+        let ix := readLeb t.rest
+        if t.ok != profile.cOk || ix.ok != profile.cOk || ix.n < 0 then {} else
+          let fields := storageFields g t.acc
+          if ix.n.toNat >= fields.length || !(typeEq g) (fields.getD ix.n.toNat []) ty then {} else
+            let a := groundRead g lay ctx k t.acc ix.rest
+            if !a.ok then {} else if a.node.kind != 7 || a.node.args.length != fields.length then
+              { ok := true, rest := a.rest, node := groundUnknown ty }
+            else
+              { ok := true, safe := a.safe, rest := a.rest,
+                node := a.node.args.getD ix.n.toNat (groundUnknown ty) }
+      else if tag == 36 && kind == 8 then
+        let a := groundRead g lay ctx k (innerTy g ty) bs
+        if !a.ok then {} else
+          { (groundReadOk 8 ty 1 [] [a.node] false a.rest) with safe := a.safe }
+      else if tag == 37 && kind == 8 then groundReadOk 8 ty 0 [] [] false bs
+      else groundMiss g ty rest
+
+-- Little endian, including negative checked i64 scalars. All unused padding
+-- is zero, so static and runtime ObjectLayout offsets agree byte for byte.
+def groundWord : Nat → Int → List Int
+  | 0, _ => []
+  | k + 1, n => n % 256 :: groundWord k (n / 256)
+
+def groundPad (bs : List Int) : List Int :=
+  bs ++ List.replicate ((8 - bs.length % 8) % 8) 0
+
+def groundHeader (tag other : Int) : List Int :=
+  groundWord 8 (storageHeader 0 tag other)
+
+-- Length-framed exact keys inside hash buckets: collisions only cost a
+-- comparison. The descriptor distinguishes layouts with identical bytes.
+def groundFind : Nat → List Int → List Int → Int
+  | 0, _, _ => 0
+  | _ + 1, _, [] => 0
+  | k + 1, key, addr :: n :: rest =>
+    let a := takeBytes n.toNat n [] rest
+    if a.ok != profile.cOk || n < 0 then 0
+    else if key == a.bs then addr else groundFind k key a.rest
+  | _ + 1, _, _ => 0
+
+structure GroundBuild where
+  ok : Bool := true
+  words : List Int := []
+  pool : GroundPool := {}
+
+def groundIntern (descriptor bytes : List Int) (p : GroundPool) : GroundBuild :=
+  let key := (descriptor.length : Int) :: descriptor ++ bytes
+  let h := (dagHashGo 65599 1 key 0 : Int)
+  let m := kid 0 p.cache
+  let bucket := get m h
+  let addr := groundFind (bucket.xs.length + 1) key bucket.xs
+  if addr != 0 then { words := [addr], pool := { p with hits := p.hits + 1 } }
+  else if p.next + (bytes.length : Int) > 4294901760 then { ok := false, pool := p }
+  else
+    let more := [p.next, (key.length : Int)] ++ key ++ bucket.xs
+    let cache := ins m h 0 0 0 more
+    let updated : GroundPool :=
+      { next := p.next + (bytes.length : Int), chunks := bytes :: p.chunks,
+        cache := box 0 cache.m, objects := p.objects + 1, hits := p.hits }
+    { words := [p.next], pool := updated }
+
+-- Field writes are constructed as a bounded byte list (CtorLayout's 4096
+-- byte bound), not as wasm store instructions.
+def groundSet (off : Nat) (value : List Int) (bytes : List Int) : List Int :=
+  bytes.take off ++ value ++ bytes.drop (off + value.length)
+
+def groundPutFields : List Int → List Int → List Int → List Int → List Int
+  | cls :: cs, off :: os, v :: vs, bytes =>
+    groundPutFields cs os vs (groundSet off.toNat (groundWord (objectSlotWidth cls).toNat v) bytes)
+  | _, _, _, bytes => bytes
+
+mutual
+def groundFlat (g : Dg) (lay : Layers) (arr : List (List Int)) : Nat → Ground → GroundPool → GroundBuild
+  | 0, _, p => { ok := false, pool := p }
+  | k + 1, a, p =>
+    if a.kind == 0 || a.kind == 1 then { words := [a.value], pool := p }
+    else if a.kind == 2 then groundString a.bytes p
+    else if a.kind == 4 then
+      let b := if memT g arr a.ty then groundArray g lay arr k a.ty a.args p
+        else groundList g lay arr k (readTyD g (innerTy g a.ty)).acc a.args p
+      if memT g arr a.ty then { b with words := b.words ++ [0] } else b
+    else if a.kind == 5 || a.kind == 7 then groundFlats g lay arr k a.args p
+    else if a.kind == 8 then
+      if a.value == 0 then { words := List.replicate (wordsOfWithLayers g lay arr a.ty) 0, pool := p }
+      else
+        let b := groundFlats g lay arr k a.args p
+        { b with words := 1 :: b.words }
+    else { ok := false, pool := p }
+
+def groundFlats (g : Dg) (lay : Layers) (arr : List (List Int)) : Nat → List Ground → GroundPool → GroundBuild
+  | 0, _, p => { ok := false, pool := p }
+  | _ + 1, [], p => { pool := p }
+  | k + 1, a :: more, p =>
+    let x := groundFlat g lay arr k a p
+    if !x.ok then x else
+      let y := groundFlats g lay arr k more x.pool
+      { y with words := x.words ++ y.words }
+
+def groundPack (g : Dg) (lay : Layers) (arr : List (List Int)) : Nat → Ground → GroundPool → GroundBuild
+  | 0, _, p => { ok := false, pool := p }
+  | k + 1, a, p =>
+    if a.kind == 0 || a.kind == 1 || a.kind == 2 then groundFlat g lay arr k a p
+    else if a.kind == 4 then
+      let b := groundFlat g lay arr k a p
+      { b with words := b.words.take 1 }
+    else if a.kind == 5 || a.kind == 7 then
+      match a.args with
+      | [] => { words := [1], pool := p }
+      | [b] =>
+        if storageClass g b.ty == 0 then groundPack g lay arr k b p
+        else if storageClass g b.ty == 1 then { words := [2 * b.value + 1], pool := p }
+        else groundCtor g lay arr k 0 a.args p
+      | _ => groundCtor g lay arr k 0 a.args p
+    else if a.kind == 8 then
+      if a.value == 0 then { words := [1], pool := p } else groundCtor g lay arr k 1 a.args p
+    else { ok := false, pool := p }
+
+def groundPacks (g : Dg) (lay : Layers) (arr : List (List Int)) : Nat → List Ground → GroundPool → GroundBuild
+  | 0, _, p => { ok := false, pool := p }
+  | _ + 1, [], p => { pool := p }
+  | k + 1, a :: more, p =>
+    let x := groundPack g lay arr k a p
+    if !x.ok then x else
+      let y := groundPacks g lay arr k more x.pool
+      { y with words := x.words ++ y.words }
+
+def groundCtor (g : Dg) (lay : Layers) (arr : List (List Int)) : Nat → Int → List Ground → GroundPool → GroundBuild
+  | 0, _, _, p => { ok := false, pool := p }
+  | k + 1, tag, args, p =>
+    let active := args.filter (fun a => wordsOfWithLayers g lay arr a.ty != 0)
+    if active.isEmpty then { words := [2 * tag + 1], pool := p }
+    else
+      let classes := active.map (fun a => storageClass g a.ty)
+      let layout := objectLayout classes
+      let values := groundPacks g lay arr k active p
+      if !layout.ok || !values.ok then { ok := false, pool := p }
+      else
+        let bytes := groundPutFields classes layout.offsets values.words
+          (groundHeader tag (layout.objects : Int) ++ List.replicate (layout.bytes - 8) 0)
+        groundIntern (tag :: classes) bytes values.pool
+
+def groundList (g : Dg) (lay : Layers) (arr : List (List Int)) : Nat → List Int → List Ground → GroundPool → GroundBuild
+  | 0, _, _, p => { ok := false, pool := p }
+  | _ + 1, _, [], p => { words := [profile.emptyAt], pool := p }
+  | k + 1, elem, a :: more, p =>
+    let tail := groundList g lay arr k elem more p
+    let head := groundPack g lay arr k a tail.pool
+    let classes := [storageClass g elem, 0]
+    let layout := objectLayout classes
+    if !tail.ok || !head.ok || !layout.ok then { ok := false, pool := p }
+    else
+      let bytes := groundPutFields classes layout.offsets
+        [head.words.headD 0, tail.words.headD 1]
+        (groundHeader 1 (layout.objects : Int) ++ List.replicate (layout.bytes - 8) 0)
+      groundIntern (1 :: classes) bytes head.pool
+
+def groundArray (g : Dg) (lay : Layers) (arr : List (List Int)) : Nat → List Int → List Ground → GroundPool → GroundBuild
+  | 0, _, _, p => { ok := false, pool := p }
+  | k + 1, ty, args, p =>
+    if args.isEmpty then { words := [objectEmptyArray], pool := p }
+    else
+      let cls := storageClass g (readTyD g (innerTy g ty)).acc
+      let tag := if cls == 0 then 246 else 248
+      let width := objectSlotWidth cls
+      let values := groundPacks g lay arr k args p
+      if !values.ok then values else
+        let bytes := groundHeader tag (if cls == 0 then 0 else width)
+          ++ groundWord 8 (args.length : Int) ++ groundWord 8 (args.length : Int)
+          ++ (values.words.flatMap (fun n => groundWord width.toNat n))
+        groundIntern [tag, cls] (groundPad bytes) values.pool
+
+def groundString (bytes : List Int) (p : GroundPool) : GroundBuild :=
+  if bytes.isEmpty then { words := [profile.emptyStr], pool := p }
+  else
+    let size := (bytes.length : Int) + 1
+    let chars := ((bytes.filter (fun b => b < 128 || b >= 192)).length : Int)
+    groundIntern [249] (groundPad (groundHeader 249 0 ++ groundWord 8 size
+      ++ groundWord 8 size ++ groundWord 8 chars ++ bytes ++ [0])) p
+end
+
+mutual
+def groundCensus (g : Dg) : Nat → Ground → Cen → Cen
+  | 0, _, cen => cen
+  | k + 1, a, cen =>
+    let cen := if a.kind == 4 && a.built then cenAddType g 1 a.ty cen else cen
+    groundCensuses g k a.args cen
+
+def groundCensuses (g : Dg) : Nat → List Ground → Cen → Cen
+  | 0, _, cen => cen
+  | _ + 1, [], cen => cen
+  | k + 1, a :: more, cen => groundCensuses g k more (groundCensus g k a cen)
+end
+
+def groundConsts : List Int → Nat → List Int
+  | [], _ => []
+  | x :: xs, dst => i64Const x ++ ls dst ++ groundConsts xs (dst + 1)
+
+def groundLower (g : Dg) (lay : Layers) (ctx : GroundContext) (arr : List (List Int)) (fuel : Nat)
+    (ty rest : List Int) (dst : Nat) (cen : Cen) : Lw :=
+  let tag := (drE g rest).headD (-1)
+  if !(tag == 2 || tag == 4 || tag == 23 || tag == 26 || tag == 28 || tag == 34 || tag == 35 || tag == 36) then lwFail 9 rest
+  else
+    let a := groundRead g lay ctx fuel ty rest
+    if !a.ok || !a.safe || !groundReady fuel a.node then lwFail 9 rest
+    else
+      let b := groundFlat g lay arr fuel a.node (groundPoolOf cen.ground)
+      if !b.ok || b.words.length != wordsOfWithLayers g lay arr ty then lwFail 9 rest
+      else lwOk a.rest [groundConsts b.words dst] (dst + b.words.length) dst
+        { (groundCensus g fuel a.node cen) with ground := [b.pool] }
+
+-- Public ABI boundary. Static-aware hosts also put their input objects at
+-- __heap_base. This clamp supports historical scalar-only hosts, and runs
+-- before ownership wrappers or region marks capture the dynamic bump.
+-- The static region counts against the caller's memory limit; never widen
+-- that limit to accommodate it. Fuel refusal retains its entry precedence.
+def groundPublicFns (pool : List GroundPool) (fns : List WFn) : List WFn :=
+  let p := groundPoolOf pool
+  if p.chunks.isEmpty then fns else
+    let prologue := fuelPrologue
+      ++ blkGet offLimit ++ i64Const p.next ++ [84]
+      ++ voidIf (refuseTo profile.tagCapacity profile.detGrow)
+      ++ blkGet offBump ++ i64Const p.next ++ [84]
+      ++ voidIf (blkSet offBump (i64Const p.next))
+    fns.map (fun f => { f with code := prologue ++ f.code })

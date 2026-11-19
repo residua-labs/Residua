@@ -1,0 +1,574 @@
+-- LRC: range facts with a certificate. A check that a fact decides is not emitted.
+-- closure_claim = 0.
+--
+-- The wire's arithmetic is checked: `add`, `sub` and `mul` refuse when the result leaves i64, `mod`
+-- refuses a zero divisor. A fixed-width type of the source (UInt32) reaches the wire as that
+-- arithmetic followed by a modulus (the frontend's helper: `if m = 0 then a + b else (a + b) % m`),
+-- so the type's own promise, that every value is below 2^32, is gone from the image and each
+-- operation pays a test that can never fire. Here the promise is recovered as facts and used:
+--
+--   * an `add`, `sub` or `mul` whose operands' ranges keep every result inside i64 becomes the
+--     operator without its test (`primAddW`, `primSubW`, `primMulW`);
+--   * a `mod` by a divisor known to be a power of two becomes a mask (`primMask`): the wire's
+--     modulus takes the sign of the divisor, and for 2^k that is the low k bits of any dividend;
+--   * a comparison whose operands' ranges decide it becomes its value, and a `case` on a word
+--     whose range is one value becomes that alternative;
+--   * a `mod` of a word that is not negative and below its divisor is that word. The frontend's
+--     scalar form of a fixed-width operation (since main 62438f27a: `((a % m) op (b % m)) % m`)
+--     reduces its operands again, and a parameter or a literal of the type is below the bound already.
+--
+-- The facts are intervals of i64 (Cousot and Cousot, POPL 1977; the interprocedural form with
+-- function clones is the usual one for a closed call graph, LLVM's IPSCCP and GCC's IPA-CP):
+--   * for every scalar parameter of a function, the join of the arguments of the calls that reach it;
+--   * for every scalar result of a function, the join of what its body returns;
+--   * for every scalar field of a constructor, the join of every value the program stores there
+--     (all cells are built by the program: lib/lrc/Pack.rsd relies on the same).
+-- They are found by iterating from "nothing reaches here" until nothing changes, widening a bound
+-- that keeps moving to the end of the range. That table is the certificate. It is then checked
+-- on its own, by one more walk over every body that must leave it as it is (`rangeAccepts`); only
+-- a checked table is used, and a table that fails the check changes nothing in the program.
+--
+-- Every image function can be entered from outside with any words, so a fact about a parameter
+-- cannot hold for the function as the image names it. A function whose parameters have facts gets
+-- a clone (a new function after the declarations, taking fuel as the original does); the calls
+-- inside the program go to the clone, and the original keeps the body that assumes nothing. One
+-- exception keeps the facts from being diluted: a call from a function's original body to a
+-- function of its own component of the call graph stays with the original (the recursion of an
+-- entry with arbitrary arguments carries those arguments along). The stage's own list functions
+-- have no entry from outside: their one body uses the facts directly.
+--
+-- It runs before the other passes, on the declarations as translated (after lib/lrc/Pack.rsd):
+-- every store into a cell is then a store into a fresh `ctor`, whose constructor the code shows.
+-- A store into an object of unknown constructor turns the field facts off altogether, and so does a
+-- call of a function that has no body here.
+import AvlMap
+import Lib.Lrc.FreeVars
+import Lib.Lrc.Prim
+import Lib.Lrc.Inline
+
+namespace Lrc
+
+/-! ## Intervals of i64 -/
+
+structure Iv where
+  lo : Int
+  hi : Int
+  deriving Inhabited
+
+def ivMin : Int := -9223372036854775808
+def ivMax : Int := 9223372036854775807
+def ivTop : Iv := { lo := ivMin, hi := ivMax }
+-- the empty interval: no value reaches here
+def ivBot : Iv := { lo := 1, hi := 0 }
+def ivIsBot (a : Iv) : Bool := a.lo > a.hi
+def ivIsTop (a : Iv) : Bool := a.lo == ivMin && a.hi == ivMax
+def ivConst (v : Int) : Iv := { lo := v, hi := v }
+def ivIsConst (a : Iv) : Bool := a.lo == a.hi
+def ivBool : Iv := { lo := 0, hi := 1 }
+
+def ivJoin (a b : Iv) : Iv :=
+  if ivIsBot a then b else if ivIsBot b then a
+  else { lo := (if a.lo < b.lo then a.lo else b.lo), hi := (if a.hi > b.hi then a.hi else b.hi) }
+
+def ivMeet (a b : Iv) : Iv :=
+  { lo := (if a.lo > b.lo then a.lo else b.lo), hi := (if a.hi < b.hi then a.hi else b.hi) }
+
+def ivLe (a b : Iv) : Bool := ivIsBot a || (!ivIsBot b && b.lo <= a.lo && a.hi <= b.hi)
+
+-- Does x + y stay inside i64 for every pair. Written so that this arithmetic itself, which is
+-- the stage's own checked arithmetic, never leaves i64.
+def ivAddSafe (x y : Iv) : Bool :=
+  (y.hi <= 0 || x.hi <= ivMax - y.hi) && (y.lo >= 0 || x.lo >= ivMin - y.lo)
+
+def ivSubSafe (x y : Iv) : Bool :=
+  (y.lo >= 0 || x.hi <= ivMax + y.lo) && (y.hi <= 0 || x.lo >= ivMin + y.hi)
+
+-- 3037000499 is the largest word whose square is inside i64
+def ivMulSafe (x y : Iv) : Bool :=
+  x.lo >= 0 && y.lo >= 0 && x.hi <= 3037000499 && y.hi <= 3037000499
+
+def ivPow2Go : Nat → Int → Int → Bool
+  | 0, _, _ => false
+  | k + 1, p, m => p == m || (p < m && ivPow2Go k (p + p) m)
+
+-- is m one of 2, 4, .., 2^62
+def ivPow2 (m : Int) : Bool := m >= 2 && ivPow2Go 62 2 m
+
+-- the result of operator p on operands in a and b, when it returns at all
+def ivPrim (p : Nat) (a b : Iv) : Iv :=
+  let two := p == primAdd || p == primSub || p == primMul || p == primDiv || p == primMod || p == primLt || p == primGt
+    || p == primEq || p == primAnd || p == primOr || p == primStrEq || p == primAddW || p == primSubW || p == primMulW
+  let one := p == primNeg || p == primNot || p == primTagOf || p == primMask
+  if !two && !one then ivTop
+  else if ivIsBot a || (two && ivIsBot b) then ivBot
+  else if p == primAdd || p == primAddW then (if ivAddSafe a b then { lo := a.lo + b.lo, hi := a.hi + b.hi } else ivTop)
+  else if p == primSub || p == primSubW then (if ivSubSafe a b then { lo := a.lo - b.hi, hi := a.hi - b.lo } else ivTop)
+  else if p == primMul || p == primMulW then
+    (if ivMulSafe a b then { lo := a.lo * b.lo, hi := a.hi * b.hi } else ivTop)
+  else if p == primNeg then (if a.lo > ivMin then { lo := 0 - a.hi, hi := 0 - a.lo } else ivTop)
+  else if p == primMod then
+    -- the wire's modulus has the divisor's sign (lib/lrc/Emit.rsd `emMod`)
+    (if b.lo > 0 then { lo := 0, hi := (if a.lo >= 0 && a.hi < b.hi - 1 then a.hi else b.hi - 1) }
+     else if b.hi < 0 then { lo := b.lo + 1, hi := 0 } else ivTop)
+  else if p == primDiv then (if a.lo >= 0 && b.lo > 0 then { lo := 0, hi := a.hi } else ivTop)
+  else if p == primLt then (if a.hi < b.lo then ivConst 1 else if a.lo >= b.hi then ivConst 0 else ivBool)
+  else if p == primGt then (if a.lo > b.hi then ivConst 1 else if a.hi <= b.lo then ivConst 0 else ivBool)
+  else if p == primEq then
+    (if a.hi < b.lo || b.hi < a.lo then ivConst 0
+     else if ivIsConst a && ivIsConst b then ivConst 1 else ivBool)
+  else if p == primAnd || p == primOr || p == primStrEq then ivBool
+  else if p == primNot then (if ivIsConst a && a.lo == 0 then ivConst 1 else if a.lo >= 1 then ivConst 0 else ivBool)
+  else if p == primTagOf then { lo := 0, hi := 65535 }
+  else ivTop
+
+/-! ## A map from a key to an interval (lib/AvlMap.rsd; the bounds are the node's two spare words) -/
+
+structure IvMap where
+  m : Map
+  deriving Inhabited
+
+def ivmEmpty : IvMap := { m := map0 0 }
+
+def ivmHas (t : IvMap) (k : Int) : Bool := (mapNode t.m k).tag != 0
+
+-- the entry of k, `dflt` when there is none
+def ivmFind (t : IvMap) (k : Int) (dflt : Iv) : Iv :=
+  let r := mapNode t.m k
+  if r.tag == 0 then dflt else { lo := r.sa, hi := r.sb }
+
+def ivmSet (t : IvMap) (k : Int) (a : Iv) : IvMap := { m := mapPut t.m k 1 a.lo a.hi [] }
+
+structure IvPut where
+  t : IvMap
+  changed : Bool
+  deriving Inhabited
+
+-- Widening with thresholds (Blanchet et al., A static analyzer for large safety-critical software,
+-- PLDI 2003, section 7.1.2): a bound that keeps moving goes to the next of a few fixed values and
+-- not at once to the end of the range. A counter that a modulus brings back (`(d + 1) % 2^32`)
+-- then comes to rest at the modulus' bound, which the end of the range would have lost.
+def ivSteps : List Int := [0, 1, 255, 65535, 2147483647, 4294967295, 4294967296, 1099511627775]
+
+-- the least of the fixed values that is at least v, the end of the range when there is none
+def ivUp (v : Int) : List Int → Int
+  | [] => ivMax
+  | t :: ts => if v <= t then t else ivUp v ts
+
+-- the same downwards: the fixed values negated, then the end of the range
+def ivDown (v : Int) : List Int → Int
+  | [] => ivMin
+  | t :: ts => if v >= 0 - t then 0 - t else ivDown v ts
+
+-- The entry of k joined with a; no entry counts as the empty interval. With `wide`, a bound that
+-- moves goes to the next fixed value, so that an entry changes a bounded number of times.
+def ivmJoin (t : IvMap) (k : Int) (a : Iv) (wide : Bool) : IvPut :=
+  if ivIsBot a then { t := t, changed := false }
+  else
+    let r := mapNode t.m k
+    if r.tag == 0 then { t := ivmSet t k a, changed := true }
+    else
+      let old : Iv := { lo := r.sa, hi := r.sb }
+      if ivLe a old then { t := t, changed := false }
+      else
+        let lo := if a.lo < old.lo then (if wide then ivDown a.lo ivSteps else a.lo) else old.lo
+        let hi := if a.hi > old.hi then (if wide then ivUp a.hi ivSteps else a.hi) else old.hi
+        { t := ivmSet t k { lo := lo, hi := hi }, changed := true }
+
+/-! ## The table (the certificate) and the walk -/
+
+-- parameter or result i of function f; position 255 marks "a call reaches f's facts"
+def rgAt (f i : Nat) : Int := ((f * 256 + i : Nat) : Int)
+def rgMark : Nat := 255
+
+-- scalar number n at byte `off` of the constructor
+def rgKey (i : CtorInfo) (n off : Nat) : Int :=
+  ((((i.tid * 4096 + i.cidx) * 64 + n) * 4096 + off : Nat) : Int)
+
+-- ps: parameters, for the calls that go to a function's facts (its clone, or a list function).
+-- rc: the results of the body that assumes ps. rp: the results of the body that assumes nothing.
+-- fs: fields. poison: a scalar went into an object of unknown constructor, no field fact holds.
+-- jm: inside one body, join point j's parameter i (key j * 256 + i), position 255 for "jumped to".
+-- used: in `rw`, how many operators and cases the facts changed.
+structure RgS where
+  ps : IvMap
+  rc : IvMap
+  rp : IvMap
+  fs : IvMap
+  poison : Bool
+  changed : Bool
+  jm : IvMap
+  used : Nat
+  deriving Inhabited
+
+def rgS0 : RgS :=
+  { ps := ivmEmpty, rc := ivmEmpty, rp := ivmEmpty, fs := ivmEmpty, poison := false, changed := false, jm := ivmEmpty, used := 0 }
+
+-- self: the function walked. pub: its body that assumes nothing about its parameters.
+-- comp: its component of the call graph. all: every image function is taken to have a clone
+-- (the first run, which finds out which do); cloned: the ones that have. wide: widen.
+-- rw: write the new body; base: the index of the first clone.
+structure RgCx where
+  nImg : Nat
+  decls : List Decl
+  -- the same declarations by function number (lib/lrc/Ir.rsd `DeclTab`)
+  tab : DeclTab
+  -- the call graph's components (lib/lrc/CallGraph.rsd `callScc`)
+  scc : CallScc
+  self : Nat
+  pub : Bool
+  comp : List Int
+  all : Bool
+  cloned : List Int
+  -- for each of them its place in `cloned`
+  clonedAt : IMap
+  wide : Bool
+  rw : Bool
+  base : Nat
+  deriving Inhabited
+
+-- iv: a scalar variable's interval, the whole range when absent. ck: an object variable's
+-- constructor as (tid, cidx), unknown when absent.
+structure RgEnv where
+  iv : IvMap
+  ck : IvMap
+  deriving Inhabited
+
+def rgIv (env : RgEnv) (y : Int) : Iv := if y < 0 then ivTop else ivmFind env.iv y ivTop
+
+-- the numbers of w bytes
+def rgOfWidth (w : Nat) : Iv :=
+  if w == 1 then { lo := 0, hi := 255 } else if w == 2 then { lo := 0, hi := 65535 }
+  else if w == 4 then { lo := 0, hi := 4294967295 } else ivTop
+-- What a type says by itself: uint8, the type of `isShared`'s result and of a parameter that the wire types Bool or
+-- declares with 8 bits. The wider declared widths (uint16 and uint32 on a parameter, lib/lrc/FromWire.rsd
+-- `tysOfWidth`) say nothing here. An image function is entered from outside with any words (above), and a clone
+-- has its parameters' facts from the calls inside the program. Read here, the width would clear the body that
+-- assumes nothing, so that no clone is made; that was measured and is not taken
+-- (reports/backend-opt-fable/LAND-PACKW.md, "Not taken").
+def rgOfType (ty : Int) (a : Iv) : Iv := if ty == tyU8 then ivMeet a (rgOfWidth 1) else a
+-- what a store of type `ty` leaves in its field: a number of the bytes it writes (lib/lrc/Pack.rsd gives the
+-- `sset` of a narrow field the type uint8, uint16 or uint32)
+def rgOfStore (ty : Int) (a : Iv) : Iv := if tyWidth ty < 8 then ivMeet a (rgOfWidth (tyWidth ty)) else a
+
+def rgBindIv (env : RgEnv) (x : Nat) (ty : Int) (a : Iv) : RgEnv :=
+  if tyIsScalar ty then { env with iv := ivmSet env.iv (x : Int) (rgOfType ty a) } else env
+
+-- does a call of f from the body walked go to f's facts (its clone, or a list function)
+def rgToFacts (cx : RgCx) (f : Nat) : Bool :=
+  isOwnFn cx.nImg f || ((cx.all || imContains cx.clonedAt f) && !(cx.pub && cx.comp.contains (f : Int)))
+
+-- the arguments of a call joined into f's parameters
+def rgArgs (env : RgEnv) (f : Nat) (wide : Bool) : Nat → List Int → RgS → RgS
+  | _, [], s => s
+  | i, y :: ys, s =>
+    let p := ivmJoin s.ps (rgAt f i) (rgIv env y) wide
+    rgArgs env f wide (i + 1) ys { s with ps := p.t, changed := s.changed || p.changed }
+
+-- the results of a call bound: x, ty, x, ty, ...
+def rgResults (t : IvMap) (f : Nat) (known : Bool) : Nat → List Int → RgEnv → RgEnv
+  | i, x :: ty :: rest, env =>
+    rgResults t f known (i + 1) rest (rgBindIv env x.toNat ty (if known then ivmFind t (rgAt f i) ivBot else ivTop))
+  | _, _, env => env
+
+-- the values returned joined into the results of the body walked
+def rgRets (cx : RgCx) (env : RgEnv) : Nat → List Int → RgS → RgS
+  | _, [], s => s
+  | i, y :: ys, s =>
+    let p := ivmJoin (if cx.pub then s.rp else s.rc) (rgAt cx.self i) (rgIv env y) cx.wide
+    rgRets cx env (i + 1) ys
+      (if cx.pub then { s with rp := p.t, changed := s.changed || p.changed }
+       else { s with rc := p.t, changed := s.changed || p.changed })
+
+def rgJumps (env : RgEnv) (j : Nat) : Nat → List Int → IvMap → IvMap
+  | _, [], t => (ivmJoin t (rgAt j rgMark) (ivConst 0) false).t
+  | i, y :: ys, t => rgJumps env j (i + 1) ys (ivmJoin t (rgAt j i) (rgIv env y) false).t
+
+def rgJoinEnv (jm : IvMap) (j : Nat) : Nat → List Param → RgEnv → RgEnv
+  | _, [], env => env
+  | i, p :: ps, env => rgJoinEnv jm j (i + 1) ps (rgBindIv env p.x p.ty (ivmFind jm (rgAt j i) ivBot))
+
+-- the interval of an expression that is not a call
+def rgExpr (env : RgEnv) (s : RgS) (e : N) : Iv :=
+  if e.op == opLit then ivConst e.a
+  else if e.op == opPrim then
+    ivPrim (primOp e) (rgIv env (intAt 0 e.ys)) (rgIv env (intAt 1 e.ys))
+  else if e.op == opSProj then
+    let x := (sprojVar e : Int)
+    let of := rgOfWidth (sprojWidth e)
+    if s.poison || !ivmHas env.ck x then of
+    else
+      let c := ivmFind env.ck x ivTop
+      ivMeet of (ivmFind s.fs (rgKey { cidx := c.hi.toNat, size := 0, ssize := 0, tid := c.lo.toNat } (sprojN e) (sprojOff e)) ivBot)
+  else if e.op == opIsShared then ivBool
+  else ivTop
+
+-- the expression as the facts let it be written
+def rgRewrite (env : RgEnv) (e : N) (r : Iv) : N :=
+  if e.op != opPrim then e
+  else
+    let p := primOp e
+    let a := rgIv env (intAt 0 e.ys)
+    let b := rgIv env (intAt 1 e.ys)
+    if ivIsBot a || ivIsBot b then e
+    else if (p == primLt || p == primGt || p == primEq || p == primNot) && ivIsConst r then mkLit r.lo
+    else if p == primAdd && ivAddSafe a b then { e with a := (primAddW : Int) }
+    else if p == primSub && ivSubSafe a b then { e with a := (primSubW : Int) }
+    else if p == primMul && ivMulSafe a b then { e with a := (primMulW : Int) }
+    else if p == primMod && ivIsConst b && ivPow2 b.lo then
+      { e with a := (primMask : Int), b := b.lo - 1, ys := [intAt 0 e.ys] }
+    else e
+
+-- is e a modulus that gives back its dividend: a word that is not negative and below every divisor it
+-- can meet (the wire's modulus has the divisor's sign, lib/lrc/Emit.rsd `emMod`)
+def rgSame (env : RgEnv) (e : N) : Bool :=
+  e.op == opPrim && primOp e == primMod && intAt 0 e.ys >= 0 &&
+    (let a := rgIv env (intAt 0 e.ys)
+     let b := rgIv env (intAt 1 e.ys)
+     !ivIsBot a && !ivIsBot b && a.lo >= 0 && b.lo > a.hi)
+
+-- the alternative a word of value v selects: its body, or the default's
+def rgPick (v : Int) : List N → Option N
+  | [] => none
+  | alt :: alts =>
+    if altIsDefault alt then (match rgPick v alts with | some b => some b | none => some (altBody alt))
+    else if ((infoOf alt).cidx : Int) == v then some (altBody alt) else rgPick v alts
+
+-- is f a function with a body here
+def rgHasBody (f : Nat) (decls : DeclTab) : Bool :=
+  match dtFind decls f with
+  | some d => !d.ext
+  | none => false
+
+structure RgR where
+  s : RgS
+  node : N
+  deriving Inhabited
+
+structure RgAlts where
+  s : RgS
+  alts : List N
+  deriving Inhabited
+
+mutual
+partial def rgGo (cx : RgCx) (env : RgEnv) (s : RgS) (n : N) : RgR :=
+  if n.op == opVDecl then
+    let e := vdeclExpr n
+    let x := vdeclVar n
+    if e.op == opFap then
+      let f := fapFn e
+      let known := rgHasBody f cx.tab
+      let facts := known && rgToFacts cx f
+      -- a function without a body here may build cells that no store shows: no field fact holds
+      let s0 := if known || s.poison then s else { s with poison := true, changed := true }
+      let s1 := if facts then
+          let m := ivmJoin s0.ps (rgAt f rgMark) (ivConst 0) false
+          rgArgs env f cx.wide 0 e.ys { s0 with ps := m.t, changed := s0.changed || m.changed }
+        else s0
+      let env1 := rgResults (if facts then s1.rc else s1.rp) f known 0 (vdeclBinds n) env
+      let r := rgGo cx env1 s1 (bodyOf n)
+      let e1 := if cx.rw && facts && !isOwnFn cx.nImg f then
+          { e with a := ((cx.base + (imFind cx.clonedAt f).toNat : Nat) : Int) }
+        else e
+      { s := r.s, node := { n with kids := [e1, r.node] } }
+    else if cx.rw && rgSame env e then
+      -- the binding goes, and what named it names the operand (NormIds.rsd `replaceVar`). It counts two:
+      -- the body that knows nothing about the operand turns the same modulus into a mask and counts one,
+      -- and a function whose parameters' facts take the masks away is worth its clone (`rgGains`)
+      rgGo cx env { s with used := s.used + 2 } (replaceVar x (intAt 0 e.ys).toNat (bodyOf n))
+    else
+      let v := rgExpr env s e
+      let env1 := if e.op == opCtor || e.op == opReuse then
+          { env with ck := ivmSet env.ck (x : Int) { lo := ((infoOf e).tid : Int), hi := ((infoOf e).cidx : Int) } }
+        else rgBindIv env x (vdeclTy n) v
+      let e1 := if cx.rw then rgRewrite env e (rgIv env1 (x : Int)) else e
+      let r := rgGo cx env1 (if e1.op != e.op || e1.a != e.a then { s with used := s.used + 1 } else s) (bodyOf n)
+      { s := r.s, node := { n with kids := [e1, r.node] } }
+  else if n.op == opSSet then
+    let x := (ssetVar n : Int)
+    let s1 := if s.poison then s
+      else if !ivmHas env.ck x then { s with poison := true, changed := true }
+      else
+        let c := ivmFind env.ck x ivTop
+        let p := ivmJoin s.fs (rgKey { cidx := c.hi.toNat, size := 0, ssize := 0, tid := c.lo.toNat } (ssetN n) (ssetOff n))
+          (rgOfStore n.d (rgIv env (ssetArg n : Int))) cx.wide
+        { s with fs := p.t, changed := s.changed || p.changed }
+    let r := rgGo cx env s1 (bodyOf n)
+    { s := r.s, node := setBody n r.node }
+  else if n.op == opCase then
+    let x := (caseVar n : Int)
+    if tyIsScalar (caseTy n) then
+      let v := rgIv env x
+      match (if cx.rw && ivIsConst v then rgPick v.lo (caseAlts n) else none) with
+      | some b => rgGo cx env { s with used := s.used + 1 } b
+      | none =>
+        let r := rgAlts cx env s x true v (caseAlts n)
+        { s := r.s, node := { n with kids := r.alts } }
+    else
+      let r := rgAlts cx env s x false ivTop (caseAlts n)
+      { s := r.s, node := { n with kids := r.alts } }
+  else if n.op == opJDecl then
+    let j := jdeclId n
+    let b := rgGo cx env s (bodyOf n)
+    if ivmHas b.s.jm (rgAt j rgMark) then
+      let v := rgGo cx (rgJoinEnv b.s.jm j 0 (jdeclParams n) env) b.s (jdeclBody n)
+      { s := v.s, node := { n with kids := [v.node, b.node] } }
+    else { s := b.s, node := { n with kids := [jdeclBody n, b.node] } }
+  else if n.op == opJmp then
+    { s := { s with jm := rgJumps env (jmpId n) 0 (jmpArgs n) s.jm }, node := n }
+  else if n.op == opRet then { s := rgRets cx env 0 (retArgs n) s, node := n }
+  else if isTerminal n then { s := s, node := n }
+  else
+    let r := rgGo cx env s (bodyOf n)
+    { s := r.s, node := setBody n r.node }
+-- `scalar`: the subject is a word in v; an alternative for a value outside v is not walked
+partial def rgAlts (cx : RgCx) (env : RgEnv) (s : RgS) (x : Int) (scalar : Bool) (v : Iv) : List N → RgAlts
+  | [] => { s := s, alts := [] }
+  | alt :: alts =>
+    let c := ((infoOf alt).cidx : Int)
+    if scalar && !altIsDefault alt && (ivIsBot v || c < v.lo || c > v.hi) then
+      let r := rgAlts cx env s x scalar v alts
+      { s := r.s, alts := alt :: r.alts }
+    else
+      let env1 := if altIsDefault alt then env
+        else if scalar then { env with iv := ivmSet env.iv x (ivConst c) }
+        else { env with ck := ivmSet env.ck x { lo := ((infoOf alt).tid : Int), hi := c } }
+      let b := rgGo cx env1 s (altBody alt)
+      let r := rgAlts cx env b.s x scalar v alts
+      { s := r.s, alts := altSetBody alt b.node :: r.alts }
+end
+
+-- the parameters of a body: nothing known for the body that assumes nothing, ps for the other
+def rgParams (f : Nat) (pub : Bool) (ps : IvMap) : Nat → List Param → RgEnv → RgEnv
+  | _, [], env => env
+  | i, p :: rest, env =>
+    rgParams f pub ps (i + 1) rest (rgBindIv env p.x p.ty (if pub then ivTop else ivmFind ps (rgAt f i) ivBot))
+
+def rgEnv0 : RgEnv := { iv := ivmEmpty, ck := ivmEmpty }
+
+-- one body walked: its state, and in `rw` its new body
+def rgBody (cx : RgCx) (groups : List (List Int)) (d : Decl) (pub : Bool) (s : RgS) : RgR :=
+  let cx1 := { cx with self := d.f, pub := pub, comp := sccOf cx.scc (d.f : Int) }
+  let r := rgGo cx1 (rgParams d.f pub s.ps 0 d.xs rgEnv0) { s with jm := ivmEmpty } d.body
+  { s := { r.s with jm := ivmEmpty }, node := r.node }
+
+-- does function f have facts to walk a body under: a list function, or an image function that is cloned
+def rgHasFacts (cx : RgCx) (f : Nat) : Bool := isOwnFn cx.nImg f || cx.all || imContains cx.clonedAt f
+
+-- one round: every body that can run, each joined into the table
+def rgRound (cx : RgCx) (groups : List (List Int)) : List Decl → RgS → RgS
+  | [], s => s
+  | d :: ds, s =>
+    if d.ext then rgRound cx groups ds s
+    else
+      let s1 := if isOwnFn cx.nImg d.f then s else (rgBody cx groups d true s).s
+      let s2 := if rgHasFacts cx d.f && ivmHas s1.ps (rgAt d.f rgMark) then (rgBody cx groups d false s1).s else s1
+      rgRound cx groups ds s2
+
+-- rounds until nothing changes; `ok` is false when the limit is reached first
+structure RgFix where
+  s : RgS
+  ok : Bool
+  deriving Inhabited
+
+def rgWidenAt : Nat := 4
+
+def rgIterate (cx : RgCx) (groups : List (List Int)) : Nat → Nat → RgS → RgFix
+  | 0, _, s => { s := s, ok := false }
+  | k + 1, round, s =>
+    let s1 := rgRound { cx with wide := round >= rgWidenAt } groups cx.decls { s with changed := false }
+    if s1.changed then rgIterate cx groups k (round + 1) s1 else { s := s1, ok := true }
+
+-- has f parameter facts: some scalar parameter's interval is narrower than its type's
+def rgNarrow (ps : IvMap) (f : Nat) : Nat → List Param → Bool
+  | _, [] => false
+  | i, p :: rest =>
+    (tyIsScalar p.ty && !ivLe (rgOfType p.ty ivTop) (rgOfType p.ty (ivmFind ps (rgAt f i) ivBot))) || rgNarrow ps f (i + 1) rest
+
+-- The image functions a clone pays for, first those whose own body the parameter facts change:
+-- more operators or cases are rewritten under the facts than without them.
+def rgGains (cx : RgCx) (groups : List (List Int)) (s : RgS) : List Decl → List Int
+  | [] => []
+  | d :: ds =>
+    if !d.ext && d.f < cx.nImg && ivmHas s.ps (rgAt d.f rgMark) && rgNarrow s.ps d.f 0 d.xs
+        && (rgBody { cx with rw := true } groups d false { s with used := 0 }).s.used
+             > (rgBody { cx with rw := true } groups d true { s with used := 0 }).s.used then
+      (d.f : Int) :: rgGains cx groups s ds
+    else rgGains cx groups s ds
+
+def rgCallsAny (w : VSet) : List Int → Bool
+  | [] => false
+  | c :: cs => (c >= 0 && vsContains w c.toNat) || rgCallsAny w cs
+
+-- ... then those with parameter facts that call one of them: the facts reach it through them
+-- (`adj`: the functions each declaration calls, lib/lrc/CallGraph.rsd `CallScc`)
+def rgGrow (nImg : Nat) (ps : IvMap) (adj : Map) (w : VSet) : List Decl → List Int
+  | [] => []
+  | d :: ds =>
+    if !d.ext && d.f < nImg && !vsContains w d.f && ivmHas ps (rgAt d.f rgMark) && rgNarrow ps d.f 0 d.xs
+        && rgCallsAny w (mapXs adj (d.f : Int)) then (d.f : Int) :: rgGrow nImg ps adj w ds
+    else rgGrow nImg ps adj w ds
+
+def rgClosure (nImg : Nat) (ps : IvMap) (adj : Map) (decls : List Decl) : Nat → VSet → VSet
+  | 0, w => w
+  | k + 1, w =>
+    let more := rgGrow nImg ps adj w decls
+    if more.isEmpty then w else rgClosure nImg ps adj decls k (vsInsertArgs w more)
+
+def rgSorted (w : VSet) : List Decl → List Int
+  | [] => []
+  | d :: ds => if vsContains w d.f then (d.f : Int) :: rgSorted w ds else rgSorted w ds
+
+-- each function of a list at its place in the list
+def rgPlaces : List Int → Nat → IMap → IMap
+  | [], _, m => m
+  | f :: fs, i, m => rgPlaces fs (i + 1) (imInsert m f.toNat i)
+
+-- The certificate: the clones chosen and the table for them. `ok`: both runs came to rest.
+structure RgCert where
+  cx : RgCx
+  groups : List (List Int)
+  s : RgS
+  ok : Bool
+  deriving Inhabited
+
+def rangeCert (nImg : Nat) (decls : List Decl) : RgCert :=
+  let st := callScc decls
+  let cx0 : RgCx := { nImg := nImg, decls := decls, tab := dtOfList decls, scc := st, self := 0, pub := true, comp := [], all := true, cloned := [], clonedAt := imEmpty,
+                      wide := false, rw := false, base := decls.length }
+  if !declsDense 0 decls then { cx := cx0, groups := [], s := rgS0, ok := false }
+  else
+    let first := rgIterate cx0 st.groups 96 0 rgS0
+    let gains := rgGains cx0 st.groups first.s decls
+    let cloned := rgSorted (rgClosure nImg first.s.ps st.adj decls decls.length (vsInsertArgs vsEmpty gains)) decls
+    let cx1 := { cx0 with all := false, cloned := cloned, clonedAt := rgPlaces cloned 0 imEmpty }
+    let second := rgIterate cx1 st.groups 96 0 rgS0
+    { cx := cx1, groups := st.groups, s := second.s, ok := first.ok && second.ok }
+
+-- The check of a certificate, apart from how it was found: one round over every body leaves the
+-- table as it is.
+def rangeAccepts (c : RgCert) : Bool :=
+  c.ok && !(rgRound { c.cx with wide := false } c.groups c.cx.decls { c.s with changed := false }).changed
+
+def rgNewBodies (c : RgCert) : List Decl → List Decl
+  | [] => []
+  | d :: ds =>
+    (if d.ext then d
+     else if isOwnFn c.cx.nImg d.f then
+       (if ivmHas c.s.ps (rgAt d.f rgMark) then { d with body := (rgBody { c.cx with rw := true } c.groups d false c.s).node } else d)
+     else { d with body := (rgBody { c.cx with rw := true } c.groups d true c.s).node }) :: rgNewBodies c ds
+
+def rgClones (c : RgCert) (all : DeclTab) : Nat → List Int → List Decl
+  | _, [] => []
+  | i, f :: fs =>
+    match dtFind all f.toNat with
+    | some d => { d with f := c.cx.base + i, body := (rgBody { c.cx with rw := true } c.groups d false c.s).node } :: rgClones c all (i + 1) fs
+    | none => rgClones c all (i + 1) fs
+
+-- The declarations with the facts used: the bodies rewritten, the clones after them. Without an
+-- accepted certificate the declarations are returned as they are.
+def rangeFacts (nImg : Nat) (decls : List Decl) : List Decl :=
+  let c := rangeCert nImg decls
+  if !rangeAccepts c then decls
+  else rgNewBodies c decls ++ rgClones c c.cx.tab 0 c.cx.cloned
+
+end Lrc

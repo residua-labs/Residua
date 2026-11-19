@@ -1,0 +1,125 @@
+-- LRC: reads sunk to the branches that use them, past the tests in between.
+-- closure_claim = 0.
+--
+-- Lean's pushProj (lib/lrc/PushProj.rsd, PushProj.lean:13) moves the projections that stand
+-- directly in front of a `case` into the alternatives that read them. It stops at the first
+-- instruction that is not a projection. On the wire a test is an operator on a word: a match on
+-- a field reads the fields, binds a literal, compares, and only then branches, so the literal and
+-- the comparison stand between the reads and the `case`, and every field of the cell was read
+-- on every path (rbtree's insert: five loads for each level where the path taken needs three).
+--
+-- Here the walk goes on past a literal and an operator. A literal moves like a projection. An
+-- operator stays in front of the `case`, with what it reads: it may refuse, and a refusal must
+-- not depend on the branch. A read that moves below an operator or an `isShared` reads the
+-- same value there: neither writes memory nor releases anything. The walk stops, as Lean's
+-- does, at anything else (a store, a count, a call, an allocation).
+--
+-- It runs where Lean runs its second pushProj, after the counting is explicit and the reuse
+-- expanded: on the unique path the fields that the rebuilt cell took over from the old one are
+-- no longer stored, so their reads are needed on no path and vanish.
+import Lib.Lrc.PushProj
+
+namespace Lrc
+
+partial def sinkProjs (bsRev : List N) (alts : List N) (altsF : List VSet) (ctx : List N) (ctxF : VSet) : PushR :=
+  match bsRev with
+  | [] => { bs := ctx, alts := alts }
+  | b :: rest =>
+    let v := vdeclExpr b
+    if b.op == opVDecl && b.ys.isEmpty && (v.op == opProj || v.op == opSProj || v.op == opLit) then
+      let x := vdeclVar b
+      if !vsContains ctxF x then sinkProjs rest (pushIntoAlts b x alts altsF) (pushIntoFree b x altsF) ctx ctxF
+      else sinkProjs rest alts altsF (b :: ctx) (collectFreeIndices b ctxF)
+    else if b.op == opVDecl && b.ys.isEmpty && (v.op == opIsShared || v.op == opPrim) then
+      sinkProjs rest alts altsF (b :: ctx) (collectFreeIndices b ctxF)
+    else { bs := rest.reverse ++ (b :: ctx), alts := alts }
+
+mutual
+partial def sinkProjBody (b : N) : N :=
+  let f := flatten b
+  let bs := sinkProjJPs f.bs
+  if f.term.op == opCase then
+    let alts := caseAlts f.term
+    let r := sinkProjs bs.reverse alts (altsFree alts) [] (vsInsert vsEmpty (caseVar f.term))
+    reshape r.bs { f.term with kids := sinkProjAlts r.alts }
+  else reshape bs f.term
+partial def sinkProjJPs : List N → List N
+  | [] => []
+  | b :: bs => (if b.op == opJDecl then jdeclSetBody b (sinkProjBody (jdeclBody b)) else b) :: sinkProjJPs bs
+partial def sinkProjAlts : List N → List N
+  | [] => []
+  | alt :: alts => altSetBody alt (sinkProjBody (altBody alt)) :: sinkProjAlts alts
+end
+
+/-! ## Reads into a join point
+
+An inlined call leaves `jdecl j ps := v; b`: b is the callee's body, which ends in jumps to j, and
+v is what followed the call. A read that stands above the `jdecl` and is used in v alone was
+needed by the code after the call, not by the callee (rbtree's insert after `isRed` is inlined:
+the left child and the value are read for every level and used only where the node is rebuilt).
+It moves to the head of v, where the walk above takes it on into v's branches.
+
+That is sound when b does nothing but read: bindings of projections, literals and operators,
+guards, cases, jumps and returns. Then memory at the head of v is what it was above the `jdecl`
+on every path that reaches v. A path of b that never jumps to j skips the read, which had no
+effect. A store, a count, a release, an allocation or a call anywhere in b keeps the read where
+it is. -/
+
+mutual
+partial def sjReadOnly (n : N) : Bool :=
+  if n.op == opVDecl then
+    let e := vdeclExpr n
+    (e.op == opProj || e.op == opSProj || e.op == opLit || e.op == opPrim || e.op == opIsShared) && sjReadOnly (bodyOf n)
+  else if n.op == opJDecl then sjReadOnly (jdeclBody n) && sjReadOnly (bodyOf n)
+  else if n.op == opCase then sjReadOnlyAlts (caseAlts n)
+  else if n.op == opMData then sjReadOnly (bodyOf n)
+  else n.op == opJmp || n.op == opRet || n.op == opUnreachable
+partial def sjReadOnlyAlts : List N → Bool
+  | [] => true
+  | alt :: alts => sjReadOnly (altBody alt) && sjReadOnlyAlts alts
+end
+
+def sjIsRead (n : N) : Bool :=
+  n.op == opVDecl && n.ys.isEmpty && ((vdeclExpr n).op == opProj || (vdeclExpr n).op == opSProj || (vdeclExpr n).op == opLit)
+
+structure SjR where
+  moved : Bool
+  node : N
+  deriving Inhabited
+
+-- the read r (a `vdecl` whose own body is dropped) in front of `rest`: moved into a join point
+-- below when one takes it, past the reads in between that do not use it
+partial def sjPush (r : N) (rest : N) : SjR :=
+  let x := vdeclVar r
+  if rest.op == opJDecl then
+    if !vsContains (freeIndices (bodyOf rest)) x && sjReadOnly (bodyOf rest) then
+      { moved := true, node := { rest with kids := [{ r with kids := [vdeclExpr r, jdeclBody rest] }, bodyOf rest] } }
+    else { moved := false, node := { r with kids := [vdeclExpr r, rest] } }
+  else if sjIsRead rest && !vsContains (collectFreeIndices { rest with kids := [vdeclExpr rest, mkUnreachable] } vsEmpty) x then
+    let inner := sjPush r (bodyOf rest)
+    if inner.moved then { moved := true, node := { rest with kids := [vdeclExpr rest, inner.node] } }
+    else { moved := false, node := { r with kids := [vdeclExpr r, rest] } }
+  else { moved := false, node := { r with kids := [vdeclExpr r, rest] } }
+
+mutual
+partial def sjGo (n : N) : N :=
+  if n.op == opVDecl then
+    let rest := sjGo (bodyOf n)
+    if sjIsRead n then (sjPush n rest).node else { n with kids := [vdeclExpr n, rest] }
+  else if n.op == opJDecl then { n with kids := [sjGo (jdeclBody n), sjGo (bodyOf n)] }
+  else if n.op == opCase then { n with kids := sjAlts (caseAlts n) }
+  else if isTerminal n then n
+  else setBody n (sjGo (bodyOf n))
+partial def sjAlts : List N → List N
+  | [] => []
+  | alt :: alts => altSetBody alt (sjGo (altBody alt)) :: sjAlts alts
+end
+
+def declSinkProj (d : Decl) : Decl :=
+  if d.ext then d else declNormalizeIds { d with body := sinkProjBody (sjGo d.body) }
+
+def sinkProj : List Decl → List Decl
+  | [] => []
+  | d :: ds => declSinkProj d :: sinkProj ds
+
+end Lrc

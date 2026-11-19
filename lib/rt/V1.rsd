@@ -1,0 +1,702 @@
+-- OBJECT-ABI v1, revision 2. All object references are zero-extended
+-- wasm32 offsets in 64-bit slots. Header: rc32, cs_sz16, other8, tag8.
+-- Capacity is allocator metadata at p-8; it is not an object/RC header.
+-- The shared objectSlotClass function supplies the generated layout query.
+-- Private list helpers borrow inputs; public dup/drop/free use the frozen ABI.
+
+mutual
+partial def rsd_rt_v1_alloc (base : UInt64) (bytes : UInt64) (tag : UInt64) (other : UInt64) : RT.M UInt64 := do {
+  let mut capacity : UInt64 := 0;
+  let mut sizeClass : UInt64 := 5;
+  let mut fresh : UInt64 := 0;
+  let mut block : UInt64 := 0;
+  let mut rounded : UInt64 := 0;
+  let mut heads : UInt64 := 0;
+  let mut page : UInt64 := 0;
+  let mut count : UInt64 := 0;
+  let mut next : UInt64 := 0;
+  let mut i : UInt64 := 0;
+  let mut reserved : UInt64 := 0;
+  if RT.orBool (RT.ltU64 bytes 8) (RT.gtU64 bytes 4294967288) then {
+    RT.store64 (RT.addr base) 16 4;
+    RT.store64 (RT.addr base) 24 144115188075855873;
+    return 0
+  };
+  if RT.orBool (RT.gtU64 tag 250) (RT.gtU64 other 255) then {
+    runtimeFailure base 12; return 0
+  };
+  if RT.andBool (RT.eq64 tag 250) (RT.orBool (RT.ne64 bytes 32) (RT.ne64 other 0)) then {
+    runtimeFailure base 12; return 0
+  };
+  if RT.ne64 (RT.and64 (← RT.load64 (RT.addr base) 352) 2) 0 then {
+    if RT.geU64 (← RT.load64 (RT.addr base) 632) (← RT.load64 (RT.addr base) 360) then {
+      runtimeFailure base 16; return 0
+    }
+  };
+  rounded := RT.and64 (RT.add64 bytes 7) 18446744073709551608;
+  if RT.andBool RT.rc (RT.leU64 rounded 4096) then {
+    capacity := RT.add64 rounded 8;
+    sizeClass := RT.sub64 (RT.divU64 rounded 8) 1;
+    heads := (← RT.load64 (RT.addr base) 344);
+    if RT.eqz64 heads then {
+      heads := (← bump base 4096);
+      if RT.eqz64 heads then { return 0 };
+      RT.store64 (RT.addr base) 344 heads;
+      i := 0;
+      while RT.ltU64 i 512 do {
+        RT.store64 (RT.addr (RT.add64 heads (RT.mul64 i 8))) 0 0;
+        i := RT.add64 i 1
+      };
+      RT.store64 (RT.addr base) 368 (RT.add64 (← RT.load64 (RT.addr base) 368) 4096)
+    };
+    page := (← RT.load64 (RT.addr (RT.add64 heads (RT.mul64 sizeClass 8))) 0);
+    if RT.eqz64 page then {
+      block := (← RT.load64 (RT.addr base) 0);
+      page := RT.and64 (RT.add64 block 8191) 18446744073709543424;
+      reserved := RT.add64 (RT.sub64 page block) 8192;
+      block := (← bump base reserved);
+      if RT.eqz64 block then { return 0 };
+      RT.store64 (RT.addr base) 368 (RT.add64 (← RT.load64 (RT.addr base) 368) reserved);
+      if RT.rc then {
+        RT.store64 (RT.addr page) 0 0;
+        RT.store64 (RT.addr page) 8 (RT.add64 page 40);
+        RT.store64 (RT.addr page) 16 capacity;
+        RT.store64 (RT.addr page) 24 0;
+        RT.store64 (RT.addr (RT.add64 heads (RT.mul64 sizeClass 8))) 0 page
+      } else {
+        -- Configuration folding preserves the previous off-mode bytes,
+        -- including its unreachable page branch and local numbering.
+        count := RT.divU64 8160 capacity;
+        RT.store64 (RT.addr page) 0 0;
+        RT.store64 (RT.addr page) 8 (RT.add64 page 40);
+        RT.store64 (RT.addr page) 16 capacity;
+        RT.store64 (RT.addr page) 24 count;
+        RT.store64 (RT.addr (RT.add64 heads (RT.mul64 sizeClass 8))) 0 page;
+        i := 0;
+        while RT.ltU64 i count do {
+          fresh := RT.add64 (RT.add64 page 40) (RT.mul64 i capacity);
+          next := 0;
+          if RT.ltU64 (RT.add64 i 1) count then { next := RT.add64 fresh capacity };
+          RT.store64 (RT.addr (RT.sub64 fresh 8)) 0 (RT.or64 page 9223372036854775808);
+          RT.store64 (RT.addr fresh) 0 next;
+          i := RT.add64 i 1
+        }
+      }
+    };
+    -- A page has a virgin bump cursor and a separate recycled-slot list.
+    -- Preserve the first-slot offset used by detached reuse tokens. A page
+    -- refill writes four words, independent of its number of slots.
+    if RT.rc then {
+      fresh := (← RT.load64 (RT.addr page) 24);
+      if RT.ne64 fresh 0 then {
+        RT.store64 (RT.addr page) 24 (← RT.load64 (RT.addr fresh) 0)
+      } else {
+        fresh := (← RT.load64 (RT.addr page) 8);
+        next := RT.add64 fresh capacity;
+        if RT.gtU64 (RT.add64 next capacity) (RT.add64 page 8200) then { next := 0 };
+        RT.store64 (RT.addr page) 8 next
+      };
+      if RT.andBool (RT.eqz64 (← RT.load64 (RT.addr page) 8))
+          (RT.eqz64 (← RT.load64 (RT.addr page) 24)) then {
+        RT.store64 (RT.addr (RT.add64 heads (RT.mul64 sizeClass 8))) 0 (← RT.load64 (RT.addr page) 0)
+      }
+    } else {
+      fresh := (← RT.load64 (RT.addr page) 8);
+      next := (← RT.load64 (RT.addr fresh) 0);
+      RT.store64 (RT.addr page) 8 next;
+      RT.store64 (RT.addr page) 24 (RT.sub64 (← RT.load64 (RT.addr page) 24) 1);
+      if RT.eqz64 next then {
+        RT.store64 (RT.addr (RT.add64 heads (RT.mul64 sizeClass 8))) 0 (← RT.load64 (RT.addr page) 0)
+      }
+    };
+    RT.store64 (RT.addr (RT.sub64 fresh 8)) 0 page
+  } else {
+    capacity := 32;
+    while RT.ltU64 capacity (RT.add64 rounded 8) do {
+      if RT.geU64 sizeClass 31 then {
+        RT.store64 (RT.addr base) 16 4;
+        RT.store64 (RT.addr base) 24 144115188075855873;
+        return 0
+      };
+      capacity := RT.shl64 capacity 1;
+      sizeClass := RT.add64 sizeClass 1
+    };
+    fresh := (← RT.load64 (RT.addr (RT.add64 (RT.add64 base 344) (RT.mul64 sizeClass 8))) 0);
+    if RT.eqz64 fresh then {
+      block := (← bump base capacity);
+      if RT.eqz64 block then { return 0 };
+      fresh := RT.add64 block 8;
+      RT.store64 (RT.addr base) 368 (RT.add64 (← RT.load64 (RT.addr base) 368) capacity)
+    } else {
+      RT.store64 (RT.addr (RT.add64 (RT.add64 base 344) (RT.mul64 sizeClass 8))) 0
+        (← RT.load64 (RT.addr fresh) 0)
+    };
+    RT.store64 (RT.addr (RT.sub64 fresh 8)) 0 sizeClass
+  };
+  if RT.gtU64 rounded 8 then {
+    RT.store64 (RT.addr (RT.add64 fresh (RT.sub64 rounded 8))) 0 0
+  };
+  RT.store64 (RT.addr fresh) 0 (RT.or64 1 (RT.or64 (RT.shl64 other 48) (RT.shl64 tag 56)));
+  RT.store64 (RT.addr base) 376 (RT.add64 (← RT.load64 (RT.addr base) 376) 1);
+  RT.store64 (RT.addr base) 608 (RT.add64 (← RT.load64 (RT.addr base) 608) capacity);
+  if RT.gtU64 (← RT.load64 (RT.addr base) 608) (← RT.load64 (RT.addr base) 616) then {
+    RT.store64 (RT.addr base) 616 (← RT.load64 (RT.addr base) 608)
+  };
+  RT.store64 (RT.addr base) 624 (RT.add64 (← RT.load64 (RT.addr base) 624) rounded);
+  RT.store64 (RT.addr base) 632 (RT.add64 (← RT.load64 (RT.addr base) 632) 1);
+  return fresh
+}
+
+partial def append (base : UInt64) (left : UInt64) (right : UInt64) (kind : UInt64) : RT.M UInt64 := do {
+  let mut cls : UInt64 := 0;
+  let mut tailOff : UInt64 := 16;
+  let mut other : UInt64 := 2;
+  let mut cur : UInt64 := left;
+  let mut head : UInt64 := 0;
+  let mut prev : UInt64 := 0;
+  let mut fresh : UInt64 := 0;
+  cls := (← rsd_rt_v1_slot_class kind);
+  if RT.ne64 cls 0 then { tailOff := 8; other := 1 };
+  if RT.eq64 left 1 then { if RT.rc then { rsd_rt_v1_dup base right }; return right };
+  if RT.rc then {
+    if RT.eq64 right 1 then { rsd_rt_v1_dup base left; return left }
+  };
+  while RT.ne64 cur 1 do {
+    fresh := (← rsd_rt_v1_alloc base 24 1 other);
+    if RT.eqz64 fresh then { return 0 };
+    RT.memoryCopy (RT.addr (RT.add64 fresh 8)) (RT.addr (RT.add64 cur 8)) 16;
+    if RT.rc then {
+      if RT.eqz64 cls then { rsd_rt_v1_retain_fields base fresh 0 1 }
+    };
+    if RT.eqz64 prev then { head := fresh }
+    else { RT.store64 (RT.addr (RT.add64 prev tailOff)) 0 fresh };
+    prev := fresh;
+    cur := (← RT.load64 (RT.addr (RT.add64 cur tailOff)) 0)
+  };
+  if RT.rc then { rsd_rt_v1_dup base right };
+  RT.store64 (RT.addr (RT.add64 prev tailOff)) 0 right;
+  return head
+}
+
+partial def listLen (base : UInt64) (p : UInt64) (tailOff : UInt64) : RT.M UInt64 := do {
+  let mut p : UInt64 := p;
+  let mut count : UInt64 := 0;
+  while RT.ne64 p 1 do {
+    p := (← RT.load64 (RT.addr (RT.add64 p tailOff)) 0);
+    count := RT.add64 count 1
+  };
+  return count
+}
+
+partial def listDrop (base : UInt64) (p : UInt64) (n : UInt64) (tailOff : UInt64) : RT.M UInt64 := do {
+  let mut p : UInt64 := p;
+  let mut n : UInt64 := n;
+  while RT.andBool (RT.geS64 n 1) (RT.ne64 p 1) do {
+    p := (← RT.load64 (RT.addr (RT.add64 p tailOff)) 0);
+    n := RT.sub64 n 1
+  };
+  if RT.rc then { rsd_rt_v1_dup base p };
+  return p
+}
+
+partial def appendArray (base : UInt64) (ap : UInt64) (aoff : UInt64) (bp : UInt64) (boff : UInt64) (kind : UInt64) : RT.M UInt64 := do {
+  let mut na : UInt64 := 0;
+  let mut nb : UInt64 := 0;
+  let mut width : UInt64 := 0;
+  let mut tag : UInt64 := 248;
+  let mut other : UInt64 := 0;
+  let mut p : UInt64 := 0;
+  width := (← rsd_rt_v1_slot_class kind);
+  other := width;
+  if RT.eqz64 width then { width := 8; tag := 246 };
+  na := RT.sub64 (← RT.load64 (RT.addr ap) 8) aoff;
+  nb := RT.sub64 (← RT.load64 (RT.addr bp) 8) boff;
+  p := (← rsd_rt_v1_alloc base (RT.add64 24 (RT.mul64 (RT.add64 na nb) width)) tag other);
+  if RT.eqz64 p then { return 0 };
+  RT.store64 (RT.addr p) 8 (RT.add64 na nb);
+  RT.store64 (RT.addr p) 16 (RT.add64 na nb);
+  RT.memoryCopy (RT.addr (RT.add64 p 24)) (RT.addr (RT.add64 (RT.add64 ap 24) (RT.mul64 aoff width))) (RT.addr (RT.mul64 na width));
+  RT.memoryCopy (RT.addr (RT.add64 (RT.add64 p 24) (RT.mul64 na width))) (RT.addr (RT.add64 (RT.add64 bp 24) (RT.mul64 boff width))) (RT.addr (RT.mul64 nb width));
+  if RT.rc then {
+    if RT.eq64 tag 246 then { rsd_rt_v1_retain_fields base p 0 (RT.add64 na nb) }
+  };
+  return p
+}
+
+partial def rsd_rt_v1_sha256 (base : UInt64) (list : UInt64) (n : UInt64) : RT.M UInt64 := do {
+  let mut blob : UInt64 := default;
+  let mut tmp : UInt64 := default;
+  let mut i : UInt64 := default;
+  let mut cursor : UInt64 := default;
+  let mut acc : UInt64 := default;
+  let mut padded : UInt64 := default;
+  let mut block : UInt64 := default;
+  let mut t : UInt64 := default;
+  let mut a : UInt32 := default;
+  let mut b : UInt32 := default;
+  let mut c : UInt32 := default;
+  let mut d : UInt32 := default;
+  let mut e : UInt32 := default;
+  let mut f : UInt32 := default;
+  let mut g : UInt32 := default;
+  let mut h : UInt32 := default;
+  let mut t1 : UInt32 := default;
+  let mut t2 : UInt32 := default;
+  let mut w : UInt32 := default;
+  let mut unused32 : UInt32 := default;
+  let mut h0 : UInt32 := default;
+  let mut h1 : UInt32 := default;
+  let mut h2 : UInt32 := default;
+  let mut h3 : UInt32 := default;
+  let mut h4 : UInt32 := default;
+  let mut h5 : UInt32 := default;
+  let mut h6 : UInt32 := default;
+  let mut h7 : UInt32 := default;
+  tmp := RT.add64 (RT.mul64 (RT.add64 n 128) 8) 24;
+  blob := (← rsd_rt_v1_alloc base tmp 248 8);
+  if RT.eqz64 blob then { return 0 };
+  RT.store64 (RT.addr blob) 8 (RT.add64 n 128);
+  RT.store64 (RT.addr blob) 16 (RT.add64 n 128);
+  cursor := list;
+  i := 0;
+  repeat {
+    if RT.eq64 cursor 1 then { break } else {
+      RT.store64 (RT.addr (RT.add64 (RT.add64 blob 24) (RT.mul64 i 8))) 0 (← RT.load64 (RT.addr cursor) 16);
+      cursor := (← RT.load64 (RT.addr cursor) 8);
+      i := RT.add64 i 1;
+      continue
+    }
+  };
+  RT.store32x (RT.addr (RT.add64 (RT.add64 (blob) (24)) (RT.mul64 (RT.add64 (n) (64)) (8)))) 0 1116352408;
+  RT.store32x (RT.addr (RT.add64 (RT.add64 (blob) (24)) (RT.mul64 (RT.add64 (n) (65)) (8)))) 0 1899447441;
+  RT.store32x (RT.addr (RT.add64 (RT.add64 (blob) (24)) (RT.mul64 (RT.add64 (n) (66)) (8)))) 0 3049323471;
+  RT.store32x (RT.addr (RT.add64 (RT.add64 (blob) (24)) (RT.mul64 (RT.add64 (n) (67)) (8)))) 0 3921009573;
+  RT.store32x (RT.addr (RT.add64 (RT.add64 (blob) (24)) (RT.mul64 (RT.add64 (n) (68)) (8)))) 0 961987163;
+  RT.store32x (RT.addr (RT.add64 (RT.add64 (blob) (24)) (RT.mul64 (RT.add64 (n) (69)) (8)))) 0 1508970993;
+  RT.store32x (RT.addr (RT.add64 (RT.add64 (blob) (24)) (RT.mul64 (RT.add64 (n) (70)) (8)))) 0 2453635748;
+  RT.store32x (RT.addr (RT.add64 (RT.add64 (blob) (24)) (RT.mul64 (RT.add64 (n) (71)) (8)))) 0 2870763221;
+  RT.store32x (RT.addr (RT.add64 (RT.add64 (blob) (24)) (RT.mul64 (RT.add64 (n) (72)) (8)))) 0 3624381080;
+  RT.store32x (RT.addr (RT.add64 (RT.add64 (blob) (24)) (RT.mul64 (RT.add64 (n) (73)) (8)))) 0 310598401;
+  RT.store32x (RT.addr (RT.add64 (RT.add64 (blob) (24)) (RT.mul64 (RT.add64 (n) (74)) (8)))) 0 607225278;
+  RT.store32x (RT.addr (RT.add64 (RT.add64 (blob) (24)) (RT.mul64 (RT.add64 (n) (75)) (8)))) 0 1426881987;
+  RT.store32x (RT.addr (RT.add64 (RT.add64 (blob) (24)) (RT.mul64 (RT.add64 (n) (76)) (8)))) 0 1925078388;
+  RT.store32x (RT.addr (RT.add64 (RT.add64 (blob) (24)) (RT.mul64 (RT.add64 (n) (77)) (8)))) 0 2162078206;
+  RT.store32x (RT.addr (RT.add64 (RT.add64 (blob) (24)) (RT.mul64 (RT.add64 (n) (78)) (8)))) 0 2614888103;
+  RT.store32x (RT.addr (RT.add64 (RT.add64 (blob) (24)) (RT.mul64 (RT.add64 (n) (79)) (8)))) 0 3248222580;
+  RT.store32x (RT.addr (RT.add64 (RT.add64 (blob) (24)) (RT.mul64 (RT.add64 (n) (80)) (8)))) 0 3835390401;
+  RT.store32x (RT.addr (RT.add64 (RT.add64 (blob) (24)) (RT.mul64 (RT.add64 (n) (81)) (8)))) 0 4022224774;
+  RT.store32x (RT.addr (RT.add64 (RT.add64 (blob) (24)) (RT.mul64 (RT.add64 (n) (82)) (8)))) 0 264347078;
+  RT.store32x (RT.addr (RT.add64 (RT.add64 (blob) (24)) (RT.mul64 (RT.add64 (n) (83)) (8)))) 0 604807628;
+  RT.store32x (RT.addr (RT.add64 (RT.add64 (blob) (24)) (RT.mul64 (RT.add64 (n) (84)) (8)))) 0 770255983;
+  RT.store32x (RT.addr (RT.add64 (RT.add64 (blob) (24)) (RT.mul64 (RT.add64 (n) (85)) (8)))) 0 1249150122;
+  RT.store32x (RT.addr (RT.add64 (RT.add64 (blob) (24)) (RT.mul64 (RT.add64 (n) (86)) (8)))) 0 1555081692;
+  RT.store32x (RT.addr (RT.add64 (RT.add64 (blob) (24)) (RT.mul64 (RT.add64 (n) (87)) (8)))) 0 1996064986;
+  RT.store32x (RT.addr (RT.add64 (RT.add64 (blob) (24)) (RT.mul64 (RT.add64 (n) (88)) (8)))) 0 2554220882;
+  RT.store32x (RT.addr (RT.add64 (RT.add64 (blob) (24)) (RT.mul64 (RT.add64 (n) (89)) (8)))) 0 2821834349;
+  RT.store32x (RT.addr (RT.add64 (RT.add64 (blob) (24)) (RT.mul64 (RT.add64 (n) (90)) (8)))) 0 2952996808;
+  RT.store32x (RT.addr (RT.add64 (RT.add64 (blob) (24)) (RT.mul64 (RT.add64 (n) (91)) (8)))) 0 3210313671;
+  RT.store32x (RT.addr (RT.add64 (RT.add64 (blob) (24)) (RT.mul64 (RT.add64 (n) (92)) (8)))) 0 3336571891;
+  RT.store32x (RT.addr (RT.add64 (RT.add64 (blob) (24)) (RT.mul64 (RT.add64 (n) (93)) (8)))) 0 3584528711;
+  RT.store32x (RT.addr (RT.add64 (RT.add64 (blob) (24)) (RT.mul64 (RT.add64 (n) (94)) (8)))) 0 113926993;
+  RT.store32x (RT.addr (RT.add64 (RT.add64 (blob) (24)) (RT.mul64 (RT.add64 (n) (95)) (8)))) 0 338241895;
+  RT.store32x (RT.addr (RT.add64 (RT.add64 (blob) (24)) (RT.mul64 (RT.add64 (n) (96)) (8)))) 0 666307205;
+  RT.store32x (RT.addr (RT.add64 (RT.add64 (blob) (24)) (RT.mul64 (RT.add64 (n) (97)) (8)))) 0 773529912;
+  RT.store32x (RT.addr (RT.add64 (RT.add64 (blob) (24)) (RT.mul64 (RT.add64 (n) (98)) (8)))) 0 1294757372;
+  RT.store32x (RT.addr (RT.add64 (RT.add64 (blob) (24)) (RT.mul64 (RT.add64 (n) (99)) (8)))) 0 1396182291;
+  RT.store32x (RT.addr (RT.add64 (RT.add64 (blob) (24)) (RT.mul64 (RT.add64 (n) (100)) (8)))) 0 1695183700;
+  RT.store32x (RT.addr (RT.add64 (RT.add64 (blob) (24)) (RT.mul64 (RT.add64 (n) (101)) (8)))) 0 1986661051;
+  RT.store32x (RT.addr (RT.add64 (RT.add64 (blob) (24)) (RT.mul64 (RT.add64 (n) (102)) (8)))) 0 2177026350;
+  RT.store32x (RT.addr (RT.add64 (RT.add64 (blob) (24)) (RT.mul64 (RT.add64 (n) (103)) (8)))) 0 2456956037;
+  RT.store32x (RT.addr (RT.add64 (RT.add64 (blob) (24)) (RT.mul64 (RT.add64 (n) (104)) (8)))) 0 2730485921;
+  RT.store32x (RT.addr (RT.add64 (RT.add64 (blob) (24)) (RT.mul64 (RT.add64 (n) (105)) (8)))) 0 2820302411;
+  RT.store32x (RT.addr (RT.add64 (RT.add64 (blob) (24)) (RT.mul64 (RT.add64 (n) (106)) (8)))) 0 3259730800;
+  RT.store32x (RT.addr (RT.add64 (RT.add64 (blob) (24)) (RT.mul64 (RT.add64 (n) (107)) (8)))) 0 3345764771;
+  RT.store32x (RT.addr (RT.add64 (RT.add64 (blob) (24)) (RT.mul64 (RT.add64 (n) (108)) (8)))) 0 3516065817;
+  RT.store32x (RT.addr (RT.add64 (RT.add64 (blob) (24)) (RT.mul64 (RT.add64 (n) (109)) (8)))) 0 3600352804;
+  RT.store32x (RT.addr (RT.add64 (RT.add64 (blob) (24)) (RT.mul64 (RT.add64 (n) (110)) (8)))) 0 4094571909;
+  RT.store32x (RT.addr (RT.add64 (RT.add64 (blob) (24)) (RT.mul64 (RT.add64 (n) (111)) (8)))) 0 275423344;
+  RT.store32x (RT.addr (RT.add64 (RT.add64 (blob) (24)) (RT.mul64 (RT.add64 (n) (112)) (8)))) 0 430227734;
+  RT.store32x (RT.addr (RT.add64 (RT.add64 (blob) (24)) (RT.mul64 (RT.add64 (n) (113)) (8)))) 0 506948616;
+  RT.store32x (RT.addr (RT.add64 (RT.add64 (blob) (24)) (RT.mul64 (RT.add64 (n) (114)) (8)))) 0 659060556;
+  RT.store32x (RT.addr (RT.add64 (RT.add64 (blob) (24)) (RT.mul64 (RT.add64 (n) (115)) (8)))) 0 883997877;
+  RT.store32x (RT.addr (RT.add64 (RT.add64 (blob) (24)) (RT.mul64 (RT.add64 (n) (116)) (8)))) 0 958139571;
+  RT.store32x (RT.addr (RT.add64 (RT.add64 (blob) (24)) (RT.mul64 (RT.add64 (n) (117)) (8)))) 0 1322822218;
+  RT.store32x (RT.addr (RT.add64 (RT.add64 (blob) (24)) (RT.mul64 (RT.add64 (n) (118)) (8)))) 0 1537002063;
+  RT.store32x (RT.addr (RT.add64 (RT.add64 (blob) (24)) (RT.mul64 (RT.add64 (n) (119)) (8)))) 0 1747873779;
+  RT.store32x (RT.addr (RT.add64 (RT.add64 (blob) (24)) (RT.mul64 (RT.add64 (n) (120)) (8)))) 0 1955562222;
+  RT.store32x (RT.addr (RT.add64 (RT.add64 (blob) (24)) (RT.mul64 (RT.add64 (n) (121)) (8)))) 0 2024104815;
+  RT.store32x (RT.addr (RT.add64 (RT.add64 (blob) (24)) (RT.mul64 (RT.add64 (n) (122)) (8)))) 0 2227730452;
+  RT.store32x (RT.addr (RT.add64 (RT.add64 (blob) (24)) (RT.mul64 (RT.add64 (n) (123)) (8)))) 0 2361852424;
+  RT.store32x (RT.addr (RT.add64 (RT.add64 (blob) (24)) (RT.mul64 (RT.add64 (n) (124)) (8)))) 0 2428436474;
+  RT.store32x (RT.addr (RT.add64 (RT.add64 (blob) (24)) (RT.mul64 (RT.add64 (n) (125)) (8)))) 0 2756734187;
+  RT.store32x (RT.addr (RT.add64 (RT.add64 (blob) (24)) (RT.mul64 (RT.add64 (n) (126)) (8)))) 0 3204031479;
+  RT.store32x (RT.addr (RT.add64 (RT.add64 (blob) (24)) (RT.mul64 (RT.add64 (n) (127)) (8)))) 0 3329325298;
+  h0 := 1779033703;
+  h1 := 3144134277;
+  h2 := 1013904242;
+  h3 := 2773480762;
+  h4 := 1359893119;
+  h5 := 2600822924;
+  h6 := 528734635;
+  h7 := 1541459225;
+  padded := RT.mul64 (RT.divU64 (RT.add64 n 72) 64) 64;
+  block := 0;
+  while RT.ltS64 (RT.mul64 block 64) padded do {
+    t := 0;
+    while RT.ltS64 t 16 do {
+      i := RT.add64 (RT.mul64 block 64) (RT.mul64 t 4);
+      w := RT.shl32 (← if RT.ltS64 i n then RT.load8x (RT.addr (RT.add64 (RT.add64 (blob) (24)) (RT.mul64 (i) (8)))) 0 else pure (if RT.eq64 i n then 128 else if RT.geS64 i (RT.sub64 padded 8) then (RT.addr (RT.and64 (RT.shrU64 (RT.mul64 n 8) (RT.mul64 (RT.sub64 (RT.sub64 padded 1) i) 8)) 255)) else 0)) 24;
+      i := RT.add64 i 1;
+      w := RT.or32 w (RT.shl32 (← if RT.ltS64 i n then RT.load8x (RT.addr (RT.add64 (RT.add64 (blob) (24)) (RT.mul64 (i) (8)))) 0 else pure (if RT.eq64 i n then 128 else if RT.geS64 i (RT.sub64 padded 8) then (RT.addr (RT.and64 (RT.shrU64 (RT.mul64 n 8) (RT.mul64 (RT.sub64 (RT.sub64 padded 1) i) 8)) 255)) else 0)) 16);
+      i := RT.add64 i 1;
+      w := RT.or32 w (RT.shl32 (← if RT.ltS64 i n then RT.load8x (RT.addr (RT.add64 (RT.add64 (blob) (24)) (RT.mul64 (i) (8)))) 0 else pure (if RT.eq64 i n then 128 else if RT.geS64 i (RT.sub64 padded 8) then (RT.addr (RT.and64 (RT.shrU64 (RT.mul64 n 8) (RT.mul64 (RT.sub64 (RT.sub64 padded 1) i) 8)) 255)) else 0)) 8);
+      i := RT.add64 i 1;
+      w := RT.or32 w (← if RT.ltS64 i n then RT.load8x (RT.addr (RT.add64 (RT.add64 (blob) (24)) (RT.mul64 (i) (8)))) 0 else pure (if RT.eq64 i n then 128 else if RT.geS64 i (RT.sub64 padded 8) then (RT.addr (RT.and64 (RT.shrU64 (RT.mul64 n 8) (RT.mul64 (RT.sub64 (RT.sub64 padded 1) i) 8)) 255)) else 0));
+      RT.store32x (RT.addr (RT.add64 (RT.add64 (blob) (24)) (RT.mul64 (RT.add64 (RT.add64 (n) (t)) (0)) (8)))) 0 w;
+      t := RT.add64 t 1
+    };
+    while RT.ltS64 t 64 do {
+      w := (← RT.load32x (RT.addr (RT.add64 (RT.add64 blob 24) (RT.mul64 (RT.add64 (RT.add64 n t) 18446744073709551614) 8))) 0);
+      unused32 := RT.xor32 (RT.xor32 (RT.rotr32 w 17) (RT.rotr32 w 19)) (RT.shrU32 w 10);
+      w := (← RT.load32x (RT.addr (RT.add64 (RT.add64 blob 24) (RT.mul64 (RT.add64 (RT.add64 n t) 18446744073709551601) 8))) 0);
+      w := RT.add32 (RT.add32 (RT.add32 unused32 (← RT.load32x (RT.addr (RT.add64 (RT.add64 blob 24) (RT.mul64 (RT.add64 (RT.add64 n t) 18446744073709551609) 8))) 0)) (RT.xor32 (RT.xor32 (RT.rotr32 w 7) (RT.rotr32 w 18)) (RT.shrU32 w 3))) (← RT.load32x (RT.addr (RT.add64 (RT.add64 blob 24) (RT.mul64 (RT.add64 (RT.add64 n t) 18446744073709551600) 8))) 0);
+      RT.store32x (RT.addr (RT.add64 (RT.add64 (blob) (24)) (RT.mul64 (RT.add64 (RT.add64 (n) (t)) (0)) (8)))) 0 w;
+      t := RT.add64 t 1
+    };
+    h := h7;
+    g := h6;
+    f := h5;
+    e := h4;
+    d := h3;
+    c := h2;
+    b := h1;
+    a := h0;
+    t := 0;
+    while RT.ltS64 t 64 do {
+      t1 := RT.add32 (RT.add32 (RT.add32 (RT.add32 (h) (RT.xor32 (RT.xor32 (RT.rotr32 e 6) (RT.rotr32 e 11)) (RT.rotr32 e 25))) (RT.xor32 (RT.and32 (e) (f)) (RT.and32 (RT.xor32 (e) 4294967295) (g)))) ((← RT.load32x (RT.addr (RT.add64 (RT.add64 (blob) (24)) (RT.mul64 (RT.add64 (RT.add64 (n) (t)) (64)) (8)))) 0))) ((← RT.load32x (RT.addr (RT.add64 (RT.add64 (blob) (24)) (RT.mul64 (RT.add64 (RT.add64 (n) (t)) (0)) (8)))) 0));
+      t2 := RT.add32 (RT.xor32 (RT.xor32 (RT.rotr32 a 2) (RT.rotr32 a 13)) (RT.rotr32 a 22)) (RT.xor32 (RT.xor32 (RT.and32 (a) (b)) (RT.and32 (a) (c))) (RT.and32 (b) (c)));
+      h := g;
+      g := f;
+      f := e;
+      e := RT.add32 d t1;
+      d := c;
+      c := b;
+      b := a;
+      a := RT.add32 t1 t2;
+      t := RT.add64 t 1
+    };
+    h7 := RT.add32 h7 h;
+    h6 := RT.add32 h6 g;
+    h5 := RT.add32 h5 f;
+    h4 := RT.add32 h4 e;
+    h3 := RT.add32 h3 d;
+    h2 := RT.add32 h2 c;
+    h1 := RT.add32 h1 b;
+    h0 := RT.add32 h0 a;
+    block := RT.add64 block 1
+  };
+  RT.store8x (RT.addr (RT.add64 (RT.add64 (blob) (24)) (RT.mul64 (RT.add64 (n) (0)) (8)))) 0 (RT.shrU32 h0 24);
+  RT.store8x (RT.addr (RT.add64 (RT.add64 (blob) (24)) (RT.mul64 (RT.add64 (n) (1)) (8)))) 0 (RT.shrU32 h0 16);
+  RT.store8x (RT.addr (RT.add64 (RT.add64 (blob) (24)) (RT.mul64 (RT.add64 (n) (2)) (8)))) 0 (RT.shrU32 h0 8);
+  RT.store8x (RT.addr (RT.add64 (RT.add64 (blob) (24)) (RT.mul64 (RT.add64 (n) (3)) (8)))) 0 (RT.shrU32 h0 0);
+  RT.store8x (RT.addr (RT.add64 (RT.add64 (blob) (24)) (RT.mul64 (RT.add64 (n) (4)) (8)))) 0 (RT.shrU32 h1 24);
+  RT.store8x (RT.addr (RT.add64 (RT.add64 (blob) (24)) (RT.mul64 (RT.add64 (n) (5)) (8)))) 0 (RT.shrU32 h1 16);
+  RT.store8x (RT.addr (RT.add64 (RT.add64 (blob) (24)) (RT.mul64 (RT.add64 (n) (6)) (8)))) 0 (RT.shrU32 h1 8);
+  RT.store8x (RT.addr (RT.add64 (RT.add64 (blob) (24)) (RT.mul64 (RT.add64 (n) (7)) (8)))) 0 (RT.shrU32 h1 0);
+  RT.store8x (RT.addr (RT.add64 (RT.add64 (blob) (24)) (RT.mul64 (RT.add64 (n) (8)) (8)))) 0 (RT.shrU32 h2 24);
+  RT.store8x (RT.addr (RT.add64 (RT.add64 (blob) (24)) (RT.mul64 (RT.add64 (n) (9)) (8)))) 0 (RT.shrU32 h2 16);
+  RT.store8x (RT.addr (RT.add64 (RT.add64 (blob) (24)) (RT.mul64 (RT.add64 (n) (10)) (8)))) 0 (RT.shrU32 h2 8);
+  RT.store8x (RT.addr (RT.add64 (RT.add64 (blob) (24)) (RT.mul64 (RT.add64 (n) (11)) (8)))) 0 (RT.shrU32 h2 0);
+  RT.store8x (RT.addr (RT.add64 (RT.add64 (blob) (24)) (RT.mul64 (RT.add64 (n) (12)) (8)))) 0 (RT.shrU32 h3 24);
+  RT.store8x (RT.addr (RT.add64 (RT.add64 (blob) (24)) (RT.mul64 (RT.add64 (n) (13)) (8)))) 0 (RT.shrU32 h3 16);
+  RT.store8x (RT.addr (RT.add64 (RT.add64 (blob) (24)) (RT.mul64 (RT.add64 (n) (14)) (8)))) 0 (RT.shrU32 h3 8);
+  RT.store8x (RT.addr (RT.add64 (RT.add64 (blob) (24)) (RT.mul64 (RT.add64 (n) (15)) (8)))) 0 (RT.shrU32 h3 0);
+  RT.store8x (RT.addr (RT.add64 (RT.add64 (blob) (24)) (RT.mul64 (RT.add64 (n) (16)) (8)))) 0 (RT.shrU32 h4 24);
+  RT.store8x (RT.addr (RT.add64 (RT.add64 (blob) (24)) (RT.mul64 (RT.add64 (n) (17)) (8)))) 0 (RT.shrU32 h4 16);
+  RT.store8x (RT.addr (RT.add64 (RT.add64 (blob) (24)) (RT.mul64 (RT.add64 (n) (18)) (8)))) 0 (RT.shrU32 h4 8);
+  RT.store8x (RT.addr (RT.add64 (RT.add64 (blob) (24)) (RT.mul64 (RT.add64 (n) (19)) (8)))) 0 (RT.shrU32 h4 0);
+  RT.store8x (RT.addr (RT.add64 (RT.add64 (blob) (24)) (RT.mul64 (RT.add64 (n) (20)) (8)))) 0 (RT.shrU32 h5 24);
+  RT.store8x (RT.addr (RT.add64 (RT.add64 (blob) (24)) (RT.mul64 (RT.add64 (n) (21)) (8)))) 0 (RT.shrU32 h5 16);
+  RT.store8x (RT.addr (RT.add64 (RT.add64 (blob) (24)) (RT.mul64 (RT.add64 (n) (22)) (8)))) 0 (RT.shrU32 h5 8);
+  RT.store8x (RT.addr (RT.add64 (RT.add64 (blob) (24)) (RT.mul64 (RT.add64 (n) (23)) (8)))) 0 (RT.shrU32 h5 0);
+  RT.store8x (RT.addr (RT.add64 (RT.add64 (blob) (24)) (RT.mul64 (RT.add64 (n) (24)) (8)))) 0 (RT.shrU32 h6 24);
+  RT.store8x (RT.addr (RT.add64 (RT.add64 (blob) (24)) (RT.mul64 (RT.add64 (n) (25)) (8)))) 0 (RT.shrU32 h6 16);
+  RT.store8x (RT.addr (RT.add64 (RT.add64 (blob) (24)) (RT.mul64 (RT.add64 (n) (26)) (8)))) 0 (RT.shrU32 h6 8);
+  RT.store8x (RT.addr (RT.add64 (RT.add64 (blob) (24)) (RT.mul64 (RT.add64 (n) (27)) (8)))) 0 (RT.shrU32 h6 0);
+  RT.store8x (RT.addr (RT.add64 (RT.add64 (blob) (24)) (RT.mul64 (RT.add64 (n) (28)) (8)))) 0 (RT.shrU32 h7 24);
+  RT.store8x (RT.addr (RT.add64 (RT.add64 (blob) (24)) (RT.mul64 (RT.add64 (n) (29)) (8)))) 0 (RT.shrU32 h7 16);
+  RT.store8x (RT.addr (RT.add64 (RT.add64 (blob) (24)) (RT.mul64 (RT.add64 (n) (30)) (8)))) 0 (RT.shrU32 h7 8);
+  RT.store8x (RT.addr (RT.add64 (RT.add64 (blob) (24)) (RT.mul64 (RT.add64 (n) (31)) (8)))) 0 (RT.shrU32 h7 0);
+  acc := 1;
+  i := 31;
+  while RT.geS64 i 0 do {
+    tmp := 24;
+    cursor := (← rsd_rt_v1_alloc base tmp 1 1);
+    if RT.eqz64 cursor then { return 0 };
+    
+    
+    RT.store64 (RT.addr cursor) 16 (← RT.load8 (RT.addr (RT.add64 (RT.add64 blob 24) (RT.mul64 (RT.add64 n i) 8))) 0);
+    RT.store64 (RT.addr cursor) 8 acc;
+    acc := cursor;
+    i := RT.sub64 i 1
+  };
+  if RT.rc then { rsd_rt_v1_drop base blob };
+  return acc
+}
+
+partial def rsd_rt_v1_dup (base : UInt64) (p : UInt64) : RT.M Unit := do {
+  let mut count : UInt64 := 0;
+  if RT.notBool (RT.eqz64 (RT.and64 p 1)) then { return () };
+  if RT.eqz64 p then { return () };
+  if RT.ne64 (RT.and64 (← RT.load64 (RT.addr base) 352) 1) 0 then {
+    if RT.geU64 (← RT.load64 (RT.addr (RT.sub64 p 8)) 0) 9223372036854775808 then {
+      runtimeFailure base 15; return ()
+    }
+  };
+  count := (← RT.load32 (RT.addr p) 0);
+  if RT.eqz64 count then { return () };
+  if RT.geU64 count 2147483648 then { runtimeFailure base 11; return () };
+  if RT.eq64 count 2147483647 then { runtimeFailure base 10; return () };
+  RT.store32 (RT.addr p) 0 (RT.add64 count 1);
+  return ()
+}
+
+partial def rsd_rt_v1_drop (base : UInt64) (p : UInt64) : RT.M Unit := do {
+  let mut count : UInt64 := 0;
+  if RT.notBool (RT.eqz64 (RT.and64 p 1)) then { return () };
+  if RT.eqz64 p then { return () };
+  if RT.ne64 (RT.and64 (← RT.load64 (RT.addr base) 352) 1) 0 then {
+    if RT.geU64 (← RT.load64 (RT.addr (RT.sub64 p 8)) 0) 9223372036854775808 then {
+      runtimeFailure base 14; return ()
+    }
+  };
+  count := (← RT.load32 (RT.addr p) 0);
+  if RT.eqz64 count then { return () };
+  if RT.geU64 count 2147483648 then { runtimeFailure base 11; return () };
+  if RT.eq64 count 1 then { rsd_rt_v1_drop_cold base p }
+  else { RT.store32 (RT.addr p) 0 (RT.sub64 count 1) };
+  return ()
+}
+
+partial def rsd_rt_v1_retain_fields (base : UInt64) (p : UInt64) (first : UInt64) (count : UInt64) : RT.M Unit := do {
+  let mut i : UInt64 := first;
+  let mut pay : UInt64 := 8;
+  let mut total : UInt64 := 0;
+  let mut tag : UInt64 := 0;
+  if RT.ne64 (RT.and64 (← RT.load64 (RT.addr base) 352) 1) 0 then {
+    if RT.geU64 (← RT.load64 (RT.addr (RT.sub64 p 8)) 0) 9223372036854775808 then {
+      runtimeFailure base 15; return ()
+    }
+  };
+  tag := (← RT.load8 (RT.addr p) 7);
+  if RT.ltU64 tag 245 then { total := (← RT.load8 (RT.addr p) 6) }
+  else {
+    if RT.eq64 tag 246 then { pay := 24; total := (← RT.load64 (RT.addr p) 8) }
+    else { runtimeFailure base 12; return () }
+  };
+  if RT.orBool (RT.gtU64 first total) (RT.gtU64 count (RT.sub64 total first)) then {
+    runtimeFailure base 12; return ()
+  };
+  while RT.ltU64 i (RT.add64 first count) do {
+    rsd_rt_v1_dup base (← RT.load64 (RT.addr (RT.add64 (RT.add64 p pay) (RT.mul64 i 8))) 0);
+    i := RT.add64 i 1
+  };
+  return ()
+}
+
+partial def rsd_rt_v1_free (base : UInt64) (p : UInt64) : RT.M Unit := do {
+  let mut token : UInt64 := 0;
+  let mut capacity : UInt64 := 0;
+  let mut free : UInt64 := 0;
+  let mut heads : UInt64 := 0;
+  let mut sizeClass : UInt64 := 0;
+  if RT.eqz64 p then { return () };
+  token := (← RT.load64 (RT.addr (RT.sub64 p 8)) 0);
+  if RT.geU64 token 9223372036854775808 then {
+    if RT.ne64 (RT.and64 (← RT.load64 (RT.addr base) 352) 1) 0 then {
+      runtimeFailure base 14; return ()
+    };
+    runtimeFailure base 13; return ()
+  };
+  if RT.ltU64 token 8192 then {
+    if RT.orBool (RT.ltU64 token 5) (RT.gtU64 token 31) then { runtimeFailure base 13; return () };
+    capacity := RT.shl64 1 token
+  } else {
+    capacity := (← RT.load64 (RT.addr token) 16);
+    if RT.orBool (RT.ne64 (RT.and64 token 8191) 0)
+        (RT.orBool (RT.ltU64 capacity 16) (RT.gtU64 capacity 4104)) then {
+      runtimeFailure base 13; return ()
+    }
+  };
+  RT.store64 (RT.addr (RT.sub64 p 8)) 0 (RT.or64 token 9223372036854775808);
+  RT.store64 (RT.addr base) 608 (RT.sub64 (← RT.load64 (RT.addr base) 608) capacity);
+  RT.store64 (RT.addr base) 376 (RT.sub64 (← RT.load64 (RT.addr base) 376) 1);
+  -- Checked allocations are quarantined, so a later allocation cannot mask
+  -- a stale reference by recycling its address.
+  if RT.ne64 (RT.and64 (← RT.load64 (RT.addr base) 352) 1) 0 then { return () };
+  if RT.ltU64 token 8192 then {
+    free := (← RT.load64 (RT.addr (RT.add64 (RT.add64 base 344) (RT.mul64 token 8))) 0);
+    RT.store64 (RT.addr p) 0 free;
+    RT.store64 (RT.addr (RT.add64 (RT.add64 base 344) (RT.mul64 token 8))) 0 p
+  } else { if RT.rc then {
+    free := (← RT.load64 (RT.addr token) 24);
+    if RT.andBool (RT.eqz64 free) (RT.eqz64 (← RT.load64 (RT.addr token) 8)) then {
+      heads := (← RT.load64 (RT.addr base) 344);
+      sizeClass := RT.sub64 (RT.divU64 (RT.sub64 capacity 8) 8) 1;
+      RT.store64 (RT.addr token) 0 (← RT.load64 (RT.addr (RT.add64 heads (RT.mul64 sizeClass 8))) 0);
+      RT.store64 (RT.addr (RT.add64 heads (RT.mul64 sizeClass 8))) 0 token
+    };
+    RT.store64 (RT.addr p) 0 free;
+    RT.store64 (RT.addr token) 24 p
+  } else {
+    -- Preserve the off-mode function bytes and its legacy private format.
+    free := (← RT.load64 (RT.addr token) 8);
+    if RT.eqz64 free then {
+      heads := (← RT.load64 (RT.addr base) 344);
+      sizeClass := RT.sub64 (RT.divU64 (RT.sub64 capacity 8) 8) 1;
+      RT.store64 (RT.addr token) 0 (← RT.load64 (RT.addr (RT.add64 heads (RT.mul64 sizeClass 8))) 0);
+      RT.store64 (RT.addr (RT.add64 heads (RT.mul64 sizeClass 8))) 0 token
+    };
+    RT.store64 (RT.addr p) 0 free;
+    RT.store64 (RT.addr token) 8 p;
+    RT.store64 (RT.addr token) 24 (RT.add64 (← RT.load64 (RT.addr token) 24) 1)
+  } };
+  return ()
+}
+
+-- Lean's zero-count worklist: only the dead rc32 holds the next offset.
+-- tag/other remain available until children have been detached. No fuel,
+-- host recursion, or assumption about bits of scalar fields is involved.
+partial def rsd_rt_v1_drop_cold (base : UInt64) (value : UInt64) : RT.M Unit := do {
+  let mut queue : UInt64 := value;
+  let mut p : UInt64 := 0;
+  let mut child : UInt64 := 0;
+  let mut count : UInt64 := 0;
+  let mut tag : UInt64 := 0;
+  let mut total : UInt64 := 0;
+  let mut pay : UInt64 := 8;
+  let mut i : UInt64 := 0;
+  if RT.ne64 (RT.and64 (← RT.load64 (RT.addr base) 352) 1) 0 then {
+    if RT.geU64 (← RT.load64 (RT.addr (RT.sub64 value 8)) 0) 9223372036854775808 then {
+      runtimeFailure base 14; return ()
+    }
+  };
+  RT.store32 (RT.addr value) 0 0;
+  while RT.ne64 queue 0 do {
+    p := queue;
+    queue := (← RT.load32 (RT.addr p) 0);
+    tag := (← RT.load8 (RT.addr p) 7);
+    total := 0;
+    pay := 8;
+    if RT.ltU64 tag 245 then { total := (← RT.load8 (RT.addr p) 6) }
+    else {
+      if RT.eq64 tag 246 then { total := (← RT.load64 (RT.addr p) 8); pay := 24 }
+      else {
+        if RT.eq64 tag 250 then {
+          -- Raw limb storage is not an object edge. Detach it before the
+          -- shell is recycled, including when this shell came from a queue.
+          child := (← RT.load64 (RT.addr p) 24);
+          RT.store64 (RT.addr p) 16 0;
+          RT.store64 (RT.addr p) 24 0;
+          if RT.ne64 child 0 then { rsd_rt_v1_free base (RT.sub64 child 8) }
+        } else {
+          if RT.andBool (RT.ne64 tag 248) (RT.ne64 tag 249) then {
+            runtimeFailure base 12; return ()
+          }
+        }
+      }
+    };
+    i := 0;
+    while RT.ltU64 i total do {
+      child := (← RT.load64 (RT.addr (RT.add64 (RT.add64 p pay) (RT.mul64 i 8))) 0);
+      if RT.andBool (RT.ne64 child 0) (RT.eqz64 (RT.and64 child 1)) then {
+        if RT.ne64 (RT.and64 (← RT.load64 (RT.addr base) 352) 1) 0 then {
+          if RT.geU64 (← RT.load64 (RT.addr (RT.sub64 child 8)) 0) 9223372036854775808 then {
+            runtimeFailure base 14; return ()
+          }
+        };
+        count := (← RT.load32 (RT.addr child) 0);
+        if RT.geU64 count 2147483648 then { runtimeFailure base 11; return () };
+        if RT.eq64 count 1 then {
+          RT.store32 (RT.addr child) 0 queue;
+          queue := child
+        } else {
+          if RT.ne64 count 0 then {
+            RT.store32 (RT.addr child) 0 (RT.sub64 count 1)
+          }
+        }
+      };
+      i := RT.add64 i 1
+    };
+    rsd_rt_v1_free base p
+  };
+  return ()
+}
+
+partial def bump (base : UInt64) (bytes : UInt64) : RT.M UInt64 := do {
+  let mut p : UInt64 := default;
+  let mut e : UInt64 := default;
+  let mut pages : UInt64 := default;
+  let mut cur : UInt64 := default;
+  let mut need : UInt64 := default;
+  let mut top : UInt64 := default;
+  let mut blk : UInt64 := default;
+  let mut blkBytes : UInt64 := default;
+  let mut newLimit : UInt64 := default;
+  p := (← RT.load64 (RT.addr base) 0);
+  e := RT.add64 p bytes;
+  if RT.orBool (RT.gtU64 e 4294967296) (RT.ltU64 e p) then {
+    RT.store64 (RT.addr base) 16 4;
+    RT.store64 (RT.addr base) 24 144115188075855873;
+    return 0
+  };
+  top := (← RT.load64 (RT.addr base) 32);
+  if RT.eqz64 top then { top := (← RT.load64 (RT.addr base) 8) };
+  if RT.gtS64 e top then {
+    need := RT.divS64 (RT.add64 (RT.sub64 e top) 65535) 65536;
+    cur := RT.widen (← RT.memorySize);
+    pages := need;
+    if RT.ltS64 pages cur then { pages := cur };
+    if RT.notBool (RT.eqz64 (← RT.load64 (RT.addr base) 40)) then {
+      if RT.orBool (RT.gtS64 e (← RT.load64 (RT.addr base) 40))
+          (RT.gtS64 (RT.mul64 (RT.add64 cur need) 65536) (← RT.load64 (RT.addr base) 40)) then {
+        RT.store64 (RT.addr base) 16 4;
+        RT.store64 (RT.addr base) 24 144115188075855873;
+        return 0
+      };
+      if RT.gtS64 (RT.mul64 (RT.add64 cur pages) 65536) (← RT.load64 (RT.addr base) 40) then { pages := need }
+    };
+    if RT.eq32 (← RT.memoryGrow (RT.addr pages)) 4294967295 then {
+      if RT.eq32 (← RT.memoryGrow (RT.addr need)) 4294967295 then {
+        RT.store64 (RT.addr base) 16 4;
+        RT.store64 (RT.addr base) 24 144115188075855873;
+        return 0
+      }
+    };
+    newLimit := RT.mul64 (RT.widen (← RT.memorySize)) 65536;
+    if RT.notBool (RT.eqz64 (← RT.load64 (RT.addr base) 32)) then {
+      blk := (← RT.load64 (RT.addr base) 32);
+      blkBytes := RT.sub64 (RT.mul64 cur 65536) blk;
+      RT.memoryCopy (RT.addr (RT.sub64 newLimit blkBytes)) (RT.addr blk) (RT.addr blkBytes);
+      RT.store64 (RT.addr base) 32 (RT.sub64 newLimit blkBytes)
+    };
+    if RT.andBool
+        (RT.andBool (RT.notBool (RT.eqz64 (← RT.load64 (RT.addr base) 40))) (RT.eqz64 (← RT.load64 (RT.addr base) 56)))
+        (RT.gtS64 newLimit (← RT.load64 (RT.addr base) 40)) then {
+      newLimit := (← RT.load64 (RT.addr base) 40)
+    };
+    RT.store64 (RT.addr base) 8 newLimit
+  };
+  RT.store64 (RT.addr base) 0 e;
+  return p
+}
+
+-- Stable named failure details: 10 RC overflow, 11 unsupported multithread
+-- count, 12 unsupported object kind/layout, 13 invalid allocator token;
+-- checked mode: 14 double drop, 15 use after drop, 16 injected allocation failure.
+partial def runtimeFailure (base : UInt64) (code : UInt64) : RT.M Unit := do {
+  RT.store64 (RT.addr base) 16 3;
+  RT.store64 (RT.addr base) 24 (RT.add64 216172782113783808 code);
+  RT.trap
+}
+end

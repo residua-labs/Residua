@@ -1,0 +1,140 @@
+-- Tarjan SCC, extracted from rsdc arena commit 88d3cf7, tarjanStrong/Edges.
+-- Robert Tarjan, SIAM J. Computing 1(2), 1972, depth-first search SCC.
+-- List readers recurse structurally. The mutually recursive DFS is partial;
+-- EMIT-FUEL supplies the emitted route's named resource refusal.
+-- Components are recorded when popped, so callees precede callers.
+-- Only the rsd subset is used. closure_claim = 0.
+
+structure TjState where
+  groups : List (List Int)
+  disc : List Int
+  low : List Int
+  onStk : List Int
+  stk : List Int
+  recs : List Int
+  err : Int
+  size : Nat
+  clk : Int
+  deriving Inhabited
+
+structure TjCut where
+  bs : List Int
+  rest : List Int
+
+def tjFail (st : TjState) (err : Int) : TjState :=
+  { err := err, size := st.size, disc := st.disc, low := st.low, onStk := st.onStk, stk := st.stk, clk := st.clk, recs := st.recs, groups := st.groups : TjState }
+
+def tjLen : List Int -> Int
+  | [] => 0
+  | _ :: xs => tjLen xs + 1
+
+def tjSize : List (List Int) -> Int
+  | [] => 0
+  | _ :: xs => tjSize xs + 1
+
+def tjEdgesCount : List (List Int) -> Int
+  | [] => 0
+  | x :: xs => tjLen x + tjEdgesCount xs
+
+def tjAt : List Int -> Nat -> Int
+  | [], _ => -1
+  | x :: _, 0 => x
+  | _ :: xs, i + 1 => tjAt xs i
+
+def tjAdj : List (List Int) -> Nat -> List Int
+  | [], _ => []
+  | x :: _, 0 => x
+  | _ :: xs, i + 1 => tjAdj xs i
+
+def tjHas : Int -> List Int -> Bool
+  | _, [] => false
+  | v, x :: xs => x == v || tjHas v xs
+
+def tjSet : List Int -> Nat -> Int -> List Int
+  | [], _, _ => []
+  | _ :: xs, 0, v => v :: xs
+  | x :: xs, i + 1, v => x :: tjSet xs i v
+
+-- n is the number of vertices to initialize, not a traversal limit.
+def tjInit : Nat -> List Int
+  | 0 => []
+  | n + 1 => -1 :: tjInit n
+
+def tjMin (a b : Int) : Int := if a < b then a else b
+
+def tjPop : Int -> List Int -> TjCut
+  | _, [] => { bs := [], rest := [] : TjCut }
+  | v, x :: xs =>
+    if x == v then { bs := [x], rest := xs : TjCut }
+    else
+      let c : TjCut := tjPop v xs;
+      { bs := x :: c.bs, rest := c.rest : TjCut }
+
+def tjDel : Int -> List Int -> List Int
+  | _, [] => []
+  | c, x :: xs => if x == c then xs else x :: tjDel c xs
+
+def tjDelAll : List Int -> List Int -> List Int
+  | [], ys => ys
+  | x :: xs, ys => tjDelAll xs (tjDel x ys)
+
+mutual
+partial def tjStrong : List (List Int) -> Int -> TjState -> TjState
+  | graph, v, st =>
+    if st.err != 0 then st
+    else if v < 0 || v >= Int.ofNat st.size then tjFail st 6
+    else
+      let vi : Nat := Int.toNat v;
+      let c0 : Int := st.clk;
+      let d1 : List Int := tjSet st.disc vi c0;
+      let l1 : List Int := tjSet st.low vi c0;
+      let st1 : TjState := { err := 0, size := st.size, disc := d1, low := l1, onStk := v :: st.onStk, stk := v :: st.stk, clk := c0 + 1, recs := st.recs, groups := st.groups : TjState };
+      let ws : List Int := tjAdj graph vi;
+      let st2 : TjState := tjEdges graph v ws st1;
+      let lv : Int := tjAt st2.low vi;
+      let dv : Int := tjAt st2.disc vi;
+      if st2.err != 0 || lv != dv then st2
+      else
+        let p : TjCut := tjPop v st2.stk;
+        let scc : List Int := p.bs;
+        let on2 : List Int := tjDelAll scc st2.onStk;
+        let isRec : Bool := tjLen scc > 1 || tjHas v ws;
+        let recs2 : List Int := if isRec then st2.recs ++ scc else st2.recs;
+        { err := 0, size := st2.size, disc := st2.disc, low := st2.low, onStk := on2, stk := p.rest, clk := st2.clk, recs := recs2, groups := st2.groups ++ [scc] : TjState }
+partial def tjEdges : List (List Int) -> Int -> List Int -> TjState -> TjState
+  | _, _, [], st => st
+  | graph, v, w :: ws, st =>
+    if st.err != 0 then st
+    else if w < 0 || w >= Int.ofNat st.size then tjFail st 6
+    else
+      let vi : Nat := Int.toNat v;
+      let wi : Nat := Int.toNat w;
+      let dw : Int := tjAt st.disc wi;
+      let st2 : TjState :=
+        if dw < 0 then
+          let st1 : TjState := tjStrong graph w st;
+          let lv : Int := tjAt st1.low vi;
+          let lw : Int := tjAt st1.low wi;
+          { err := st1.err, size := st1.size, disc := st1.disc, low := tjSet st1.low vi (tjMin lv lw), onStk := st1.onStk, stk := st1.stk, clk := st1.clk, recs := st1.recs, groups := st1.groups : TjState }
+        else if tjHas w st.onStk then
+          let lv : Int := tjAt st.low vi;
+          { err := 0, size := st.size, disc := st.disc, low := tjSet st.low vi (tjMin lv dw), onStk := st.onStk, stk := st.stk, clk := st.clk, recs := st.recs, groups := st.groups : TjState }
+        else st;
+      tjEdges graph v ws st2
+end
+
+-- remaining enumerates the vertices; graph remains available to the DFS.
+def tjLoop : List (List Int) -> List (List Int) -> Nat -> TjState -> TjState
+  | [], _, _, st => st
+  | _ :: remaining, graph, i, st =>
+    if st.err != 0 then st
+    else
+      let st2 : TjState :=
+        if tjAt st.disc i < 0 then tjStrong graph (Int.ofNat i) st else st;
+      tjLoop remaining graph (i + 1) st2
+
+def tarjan (graph : List (List Int)) : TjState :=
+  let size : Nat := Int.toNat (tjSize graph);
+  let init : List Int := tjInit size;
+  let st0 : TjState := { err := 0, size := size, disc := init, low := init, onStk := [], stk := [], clk := 0, recs := [], groups := [] : TjState };
+  tjLoop graph graph 0 st0

@@ -1,0 +1,70 @@
+-- LRC: drop specialization. Where an object of a known constructor is released, the release is
+-- written out for the two cases, unique and shared.
+-- closure_claim = 0.
+--
+-- The method is Perceus' drop specialization (Reinking, Xie, de Moura and Leijen, "Perceus: Garbage
+-- Free Reference Counting with Reuse", PLDI 2021). Lean 4.14 has the same two paths, but only
+-- where a constructor reuses the cell (ExpandResetReuse.lean:237 `expand`: the slow path counts
+-- the fields that were read and releases the object, the fast path gives those fields away,
+-- releases the others and takes the cell). Here a `dec y` that stands under a case that fixed
+-- y's constructor, after fields of y were read and counted, gets the two paths as well:
+--   shared: the counts of the read fields, then `dec y`, as before;
+--   unique: no count for the read fields (the object's references become the variables'), the
+--           fields that were not read are released, and the cell is freed (`del`).
+-- The paths meet in a join point, so the code after the release is not copied. The building
+-- blocks are ExpandResetReuse's (lib/lrc/ExpandResetReuse.rsd `erEraseProjInc`, `erIncs`,
+-- `erReleaseGo`). It runs after explicitRC and expandResetReuse, on the `dec`s they left.
+import Lib.Lrc.ExpandResetReuse
+
+namespace Lrc
+
+-- the number of object fields of x's constructor where a case has fixed it (pairs x, n), or -1
+def dsKnown (x : Nat) : List Int → Int
+  | y :: n :: rest => if y == (x : Int) then n else dsKnown x rest
+  | _ => -1
+
+-- does the mask name a field that was read and counted
+def dsAny : List Int → Bool
+  | [] => false
+  | z :: zs => z >= 0 || dsAny zs
+
+mutual
+-- `bsRev` holds the instructions before b in its straight line, the last one first
+-- (as ExpandResetReuse.lean:250 searchAndExpand carries them); `known` the constructors fixed here
+partial def dsGo (known : List Int) (b : N) (bsRev : List N) (next : Nat) : ErR :=
+  if b.op == opDec && rcN b == 1 && dsKnown (rcVar b) known > 0 then
+    let y := rcVar b
+    let r := erEraseProjInc (dsKnown y known).toNat y bsRev
+    if !dsAny r.mask then dsGo known (bodyOf b) (b :: bsRev) next
+    else
+      let j := next
+      let c := next + 1
+      let fast := erReleaseGo y r.mask 0 (mkDel y (mkJmp j [])) (next + 2)
+      let slow := erIncs r.mask (mkDec y 1 (rcCheck b) (rcPersistent b) (mkJmp j []))
+      let rest := dsGo known (bodyOf b) [] fast.next
+      { next := rest.next,
+        body := reshape r.bs (mkJDecl j [] rest.body (mkVDecl c tyU8 (mkIsShared y) (mkIf c slow fast.body))) }
+  else if b.op == opJDecl then
+    let rv := dsGo known (jdeclBody b) [] next
+    dsGo known (bodyOf b) (mkJDecl (jdeclId b) (jdeclParams b) rv.body mkUnreachable :: bsRev) rv.next
+  else if b.op == opCase then
+    let r := dsAlts known (caseVar b) (caseAlts b) next
+    { next := r.next, body := reshape bsRev.reverse { b with kids := r.alts } }
+  else if isTerminal b then { next := next, body := reshape bsRev.reverse b }
+  else dsGo known (bodyOf b) (b :: bsRev) next
+-- each alternative starts its own straight line; a constructor alternative with object fields
+-- fixes the case variable's constructor in it
+partial def dsAlts (known : List Int) (x : Nat) : List N → Nat → ErA
+  | [], next => { next := next, alts := [] }
+  | alt :: alts, next =>
+    let fixes := alt.op == opAltCtor && !(infoOf alt).isScalar && (infoOf alt).size > 0
+    let k := if fixes then (x : Int) :: ((infoOf alt).size : Int) :: known else known
+    let r := dsGo k (altBody alt) [] next
+    let rest := dsAlts known x alts r.next
+    { next := rest.next, alts := altSetBody alt r.body :: rest.alts }
+end
+
+def declDropSpec (d : Decl) : Decl :=
+  if d.ext then d else { d with body := (dsGo [] d.body [] (declMaxIndex d + 1)).body }
+
+end Lrc

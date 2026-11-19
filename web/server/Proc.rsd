@@ -1,0 +1,204 @@
+namespace Web.Server.Driver
+open Lean
+abbrev Proc := Web.Execution.Proc
+abbrev Cont := Web.Execution.Cont
+
+inductive Residue where
+  | frameOctets
+  | wire (cause : Net.Wire.Residue)
+  | frameCap
+  | codec (cause : Codec.Residue)
+  | model (cause : Web.Server.Residue)
+  | namespaceSelector | continuationShape | continuationCount | continuationNamespace
+  | replyFrame | errorFrame | deviceRefused (detail : String) | replyKind
+  | version | attach | walkFullPath | openReply | iounit | submissionAck | reapCount
+  | notAwaiting
+  deriving BEq, Repr
+
+def residueName : Residue → String
+  | .frameOctets => "server_frame_octets"
+  | .wire cause => Net.Wire.residueName cause
+  | .frameCap => "server_frame_cap"
+  | .codec cause => Codec.residueName cause
+  | .model cause => Web.Server.residueName cause
+  | .namespaceSelector => "server_namespace_selector"
+  | .continuationShape => "server_continuation_shape"
+  | .continuationCount => "server_continuation_count"
+  | .continuationNamespace => "server_continuation_namespace"
+  | .replyFrame => "server_reply_frame"
+  | .errorFrame => "server_error_frame"
+  | .deviceRefused detail => "server_device_refused:" ++ detail
+  | .replyKind => "server_reply_kind"
+  | .version => "server_version"
+  | .attach => "server_attach"
+  | .walkFullPath => "server_walk_full_path"
+  | .openReply => "server_open"
+  | .iounit => "server_iounit"
+  | .submissionAck => "server_submission_ack"
+  | .reapCount => "server_reap_count"
+  | .notAwaiting => "server_not_awaiting"
+
+def octets (b : ByteArray) : List Int := b.data.toList.map (Int.ofNat ∘ UInt8.toNat)
+def fromOctetsCore (xs : List Int) : Except Residue ByteArray := do
+  if xs.length > 8192 || !xs.all (fun x => 0 <= x && x <= 255) then throw .frameOctets
+  return ByteArray.mk (xs.map (fun x => UInt8.ofNat x.toNat)).toArray
+def uCore (width value : Nat) := (Net.Wire.putNat width value).mapError Residue.wire
+def stringCore (s : String) : Except Residue ByteArray := do return (← uCore 2 s.utf8ByteSize) ++ s.toUTF8
+def getCore (width : Nat) (b : ByteArray) (offset : Nat) : Except Residue Nat := do
+  return (← (Net.Wire.getNat width ⟨b,offset⟩).mapError Residue.wire).1
+def frameCore (kind tag : Nat) (payload : ByteArray) : Except Residue ByteArray := do
+  if 7+payload.size > 8192 then throw .frameCap
+  return (← uCore 4 (7+payload.size)) ++ (← uCore 1 kind) ++ (← uCore 2 tag) ++ payload
+
+def awaitCore (code : Nat) (s : State) (namespaceQ : String) (kind tag : Nat)
+    (payload : ByteArray) (expected : Nat := 0) (encoded : Option (List Int) := none) : Except Residue Proc := do
+  -- `encoded`, when given, is a continuation that decoded canonically to `s`, hence equals its encoding.
+  let state ← match encoded with
+    | some e => pure e
+    | none => (Web.Server.Codec.runNF (.encode s)).mapError Residue.codec
+  let t ← frameCore kind tag payload
+  let k : Cont := ⟨Int.ofNat code,[Int.ofNat expected],[state,octets namespaceQ.toUTF8]⟩
+  return Web.Execution.bind (Web.Execution.request (octets t)) k
+
+def reapCore (s : State) (q : String) (encoded : Option (List Int) := none) : Except Residue Proc := do
+  awaitCore 5 s q 116 0 ((← uCore 4 1) ++ (← uCore 8 0) ++ (← uCore 4 netConfig.dataCap)) (encoded := encoded)
+def nextCore (s : State) (q : String) : Except Residue Proc := do
+  let ready ← (Web.Server.runNF (.schedule s)).mapError Residue.model
+  if ready.submissions.isEmpty then return ← reapCore s q
+  let raw ← (Net.Wire.encodeBatch ready.submissions).mapError Residue.wire
+  awaitCore 4 ready.state q 118 0 ((← uCore 4 1) ++ (← uCore 8 0) ++ (← uCore 4 raw.size) ++ raw) raw.size
+
+def startCore (q : String) : Except Residue Proc := do
+  if q.utf8ByteSize != 64 || !q.toList.all (fun c => c.isDigit || ('a' <= c && c <= 'f')) then
+    throw .namespaceSelector
+  awaitCore 0 {} q 100 65535 ((← uCore 4 8192) ++ (← stringCore "9P2000"))
+
+def expectedReply : Nat → Nat
+  | 0 => 101 | 1 => 105 | 2 => 111 | 3 => 113 | 4 => 119 | _ => 117
+
+def resumeCheckedCore (sy : Http.Syntax) (k : Cont) (raw : List Int) : Except Residue Proc := do
+  if k.code < 0 || k.code > 5 || k.bs.length != 2 || k.is.length != 1 then throw .continuationShape
+  if k.is[0]! < 0 || k.is[0]! > Int.ofNat netConfig.dataCap ||
+      (k.code != 4 && k.is[0]! != 0) then throw .continuationCount
+  let s ← (Web.Server.Codec.runNF (.decode k.bs[0]!)).mapError Residue.codec
+  let qRaw := k.bs[1]!
+  if qRaw.length != 64 || !qRaw.all (fun n => 0 <= n && n <= 127) then throw .continuationNamespace
+  let q ← match String.fromUTF8? (ByteArray.mk (qRaw.map (fun n => UInt8.ofNat n.toNat)).toArray) with
+    | none => throw .continuationNamespace | some q => pure q
+  if !q.toList.all (fun c => c.isDigit || ('a' <= c && c <= 'f')) then
+    throw .continuationNamespace
+  let b ← fromOctetsCore raw
+  if b.size < 7 || (← getCore 4 b 0) != b.size || (← getCore 2 b 5) != (if k.code == 0 then 65535 else 0) then
+    throw .replyFrame
+  let code := k.code.toNat
+  if b[4]! == 107 then
+    let size ← getCore 2 b 7
+    if size+9 != b.size then throw .errorFrame
+    throw (.deviceRefused (Http.latin1 (b.extract 9 b.size)))
+  if b[4]!.toNat != expectedReply code then throw .replyKind
+  match code with
+  | 0 =>
+    if b.size != 19 || (← getCore 4 b 7) != 8192 || (← getCore 2 b 11) != 6 ||
+        (b.extract 13 19).data != "9P2000".toUTF8.data then throw .version
+    awaitCore 1 s q 104 0 ((← uCore 4 0) ++ (← uCore 4 4294967295) ++ (← stringCore "") ++ (← stringCore q)) (encoded := some k.bs[0]!)
+  | 1 =>
+    if b.size != 20 then throw .attach
+    awaitCore 2 s q 110 0 ((← uCore 4 0) ++ (← uCore 4 1) ++ (← uCore 2 2) ++ (← stringCore "net") ++ (← stringCore "queue")) (encoded := some k.bs[0]!)
+  | 2 =>
+    if b.size != 35 || (← getCore 2 b 7) != 2 then throw .walkFullPath
+    awaitCore 3 s q 112 0 ((← uCore 4 1) ++ (← uCore 1 2)) (encoded := some k.bs[0]!)
+  | 3 =>
+    if b.size != 24 then throw .openReply
+    let iounit ← getCore 4 b 20
+    if iounit != 0 && iounit < netConfig.dataCap then throw .iounit
+    nextCore s q
+  | 4 =>
+    if b.size != 11 || (← getCore 4 b 7) != k.is[0]!.toNat then throw .submissionAck
+    reapCore s q (some k.bs[0]!)
+  | _ =>
+    if b.size < 11 || (← getCore 4 b 7)+11 != b.size then throw .reapCount
+    let replies ← (Net.CompletionWire.decodeBatch netConfig (b.extract 11 b.size)).mapError Residue.wire
+    nextCore (← (Web.Server.runNF (.complete sy s replies)).mapError Residue.model) q
+
+def refusal (name : String) : Proc := Web.Execution.refuseP (octets name.toUTF8)
+
+-- All finite dispatch and continuation inspection share this gate.
+def resumeCore (sy : Http.Syntax) (p : Proc) (raw : List Int) : Except Residue Proc := do
+  if p.tag != 1 || p.conts.length != 1 then throw .notAwaiting
+  resumeCheckedCore sy (Web.Execution.pnC p.conts 0) raw
+
+def stateCore (p : Proc) : Except Residue State := do
+  if p.tag != 1 || p.conts.length != 1 || (Web.Execution.pnC p.conts 0).bs.length != 2 then
+    throw .notAwaiting
+  (Web.Server.Codec.runNF (.decode (Web.Execution.pnC p.conts 0).bs[0]!)).mapError Residue.codec
+
+inductive Input where
+  | fromOctets (raw : List Int)
+  | putNat (width value : Nat)
+  | string (value : String)
+  | get (width : Nat) (bytes : ByteArray) (offset : Nat)
+  | frame (kind tag : Nat) (payload : ByteArray)
+  | await (code : Nat) (state : State) (namespaceQ : String) (kind tag : Nat)
+      (payload : ByteArray) (expected : Nat)
+  | reap (state : State) (namespaceQ : String)
+  | next (state : State) (namespaceQ : String)
+  | start (namespaceQ : String)
+  | resumeChecked (sy : Http.Syntax) (continuation : Cont) (raw : List Int)
+  | resume (sy : Http.Syntax) (proc : Proc) (raw : List Int)
+  | state (proc : Proc)
+
+def Output : Input → Type
+  | .fromOctets .. | .putNat .. | .string .. | .frame .. => ByteArray
+  | .get .. => Nat
+  | .await .. | .reap .. | .next .. | .start .. | .resumeChecked .. | .resume .. => Proc
+  | .state .. => State
+
+def runNF (i : Input) : Except Residue (Output i) :=
+  match i with
+  | .fromOctets raw => fromOctetsCore raw
+  | .putNat width value => uCore width value
+  | .string value => stringCore value
+  | .get width bytes offset => getCore width bytes offset
+  | .frame kind tag payload => frameCore kind tag payload
+  | .await code state namespaceQ kind tag payload expected =>
+    awaitCore code state namespaceQ kind tag payload expected
+  | .reap state namespaceQ => reapCore state namespaceQ
+  | .next state namespaceQ => nextCore state namespaceQ
+  | .start namespaceQ => startCore namespaceQ
+  | .resumeChecked sy k raw => resumeCheckedCore sy k raw
+  | .resume sy p raw => resumeCore sy p raw
+  | .state p => stateCore p
+def residue? (i : Input) : Option Residue :=
+  match runNF i with
+  | .error cause => some cause
+  | .ok _ => none
+def admissible (i : Input) := (residue? i).isNone
+def fromOctets (raw : List Int) : Except String ByteArray :=
+  (runNF (.fromOctets raw)).mapError residueName
+def u (width value : Nat) : Except String ByteArray :=
+  (runNF (.putNat width value)).mapError residueName
+def string (value : String) : Except String ByteArray :=
+  (runNF (.string value)).mapError residueName
+def get (width : Nat) (bytes : ByteArray) (offset : Nat) : Except String Nat :=
+  (runNF (.get width bytes offset)).mapError residueName
+def frame (kind tag : Nat) (payload : ByteArray) : Except String ByteArray :=
+  (runNF (.frame kind tag payload)).mapError residueName
+def await (code : Nat) (s : State) (namespaceQ : String) (kind tag : Nat)
+    (payload : ByteArray) (expected : Nat := 0) : Except String Proc :=
+  (runNF (.await code s namespaceQ kind tag payload expected)).mapError residueName
+def reap (s : State) (namespaceQ : String) : Except String Proc :=
+  (runNF (.reap s namespaceQ)).mapError residueName
+def next (s : State) (namespaceQ : String) : Except String Proc :=
+  (runNF (.next s namespaceQ)).mapError residueName
+def start (namespaceQ : String) : Except String Proc :=
+  (runNF (.start namespaceQ)).mapError residueName
+def resumeChecked (sy : Http.Syntax) (k : Cont) (raw : List Int) : Except String Proc :=
+  (runNF (.resumeChecked sy k raw)).mapError residueName
+def resume (sy : Http.Syntax) (p : Proc) (raw : List Int) : Proc :=
+  match runNF (.resume sy p raw) with
+  | .error cause => refusal (residueName cause)
+  | .ok p => p
+def state? (p : Proc) : Except String State :=
+  (runNF (.state p)).mapError residueName
+
+end Web.Server.Driver

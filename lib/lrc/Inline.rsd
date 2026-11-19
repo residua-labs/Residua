@@ -1,0 +1,224 @@
+-- LRC: inlining. A call of a small function that is not recursive is replaced by the function's body;
+-- so is the only call of a function that the program calls once, whatever its size (`inlineOnce`).
+-- closure_claim = 0.
+--
+-- The wire is first-order: every call names its function, so the call graph is exact and there is
+-- no closure to analyse. The order is the usual one for such a graph: its strongly connected
+-- components, callees before callers (lib/lrc/CallGraph.rsd `callScc`); a function of a cycle is never inlined, and
+-- a body is measured after its own calls were replaced.
+--
+-- Fuel. The wire's fuel is the depth of calls: a callee runs at its caller's fuel less one and
+-- refuses at zero (lib/RscBase.rsd `fuelPrologue`, `passFuel`). An inlined body keeps that outcome
+-- at every budget: it starts with the guard the callee's entry was (lib/lrc/Ir.rsd `mkGuard`, as
+-- lib/lrc/FromWire.rsd leaves one for a reserved form), and every call and guard inside it is one
+-- call deeper than it was (`fapDepth`, the guard's depth). One of the stage's own list functions
+-- takes no fuel (lib/lrc/FromWire.rsd `helperDecls`, lib/lrc/Ir.rsd `isOwnFn`): its body is copied
+-- as it is. Every other function takes fuel, a clone that a pass added after them included.
+import AvlMap
+import Lib.Lrc.NormIds
+import Lib.Lrc.CallGraph
+
+namespace Lrc
+
+-- a body of at most this many instructions is small
+def ilLimit : Nat := 32
+
+mutual
+partial def ilSize (n : N) : Nat :=
+  if n.op == opVDecl then 1 + ilSize (bodyOf n)
+  else if n.op == opJDecl then 1 + ilSize (jdeclBody n) + ilSize (bodyOf n)
+  else if n.op == opCase then 1 + ilSizeAlts (caseAlts n)
+  else if isTerminal n then 1
+  else 1 + ilSize (bodyOf n)
+partial def ilSizeAlts : List N → Nat
+  | [] => 0
+  | alt :: alts => ilSize (altBody alt) + ilSizeAlts alts
+end
+
+mutual
+-- every call of an image function and every guard of the body is k calls deeper
+partial def ilDeepen (nImg k : Nat) (n : N) : N :=
+  if n.op == opVDecl then
+    let e := vdeclExpr n
+    let e2 := if e.op == opFap && !isOwnFn nImg (fapFn e) then { e with b := e.b + (k : Int) } else e
+    { n with kids := [e2, ilDeepen nImg k (bodyOf n)] }
+  else if n.op == opJDecl then { n with kids := [ilDeepen nImg k (jdeclBody n), ilDeepen nImg k (bodyOf n)] }
+  else if n.op == opCase then { n with kids := ilDeepenAlts nImg k (caseAlts n) }
+  else if isTerminal n then n
+  else if n.op == opMData && n.a == 1 then { n with b := n.b + (k : Int), kids := [ilDeepen nImg k (bodyOf n)] }
+  else setBody n (ilDeepen nImg k (bodyOf n))
+partial def ilDeepenAlts (nImg k : Nat) : List N → List N
+  | [] => []
+  | alt :: alts => altSetBody alt (ilDeepen nImg k (altBody alt)) :: ilDeepenAlts nImg k alts
+end
+
+mutual
+-- every return of the body becomes a jump to join point j; `bare`: the join point has no parameter
+partial def ilRetToJmp (j : Nat) (bare : Bool) (n : N) : N :=
+  if n.op == opRet then mkJmp j (if bare then [] else n.ys)
+  else if n.op == opVDecl then { n with kids := [vdeclExpr n, ilRetToJmp j bare (bodyOf n)] }
+  else if n.op == opJDecl then { n with kids := [ilRetToJmp j bare (jdeclBody n), ilRetToJmp j bare (bodyOf n)] }
+  else if n.op == opCase then { n with kids := ilRetToJmpAlts j bare (caseAlts n) }
+  else if isTerminal n then n
+  else setBody n (ilRetToJmp j bare (bodyOf n))
+partial def ilRetToJmpAlts (j : Nat) (bare : Bool) : List N → List N
+  | [] => []
+  | alt :: alts => altSetBody alt (ilRetToJmp j bare (altBody alt)) :: ilRetToJmpAlts j bare alts
+end
+
+-- the callee's parameters as the call's arguments. A parameter that gets the irrelevant argument is
+-- the irrelevant argument wherever the body passes it on (`irrIdx`): left unbound it would keep the
+-- callee's number in the caller, where that number is another variable or none.
+def ilBind : List Param → List Int → IMap → IMap
+  | p :: ps, y :: ys, m => ilBind ps ys (imInsert m p.x (if y >= 0 then y.toNat else irrIdx))
+  | _, _, m => m
+
+-- the variables a binding list binds that exist: x, ty, x, ty, ...
+def ilLiveVars : List Int → List Int
+  | x :: ty :: rest => if tyIsIrr ty then ilLiveVars rest else x :: ilLiveVars rest
+  | _ => []
+
+def ilLiveParams : List Int → List Param
+  | x :: ty :: rest => if tyIsIrr ty then ilLiveParams rest else { x := x.toNat, borrow := false, ty := ty } :: ilLiveParams rest
+  | _ => []
+
+-- is `ys` the return of exactly what the call binds: the call is in tail position
+def ilIsTail (binds : List Int) (k : N) : Bool :=
+  k.op == opRet && (k.ys == ilLiveVars binds || ((ilLiveVars binds).isEmpty && k.ys == [argIrr]))
+
+structure IlR where
+  next : Nat
+  node : N
+  deriving Inhabited
+
+structure IlAlts where
+  next : Nat
+  alts : List N
+  deriving Inhabited
+
+mutual
+-- the body with every call of a function of `cands` replaced; `ds` holds those functions as they
+-- are after their own calls were replaced, `next` is the first unused index
+partial def ilGo (cands : VSet) (ds : DeclTab) (nImg : Nat) (n : N) (next : Nat) : IlR :=
+  if n.op == opVDecl then
+    let e := vdeclExpr n
+    let k := bodyOf n
+    if e.op == opFap && vsContains cands (fapFn e) then
+      match dtFind ds (fapFn e) with
+      | some g =>
+        let c := normGo g.body (ilBind g.xs e.ys imEmpty) next
+        let depth := if isOwnFn nImg (fapFn e) || fapSame e then 0 else fapDepth e + 1
+        let body := if depth == 0 then c.node else mkGuard depth (ilDeepen nImg depth c.node)
+        if ilIsTail (vdeclBinds n) k then { next := c.next, node := body }
+        else
+          let j := c.next
+          let r := ilGo cands ds nImg k (j + 1)
+          let ps := ilLiveParams (vdeclBinds n)
+          { next := r.next, node := { n0 opJDecl with a := (j : Int), ys := paramsTo ps, kids := [r.node, ilRetToJmp j ps.isEmpty body] } }
+      | none =>
+        let r := ilGo cands ds nImg k next
+        { next := r.next, node := { n with kids := [e, r.node] } }
+    else
+      let r := ilGo cands ds nImg k next
+      { next := r.next, node := { n with kids := [e, r.node] } }
+  else if n.op == opJDecl then
+    let v := ilGo cands ds nImg (jdeclBody n) next
+    let b := ilGo cands ds nImg (bodyOf n) v.next
+    { next := b.next, node := { n with kids := [v.node, b.node] } }
+  else if n.op == opCase then
+    let r := ilAlts cands ds nImg (caseAlts n) next
+    { next := r.next, node := { n with kids := r.alts } }
+  else if isTerminal n then { next := next, node := n }
+  else
+    let r := ilGo cands ds nImg (bodyOf n) next
+    { next := r.next, node := setBody n r.node }
+partial def ilAlts (cands : VSet) (ds : DeclTab) (nImg : Nat) : List N → Nat → IlAlts
+  | [], next => { next := next, alts := [] }
+  | alt :: alts, next =>
+    let b := ilGo cands ds nImg (altBody alt) next
+    let r := ilAlts cands ds nImg alts b.next
+    { next := r.next, alts := altSetBody alt b.node :: r.alts }
+end
+
+mutual
+-- Every call of a body, one entry for each: the function called. A call at the caller's own fuel
+-- (lib/lrc/Ir.rsd `fapSame`) has two entries, so its callee is never a function "called once" (`inlineOnce`).
+-- Such a call is the stage's own: of a loop it lifted, of a public function by its boundary twin, and of the
+-- image's function behind the short form of an integer operation (lib/lrc/FromWire.rsd `magWrap`), which is
+-- the path seldom taken. With the image's function in it the short form is large; without, it is small, and a
+-- small function goes to every place that calls it (`inlineDecls`), as lean.h has its short forms inline and
+-- the library's function a call. LLVM's inliner keeps a call it knows to be cold a call for the same reason
+-- (llvm/lib/Analysis/InlineCost.cpp, `ColdCallSiteThreshold`).
+partial def ilCallList (n : N) (acc : List Int) : List Int :=
+  if n.op == opVDecl then
+    let e := vdeclExpr n
+    let f : Int := (fapFn e : Int)
+    ilCallList (bodyOf n) (if e.op == opFap && fapSame e then f :: f :: acc else if e.op == opFap then f :: acc else acc)
+  else if n.op == opJDecl then ilCallList (bodyOf n) (ilCallList (jdeclBody n) acc)
+  else if n.op == opCase then ilCallListAlts (caseAlts n) acc
+  else if isTerminal n then acc
+  else ilCallList (bodyOf n) acc
+partial def ilCallListAlts : List N → List Int → List Int
+  | [], acc => acc
+  | alt :: alts, acc => ilCallListAlts alts (ilCallList (altBody alt) acc)
+end
+
+-- every call of the program
+def ilCallsOf : List Decl → List Int → List Int
+  | [], acc => acc
+  | d :: ds, acc => ilCallsOf ds (if d.ext then acc else ilCallList d.body acc)
+
+-- for each function the number of its calls in a list of calls
+def ilCounts : List Int → IMap → IMap
+  | [], m => m
+  | f :: fs, m => ilCounts fs (imInsert m f.toNat ((imFind m f.toNat).toNat + 1))
+
+-- has the function only scalar parameters
+def ilScalarParams : List Param → Bool
+  | [] => true
+  | p :: ps => tyIsScalar p.ty && ilScalarParams ps
+
+-- the functions in `order`, each after its callees: its body with the candidates' calls replaced,
+-- then itself a candidate when it is in no cycle and is small (at most `limit` instructions) or
+-- is called once in the program (`calls` counts the program's calls as they were at the start);
+-- with `scalar`, only when all its parameters are scalars
+def ilRun (recs : VSet) (nImg : Nat) (limit : Nat) (calls : IMap) (scalar : Bool) : List Int → DeclTab → VSet → DeclTab
+  | [], ds, _ => ds
+  | f :: order, ds, cands =>
+    match dtFind ds f.toNat with
+    | some d =>
+      if d.ext then ilRun recs nImg limit calls scalar order ds cands
+      else
+        let body := (ilGo cands ds nImg d.body (declMaxIndex d + 1)).node
+        let d2 := { d with body := body }
+        let cand := !vsContains recs f.toNat && (ilSize body <= limit || imFind calls f.toNat == 1) && (!scalar || ilScalarParams d.xs)
+        ilRun recs nImg limit calls scalar order (dtSet ds d2) (if cand then vsInsert cands f.toNat else cands)
+    | none => ilRun recs nImg limit calls scalar order ds cands
+
+-- `decls` are the image's functions in order (declaration i is function i), the stage's own
+-- list functions after the first nImg; any other list is returned as it is
+def ilWith (nImg : Nat) (limit : Nat) (calls : IMap) (scalar : Bool) (decls : List Decl) : List Decl :=
+  if !declsDense 0 decls then decls
+  else
+    let st := callScc decls
+    dtToList (ilRun st.recs nImg limit calls scalar (cgOrder st.groups) (dtOfList decls) vsEmpty)
+
+def inlineDecls (nImg : Nat) (decls : List Decl) : List Decl := ilWith nImg ilLimit imEmpty false decls
+
+-- A small function whose parameters are all scalars is inlined before the passes: it owns nothing,
+-- so what made inlining before the counting cost (a parameter the callee only borrowed) cannot
+-- happen, and the facts about its arguments are then those of each call and not their join
+-- (lib/lrc/Range.rsd: the frontend's helper for a fixed-width operation is such a function).
+def inlineScalar (nImg : Nat) (decls : List Decl) : List Decl := ilWith nImg ilLimit imEmpty true decls
+
+-- The only call of a function that the program calls once is replaced by its body, whatever the
+-- body's size: the code does not grow by more than the call's own instructions, since the function
+-- has no other caller (it stays in the program: it may be an entry). The usual rule for a function
+-- with one caller; LLVM's inliner gives such a call its largest bonus (llvm/lib/Analysis/InlineCost.cpp,
+-- `LastCallToStaticBonus`). It runs before the passes: the callee's constructors then stand in
+-- the caller's body, where a cell the caller took apart is reused for them (lib/lrc/ResetReuse.rsd).
+-- rbtree's `ins` calls `balance1` and `balance2` once each, with the fields of the node it has just
+-- taken apart: as functions, each frees nothing of the caller's and allocates the cell again.
+def inlineOnce (nImg : Nat) (decls : List Decl) : List Decl := ilWith nImg 0 (ilCounts (ilCallsOf decls []) imEmpty) false decls
+
+end Lrc

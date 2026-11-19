@@ -1,0 +1,325 @@
+-- LRC: borrow inference for function and join point parameters.
+-- A port of Lean 4.14.0 src/lean/Lean/Compiler/IR/Borrow.lean, cited as Borrow:LINE.
+-- closure_claim = 0.
+-- absent: getHash fmt M getCurrFn
+--   (hash and format instances for Std.HashMap, and the ReaderT/StateM monad with its reader accessor; the port passes BwCtx and BwState explicitly)
+-- Lean's `OwnedSet` and `ParamMap` are hash maps (Borrow:29, Borrow:52); here they are the
+-- stage's balanced maps by one integer key (lib/lrc/Set.rsd), a parameter list being the
+-- integers lib/lrc/Ir.rsd `paramsTo` writes. The fold over the declarations (Borrow:293) takes them
+-- callees first (lib/lrc/CallGraph.rsd): the least set of owned variables is the same in any
+-- order, and in that order a callee's parameters are settled before a caller reads them.
+import Lib.Lrc.NormIds
+import Lib.Lrc.CallGraph
+
+namespace Lrc
+
+-- Borrow:16 Key
+structure BwKey where
+  f : Nat
+  x : Nat
+  deriving Inhabited
+
+-- Borrow:18 beq, as one number: variable x of function f
+def bwKeyNum (k : BwKey) : Nat := k.f * 16777216 + k.x
+
+-- Borrow:29 OwnedSet, Borrow:31 OwnedSet.contains
+def bwOwnedContains (s : VSet) (k : BwKey) : Bool := vsContains s (bwKeyNum k)
+
+-- Borrow:30 OwnedSet.insert
+def bwOwnedInsert (s : VSet) (k : BwKey) : VSet := vsInsert s (bwKeyNum k)
+
+-- Borrow:39 Key
+structure BwParamKey where
+  isJP : Bool
+  f : Nat
+  j : Nat
+  deriving Inhabited
+
+def bwParamKeyDecl (f : Nat) : BwParamKey := { isJP := false, f := f, j := 0 }
+def bwParamKeyJP (f j : Nat) : BwParamKey := { isJP := true, f := f, j := j }
+
+-- the key as one number: function f, or join point j of function f
+def bwParamKeyNum (k : BwParamKey) : Int :=
+  ((k.f * 33554432 + (if k.isJP then 16777216 + k.j else 0) : Nat) : Int)
+
+-- Borrow:52 ParamMap: for each key its parameters (the entry's list, lib/lrc/Ir.rsd `paramsTo`)
+def bwPMFind (k : BwParamKey) (m : Map) : Option (List Param) :=
+  let n := mapNode m (bwParamKeyNum k)
+  if n.tag == 0 then none else some (paramsOf n.extra)
+
+def bwPMInsert (k : BwParamKey) (ps : List Param) (m : Map) : Map :=
+  mapPut m (bwParamKeyNum k) 1 0 0 (paramsTo ps)
+
+-- Borrow:68 initBorrow
+def bwInitBorrow : List Param → List Param
+  | [] => []
+  | p :: ps => { p with borrow := tyIsObj p.ty } :: bwInitBorrow ps
+
+-- Borrow:78 initBorrowIfNotExported
+def bwInitBorrowIfNotExported (exported : Bool) (ps : List Param) : List Param :=
+  if exported then ps else bwInitBorrow ps
+
+mutual
+-- Borrow:81 visitFnBody
+partial def bwInitBody (fnid : Nat) (n : N) (m : Map) : Map :=
+  if n.op == opJDecl then
+    let m := bwPMInsert (bwParamKeyJP fnid (jdeclId n)) (bwInitBorrow (jdeclParams n)) m
+    let m := bwInitBody fnid (jdeclBody n) m
+    bwInitBody fnid (bodyOf n) m
+  else if n.op == opCase then bwInitAlts fnid (caseAlts n) m
+  else if isTerminal n then m
+  else bwInitBody fnid (bodyOf n) m
+partial def bwInitAlts (fnid : Nat) : List N → Map → Map
+  | [], m => m
+  | alt :: alts, m => bwInitAlts fnid alts (bwInitBody fnid (altBody alt) m)
+end
+
+-- Borrow:92 visitDecls
+def bwInitDecls : List Decl → Map → Map
+  | [], m => m
+  | d :: ds, m =>
+    if d.ext then bwInitDecls ds m
+    else
+      let m := bwPMInsert (bwParamKeyDecl d.f) (bwInitBorrowIfNotExported false d.xs) m
+      let m := bwInitBody d.f d.body m
+      bwInitDecls ds m
+
+-- Borrow:101 mkInitParamMap
+def bwMkInitParamMap (decls : List Decl) : Map := bwInitDecls decls (map0 0)
+
+mutual
+-- Borrow:108 visitFnBody
+partial def bwApplyBody (fn : Nat) (paramMap : Map) (n : N) : N :=
+  if n.op == opJDecl then
+    let v := bwApplyBody fn paramMap (jdeclBody n)
+    let b := bwApplyBody fn paramMap (bodyOf n)
+    match bwPMFind (bwParamKeyJP fn (jdeclId n)) paramMap with
+    | some ys => mkJDecl (jdeclId n) ys v b
+    | none => mkUnreachable
+  else if n.op == opCase then { n with kids := bwApplyAlts fn paramMap (caseAlts n) }
+  else if isTerminal n then n
+  else setBody n (bwApplyBody fn paramMap (bodyOf n))
+partial def bwApplyAlts (fn : Nat) (paramMap : Map) : List N → List N
+  | [] => []
+  | alt :: alts => altSetBody alt (bwApplyBody fn paramMap (altBody alt)) :: bwApplyAlts fn paramMap alts
+end
+
+-- Borrow:124 visitDecls
+def bwApplyDecls (paramMap : Map) : List Decl → List Decl
+  | [] => []
+  | d :: ds =>
+    let d1 :=
+      if d.ext then d
+      else
+        let b := bwApplyBody d.f paramMap d.body
+        match bwPMFind (bwParamKeyDecl d.f) paramMap with
+        | some xs => { d with xs := xs, body := b }
+        | none => d
+    d1 :: bwApplyDecls paramMap ds
+
+-- Borrow:135 applyParamMap
+def bwApplyParamMap (decls : List Decl) (map : Map) : List Decl :=
+  bwApplyDecls map decls
+
+-- Borrow:138 BorrowInfCtx
+structure BwCtx where
+  decls : List Decl
+  -- the same declarations by function number (lib/lrc/Ir.rsd `DeclTab`)
+  tab : DeclTab
+  -- the functions, callees first
+  order : List Int
+  currFn : Nat
+  paramSet : VSet
+  deriving Inhabited
+
+-- Borrow:144 BorrowInfState
+structure BwState where
+  owned : VSet
+  modified : Bool
+  paramMap : Map
+  deriving Inhabited
+
+-- Borrow:156 markModified
+def bwMarkModified (s : BwState) : BwState := { s with modified := true }
+
+-- Borrow:159 ownVar
+def bwOwnVar (ctx : BwCtx) (s : BwState) (x : Nat) : BwState :=
+  let k : BwKey := { f := ctx.currFn, x := x }
+  if bwOwnedContains s.owned k then s
+  else { s with owned := bwOwnedInsert s.owned k, modified := true }
+
+-- Borrow:165 ownArg
+def bwOwnArg (ctx : BwCtx) (s : BwState) (x : Int) : BwState :=
+  if argIsVar x then bwOwnVar ctx s x.toNat else s
+
+-- Borrow:170 ownArgs
+def bwOwnArgs (ctx : BwCtx) : BwState → List Int → BwState
+  | s, [] => s
+  | s, x :: xs => bwOwnArgs ctx (bwOwnArg ctx s x) xs
+
+-- Borrow:173 isOwned
+def bwIsOwned (ctx : BwCtx) (s : BwState) (x : Nat) : Bool :=
+  bwOwnedContains s.owned { f := ctx.currFn, x := x }
+
+structure BwUpdR where
+  s : BwState
+  ps : List Param
+  deriving Inhabited
+
+def bwUpdateParams (ctx : BwCtx) : BwState → List Param → BwUpdR
+  | s, [] => { s := s, ps := [] }
+  | s, p :: ps =>
+    if !p.borrow then
+      let r := bwUpdateParams ctx s ps
+      { s := r.s, ps := p :: r.ps }
+    else if bwIsOwned ctx s p.x then
+      let r := bwUpdateParams ctx (bwMarkModified s) ps
+      { s := r.s, ps := { p with borrow := false } :: r.ps }
+    else
+      let r := bwUpdateParams ctx s ps
+      { s := r.s, ps := p :: r.ps }
+
+-- Borrow:179 updateParamMap
+def bwUpdateParamMap (ctx : BwCtx) (s : BwState) (k : BwParamKey) : BwState :=
+  match bwPMFind k s.paramMap with
+  | some ps =>
+    let r := bwUpdateParams ctx s ps
+    { r.s with paramMap := bwPMInsert k r.ps r.s.paramMap }
+  | none => s
+
+-- Borrow:193 getParamInfo
+def bwGetParamInfo (ctx : BwCtx) (s : BwState) (k : BwParamKey) : List Param :=
+  match bwPMFind k s.paramMap with
+  | some ps => ps
+  | none =>
+    if !k.isJP then
+      match dtFind ctx.tab k.f with
+      | some d => d.xs
+      | none => []
+    else []
+
+-- Borrow:207 ownArgsUsingParams
+def bwOwnArgsUsingParams (ctx : BwCtx) : BwState → List Int → List Param → BwState
+  | s, x :: xs, p :: ps =>
+    let s := if !p.borrow then bwOwnArg ctx s x else s
+    bwOwnArgsUsingParams ctx s xs ps
+  | s, _, _ => s
+
+-- Borrow:218 ownParamsUsingArgs
+def bwOwnParamsUsingArgs (ctx : BwCtx) : BwState → List Int → List Param → BwState
+  | s, x :: xs, p :: ps =>
+    let s := if argIsVar x && bwIsOwned ctx s x.toNat then bwOwnVar ctx s p.x else s
+    bwOwnParamsUsingArgs ctx s xs ps
+  | s, _, _ => s
+
+-- Borrow:236 ownArgsIfParam
+def bwOwnArgsIfParam (ctx : BwCtx) : BwState → List Int → BwState
+  | s, [] => s
+  | s, x :: xs =>
+    let s := if argIsVar x && vsContains ctx.paramSet x.toNat then bwOwnVar ctx s x.toNat else s
+    bwOwnArgsIfParam ctx s xs
+
+def bwOwnVars (ctx : BwCtx) : BwState → List Nat → BwState
+  | s, [] => s
+  | s, z :: zs => bwOwnVars ctx (bwOwnVar ctx s z) zs
+
+-- Borrow:243 collectExpr
+def bwCollectExpr (ctx : BwCtx) (s : BwState) (z : Nat) (zs : List Nat) (v : N) : BwState :=
+  if v.op == opReset then bwOwnVar ctx (bwOwnVar ctx s z) (resetVar v)
+  else if v.op == opReuse then bwOwnArgsIfParam ctx (bwOwnVar ctx (bwOwnVar ctx s z) (reuseVar v)) (reuseArgs v)
+  else if v.op == opCtor then bwOwnArgsIfParam ctx (bwOwnVar ctx s z) (ctorArgs v)
+  else if v.op == opProj then
+    let x := projVar v
+    let s := if bwIsOwned ctx s x then bwOwnVar ctx s z else s
+    if bwIsOwned ctx s z then bwOwnVar ctx s x else s
+  else if v.op == opFap then
+    let ps := bwGetParamInfo ctx s (bwParamKeyDecl (fapFn v))
+    bwOwnArgsUsingParams ctx (bwOwnVars ctx (bwOwnVar ctx s z) zs) (fapArgs v) ps
+  else if v.op == opPrim then
+    -- an argument that a primitive consumes is owned, as an argument of an owned parameter is (lib/lrc/Prim.rsd `primParams`)
+    bwOwnArgsUsingParams ctx (bwOwnVars ctx (bwOwnVar ctx s z) zs) v.ys (primParams (primOp v) v.ys.length)
+  else s
+
+def bwBindArgs : List Int → List Int
+  | x :: _ :: rest => x :: bwBindArgs rest
+  | _ => []
+
+-- Borrow:257 preserveTailCall
+def bwPreserveTailCall (ctx : BwCtx) (s : BwState) (xs : List Int) (v : N) (b : N) : BwState :=
+  if v.op == opFap && b.op == opRet && ctx.currFn == fapFn v && retArgs b == xs then
+    let ps := bwGetParamInfo ctx s (bwParamKeyDecl (fapFn v))
+    bwOwnParamsUsingArgs ctx s (fapArgs v) ps
+  else s
+
+-- Borrow:267 updateParamSet
+def bwUpdateParamSet (ctx : BwCtx) (ps : List Param) : BwCtx :=
+  { ctx with paramSet := vsInsertAll ctx.paramSet (paramVars ps) }
+
+mutual
+-- Borrow:270 collectFnBody
+partial def bwCollectFnBody (ctx : BwCtx) (n : N) (s : BwState) : BwState :=
+  if n.op == opJDecl then
+    let s := bwCollectFnBody (bwUpdateParamSet ctx (jdeclParams n)) (jdeclBody n) s
+    let s := bwUpdateParamMap ctx s (bwParamKeyJP ctx.currFn (jdeclId n))
+    bwCollectFnBody ctx (bodyOf n) s
+  else if n.op == opVDecl then
+    let b := bodyOf n
+    let v := vdeclExpr n
+    let s := bwCollectFnBody ctx b s
+    let s := bwCollectExpr ctx s (vdeclVar n) (bindVars (vdeclExtra n)) v
+    bwPreserveTailCall ctx s (bwBindArgs (vdeclBinds n)) v b
+  else if n.op == opJmp then
+    let ps := bwGetParamInfo ctx s (bwParamKeyJP ctx.currFn (jmpId n))
+    let s := bwOwnArgsUsingParams ctx s (jmpArgs n) ps
+    bwOwnParamsUsingArgs ctx s (jmpArgs n) ps
+  else if n.op == opCase then bwCollectAlts ctx (caseAlts n) s
+  else if isTerminal n then s
+  else bwCollectFnBody ctx (bodyOf n) s
+partial def bwCollectAlts (ctx : BwCtx) : List N → BwState → BwState
+  | [], s => s
+  | alt :: alts, s => bwCollectAlts ctx alts (bwCollectFnBody ctx (altBody alt) s)
+end
+
+-- Borrow:285 collectDecl
+def bwCollectDecl (ctx : BwCtx) (d : Decl) (s : BwState) : BwState :=
+  if d.ext then s
+  else
+    let ctx1 := bwUpdateParamSet ctx d.xs
+    let ctx1 := { ctx1 with currFn := d.f }
+    let s := bwCollectFnBody ctx1 d.body s
+    bwUpdateParamMap ctx1 s (bwParamKeyDecl d.f)
+
+def bwCollectDeclList (ctx : BwCtx) : List Int → BwState → BwState
+  | [], s => s
+  | f :: fs, s =>
+    match dtFind ctx.tab f.toNat with
+    | some d => bwCollectDeclList ctx fs (bwCollectDecl ctx d s)
+    | none => bwCollectDeclList ctx fs s
+
+-- the functions of a list in its own order
+def bwListOrder : List Decl → List Int
+  | [] => []
+  | d :: ds => (d.f : Int) :: bwListOrder ds
+
+-- Borrow:293 whileModifing
+partial def bwWhileModifing (ctx : BwCtx) (s : BwState) : BwState :=
+  let s := { s with modified := false }
+  let s := bwCollectDeclList ctx ctx.order s
+  if s.modified then bwWhileModifing ctx s else s
+
+-- Borrow:302 collectDecls
+def bwCollectDecls (ctx : BwCtx) (s : BwState) : Map :=
+  (bwWhileModifing ctx s).paramMap
+
+-- Borrow:307 infer
+def bwInfer (decls : List Decl) : Map :=
+  let order := if declsDense 0 decls then cgOrder (callScc decls).groups else bwListOrder decls
+  let ctx : BwCtx := { decls := decls, tab := dtOfList decls, order := order, currFn := 0, paramSet := vsEmpty }
+  let s : BwState := { owned := vsEmpty, modified := false, paramMap := bwMkInitParamMap decls }
+  bwCollectDecls ctx s
+
+-- Borrow:312 inferBorrow
+def inferBorrow (decls : List Decl) : List Decl :=
+  bwApplyParamMap decls (bwInfer decls)
+
+end Lrc

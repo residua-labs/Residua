@@ -1,0 +1,120 @@
+-- LRC: the operators of the wire language as primitives of the IR (lib/lrc/Ir.rsd `mkPrim`).
+-- A primitive's code is the RSCM tag of the wire constructor it stands for (docs/GRAMMAR.md 1.3,
+-- "The 53 constructors"); codes from 100 are forms the stage introduces itself.
+-- For the passes a primitive reads its arguments without consuming them and returns an owned
+-- result. closure_claim = 0.
+import Lib.Lrc.Ir
+
+namespace Lrc
+
+def primAdd : Nat := 6
+def primSub : Nat := 7
+def primMul : Nat := 8
+def primNeg : Nat := 9
+def primDiv : Nat := 10
+def primMod : Nat := 11
+def primLt : Nat := 12
+def primGt : Nat := 13
+def primEq : Nat := 14
+def primAnd : Nat := 15
+def primOr : Nat := 16
+def primNot : Nat := 17
+def primListLen : Nat := 24
+def primListAppend : Nat := 26
+def primListDrop : Nat := 27
+-- the constructor index of a node value, as a word
+def primTagOf : Nat := 100
+-- always refuses, as stuck with the type-mismatch reason: `unwrap` of an absent option
+-- (rsc/rsc.rsd, `refuseStuck stTypeMismatch`). Not total, so its binding stays.
+def primFail : Nat := 101
+-- are two strings equal: their byte sizes, then their bytes (rsc/rsc.rsd `strEq`)
+def primStrEq : Nat := 102
+-- The wire's add, sub and mul without the test for a result outside i64: written by
+-- lib/lrc/Range.rsd where the operands' ranges keep every result inside. They cannot refuse.
+def primAddW : Nat := 103
+def primSubW : Nat := 104
+def primMulW : Nat := 105
+-- the argument's low bits: `mod` by a power of two, whose mask is the node's first immediate
+def primMask : Nat := 106
+-- The magnitude of an integer as one word (lib/lrc/FromWire.rsd "Magnitudes"): is the word a small
+-- number (its low bit: lean.h `lean_is_scalar`); the word of a small number (`lean_box`); the small
+-- number of a word (`lean_unbox`). They read their argument and consume nothing.
+def primIsScalar : Nat := 107
+def primBox : Nat := 108
+def primUnbox : Nat := 109
+-- A node of the image before its layout is decided (lib/lrc/FromWire.rsd "Layout"): the
+-- translation writes these, and the layout replaces every one before the declarations leave
+-- lib/lrc/FromWire.rsd; no pass and no emitter meets one. A read's one argument is the node: child i
+-- (the first immediate), scalar field j (the first immediate; f2 is 0), the string, the list of
+-- integers (the ninth field of the node record), the children as a list.
+def primNodeKid : Nat := 110
+def primNodeScalar : Nat := 111
+def primNodeStr : Nat := 112
+def primNodeInts : Nat := 113
+def primNodeKids : Nat := 114
+-- The allocation: the first immediate is the tag, the second the number of children written as a
+-- literal list, or -1 when the children are a list that is not a literal. The arguments are the
+-- five scalar fields f2 .. f6, the string, the list of integers, then the children (or the one
+-- list); a field written as its literal default is the irrelevant argument.
+def primNodeNew : Nat := 115
+-- Words as unsigned numbers: the shift to the right by the first immediate; the quotient and the
+-- remainder, which the stage writes only behind a test that the divisor is not zero (they are not
+-- counted as total, so no pass moves one from behind its test).
+def primShrW : Nat := 116
+def primDivU : Nat := 117
+def primRemU : Nat := 118
+
+-- Arrays (lib/lrc/FromWire.rsd "Arrays"; lean.h `lean_array_object`, `lean_sarray_object`): a list
+-- held as one object with its elements side by side. Is the value one; its number of elements
+-- (0 for the empty list); element i, which the stage reads only behind a test of the index; the
+-- array with one more element at its end; with element i replaced, behind the same test; the array
+-- of a list's elements; the list of an array's elements (any other value as it is); the array of
+-- the elements from index lo up to hi, both brought into the array's range. The first immediate
+-- of get, push, set, ofList and slice is the shape of a cell of the list's type (lib/lrc/FromWire.rsd
+-- `lsScalar`, `lsObject`).
+def primIsArr : Nat := 119
+def primArrSize : Nat := 120
+def primArrGet : Nat := 121
+def primArrPush : Nat := 122
+def primArrSet : Nat := 123
+def primArrOfList : Nat := 124
+def primArrToList : Nat := 125
+def primArrSlice : Nat := 126
+
+-- An integer as one word (lib/lrc/FromWire.rsd "An integer is one word"; lean.h `lean_box` and `lean_unbox` of a
+-- number with a sign, as its Int has them): the word of a small integer, and the small integer of a word. They
+-- read their argument and consume nothing.
+def primBoxS : Nat := 127
+def primUnboxS : Nat := 128
+
+-- The arguments a primitive consumes: every other argument of every primitive is read and not
+-- consumed. As lean.h's `lean_array_push`, `lean_array_fset` and `lean_array_to_list` take their
+-- array, and the element they store, owned: an array nothing else holds is written in place.
+def primOwned (p i : Nat) : Bool :=
+  (p == primArrPush && (i == 0 || i == 1)) || (p == primArrSet && (i == 0 || i == 2))
+    || (p == primArrOfList && i == 0) || (p == primArrToList && i == 0)
+
+def primConsumes (p : Nat) : Bool :=
+  p == primArrPush || p == primArrSet || p == primArrOfList || p == primArrToList
+
+-- the parameters of a primitive that consumes an argument, as a declaration's would say it
+def primParamsGo (p : Nat) : Nat → Nat → List Param
+  | _, 0 => []
+  | i, k + 1 => { x := i + 1, borrow := !primOwned p i, ty := tyObj } :: primParamsGo p (i + 1) k
+
+def primParams (p n : Nat) : List Param := if primConsumes p then primParamsGo p 0 n else []
+
+-- A total primitive never ends the run: its binding may be removed when nothing reads the result.
+-- Checked arithmetic (signed overflow, division by zero, inexact division) and every operator not
+-- named here may refuse, and a refusing computation stays where it is even when its result is dead
+-- (AUDIT-RSC-OPT-5 refused an optimizer for removing one). A primitive that only allocates counts
+-- as total: running out of memory is a capacity outcome, which a program is allowed to lose.
+def primTotal (p : Nat) : Bool :=
+  p == primLt || p == primGt || p == primEq || p == primAnd || p == primOr || p == primNot
+    || p == primListLen || p == primListAppend || p == primListDrop || p == primTagOf || p == primStrEq
+    || p == primAddW || p == primSubW || p == primMulW || p == primMask
+    || p == primIsScalar || p == primBox || p == primUnbox || p == primShrW
+    || p == primIsArr || p == primArrSize || p == primArrPush || p == primArrOfList || p == primArrToList || p == primArrSlice
+    || p == primBoxS || p == primUnboxS
+
+end Lrc

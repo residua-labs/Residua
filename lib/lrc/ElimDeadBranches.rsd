@@ -1,0 +1,512 @@
+-- LRC: the alternatives of a `case` its scrutinee's value cannot reach become `unreachable`.
+-- A port of Lean 4.14.0 src/lean/Lean/Compiler/IR/ElimDeadBranches.lean, cited as ElimDeadBranches:LINE.
+-- closure_claim = 0.
+-- absent: M Value.toFormat Value.format FunctionSummaries declLt sortEntries findAtSorted? functionSummariesExt addFunctionSummary getFunctionSummary?
+--   (the reader and state monad, folded into the `EdbCtx` and `EdbState` parameters; the formatters;
+--   the persistent environment extension that keeps the function summaries of other modules, and its
+--   sorted-array helpers: an image is one program, there are no other modules, and a run's summaries
+--   live in `EdbState.funVals` and end with it)
+-- absent: resetVarAssignment resetParamAssignment resetNestedJPParams (ElimDeadBranches:187-250)
+--   (Lean puts the parameters of nested join points back to `bot` before it walks a join point's body
+--   again, because it walks a body only when a jump moved a parameter; here a join point's body is
+--   walked whenever the code that reaches it is walked, see `edbInterp`, and every step only joins)
+--
+-- What this port drops from `truncate` (ElimDeadBranches:94) and why: its widening marks the type of a
+-- constructor whose inductive is recursive, and a value that nests the same type a second time on a
+-- path is approximated at `top` before the depth bound. The mark needs the type's shape, which the IR
+-- does not carry (`CtorInfo.tid` is a number, not a name the environment can hold). Under the oracle's
+-- naming (`T<tid>.c<cidx>`, or `Bool` for tid 0) `env.find?` never returns a recursive `inductInfo`, so
+-- Lean takes every type as not recursive there; the port does the same and keeps the depth bound alone.
+--
+-- A declaration with `ext = true` has no body: a call to it is an unknown value (Lean reads a function
+-- that is not among the compiled declarations and has no summary as `top`, ElimDeadBranches:202-210).
+-- It is returned unchanged, in its place. A `prim` reads the same way.
+import Lib.Lrc.Ir
+import Lib.Lrc.CallGraph
+
+namespace Lrc
+
+/-! ## Values (ElimDeadBranches:14 Value) and their equality (ElimDeadBranches:40 beq) -/
+
+-- the abstract interpreter's value: bot nothing known, top any value, a constructor and the values
+-- of its fields, or a choice of values (a join point parameter, a merge of branches). A `CtorInfo`
+-- rides as its four fields, the way `N` carries one (rsdc keeps a structure out of a structure's
+-- fields when the structure is recursive).
+structure EdbV where
+  tag : Nat
+  cidx : Nat
+  size : Nat
+  ssize : Nat
+  tid : Nat
+  vs : List EdbV
+  deriving Inhabited
+
+def edbBot : EdbV := { tag := 0, cidx := 0, size := 0, ssize := 0, tid := 0, vs := [] }
+def edbTop : EdbV := { tag := 1, cidx := 0, size := 0, ssize := 0, tid := 0, vs := [] }
+def edbCtorV (i : CtorInfo) (vs : List EdbV) : EdbV :=
+  { tag := 2, cidx := i.cidx, size := i.size, ssize := i.ssize, tid := i.tid, vs := vs }
+def edbChoiceV (vs : List EdbV) : EdbV :=
+  { tag := 3, cidx := 0, size := 0, ssize := 0, tid := 0, vs := vs }
+
+-- Lean's `i₁ == i₂` on CtorInfo compares its name and field counts; the name is the pair tid.cidx
+-- here, so the four fields compare it (ElimDeadBranches:43).
+def edbInfoEq (a b : EdbV) : Bool :=
+  a.cidx == b.cidx && a.size == b.size && a.ssize == b.ssize && a.tid == b.tid
+
+def edbInfoEqC (a : EdbV) (b : CtorInfo) : Bool :=
+  a.cidx == b.cidx && a.size == b.size && a.ssize == b.ssize && a.tid == b.tid
+
+mutual
+-- ElimDeadBranches:40 beq
+partial def edbBeq (a b : EdbV) : Bool :=
+  if !(a.tag == b.tag) then false
+  else if a.tag == 2 then edbInfoEq a b && edbBeqKids a.vs b.vs
+  else if a.tag == 3 then edbSub a.vs b.vs && edbSub b.vs a.vs
+  else true
+-- `Array.isEqv vs₁ vs₂ Value.beq`: same length and elementwise
+partial def edbBeqKids : List EdbV → List EdbV → Bool
+  | [], [] => true
+  | a :: as, b :: bs => edbBeq a b && edbBeqKids as bs
+  | _, _ => false
+-- `vs₁.all fun v₁ => vs₂.any fun v₂ => beq v₁ v₂` (ElimDeadBranches:45)
+partial def edbSub : List EdbV → List EdbV → Bool
+  | [], _ => true
+  | v :: vs, ws => edbAnyBeq v ws && edbSub vs ws
+partial def edbAnyBeq : EdbV → List EdbV → Bool
+  | _, [] => false
+  | v, w :: ws => edbBeq v w || edbAnyBeq v ws
+end
+
+mutual
+-- ElimDeadBranches:59 merge
+partial def edbMerge (a b : EdbV) : EdbV :=
+  if a.tag == 0 then b
+  else if b.tag == 0 then a
+  else if a.tag == 1 then a
+  else if b.tag == 1 then b
+  else if a.tag == 2 && b.tag == 2 then
+    if edbInfoEq a b then { a with vs := edbMergeKids a.vs b.vs } else edbChoiceV [a, b]
+  else if a.tag == 3 && b.tag == 3 then edbChoiceV (edbMergeInto b.vs a.vs)
+  else if a.tag == 3 then edbChoiceV (edbAddChoice a.vs b)
+  else edbChoiceV (edbAddChoice b.vs a)
+-- the fields of one constructor merged pairwise (ElimDeadBranches:66)
+partial def edbMergeKids : List EdbV → List EdbV → List EdbV
+  | a :: as, b :: bs => edbMerge a b :: edbMergeKids as bs
+  | _, _ => []
+-- `vs₁.foldl (addChoice merge) vs₂`: the alternatives of `vs` added onto `acc` (ElimDeadBranches:68)
+partial def edbMergeInto (acc : List EdbV) : List EdbV → List EdbV
+  | [] => acc
+  | v :: vs => edbMergeInto (edbAddChoice acc v) vs
+-- ElimDeadBranches:52 addChoice. `merge` is the only merger Lean passes; the tail is a list of
+-- constructors, as every `choice` is built from them.
+partial def edbAddChoice : List EdbV → EdbV → List EdbV
+  | [], v => [v]
+  | c :: cs, v =>
+    if c.tag == 2 && v.tag == 2 && edbInfoEq c v then edbMerge c v :: cs
+    else c :: edbAddChoice cs v
+end
+
+-- ElimDeadBranches:85 truncateMaxDepth
+def edbMaxDepth : Nat := 8
+
+-- `newVs.elem top` of ElimDeadBranches:116
+def edbAnyTop : List EdbV → Bool
+  | [] => false
+  | v :: vs => edbBeq v edbTop || edbAnyTop vs
+
+mutual
+-- ElimDeadBranches:94 truncate: the depth bound only (the header says why the mark on recursive
+-- types is not ported).
+partial def edbTruncGo (v : EdbV) : Nat → EdbV
+  | 0 => edbTop
+  | d + 1 =>
+    if v.tag == 2 then { v with vs := edbTruncKids v.vs d }
+    else if v.tag == 3 then
+      let nvs := edbTruncKids v.vs d
+      if edbAnyTop nvs then edbTop else edbChoiceV nvs
+    else v
+partial def edbTruncKids : List EdbV → Nat → List EdbV
+  | [], _ => []
+  | v :: vs, d => edbTruncGo v d :: edbTruncKids vs d
+end
+
+def edbTruncate (v : EdbV) : EdbV := edbTruncGo v edbMaxDepth
+
+-- ElimDeadBranches:121 widening
+def edbWiden (a b : EdbV) : EdbV := edbTruncate (edbMerge a b)
+
+/-! ## The interpreter's context and state -/
+
+/-! ## A map from an index to a value
+
+The interpreter's assignments and summaries. Lean keeps them in arrays and hash maps
+(ElimDeadBranches:155 `Assignment`, :163 `InterpState`); here they are one balanced tree each for
+the whole program (Adelson-Velsky and Landis 1962, with the balancing of lib/AvlMap.rsd, whose
+entries hold integers only): the front end's own image has 16718 declarations, and a list read by
+position made every update of a variable a walk over half of them. An absent key reads as `bot`.
+
+An entry carries the number of the pass over a declaration that wrote it (`ep`), and a read of
+another pass's entry is `bot`: Lean starts every pass with empty assignments (ElimDeadBranches:284),
+and here that costs nothing and leaves the other declarations' entries where they are. -/
+
+structure EvMap where
+  -- 0: the empty map
+  tag : Nat
+  key : Int
+  h : Int
+  ep : Nat
+  v : EdbV
+  left : List EvMap
+  right : List EvMap
+  deriving Inhabited
+
+def ev0 : EvMap := { tag := 0, key := 0, h := 0, ep := 0, v := edbBot, left := [], right := [] }
+
+def evKid : List EvMap → EvMap
+  | [] => ev0
+  | m :: _ => m
+
+def evBox (m : EvMap) : List EvMap := if m.tag == 0 then [] else [m]
+
+def evH (m : EvMap) : Int := if m.tag == 0 then 0 else m.h
+
+def evMk (l : EvMap) (k : Int) (ep : Nat) (v : EdbV) (r : EvMap) : EvMap :=
+  { tag := 1, key := k, h := (if evH l > evH r then evH l else evH r) + 1, ep := ep, v := v, left := evBox l, right := evBox r }
+
+-- lib/AvlMap.rsd `bal`: the entry `e` (its key, pass and value) between l and r
+def evBal (l : EvMap) (e : EvMap) (r : EvMap) : EvMap :=
+  if evH l > evH r + 2 then
+    (if evH (evKid l.left) >= evH (evKid l.right) then evMk (evKid l.left) l.key l.ep l.v (evMk (evKid l.right) e.key e.ep e.v r)
+     else evMk (evMk (evKid l.left) l.key l.ep l.v (evKid (evKid l.right).left)) (evKid l.right).key (evKid l.right).ep (evKid l.right).v
+            (evMk (evKid (evKid l.right).right) e.key e.ep e.v r))
+  else if evH r > evH l + 2 then
+    (if evH (evKid r.right) >= evH (evKid r.left) then evMk (evMk l e.key e.ep e.v (evKid r.left)) r.key r.ep r.v (evKid r.right)
+     else evMk (evMk l e.key e.ep e.v (evKid (evKid r.left).left)) (evKid r.left).key (evKid r.left).ep (evKid r.left).v
+            (evMk (evKid (evKid r.left).right) r.key r.ep r.v (evKid r.right)))
+  else evMk l e.key e.ep e.v r
+
+-- the value pass `ep` wrote at key k, `bot` when it wrote none
+partial def evGet (m : EvMap) (k : Int) (ep : Nat) : EdbV :=
+  if m.tag == 0 then edbBot
+  else if k == m.key then (if m.ep == ep then m.v else edbBot)
+  else evGet (evKid (if k < m.key then m.left else m.right)) k ep
+
+partial def evPut (m : EvMap) (k : Int) (ep : Nat) (v : EdbV) : EvMap :=
+  if m.tag == 0 then evMk ev0 k ep v ev0
+  else if k == m.key then evMk (evKid m.left) k ep v (evKid m.right)
+  else if k < m.key then evBal (evPut (evKid m.left) k ep v) m (evKid m.right)
+  else evBal (evKid m.left) m (evPut (evKid m.right) k ep v)
+
+-- variable x of the declaration at position i (`s.assignments[i]!` at x)
+def edbKey (i x : Nat) : Int := ((i * 16777216 + x : Nat) : Int)
+
+-- a join point of the local context (ElimDeadBranches:258 `lctx.addJP j ys v`)
+structure EdbJP where
+  j : Nat
+  xs : List Param
+  b : N
+  deriving Inhabited
+
+-- ElimDeadBranches:157 InterpContext (`env` dropped: there are no other modules; `lctx` is `jps`)
+structure EdbCtx where
+  curr : Nat
+  decls : List Decl
+  -- the same declarations by function number (lib/lrc/Ir.rsd `DeclTab`)
+  tab : DeclTab
+  -- the call graph's components, callees first (lib/lrc/CallGraph.rsd); `dense`: the list is in
+  -- the order of its function numbers, so function f is at position f
+  scc : CallScc
+  dense : Bool
+  jps : List EdbJP
+  deriving Inhabited
+
+-- ElimDeadBranches:163 InterpState: the values of the variables of every declaration (`edbKey`),
+-- and each declaration's summary by its position (written as pass 0). `ep` numbers the pass over
+-- one declaration that is running, `last` holds for each position its latest pass.
+structure EdbState where
+  assigns : EvMap
+  funVals : EvMap
+  ep : Nat
+  last : IMap
+  -- the join points a walked jump reached, by `edbKey`, with the pass stamp of `assigns`. A map of
+  -- its own: in Lean a join point's index and a variable's are different names (JoinPointId,
+  -- VarId), and one function may use the same number for both.
+  marks : EvMap
+  deriving Inhabited
+
+-- field i of a constructor's values, `bot` for an index out of range
+def edbVAt : Nat → List EdbV → EdbV
+  | _, [] => edbBot
+  | 0, v :: _ => v
+  | i + 1, _ :: vs => edbVAt i vs
+
+/-! ## The abstract interpreter -/
+
+-- ElimDeadBranches:171 findVarValue
+def edbFindVar (x : Nat) (ctx : EdbCtx) (s : EdbState) : EdbV :=
+  evGet s.assigns (edbKey ctx.curr x) s.ep
+
+-- ElimDeadBranches:177 findArgValue
+def edbFindArg (y : Int) (ctx : EdbCtx) (s : EdbState) : EdbV :=
+  if argIsVar y then edbFindVar y.toNat ctx s else edbTop
+
+-- ElimDeadBranches:182 updateVarAssignment
+def edbUpdVar (x : Nat) (v : EdbV) (ctx : EdbCtx) (s : EdbState) : EdbState :=
+  { s with assigns := evPut s.assigns (edbKey ctx.curr x) s.ep (edbMerge v (evGet s.assigns (edbKey ctx.curr x) s.ep)) }
+
+-- was a jump to join point j walked in this pass over the function
+def edbMarked (j : Nat) (ctx : EdbCtx) (s : EdbState) : Bool :=
+  (evGet s.marks (edbKey ctx.curr j) s.ep).tag != 0
+
+def edbMark (j : Nat) (ctx : EdbCtx) (s : EdbState) : EdbState :=
+  { s with marks := evPut s.marks (edbKey ctx.curr j) s.ep edbTop }
+
+mutual
+-- ElimDeadBranches:194 projValue
+partial def edbProjV (v : EdbV) (i : Nat) : EdbV :=
+  if v.tag == 2 then edbVAt i v.vs
+  else if v.tag == 3 then edbProjFold v.vs i edbBot
+  else v
+partial def edbProjFold : List EdbV → Nat → EdbV → EdbV
+  | [], _, r => r
+  | v :: vs, i, r => edbProjFold vs i (edbMerge r (edbProjV v i))
+end
+
+-- the position of a declaration with a body (`ctx.decls.findIdx?` of ElimDeadBranches:208); a
+-- declaration without one is not among the compiled declarations and reads as `top`.
+def edbFindIdxGo : Nat → Nat → List Decl → Int
+  | _, _, [] => -1
+  | f, i, d :: ds => if d.f == f && !d.ext then (i : Int) else edbFindIdxGo f (i + 1) ds
+
+-- in a list in the order of the function numbers the position of function f is f
+def edbFindIdx (f : Nat) (ctx : EdbCtx) : Int :=
+  if !ctx.tab.rest.isEmpty then edbFindIdxGo f 0 ctx.decls
+  else
+    match dtFind ctx.tab f with
+    | some d => if d.ext then -1 else (f : Int)
+    | none => -1
+
+-- ElimDeadBranches:202-210: there are no summaries beyond the run, so a callee's value is its
+-- position's `funVals`, and a callee not among the declarations (an `ext`, a `prim`) is `top`.
+def edbCallVal (f : Nat) (ctx : EdbCtx) (s : EdbState) : EdbV :=
+  let idx := edbFindIdx f ctx
+  if idx < 0 then edbTop else evGet s.funVals idx 0
+
+def edbArgVals : List Int → EdbCtx → EdbState → List EdbV
+  | [], _, _ => []
+  | y :: ys, ctx, s => edbFindArg y ctx s :: edbArgVals ys ctx s
+
+-- ElimDeadBranches:199 interpExpr
+def edbExpr (e : N) (ctx : EdbCtx) (s : EdbState) : EdbV :=
+  if e.op == opCtor then edbCtorV (infoOf e) (edbArgVals (ctorArgs e) ctx s)
+  else if e.op == opProj then edbProjV (edbFindVar (projVar e) ctx s) (projIdx e)
+  else if e.op == opFap then edbCallVal (fapFn e) ctx s
+  else edbTop
+
+mutual
+-- ElimDeadBranches:213 containsCtor
+partial def edbHasCtor (v : EdbV) (j : CtorInfo) : Bool :=
+  if v.tag == 1 then true
+  else if v.tag == 2 then edbInfoEqC v j
+  else if v.tag == 3 then edbAnyCtor v.vs j
+  else false
+partial def edbAnyCtor : List EdbV → CtorInfo → Bool
+  | [], _ => false
+  | v :: vs, j => edbHasCtor v j || edbAnyCtor vs j
+end
+
+-- ElimDeadBranches:219 updateCurrFnSummary
+def edbUpdSummary (v : EdbV) (ctx : EdbCtx) (s : EdbState) : EdbState :=
+  { s with funVals := evPut s.funVals (ctx.curr : Int) 0 (edbWiden v (evGet s.funVals (ctx.curr : Int) 0)) }
+
+-- the `Bool` of the fold in ElimDeadBranches:225 updateJPParamsAssignment, and the state after it
+structure EdbUpd where
+  updated : Bool
+  s : EdbState
+  deriving Inhabited
+
+-- ElimDeadBranches:225 updateJPParamsAssignment
+def edbUpdJP : List Param → List Int → EdbCtx → Bool → EdbState → EdbUpd
+  | [], _, _, u, s => { updated := u, s := s }
+  | _ :: _, [], _, u, s => { updated := u, s := s }
+  | y :: ys, x :: xs, ctx, u, s =>
+    let yVal := edbFindVar y.x ctx s
+    let xVal := edbFindArg x ctx s
+    let newVal := edbMerge yVal xVal
+    if edbBeq newVal yVal then edbUpdJP ys xs ctx u s
+    else
+      edbUpdJP ys xs ctx true
+        { s with assigns := evPut s.assigns (edbKey ctx.curr y.x) s.ep newVal }
+
+-- `ctx.lctx.getJPParams` and `getJPBody` of ElimDeadBranches:271-272
+def edbFindJP : Nat → List EdbJP → Option EdbJP
+  | _, [] => none
+  | j, e :: es => if e.j == j then some e else edbFindJP j es
+
+-- ElimDeadBranches:266-268: the value of the returned argument; a `ret` of several values has no
+-- Lean form, and the first result is what a caller's `vdecl` binds
+def edbRetVal : List Int → EdbCtx → EdbState → EdbV
+  | [], _, _ => edbBot
+  | y :: _, ctx, s => edbFindArg y ctx s
+
+-- the further results of a `vdecl` call (lib/lrc/Ir.rsd `vdeclExtra`, no Lean form) bind an
+-- unknown value each
+def edbUpdExtras : List Int → EdbCtx → EdbState → EdbState
+  | x :: _ :: rest, ctx, s => edbUpdExtras rest ctx (edbUpdVar x.toNat edbTop ctx s)
+  | _, _, s => s
+
+-- the values of a list of parameters
+def edbParamVals : List Param → EdbCtx → EdbState → List EdbV
+  | [], _, _ => []
+  | p :: ps, ctx, s => edbFindVar p.x ctx s :: edbParamVals ps ctx s
+
+mutual
+-- ElimDeadBranches:252 interpFnBody.
+-- A join point: Lean walks its body at every jump that moves one of its parameters, with the
+-- parameters of the join points nested in it reset (ElimDeadBranches:268-275). That is one walk for
+-- each move at each depth: two to the depth when both branches of a conditional give a constructor
+-- and the join points are nested as the stage's values of conditionals are (the rest of the function
+-- is the join point's body; the front end's own image nests them hundreds deep). Here the part
+-- that jumps is walked first, a jump only joins its arguments into the parameters and marks the
+-- join point as reached (`edbMark`, a map beside the variables' assignment),
+-- and then the body is walked with the joined parameters, again while a jump inside it moves them.
+-- Every step only joins, so the assignment is the least one either way, and a value left from an
+-- earlier walk is below the one the next walk gives: nothing is put back to `bot` in between.
+partial def edbInterp (n : N) (ctx : EdbCtx) (s : EdbState) : EdbState :=
+  if n.op == opVDecl then
+    let v := edbExpr (vdeclExpr n) ctx s
+    let s := edbUpdVar (vdeclVar n) v ctx s
+    edbInterp (bodyOf n) ctx (edbUpdExtras (vdeclExtra n) ctx s)
+  else if n.op == opJDecl then
+    let jp : EdbJP := { j := jdeclId n, xs := jdeclParams n, b := jdeclBody n }
+    let ctx1 := { ctx with jps := jp :: ctx.jps }
+    let s1 := edbInterp (bodyOf n) ctx1 s
+    if !(edbMarked jp.j ctx s1) then s1 else edbJoinBody jp ctx1 s1
+  else if n.op == opCase then
+    edbInterpAlts (caseAlts n) (edbFindVar (caseVar n) ctx s) ctx s
+  else if n.op == opRet then
+    edbUpdSummary (edbRetVal (retArgs n) ctx s) ctx s
+  else if n.op == opJmp then
+    match edbFindJP (jmpId n) ctx.jps with
+    | none => s
+    | some jp => edbMark jp.j ctx (edbUpdJP jp.xs (jmpArgs n) ctx false s).s
+  else if isTerminal n then s
+  else edbInterp (bodyOf n) ctx s
+partial def edbInterpAlts : List N → EdbV → EdbCtx → EdbState → EdbState
+  | [], _, _, s => s
+  | alt :: alts, v, ctx, s =>
+    let s := if alt.op == opAltCtor then
+        (if edbHasCtor v (infoOf alt) then edbInterp (altBody alt) ctx s else s)
+      else edbInterp (altBody alt) ctx s
+    edbInterpAlts alts v ctx s
+-- the body of a reached join point, until its own parameters rest (a jump inside it to itself)
+partial def edbJoinBody (jp : EdbJP) (ctx : EdbCtx) (s : EdbState) : EdbState :=
+  let s1 := edbInterp jp.b ctx s
+  if edbBeqKids (edbParamVals jp.xs ctx s) (edbParamVals jp.xs ctx s1) then s1 else edbJoinBody jp ctx s1
+end
+
+-- the `Bool` of the fold in ElimDeadBranches:282 inferStep, and the state after it
+structure EdbStep where
+  modified : Bool
+  s : EdbState
+  deriving Inhabited
+
+-- `ys.forM fun y => updateVarAssignment y.x top` (ElimDeadBranches:291)
+def edbTopParams : List Param → EdbCtx → EdbState → EdbState
+  | [], _, s => s
+  | p :: ps, ctx, s => edbTopParams ps ctx (edbUpdVar p.x edbTop ctx s)
+
+-- one declaration of the fold (ElimDeadBranches:285-296): only a declaration with a body is read
+def edbStepOne (d : Decl) (idx : Nat) (ctx : EdbCtx) (m : Bool) (s : EdbState) : EdbStep :=
+  if d.ext then { modified := m, s := s }
+  else
+    let cur := evGet s.funVals (idx : Int) 0
+    let ictx := { ctx with curr := idx }
+    -- a new pass over this declaration: its assignment starts empty
+    let s := { s with ep := s.ep + 1, last := imInsert s.last idx (s.ep + 1) }
+    let s := edbTopParams d.xs ictx s
+    let s := edbInterp d.body ictx s
+    { modified := m || !edbBeq cur (evGet s.funVals (idx : Int) 0), s := s }
+
+def edbStepGo : List Decl → Nat → EdbCtx → Bool → EdbState → EdbStep
+  | [], _, _, m, s => { modified := m, s := s }
+  | d :: ds, idx, ctx, m, s =>
+    let r := edbStepOne d idx ctx m s
+    edbStepGo ds (idx + 1) ctx r.modified r.s
+
+-- the same fold over the functions of a list of numbers: function f is at position f
+def edbStepOrder : List Int → EdbCtx → Bool → EdbState → EdbStep
+  | [], _, m, s => { modified := m, s := s }
+  | f :: fs, ctx, m, s =>
+    match dtFind ctx.tab f.toNat with
+    | some d =>
+      let r := edbStepOne d f.toNat ctx m s
+      edbStepOrder fs ctx r.modified r.s
+    | none => edbStepOrder fs ctx m s
+
+-- ElimDeadBranches:282 inferStep (every pass over a declaration starts with an empty assignment: `ep`)
+def edbStep (ctx : EdbCtx) (s : EdbState) : EdbStep :=
+  edbStepGo ctx.decls 0 ctx false s
+
+-- ElimDeadBranches:298 inferMain
+partial def edbInferAll (ctx : EdbCtx) (s : EdbState) : EdbState :=
+  let r := edbStep ctx s
+  if r.modified then edbInferAll ctx r.s else r.s
+
+-- one component of the call graph until none of its summaries moves; a function that does not
+-- call itself has its summary after one pass
+partial def edbInferGroup (ctx : EdbCtx) (g : List Int) (s : EdbState) : EdbState :=
+  let r := edbStepOrder g ctx false s
+  match g with
+  | [f] => if r.modified && vsContains ctx.scc.recs f.toNat then edbInferGroup ctx g r.s else r.s
+  | _ => if r.modified then edbInferGroup ctx g r.s else r.s
+
+def edbInferGroups (ctx : EdbCtx) : List (List Int) → EdbState → EdbState
+  | [], s => s
+  | g :: gs, s => edbInferGroups ctx gs (edbInferGroup ctx g s)
+
+-- The summaries are the least ones that the passes leave unchanged, in whatever order the
+-- declarations are taken (each pass only joins into them). Lean takes all the declarations again
+-- until none moves; here the components of the call graph are taken callees first, each until
+-- its own summaries rest: a callee's summary is then final before a caller reads it, and the
+-- last pass over a declaration ran with every summary it reads final, as Lean's last round does.
+def edbInfer (ctx : EdbCtx) (s : EdbState) : EdbState :=
+  if ctx.dense then edbInferGroups ctx ctx.scc.groups s else edbInferAll ctx s
+
+/-! ## Rewriting with the assignments -/
+
+mutual
+-- ElimDeadBranches:302 elimDeadAux; `a` holds every declaration's assignment, `i` is this one's
+-- position and `ep` its latest pass
+partial def edbElim (a : EvMap) (i ep : Nat) (n : N) : N :=
+  if n.op == opVDecl then setBody n (edbElim a i ep (bodyOf n))
+  else if n.op == opJDecl then { n with kids := [edbElim a i ep (jdeclBody n), edbElim a i ep (bodyOf n)] }
+  else if n.op == opCase then { n with kids := edbElimAlts a i ep (evGet a (edbKey i (caseVar n)) ep) (caseAlts n) }
+  else if isTerminal n then n
+  else setBody n (edbElim a i ep (bodyOf n))
+partial def edbElimAlts (a : EvMap) (i ep : Nat) (v : EdbV) : List N → List N
+  | [] => []
+  | alt :: alts =>
+    (if alt.op == opAltCtor && !edbHasCtor v (infoOf alt) then altSetBody alt mkUnreachable
+     else altSetBody alt (edbElim a i ep (altBody alt))) :: edbElimAlts a i ep v alts
+end
+
+-- ElimDeadBranches:319 elimDead
+def edbElimDecl (a : EvMap) (i ep : Nat) (d : Decl) : Decl :=
+  if d.ext then d else { d with body := edbElim a i ep d.body }
+
+-- `decls.mapIdx fun i decl => elimDead assignments[i]! decl` (ElimDeadBranches:342)
+def edbElimDecls (s : EdbState) : Nat → List Decl → List Decl
+  | _, [] => []
+  | i, d :: ds => edbElimDecl s.assigns i (imFind s.last i).toNat d :: edbElimDecls s (i + 1) ds
+
+-- ElimDeadBranches:328 elimDeadBranches (`mkPArray decls.size Value.bot` is the empty map: an
+-- absent summary reads as `bot`)
+def elimDeadBranches (decls : List Decl) : List Decl :=
+  let dense := declsDense 0 decls
+  let scc : CallScc := if dense then callScc decls else { adj := map0 0, groups := [], recs := vsEmpty, comps := map0 0 }
+  let ctx : EdbCtx := { curr := 0, decls := decls, tab := dtOfList decls, scc := scc, dense := dense, jps := [] }
+  let s := edbInfer ctx { assigns := ev0, funVals := ev0, ep := 0, last := imEmpty, marks := ev0 }
+  edbElimDecls s 0 decls
+
+end Lrc

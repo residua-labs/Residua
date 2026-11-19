@@ -1,0 +1,220 @@
+-- LRC: common subexpressions. A binding whose expression an earlier binding on the same path
+-- already computed takes that binding's variables.
+-- closure_claim = 0.
+--
+-- Modelled on Lean 4.14.0 src/lean/Lean/Compiler/LCNF/CSE.lean (cited as CSE:LINE), which does this
+-- on LCNF, where every `let` is pure: a map from expression to variable along the code (CSE:32
+-- addEntry, CSE:62 the lookup), a substitution for the erased variables (CSE:39 replaceLet), and
+-- the map of the enclosing code for each alternative and each join point (CSE:35 withNewScope).
+-- Here it runs on the IR before the counting passes, where a binding's expression is a read, a
+-- literal, an operator of the wire or a call. The wire is first-order and total in this sense:
+-- an operator or a call either returns the value its arguments determine or refuses, and what it
+-- does depends on nothing else but the fuel, which is one number during a function's activation
+-- (lib/lrc/GuardElim.rsd). So a second evaluation of the same expression at the same depth, after
+-- the first returned, returns the same value; taking the first value changes no outcome at any
+-- budget. That holds for calls too, which is more than a language with effects may do.
+-- Not shared: a constructor with fields in general (the IR writes its scalars after the binding,
+-- and a cell that stays unique can be reused). Shared: a closed constructor term, section "A closed
+-- constructor term built again". One constructor with fields is not built at all: the one
+-- whose every field is the same field of an object x that a `case` has shown to be of that very
+-- constructor. It is x (LCNF/Simp/DiscrM.lean:107 simpCtorDiscrCore?: a constructor applied to
+-- the fields its alternative bound is the discriminant). The wire writes such a term wherever a
+-- match's right side names the matched value again (deriv's `| f, val n => addAux (val n) f`);
+-- built anew it is a second cell, and what was one shared subterm is two. A string literal is shared: it is a value like a number, and
+-- two calls that differ in nothing but which evaluation of one literal they pass are one call
+-- (deriv's `d "x" x`, written twice in its source).
+import Lib.Lrc.NormIds
+import Lib.Lrc.Prim
+
+namespace Lrc
+
+-- may this expression be shared; `calls`: calls too
+def csKey (calls : Bool) (e : N) : Bool :=
+  (calls && e.op == opFap) || e.op == opPrim || e.op == opProj || e.op == opSProj || e.op == opLit || e.op == opLitStr
+    || (e.op == opCtor && (infoOf e).isScalar)
+
+-- the same computation: every field equal, the variables after the substitution
+def csSame (e1 e2 : N) : Bool :=
+  e1.op == e2.op && e1.a == e2.a && e1.b == e2.b && e1.c == e2.c && e1.d == e2.d && e1.s == e2.s && e1.ys == e2.ys
+    && (e1.op != opLitStr || litBytes e1 == litBytes e2)
+
+def csTypes : List Int → List Int
+  | _ :: ty :: rest => ty :: csTypes rest
+  | _ => []
+
+def csVars : List Int → List Int
+  | x :: _ :: rest => x :: csVars rest
+  | _ => []
+
+-- the earlier binding of `e` with results of the same types (CSE:62)
+def csFind (e : N) (tys : List Int) : List N → Option N
+  | [] => none
+  | p :: ps => if csSame (vdeclExpr p) e && csTypes (vdeclBinds p) == tys then some p else csFind e tys ps
+
+-- each erased variable stands for the earlier one (CSE:39 replaceLet)
+def csSubst (m : IMap) : List Int → List Int → IMap
+  | x :: xs, y :: ys => csSubst (if x >= 0 && y >= 0 then imInsert m x.toNat y.toNat else m) xs ys
+  | _, _ => m
+
+/-! ## A constructor rebuilt from the object it was matched from (DiscrM.lean:107) -/
+
+-- the constructors a `case` has fixed on this path: x, tid, cidx, size, ssize, the nearest first
+def csFact (x : Int) (i : CtorInfo) : List Int → Bool
+  | y :: tid :: c :: sz :: ss :: rest =>
+    if x == y then tid == (i.tid : Int) && c == (i.cidx : Int) && sz == (i.size : Int) && ss == (i.ssize : Int)
+    else csFact x i rest
+  | _ => false
+
+def csBindFact (x : Int) (i : CtorInfo) (facts : List Int) : List Int :=
+  x :: (i.tid : Int) :: (i.cidx : Int) :: (i.size : Int) :: (i.ssize : Int) :: facts
+
+-- the expression the path bound to v, `unreachable` when it holds none
+def csDef (v : Int) : List N → N
+  | [] => mkUnreachable
+  | p :: ps => if p.a == v && p.ys.isEmpty then vdeclExpr p else csDef v ps
+
+-- are the object fields, from index i on, x's own fields of the same indices
+def csFieldsOf (x : Int) (avail : List N) : Nat → List Int → Bool
+  | _, [] => true
+  | i, y :: ys =>
+    let d := csDef y avail
+    d.op == opProj && d.a == (i : Int) && intAt 0 d.ys == x && csFieldsOf x avail (i + 1) ys
+
+-- The `sset`s on the new cell y that follow its `ctor`: ok when each stores the scalar read from
+-- the same place of x at the same width; bytes: how much of the scalar area they write.
+structure CsRun where
+  ok : Bool
+  bytes : Nat
+  rest : N
+  deriving Inhabited
+
+partial def csRun (y x : Int) (avail : List N) (m : IMap) (n : N) : CsRun :=
+  if n.op == opSSet && n.a == y then
+    let d := csDef (renIdx m (intAt 0 n.ys)) avail
+    let r := csRun y x avail m (bodyOf n)
+    let same := d.op == opSProj && d.a == n.b && d.b == n.c && intAt 0 d.ys == x && sprojWidth d == tyWidth n.d
+    { ok := r.ok && same, bytes := r.bytes + tyWidth n.d, rest := r.rest }
+  else { ok := true, bytes := 0, rest := n }
+
+-- the object whose field the new cell's first field is, -1 for none; `next` follows the `ctor`
+def csDiscr (e : N) (next : N) (avail : List N) (m : IMap) : Int :=
+  let d0 := csDef (intAt 0 e.ys) avail
+  let d1 := csDef (renIdx m (intAt 0 next.ys)) avail
+  if !e.ys.isEmpty then (if d0.op == opProj then intAt 0 d0.ys else -1)
+  else if next.op == opSSet && d1.op == opSProj then intAt 0 d1.ys
+  else -1
+
+/-! ## A closed constructor term built again (CSE:62, a constructor application is a `let` value)
+
+In LCNF a constructor application is a pure `let` value and CSE.lean shares it like any other. Here
+that is taken for the closed terms only: a constructor whose object fields are closed values of
+the path (a literal, a constructor without fields, a number put in a box, a closed cell bound
+above) and whose `sset`s, which follow the binding directly, store literals. Such a term is a
+constant; built twice on one path it is one cell with two owners. Not taken: Lean's wider rule
+for any constructor application, because a cell with variable fields that stays unique is updated
+in place by the passes after this one, and a shared one is not.
+
+The front end writes a string literal as such a term (a cell for each character), so two calls
+that differ in nothing but which evaluation of one literal they pass become one call here, as
+they do with a literal of the IR (deriv's `d "x" x`, written twice in its source). A cell is kept
+in `avail` with its scalars as the second kid: only closed cells stand there with fields. -/
+
+-- the expression the path bound to v is a closed value
+def csClosed (v : Int) (avail : List N) : Bool :=
+  let d := csDef v avail
+  d.op == opLit || d.op == opLitStr || d.op == opCtor
+    || (d.op == opPrim && (primOp d == primBox || primOp d == primBoxS) && (csDef (intAt 0 d.ys) avail).op == opLit)
+
+def csAllClosed (avail : List N) : List Int → Bool
+  | [] => true
+  | y :: ys => csClosed y avail && csAllClosed avail ys
+
+-- The `sset`s on the new cell x that follow its `ctor`: ok when each stores a literal of the
+-- path; key: place, width and variable of each (equal literals are one variable by now).
+structure CsLitRun where
+  ok : Bool
+  key : List Int
+  rest : N
+  deriving Inhabited
+
+partial def csLitRun (x : Int) (avail : List N) (m : IMap) (n : N) : CsLitRun :=
+  if n.op == opSSet && n.a == x then
+    let v := renIdx m (intAt 0 n.ys)
+    let r := csLitRun x avail m (bodyOf n)
+    { ok := r.ok && (csDef v avail).op == opLit, key := n.b :: n.c :: n.d :: v :: r.key, rest := r.rest }
+  else { ok := true, key := [], rest := n }
+
+mutual
+-- does the code write to x
+partial def csWrites (x : Int) (n : N) : Bool :=
+  if n.op == opVDecl then csWrites x (bodyOf n)
+  else if n.op == opJDecl then csWrites x (jdeclBody n) || csWrites x (bodyOf n)
+  else if n.op == opCase then csWritesAlts x (caseAlts n)
+  else if n.op == opRet || n.op == opJmp || n.op == opUnreachable then false
+  else ((n.op == opSet || n.op == opSSet || n.op == opSetTag) && n.a == x) || csWrites x (bodyOf n)
+partial def csWritesAlts (x : Int) : List N → Bool
+  | [] => false
+  | alt :: alts => csWrites x (altBody alt) || csWritesAlts x alts
+end
+
+-- the closed cell above of this constructor, these fields and these scalars; -1 for none
+def csFindCell (e : N) (ty : Int) (key : List Int) : List N → Int
+  | [] => -1
+  | p :: ps =>
+    if p.ys.isEmpty && p.b == ty && (vdeclExpr p).op == opCtor && csSame (vdeclExpr p) e
+        && (kidAt 1 p.kids).op == opLit && (kidAt 1 p.kids).ys == key then p.a
+    else csFindCell e ty key ps
+
+mutual
+-- `avail`: the bindings above on this path, the nearest first (CSE:18 State.map); `m`: the
+-- substitution (State.subst); `facts`: the constructors the path's cases have fixed
+partial def csGo (calls : Bool) (facts : List Int) (avail : List N) (m : IMap) (n : N) : N :=
+  if n.op == opVDecl then
+    let e := renExpr m (vdeclExpr n)
+    let info := infoOf e
+    let x := if e.op == opCtor && info.isRef && n.ys.isEmpty then csDiscr e (bodyOf n) avail m else -1
+    let run := csRun n.a x avail m (bodyOf n)
+    if x >= 0 && csFact x info facts && e.ys.length == info.size && csFieldsOf x avail 0 e.ys && run.ok && run.bytes == info.ssize then
+      csGo calls facts avail (imInsert m n.a.toNat x.toNat) run.rest
+    else if e.op == opCtor && info.isRef && n.ys.isEmpty && csAllClosed avail e.ys then
+      let lr := csLitRun n.a avail m (bodyOf n)
+      if lr.ok && !csWrites n.a lr.rest then
+        let y := csFindCell e n.b lr.key avail
+        if y >= 0 then csGo calls facts avail (imInsert m n.a.toNat y.toNat) lr.rest
+        else { n with kids := [e, csGo calls facts ({ n with kids := [e, { n0 opLit with ys := lr.key }] } :: avail) m (bodyOf n)] }
+      else { n with kids := [e, csGo calls facts avail m (bodyOf n)] }
+    else if csKey calls e then
+      match csFind e (csTypes (vdeclBinds n)) avail with
+      | some p => csGo calls facts avail (csSubst m (csVars (vdeclBinds n)) (csVars (vdeclBinds p))) (bodyOf n)
+      | none => { n with kids := [e, csGo calls facts ({ n with kids := [e, mkUnreachable] } :: avail) m (bodyOf n)] }
+    else { n with kids := [e, csGo calls facts avail m (bodyOf n)] }
+  else if n.op == opJDecl then
+    { n with kids := [csGo calls facts avail m (jdeclBody n), csGo calls facts avail m (bodyOf n)] }
+  else if n.op == opCase then
+    { n with a := renIdx m n.a, kids := csAlts calls facts avail m (renIdx m n.a) (tyIsObj (caseTy n)) (caseAlts n) }
+  else if n.op == opJmp then { n with ys := renArgs m n.ys }
+  else if n.op == opRet then { n with ys := renArgs m n.ys }
+  else if n.op == opUnreachable then n
+  else setBody (renIns m n) (csGo calls facts avail m (bodyOf n))
+-- x: the case's subject; obj: it is an object, so an alternative fixes its constructor
+partial def csAlts (calls : Bool) (facts : List Int) (avail : List N) (m : IMap) (x : Int) (obj : Bool) : List N → List N
+  | [] => []
+  | alt :: alts =>
+    let facts2 := if obj && !altIsDefault alt then csBindFact x (infoOf alt) facts else facts
+    altSetBody alt (csGo calls facts2 avail m (altBody alt)) :: csAlts calls facts avail m x obj alts
+end
+
+-- CSE:104 Decl.cse
+def declCse (calls : Bool) (d : Decl) : Decl :=
+  if d.ext then d else { d with body := csGo calls [] [] imEmpty d.body }
+
+-- `calls`: a second call of a function with the same arguments takes the first one's results.
+-- That is the pass as Lean has it. It can change how much a program allocates by more than a
+-- constant: `node (bottomUp k) (bottomUp k)` builds one subtree and shares it (binarytrees: 4406
+-- allocations become 455 at depth 6). The value is the same; a table that compares allocators
+-- must say which way it ran.
+def cse (calls : Bool) : List Decl → List Decl
+  | [] => []
+  | d :: ds => declCse calls d :: cse calls ds
+
+end Lrc

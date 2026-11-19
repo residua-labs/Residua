@@ -1,0 +1,317 @@
+-- LRC: tail recursion modulo cons. A call of the function itself whose result only becomes one
+-- field of the object the function returns is made a jump: the object is built first, with that
+-- field open, and the rest of the recursion writes into it.
+-- closure_claim = 0.
+--
+-- The method is the destination-passing one of Bour, Clément and Scherer, "Tail Modulo Cons"
+-- (JFLA 2021; OCaml's lambda/tmc.ml), which Leijen and Lorenzen, "Tail Recursion Modulo Context:
+-- An Equational Approach" (POPL 2023; Koka's src/Core/CTail.hs) derive for a counted heap. A
+-- function f with such a call gets a second form g with three more parameters: an object, the
+-- index of one of its fields, and the root, the object the whole call returns. g computes what f
+-- computes, stores it in that field and returns the root.
+--
+--   f:  let r := f ys; K[r]; ret z      becomes   K[_]; ret (g ys z i z)
+--   g:  let r := f ys; K[r]; ret z      becomes   K[_]; dst[di] := z; jump to g with ys, z, i, root
+--       let r := f ys; ret r            becomes   jump to g with ys, dst, di, root
+--       ret v                           becomes   dst[di] := v; ret root
+--
+-- g is also called for its value, with no destination: the index is then negative (Koka's empty
+-- context, kklib `kk_cctx_apply`). The store is left out; the first object g builds is the root
+-- from there on, and a return before any such object returns v itself. In that way g is f: every
+-- call of f that is not one of the above goes to g (`tcDirect`), so that a recursion which is
+-- not a tail call (rbtree's insert under a black node with a red child) is one call for each
+-- level and not two, f for the first object and g for the rest.
+--
+-- That form costs a test at every store and every return, and three words in g's frame. A
+-- function gets it when its own body calls it for a value (`tcSelfValue`): then it is entered
+-- for a value once for every such call at run time. A function whose only calls of itself are
+-- the ones above (a list's append) is entered from outside alone and keeps the plain form:
+--
+--   f:  let r := f ys; K[r]; ret z      becomes   K[_]; g ys z i; ret z
+--   g:  let r := f ys; K[r]; ret z      becomes   K[_]; dst[di] := z; jump to g with ys, z, i
+--       let r := f ys; ret r            becomes   jump to g with ys, dst, di
+--       ret v                           becomes   dst[di] := v; ret
+--
+-- with two own parameters and no result. `mode` chooses for all: 0 as said, 1 the plain form
+-- always, 2 the form with the root always.
+--
+-- K is what stands between the call and the return. K[_] is K without its use of r, which is
+-- either the field i of the constructor that makes z, or a `set z[i] := r` on a cell the function
+-- took for reuse (lib/lrc/ExpandResetReuse.rsd, the fast path).
+--
+-- The pass runs last, on bodies whose counting is explicit, so that what K may hold can be read
+-- off its instructions. K is moved before the call, and that is sound when
+--   * K is instructions only and ends in `ret z`: no case, no join point, no jump;
+--   * K has no call, no operator and no fuel guard: nothing in it refuses, so the refusal the
+--     run ends with is the one the call gives, as before (a failed allocation aside, which no
+--     pass keeps in place);
+--   * K has no `dec` and no `del`: a release before the call could free what the call reads;
+--   * K reads r nowhere else and reads z nowhere at all, so nothing sees the open field;
+--   * no object K writes to (z, or another cell taken for reuse) is an argument of the call. Such
+--     a cell is unique, so the callee reaches it through an argument or not at all.
+-- The fuel is as before: f calls g at its fuel less one, as it called f, and g's jump to its own
+-- start tests and counts as every self tail call does (lib/lrc/Emit.rsd `emBody`). g is not one
+-- of the stage's own list functions (lib/lrc/Ir.rsd `isOwnFn`): it takes fuel as f does. A call
+-- that went to f and goes to g keeps its depth: g meets every object at the fuel f met it at.
+--
+-- g borrows its object: the cell stays owned by whoever built it, f or the field it was stored
+-- in. The value stored in a field is given to it; `set` counts nothing.
+import Lib.Lrc.FreeVars
+import Lib.Lrc.NormIds
+import Lib.Lrc.Prim
+
+namespace Lrc
+
+def tcMember (x : Int) : List Int → Bool
+  | [] => false
+  | y :: ys => x == y || tcMember x ys
+
+def tcCount (x : Int) : List Int → Nat
+  | [] => 0
+  | y :: ys => (if x == y then 1 else 0) + tcCount x ys
+
+def tcPos (x : Int) : List Int → Nat
+  | [] => 0
+  | y :: ys => if x == y then 0 else 1 + tcPos x ys
+
+def tcOpenArgs (r : Int) : List Int → List Int
+  | [] => []
+  | y :: ys => (if y == r then argIrr else y) :: tcOpenArgs r ys
+
+-- the variable a body of instructions returns, -1 when the body is anything else
+partial def tcRetVar (n : N) : Int :=
+  if n.op == opRet then (if (retArgs n).length == 1 then intAt 0 (retArgs n) else -1)
+  else if n.op == opVDecl || n.op == opSet || n.op == opSetTag || n.op == opSSet || n.op == opInc then tcRetVar (bodyOf n)
+  else -1
+
+-- an expression that may stand before the call: it cannot refuse and reads no count
+def tcMovable (e : N) : Bool :=
+  e.op == opCtor || e.op == opLit || e.op == opLitStr || e.op == opProj || e.op == opSProj
+
+-- The context k after `let r := f args`, which returns z: the index of the field of z that r
+-- fills, or -2 when k is not a context the head of this file allows. `idx` is the field found
+-- so far, -1 for none.
+partial def tcHole (r z : Int) (args : List Int) (idx : Int) (n : N) : Int :=
+  if n.op == opRet then (if idx < 0 then -2 else idx)
+  else if n.op == opVDecl then
+    let e := vdeclExpr n
+    if !n.ys.isEmpty || !tcMovable e || tcMember z (exprArgs e) then -2
+    else if e.op == opCtor && n.a == z && idx == -1 && tcCount r e.ys == 1 then
+      tcHole r z args ((tcPos r e.ys : Nat) : Int) (bodyOf n)
+    else if tcMember r (exprArgs e) then -2
+    else tcHole r z args idx (bodyOf n)
+  else if n.op == opSet then
+    if n.c == 1 || n.a == r || tcMember n.a args then -2
+    else if setArg n == r then (if n.a == z && idx == -1 then tcHole r z args n.b (bodyOf n) else -2)
+    else if setArg n == z then -2
+    else tcHole r z args idx (bodyOf n)
+  else if n.op == opSetTag || n.op == opSSet then
+    if n.a == r || tcMember n.a args || tcMember r n.ys || tcMember z n.ys then -2 else tcHole r z args idx (bodyOf n)
+  else if n.op == opInc then
+    if n.a == r || n.a == z then -2 else tcHole r z args idx (bodyOf n)
+  else -2
+
+-- Is the `vdecl` n a call of function `self` whose result fills one field of what the body
+-- returns? That field's index, or -2.
+def tcSite (self np : Nat) (n : N) : Int :=
+  let e := vdeclExpr n
+  if !(e.op == opFap && fapFn e == self && fapDepth e == 0 && n.ys.isEmpty && tyIsObj (vdeclTy n) && e.ys.length == np) then -2
+  else
+    let z := tcRetVar (bodyOf n)
+    if z < 0 || z == n.a || tcMember z e.ys then -2 else tcHole n.a z e.ys (-1) (bodyOf n)
+
+-- the context with the field left open: r's one use is gone, and `tail` stands for the `ret`
+partial def tcOpen (r : Int) (tail : N) (n : N) : N :=
+  if n.op == opRet then tail
+  else if n.op == opVDecl then
+    let e := vdeclExpr n
+    { n with kids := [if e.op == opCtor then { e with ys := tcOpenArgs r e.ys } else e, tcOpen r tail (bodyOf n)] }
+  else if n.op == opSet && setArg n == r then tcOpen r tail (bodyOf n)
+  else setBody n (tcOpen r tail (bodyOf n))
+
+-- self: f. g: its destination-passing form. np: the number of f's parameters. dps: the body
+-- being written is g's. val: g also serves calls for a value, and returns the root.
+-- dst, di, root: g's own parameters (root with val only). rty: the type of f's result.
+-- iv, u, zv, cv: fresh variables, the index at a site, the binder of g's call, a zero and the
+-- test for a destination; a site or a return ends its path, so one set serves all.
+structure TcEnv where
+  self : Nat
+  g : Nat
+  np : Nat
+  dps : Bool
+  val : Bool
+  dst : Nat
+  di : Nat
+  root : Nat
+  rty : Int
+  iv : Nat
+  u : Nat
+  zv : Nat
+  cv : Nat
+  deriving Inhabited
+
+-- g ys dst di root, whose result is returned at once: in g a jump to its start
+def tcJumpG (cx : TcEnv) (ys : List Int) (dst di root : Int) : N :=
+  mkVDecl cx.u cx.rty (mkFap cx.g (ys ++ [dst, di, root])) (mkRet [(cx.u : Int)])
+
+-- the plain form: g ys dst di, which returns nothing, then `after`
+def tcCallG (cx : TcEnv) (ys : List Int) (dst di : Int) (after : N) : N :=
+  mkVDecl cx.u tyIrr (mkFap cx.g (ys ++ [dst, di])) after
+
+-- g's two ways at a store: `has` with a destination, `hasNot` without one (di < 0)
+def tcIfDest (cx : TcEnv) (has hasNot : N) : N :=
+  mkVDecl cx.zv tyI64 (mkLit 0)
+    (mkVDecl cx.cv tyI64 (mkPrim primLt 0 0 [(cx.di : Int), (cx.zv : Int)]) (mkIfW cx.cv hasNot has))
+
+def tcSiteCode (cx : TcEnv) (n : N) (idx : Int) : N :=
+  let e := vdeclExpr n
+  let z := tcRetVar (bodyOf n)
+  let tail :=
+    if !cx.val then
+      (if cx.dps then mkSetAt cx.dst cx.di z (tcCallG cx e.ys z (cx.iv : Int) (mkRet []))
+       else tcCallG cx e.ys z (cx.iv : Int) (mkRet [z]))
+    else if cx.dps then
+      tcIfDest cx (mkSetAt cx.dst cx.di z (tcJumpG cx e.ys z (cx.iv : Int) (cx.root : Int)))
+        (tcJumpG cx e.ys z (cx.iv : Int) z)
+    else tcJumpG cx e.ys z (cx.iv : Int) z
+  mkVDecl cx.iv tyI64 (mkLit idx) (tcOpen n.a tail (bodyOf n))
+
+mutual
+partial def tcGo (cx : TcEnv) (n : N) : N :=
+  if n.op == opVDecl then
+    let e := vdeclExpr n
+    let k := bodyOf n
+    let i := tcSite cx.self cx.np n
+    if i >= 0 then tcSiteCode cx n i
+    else if cx.dps && e.op == opFap && fapFn e == cx.self && fapDepth e == 0 && n.ys.isEmpty && e.ys.length == cx.np
+        && k.op == opRet && retArgs k == [n.a] then
+      (if cx.val then tcJumpG cx e.ys (cx.dst : Int) (cx.di : Int) (cx.root : Int)
+       else tcCallG cx e.ys (cx.dst : Int) (cx.di : Int) (mkRet []))
+    else { n with kids := [e, tcGo cx k] }
+  else if n.op == opJDecl then { n with kids := [tcGo cx (jdeclBody n), tcGo cx (bodyOf n)] }
+  else if n.op == opCase then { n with kids := tcAlts cx (caseAlts n) }
+  else if n.op == opRet then
+    if cx.dps then
+      let v := intAt 0 (retArgs n)
+      if cx.val then tcIfDest cx (mkSetAt cx.dst cx.di v (mkRet [(cx.root : Int)])) (mkRet [v])
+      else mkSetAt cx.dst cx.di v (mkRet [])
+    else n
+  else if n.op == opJmp || n.op == opUnreachable then n
+  else setBody n (tcGo cx (bodyOf n))
+partial def tcAlts (cx : TcEnv) : List N → List N
+  | [] => []
+  | alt :: alts => altSetBody alt (tcGo cx (altBody alt)) :: tcAlts cx alts
+end
+
+-- does the body have such a call
+mutual
+partial def tcAny (self np : Nat) (n : N) : Bool :=
+  if n.op == opVDecl then tcSite self np n >= 0 || tcAny self np (bodyOf n)
+  else if n.op == opJDecl then tcAny self np (jdeclBody n) || tcAny self np (bodyOf n)
+  else if n.op == opCase then tcAnyAlts self np (caseAlts n)
+  else if n.op == opRet || n.op == opJmp || n.op == opUnreachable then false
+  else tcAny self np (bodyOf n)
+partial def tcAnyAlts (self np : Nat) : List N → Bool
+  | [] => false
+  | alt :: alts => tcAny self np (altBody alt) || tcAnyAlts self np alts
+end
+
+structure TcPair where
+  direct : Decl
+  dps : Decl
+  deriving Inhabited
+
+mutual
+-- does the body call the function for a value: a call of it that is neither a site nor in tail position
+partial def tcSelfValue (self np : Nat) (n : N) : Bool :=
+  if n.op == opVDecl then
+    let e := vdeclExpr n
+    let k := bodyOf n
+    (e.op == opFap && fapFn e == self && tcSite self np n < 0 && !(k.op == opRet && retArgs k == [n.a]))
+      || tcSelfValue self np k
+  else if n.op == opJDecl then tcSelfValue self np (jdeclBody n) || tcSelfValue self np (bodyOf n)
+  else if n.op == opCase then tcSelfValueAlts self np (caseAlts n)
+  else if isTerminal n then false
+  else tcSelfValue self np (bodyOf n)
+partial def tcSelfValueAlts (self np : Nat) : List N → Bool
+  | [] => false
+  | alt :: alts => tcSelfValue self np (altBody alt) || tcSelfValueAlts self np alts
+end
+
+-- f rewritten, and its destination-passing form as function g; `val`: the form with the root
+def tcDecl (d : Decl) (g : Nat) (val : Bool) : TcPair :=
+  let m := declMaxIndex d
+  let cx : TcEnv := { self := d.f, g := g, np := d.xs.length, dps := false, val := val, dst := m + 1, di := m + 2, root := m + 3,
+                      rty := intAt 0 d.rets, iv := m + 4, u := m + 5, zv := m + 6, cv := m + 7 }
+  let own : List Param := [{ x := m + 1, borrow := true, ty := tyObj }, { x := m + 2, borrow := false, ty := tyI64 }]
+    ++ (if val then [{ x := m + 3, borrow := true, ty := tyObj }] else [])
+  let dps : Decl := { f := g, xs := d.xs ++ own, rets := if val then d.rets else [],
+                      body := tcGo { cx with dps := true } d.body, ext := false }
+  { direct := declNormalizeIds { d with body := tcGo cx d.body }, dps := declNormalizeIds dps }
+
+-- a function that takes fuel (an image function, or a clone of one), with a body, one object for its
+-- result, and such a call
+def tcApplies (nImg : Nat) (d : Decl) : Bool :=
+  !d.ext && !isOwnFn nImg d.f && d.rets.length == 1 && tyIsObj (intAt 0 d.rets) && tcAny d.f d.xs.length d.body
+
+-- `pairs`: f, g, f, g, ... for every function f whose form g also serves calls for a value
+structure TcR where
+  decls : List Decl
+  added : List Decl
+  pairs : List Int
+  deriving Inhabited
+
+def trmcGo (nImg mode : Nat) : Nat → List Decl → TcR
+  | _, [] => { decls := [], added := [], pairs := [] }
+  | next, d :: ds =>
+    if tcApplies nImg d then
+      let val := mode == 2 || (mode == 0 && tcSelfValue d.f d.xs.length d.body)
+      let p := tcDecl d next val
+      let r := trmcGo nImg mode (next + 1) ds
+      { decls := p.direct :: r.decls, added := p.dps :: r.added,
+        pairs := if val then (d.f : Int) :: (next : Int) :: r.pairs else r.pairs }
+    else
+      let r := trmcGo nImg mode next ds
+      { r with decls := d :: r.decls }
+
+-- the destination-passing form of f in `pairs`, -1 when f has none
+def tcFormOf (f : Int) : List Int → Int
+  | a :: g :: rest => if a == f then g else tcFormOf f rest
+  | _ => -1
+
+mutual
+-- A call of a function that has a form goes to the form, with no destination. A call of the
+-- function itself in tail position stays: it is a jump to its start already. `mv` is a fresh
+-- variable for the index.
+partial def tcDirect (pairs : List Int) (self np mv : Nat) (n : N) : N :=
+  if n.op == opVDecl then
+    let e := vdeclExpr n
+    let k := bodyOf n
+    let g := if e.op == opFap && n.ys.isEmpty then tcFormOf (fapFn e : Int) pairs else -1
+    let selfTail := fapFn e == self && fapDepth e == 0 && k.op == opRet && retArgs k == [n.a] && e.ys.length == np
+    if g >= 0 && !selfTail then
+      mkVDecl mv tyI64 (mkLit (-1))
+        { n with kids := [{ e with a := g, ys := e.ys ++ [argIrr, (mv : Int), argIrr] }, tcDirect pairs self np mv k] }
+    else { n with kids := [e, tcDirect pairs self np mv k] }
+  else if n.op == opJDecl then { n with kids := [tcDirect pairs self np mv (jdeclBody n), tcDirect pairs self np mv (bodyOf n)] }
+  else if n.op == opCase then { n with kids := tcDirectAlts pairs self np mv (caseAlts n) }
+  else if isTerminal n then n
+  else setBody n (tcDirect pairs self np mv (bodyOf n))
+partial def tcDirectAlts (pairs : List Int) (self np mv : Nat) : List N → List N
+  | [] => []
+  | alt :: alts => altSetBody alt (tcDirect pairs self np mv (altBody alt)) :: tcDirectAlts pairs self np mv alts
+end
+
+def tcDirectAll (pairs : List Int) : List Decl → List Decl
+  | [] => []
+  | d :: ds =>
+    (if d.ext then d else declNormalizeIds { d with body := tcDirect pairs d.f d.xs.length (declMaxIndex d + 1) d.body })
+      :: tcDirectAll pairs ds
+
+-- The declarations are numbered 0, 1, ... in their order (lib/lrc/Emit.rsd `emitFns` relies on
+-- it too); the new functions follow them. `nImg` is the number of the image's functions.
+def trmc (nImg mode : Nat) (decls : List Decl) : List Decl :=
+  let r := trmcGo nImg mode decls.length decls
+  if r.pairs.isEmpty then r.decls ++ r.added else tcDirectAll r.pairs (r.decls ++ r.added)
+
+end Lrc

@@ -1,0 +1,61 @@
+-- Private O2 templates. They are source-lowered and expanded at allocation
+-- sites, never added to the frozen runtime function-index prefix.
+-- Static parameters are specialized before lowering. A guard reserves no
+-- storage. A virgin batch leaves one spare slot; otherwise the guard walks
+-- at most the static batch count through the recycled list. This admits
+-- exhausted virgin pages without an allocation call or a per-site limit
+-- check. Consuming the last recycled slot unlinks the empty class head.
+partial def rsd_rt_alloc_guard (base : UInt64) (classOffset : UInt64) (stride : UInt64) (need : UInt64) (count : UInt64) : RT.M UInt64 := do {
+  let mut heads : UInt64 := 0;
+  let mut page : UInt64 := 0;
+  let mut fresh : UInt64 := 0;
+  let mut recycled : UInt64 := 0;
+  let mut remaining : UInt64 := 0;
+  if RT.ne64 (← RT.load64 (RT.addr base) 352) 0 then { return 0 };
+  heads := (← RT.load64 (RT.addr base) 344);
+  if RT.eqz64 heads then { return 0 };
+  page := (← RT.load64 (RT.addr (RT.add64 heads classOffset)) 0);
+  if RT.eqz64 page then { return 0 };
+  if RT.ne64 (← RT.load64 (RT.addr page) 16) stride then { return 0 };
+  fresh := (← RT.load64 (RT.addr page) 8);
+  if RT.ne64 fresh 0 then {
+    if RT.leU64 (RT.add64 fresh need) (RT.add64 page 8200) then { return page }
+  };
+  recycled := (← RT.load64 (RT.addr page) 24);
+  remaining := count;
+  while RT.ne64 remaining 0 do {
+    if RT.eqz64 recycled then { return 0 };
+    recycled := (← RT.load64 (RT.addr recycled) 0);
+    remaining := RT.sub64 remaining 1
+  };
+  return page
+}
+
+partial def rsd_rt_alloc_bump (base : UInt64) (page : UInt64) (header : UInt64) (rounded : UInt64) (stride : UInt64) : RT.M UInt64 := do {
+  let mut fresh : UInt64 := 0;
+  fresh := (← RT.load64 (RT.addr page) 24);
+  if RT.ne64 fresh 0 then {
+    RT.store64 (RT.addr page) 24 (← RT.load64 (RT.addr fresh) 0);
+    if RT.andBool (RT.eqz64 (← RT.load64 (RT.addr page) 8))
+        (RT.eqz64 (← RT.load64 (RT.addr page) 24)) then {
+      RT.store64 (RT.addr (RT.add64 (← RT.load64 (RT.addr base) 344) (RT.sub64 rounded 8))) 0
+        (← RT.load64 (RT.addr page) 0)
+    }
+  } else {
+    fresh := (← RT.load64 (RT.addr page) 8);
+    RT.store64 (RT.addr page) 8 (RT.add64 fresh stride)
+  };
+  RT.store64 (RT.addr (RT.sub64 fresh 8)) 0 page;
+  if RT.gtU64 rounded 8 then {
+    RT.store64 (RT.addr (RT.add64 fresh (RT.sub64 rounded 8))) 0 0
+  };
+  RT.store64 (RT.addr fresh) 0 header;
+  RT.store64 (RT.addr base) 376 (RT.add64 (← RT.load64 (RT.addr base) 376) 1);
+  RT.store64 (RT.addr base) 608 (RT.add64 (← RT.load64 (RT.addr base) 608) stride);
+  if RT.gtU64 (← RT.load64 (RT.addr base) 608) (← RT.load64 (RT.addr base) 616) then {
+    RT.store64 (RT.addr base) 616 (← RT.load64 (RT.addr base) 608)
+  };
+  RT.store64 (RT.addr base) 624 (RT.add64 (← RT.load64 (RT.addr base) 624) rounded);
+  RT.store64 (RT.addr base) 632 (RT.add64 (← RT.load64 (RT.addr base) 632) 1);
+  return fresh
+}

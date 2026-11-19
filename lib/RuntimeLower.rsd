@@ -1,0 +1,362 @@
+import RscBase
+import RuntimeIR
+
+-- Compiler-rt backend.  Control flow is compiled from typed ordinary do
+-- nodes; only primitive stencils contain target instructions. The object
+-- convention lives in lib/rt/V1.rsd, not in this compiler.
+structure RtDecoded where
+  rest : List Int
+  value : Int
+  node : RtNode
+  nodes : List RtNode
+  ints : List Int
+  functions : List RtFunction
+  error : Nat
+
+structure RtEmission where
+  bytes : List Int
+  error : Nat
+
+def rtDecoded (bs : List Int) : RtDecoded :=
+  { rest := bs, value := 0, node := rtNil, nodes := [], ints := [], functions := [], error := 0 }
+
+def rtReadInt : Nat → Int → Int → RtDecoded → RtDecoded
+  | 0, _, _, state => { state with error := 20 }
+  | _ + 1, _, _, { rest := [], .. } => { (rtDecoded []) with error := 20 }
+  | fuel + 1, value, place, state =>
+    let byte := state.rest.headD (-1)
+    if byte < 0 || byte > 255 then { state with error := 20 }
+    else
+      let low := byte % 128
+      let value := value + low * place
+      let s := { state with rest := state.rest.drop 1 }
+      if byte >= 128 then rtReadInt fuel value (place * 128) s
+      else { s with value := if low >= 64 then value - place * 128 else value }
+
+def rtInteger (state : RtDecoded) : RtDecoded :=
+  if state.error != 0 then state else rtReadInt 10 0 1 state
+
+def rtReadInts : Nat → Nat → RtDecoded → List Int → RtDecoded
+  | 0, _, state, _ => { state with error := 20 }
+  | _ + 1, 0, state, acc => { state with ints := acc.reverse }
+  | fuel + 1, count + 1, state, acc =>
+    let s := rtInteger state
+    rtReadInts fuel count s (s.value :: acc)
+
+mutual
+  def rtReadNode (fuel : Nat) (state : RtDecoded) : RtDecoded :=
+    match fuel with
+    | 0 => { state with error := 20 }
+    | fuel + 1 =>
+      let s := rtInteger state
+      let tag := s.value
+      let s := rtInteger s
+      let value := s.value
+      let s := rtInteger s
+      let ty := s.value
+      let s := rtInteger s
+      if s.value < 0 || s.value > 200000 then { s with error := 20 }
+      else
+        let s := rtReadNodes fuel s.value.toNat s []
+        { s with node := { tag := tag, val := value, ty := ty, args := s.nodes } }
+  def rtReadNodes (fuel count : Nat) (state : RtDecoded) (acc : List RtNode) : RtDecoded :=
+    match fuel, count with
+    | 0, _ => { state with error := 20 }
+    | _ + 1, 0 => { state with nodes := acc.reverse }
+    | fuel + 1, count + 1 =>
+      let s := rtReadNode fuel state
+      rtReadNodes fuel count s (s.node :: acc)
+end
+
+def rtReadFunctions (fuel count : Nat) (state : RtDecoded) (acc : List RtFunction) : RtDecoded :=
+  match fuel, count with
+  | 0, _ => { state with error := 20 }
+  | _ + 1, 0 => { state with functions := acc.reverse }
+  | fuel + 1, count + 1 =>
+    let s := rtInteger state
+    if s.value < 0 || s.value > 256 then { s with error := 20 }
+    else
+      let name := String.mk ((s.rest.take s.value.toNat).map (fun x => Char.ofNat x.toNat))
+      let s := { s with rest := s.rest.drop s.value.toNat }
+      let s := rtInteger s
+      if s.value < 0 || s.value > 64 then { s with error := 20 }
+      else
+        let s := rtReadInts 100 s.value.toNat s []
+        let params := s.ints
+        let s := rtInteger s
+        let result := s.value
+        let s := rtInteger s
+        if s.value < 0 || s.value > 256 then { s with error := 20 }
+        else
+          let s := rtReadInts 300 s.value.toNat s []
+          let locals := s.ints
+          let s := rtReadNode 200000 s
+          let fn : RtFunction := { name := name, params := params, result := result, locals := locals, body := s.node }
+          rtReadFunctions fuel count s (fn :: acc)
+
+def rtDecodeModule (bs : List Int) : RtDecoded :=
+  if bs.take 6 != [82, 83, 67, 77, 127, 1] then { (rtDecoded bs) with error := 20 }
+  else
+    let s := rtInteger (rtDecoded (bs.drop 6))
+    if s.value < 1 || s.value > 1000 then { s with error := 20 }
+    else
+      let s := rtReadFunctions 1100 s.value.toNat s []
+      if !s.rest.isEmpty then { s with error := 20 } else s
+
+def rtEmitOk (bytes : List Int) : RtEmission := { bytes := bytes, error := 0 }
+def rtEmitError (error : Nat) : RtEmission := { bytes := [], error := error }
+def rtEmitJoin (a b : RtEmission) : RtEmission :=
+  if a.error != 0 then a else if b.error != 0 then b else rtEmitOk (a.bytes ++ b.bytes)
+
+def rtWasmType (ty : Int) : Int := if ty == 0 then vtI64 else if ty == 1 || ty == 4 then vtI32 else 64
+
+def rtInvert (bytes : List Int) : List Int :=
+  -- Boolean negation is a single target instruction.  The comparison
+  -- complement is an ordinary peephole, independent of object layout.
+  match bytes.reverse with
+  | op :: rest =>
+    let inverse :=
+      if op == 70 then 71 else if op == 71 then 70
+      else if op == 81 then 82 else if op == 82 then 81
+      else if op == 72 then 78 else if op == 78 then 72
+      else if op == 73 then 79 else if op == 79 then 73
+      else if op == 74 then 76 else if op == 76 then 74
+      else if op == 75 then 77 else if op == 77 then 75
+      else if op == 83 then 89 else if op == 89 then 83
+      else if op == 84 then 90 else if op == 90 then 84
+      else if op == 85 then 87 else if op == 87 then 85
+      else if op == 86 then 88 else if op == 88 then 86 else -1
+    if inverse >= 0 then rest.reverse ++ [inverse] else bytes ++ [69]
+  | [] => [69]
+
+-- Tail-position break exits by falling through the loop's end. A repeat
+-- with a mandatory terminal break needs no enclosing block.  A continue
+-- still targets the loop label; nested conditionals add their own labels.
+mutual
+  def rtTailExit (fuel : Nat) (node : RtNode) : Bool :=
+    match fuel with
+    | 0 => false
+    | fuel + 1 =>
+      if node.tag == 9 || node.tag == 10 || node.tag == 11 || node.tag == 12 then true
+      else if node.tag == 5 then rtTailExit fuel (node.args.getLast?.getD rtNil)
+      else if node.tag == 4 && node.args.length == 3 then
+        rtTailExit fuel (rtAt 1 node.args) && rtTailExit fuel (rtAt 2 node.args)
+      else false
+  def rtBreakBeforeTail (fuel : Nat) (node : RtNode) (tail : Bool) : Bool :=
+    match fuel with
+    | 0 => true
+    | fuel + 1 =>
+      if node.tag == 9 then !tail
+      else if node.tag == 7 || node.tag == 8 then false
+      else if node.tag == 5 then rtBreaksList fuel node.args tail
+      else if node.tag == 4 then
+        rtBreakBeforeTail fuel (rtAt 1 node.args) tail || rtBreakBeforeTail fuel (rtAt 2 node.args) tail
+      else false
+  def rtBreaksList (fuel : Nat) (nodes : List RtNode) (tail : Bool) : Bool :=
+    match fuel, nodes with
+    | 0, _ => true
+    | _ + 1, [] => false
+    | fuel + 1, node :: nodes =>
+      rtBreakBeforeTail fuel node (tail && nodes.isEmpty) || rtBreaksList fuel nodes tail
+end
+
+mutual
+  def rtLowerNodeWithFold (fuel : Nat) (rc foldConfiguration : Bool) (types : List Int) (signatures : List RtSignature)
+      (result : Int) (continueDepth breakDepth : Nat) (inLoop tail : Bool) (node : RtNode) : RtEmission :=
+    match fuel with
+    | 0 => rtEmitError 19
+    | fuel + 1 =>
+      if node.tag == 0 then
+        if !node.args.isEmpty || (node.ty != 0 && node.ty != 1 && node.ty != 4) then rtEmitError 15
+        else if node.ty == 0 then rtEmitOk (i64Const (if node.val % 18446744073709551616 >= 9223372036854775808 then node.val % 18446744073709551616 - 18446744073709551616 else node.val % 18446744073709551616))
+        else rtEmitOk (i32Const (if node.val % 4294967296 >= 2147483648 then node.val % 4294967296 - 4294967296 else node.val % 4294967296))
+      else if node.tag == 1 then
+        if node.val < 0 || rtTypeAt node.val.toNat types != node.ty || !node.args.isEmpty then rtEmitError 15
+        else rtEmitOk (lg node.val.toNat)
+      else if node.tag == 13 then
+        if node.ty != 4 || !node.args.isEmpty then rtEmitError 15
+        else rtEmitOk (i32Const (if rc then 1 else 0))
+      else if node.tag == 2 || node.tag == 3 then
+        let prim := rtPrimAt node.val.toNat rtPrimitives
+        let signature := rtSigAt node.val.toNat signatures
+        let args := if node.tag == 2 then prim.args else signature.params
+        let ty := if node.tag == 2 then prim.result else signature.result
+        if node.val < 0 || ty < 0 || node.ty != ty || node.args.length != args.length then rtEmitError 15
+        else if node.tag == 2 && prim.memory then
+          let offset := rtAt 1 node.args
+          if offset.tag != 0 || offset.ty != 0 || offset.val < 0 || offset.val > 4294967295 then rtEmitError 15
+          else
+            let nodes := [rtAt 0 node.args] ++ node.args.drop 2
+            let types2 := [rtTypeAt 0 args] ++ args.drop 2
+            let code := rtLowerArgsWithFold fuel rc foldConfiguration types signatures result continueDepth breakDepth inLoop nodes types2
+            rtEmitJoin code (rtEmitOk (prim.opcode ++ lebS offset.val))
+        else
+          let code := rtLowerArgsWithFold fuel rc foldConfiguration types signatures result continueDepth breakDepth inLoop node.args args
+          rtEmitJoin code (rtEmitOk (if node.tag == 2 then prim.opcode else callFn node.val.toNat))
+      else if node.tag == 4 then
+        let cond := rtAt 0 node.args
+        let yes := rtAt 1 node.args
+        let no := rtAt 2 node.args
+        if node.args.length < 2 || node.args.length > 3 || cond.ty != 4 then rtEmitError 15
+        else if foldConfiguration && cond.tag == 13 then
+          rtLowerNodeWithFold fuel rc foldConfiguration types signatures result continueDepth breakDepth inLoop tail (if rc then yes else no)
+        else
+          let c := rtLowerNodeWithFold fuel rc foldConfiguration types signatures result continueDepth breakDepth inLoop false cond
+          if foldConfiguration && inLoop && tail && yes.tag == 10 && no.tag == 9 then
+            rtEmitJoin c (rtEmitOk ([13] ++ lebU continueDepth))
+          else if foldConfiguration && node.ty == 2 && yes.tag == 5 && yes.args.length == 1 && (rtAt 0 yes.args).tag == 9 && node.args.length == 2 then
+            if !inLoop then rtEmitError 18 else rtEmitJoin c (rtEmitOk ([13] ++ lebU breakDepth))
+          else
+            let y := rtLowerNodeWithFold fuel rc foldConfiguration types signatures result (continueDepth + 1) (breakDepth + 1) inLoop tail yes
+            let n := rtLowerNodeWithFold fuel rc foldConfiguration types signatures result (continueDepth + 1) (breakDepth + 1) inLoop tail no
+            let beginCode := rtEmitJoin c (rtEmitOk [4, rtWasmType node.ty])
+            let arms := rtEmitJoin y (if node.args.length == 3 then rtEmitJoin (rtEmitOk [5]) n else rtEmitOk [])
+            rtEmitJoin (rtEmitJoin beginCode arms) (rtEmitOk [11])
+      else if node.tag == 5 then
+        rtLowerSequenceWithFold fuel rc foldConfiguration types signatures result continueDepth breakDepth inLoop tail node.args
+      else if node.tag == 6 then
+        let value := rtAt 0 node.args
+        if node.args.length != 1 || node.val < 0 || !rtCompatible2 (rtTypeAt node.val.toNat types) value.ty then rtEmitError 15
+        else rtEmitJoin (rtLowerNodeWithFold fuel rc foldConfiguration types signatures result continueDepth breakDepth inLoop false value) (rtEmitOk (ls node.val.toNat))
+      else if node.tag == 7 then
+        let cond := rtAt 0 node.args
+        if node.args.length != 2 || cond.ty != 4 then rtEmitError 15
+        else
+          let hasBreak := rtBreakBeforeTail fuel (rtAt 1 node.args) false
+          let c := rtLowerNodeWithFold fuel rc foldConfiguration types signatures result 1 2 true false cond
+          let body := rtLowerNodeWithFold fuel rc foldConfiguration types signatures result 1 2 true false (rtAt 1 node.args)
+          let beginCode := if hasBreak then [2, 64, 3, 64] else [3, 64]
+          let endCode := if hasBreak then [12, 1, 11, 11, 11] else [12, 1, 11, 11]
+          rtEmitJoin (rtEmitOk beginCode) (rtEmitJoin c (rtEmitJoin (rtEmitOk [4, 64]) (rtEmitJoin body (rtEmitOk endCode))))
+      else if node.tag == 8 then
+        let body := rtAt 0 node.args
+        let flat := if node.args.length == 2 then !rtBreakBeforeTail fuel body false
+          else rtTailExit fuel body && !rtBreakBeforeTail fuel body true
+        let b := rtLowerNodeWithFold fuel rc foldConfiguration types signatures result 0 1 true (flat && node.args.length == 1) body
+        let beginCode := if flat then [3, 64] else [2, 64, 3, 64]
+        if node.args.length == 2 then
+          let cond := rtAt 1 node.args
+          let c := rtLowerNodeWithFold fuel rc foldConfiguration types signatures result 0 1 true false cond
+          if cond.ty != 4 then rtEmitError 15
+          else rtEmitJoin (rtEmitOk beginCode) (rtEmitJoin b (rtEmitJoin { c with bytes := rtInvert c.bytes } (rtEmitOk (if flat then [13, 0, 11] else [13, 0, 11, 11]))))
+        else if node.args.length == 1 then
+          rtEmitJoin (rtEmitOk beginCode) (rtEmitJoin b (rtEmitOk (if flat then [11] else [12, 0, 11, 11])))
+        else rtEmitError 15
+      else if node.tag == 9 || node.tag == 10 then
+        if !inLoop then rtEmitError 18
+        else if node.tag == 9 && tail then rtEmitOk []
+        else rtEmitOk ([12] ++ lebU (if node.tag == 9 then breakDepth else continueDepth))
+      else if node.tag == 11 || node.tag == 12 then
+        if (node.tag == 11 && node.ty != result) || node.args.length != (if node.ty == 2 then 0 else 1) || (node.ty != 2 && !rtCompatible2 node.ty (rtAt 0 node.args).ty) then rtEmitError 15
+        else
+          let value := if node.ty == 2 then rtEmitOk [] else rtLowerNodeWithFold fuel rc foldConfiguration types signatures result continueDepth breakDepth inLoop false (rtAt 0 node.args)
+          rtEmitJoin value (rtEmitOk (if node.tag == 12 || tail then [] else [15]))
+      else rtEmitError 20
+
+  def rtCompatible2 (expected actual : Int) : Bool := expected == actual || actual == 3
+
+  def rtLowerArgsWithFold (fuel : Nat) (rc foldConfiguration : Bool) (types : List Int) (signatures : List RtSignature)
+      (result : Int) (continueDepth breakDepth : Nat) (inLoop : Bool) (nodes : List RtNode) (expected : List Int) : RtEmission :=
+    match fuel, nodes, expected with
+    | 0, _, _ => rtEmitError 19
+    | _ + 1, [], [] => rtEmitOk []
+    | fuel + 1, node :: nodes, ty :: expected =>
+      if !rtCompatible2 ty node.ty then rtEmitError 15
+      else rtEmitJoin (rtLowerNodeWithFold fuel rc foldConfiguration types signatures result continueDepth breakDepth inLoop false node)
+        (rtLowerArgsWithFold fuel rc foldConfiguration types signatures result continueDepth breakDepth inLoop nodes expected)
+    | _, _, _ => rtEmitError 15
+
+  def rtLowerSequenceWithFold (fuel : Nat) (rc foldConfiguration : Bool) (types : List Int) (signatures : List RtSignature)
+      (result : Int) (continueDepth breakDepth : Nat) (inLoop tail : Bool) (nodes : List RtNode) : RtEmission :=
+    match fuel, nodes with
+    | 0, _ => rtEmitError 19
+    | _ + 1, [] => rtEmitOk []
+    | fuel + 1, node :: nodes =>
+      rtEmitJoin (rtLowerNodeWithFold fuel rc foldConfiguration types signatures result continueDepth breakDepth inLoop (tail && nodes.isEmpty) node)
+        (rtLowerSequenceWithFold fuel rc foldConfiguration types signatures result continueDepth breakDepth inLoop tail nodes)
+end
+
+-- Validate every branch before configuration folding.  In particular, a
+-- value-block return is allowed only as that block's final statement; it
+-- cannot accidentally return from an enclosing function or leave a value
+-- on an intermediate wasm stack.
+def rtScalarType (ty : Int) : Bool := ty == 0 || ty == 1 || ty == 4
+
+mutual
+  def rtCheckFlow (fuel : Nat) (result : Int) (finalValue : Int) (node : RtNode) : Bool :=
+    match fuel with
+    | 0 => false
+    | fuel + 1 =>
+      if node.tag == 12 then
+        finalValue == node.ty && node.args.length == (if node.ty == 2 then 0 else 1)
+          && rtCheckFlowList fuel result (-1) node.args
+      else if node.tag == 11 then
+        finalValue == -1 && node.ty == result
+          && node.args.length == (if result == 2 then 0 else 1)
+          && rtCheckFlowList fuel result (-1) node.args
+      else if node.tag == 5 then
+        if node.val == 1 then
+          (rtScalarType node.ty || node.ty == 2) && !node.args.isEmpty
+            && rtCheckBlock fuel result node.ty node.args
+        else node.val == 0 && node.ty == 2 && rtCheckBlock fuel result (-1) node.args
+      else if node.tag == 4 then
+        let yes := rtAt 1 node.args
+        let no := rtAt 2 node.args
+        (node.args.length == 2 || node.args.length == 3) && (rtAt 0 node.args).ty == 4
+          && (if node.ty == 2 then yes.ty == 2 && no.ty == 2
+              else node.args.length == 3 && rtCompatible2 node.ty yes.ty && rtCompatible2 node.ty no.ty)
+          && rtCheckFlowList fuel result (-1) node.args
+      else if node.tag == 0 then
+        node.args.isEmpty && rtScalarType node.ty && (node.ty != 4 || node.val == 0 || node.val == 1)
+      else if node.tag == 1 || node.tag == 13 then rtScalarType node.ty && node.args.isEmpty
+      else if node.tag == 6 || node.tag == 7 || node.tag == 8 || node.tag == 9 || node.tag == 10 then
+        node.ty == 2 && rtCheckFlowList fuel result (-1) node.args
+      else if node.tag == 2 || node.tag == 3 then rtCheckFlowList fuel result (-1) node.args
+      else false
+  def rtCheckFlowList (fuel : Nat) (result finalValue : Int) (nodes : List RtNode) : Bool :=
+    match fuel, nodes with
+    | 0, _ => false
+    | _ + 1, [] => true
+    | fuel + 1, node :: nodes =>
+      rtCheckFlow fuel result finalValue node && rtCheckFlowList fuel result finalValue nodes
+  def rtCheckBlock (fuel : Nat) (result finalValue : Int) (nodes : List RtNode) : Bool :=
+    match fuel, nodes with
+    | 0, _ => false
+    | _ + 1, [] => finalValue == -1
+    | fuel + 1, node :: nodes =>
+      if nodes.isEmpty && finalValue != -1 then
+        node.tag == 12 && rtCheckFlow fuel result finalValue node
+      else (node.ty == 2 || node.ty == 3 || node.tag == 11)
+        && rtCheckFlow fuel result (-1) node && rtCheckBlock fuel result finalValue nodes
+end
+
+def rtReturns : Nat → RtNode → Bool
+  | 0, _ => false
+  | fuel + 1, node =>
+    if node.tag == 11 || (node.tag == 2 && node.ty == 3) then true
+    else if node.tag == 5 then rtReturns fuel (node.args.getLast?.getD rtNil)
+    else node.tag == 4 && node.args.length == 3
+      && rtReturns fuel (rtAt 1 node.args) && rtReturns fuel (rtAt 2 node.args)
+
+-- The first lowering walk is a type/control check with configuration
+-- folding disabled. No unchecked inactive branch reaches code emission.
+-- The second walk retains the byte-preserving RC configuration fold.
+def rtLowerNode (fuel : Nat) (rc : Bool) (types : List Int) (signatures : List RtSignature)
+    (result : Int) (continueDepth breakDepth : Nat) (inLoop tail : Bool) (node : RtNode) : RtEmission :=
+  rtLowerNodeWithFold fuel rc true types signatures result continueDepth breakDepth inLoop tail node
+
+def rtLowerFunction (rc : Bool) (signatures : List RtSignature) (fn : RtFunction) : RtEmission :=
+  if !(fn.params ++ fn.locals).all rtScalarType || !(rtScalarType fn.result || fn.result == 2)
+      || !rtCheckFlow 200000 fn.result (-1) fn.body || (fn.result != 2 && !rtReturns 200000 fn.body) then rtEmitError 15
+  else
+    let checked := rtLowerNodeWithFold 200000 rc false (fn.params ++ fn.locals) signatures fn.result 0 0 false true fn.body
+    if checked.error != 0 then rtEmitError checked.error
+    else
+      let code := rtLowerNode 200000 rc (fn.params ++ fn.locals) signatures fn.result 0 0 false true fn.body
+      rtEmitJoin code (rtEmitOk [11])
+
+def rtWasmFunction (rc : Bool) (signatures : List RtSignature) (fn : RtFunction) : WFn :=
+  { params := fn.params.map rtWasmType,
+    results := if fn.result == 2 then [] else [rtWasmType fn.result],
+    locals := fn.locals.map rtWasmType,
+    code := (rtLowerFunction rc signatures fn).bytes }
