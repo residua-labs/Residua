@@ -2,12 +2,13 @@
 
 English | [中文](ACKNOWLEDGEMENTS.zh-CN.md)
 
-Residua is a research project. It builds on the work of many other projects. This file lists every project whose code
-we ported, whose tools or data we used as a test oracle, and whose design we studied, as far as our records show.
-The per-file record for each release is `release/NOTICES.md` and `release/PROVENANCE.tsv` in that release.
+Residua is a research project and builds on the work of many others. This file lists, as far as our records show, every
+project whose code we ported, whose tools or data we used as a test oracle, and whose design we studied. The per-file
+record of each release is `release/NOTICES.md` and `release/PROVENANCE.tsv` in that release. Bibliographic references for
+the papers named below are in the reference list of [README.md](README.md#references).
 
 **If you find code or an idea taken from your work without credit here, please tell us**, by opening an issue or by
-private vulnerability reporting on this repository. We will add the credit, and fix the release, as a matter of course.
+private vulnerability reporting on this repository. We will add the credit and correct the release.
 
 ## Code ported into Residua (licence as published upstream)
 - Lean 4 — leanprover/lean4 (Apache-2.0): the compiler IR passes (RC, borrow, reset/reuse, dead-code, case simplification,

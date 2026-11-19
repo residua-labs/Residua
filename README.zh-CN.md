@@ -4,25 +4,41 @@
 
 [English](README.md) | 中文
 
-Residua 是一个研究项目，目标是构建这样一套基础设施：使用别人的计算或证明，而不必信任对方。每个结果都由内容地址（*q*，即结果本身的 SHA-256
-摘要）标识，而不是由谁产出、用哪个版本的工具链构建来标识；结果只有经过对照形式语义的机械检查，才会被接纳。
+## 摘要
 
-语言 **rsd** 的设计目标是：程序和证明是同一个依赖类型理论里的项，同一个项既被编译成原生或 WebAssembly 代码，又被证明内核检查。0.1 交付的是这个设计中
-编译的那一半；证明检查的那一半（R-CIC 内核）是下一个版本的内容。
+Residua 是一个研究项目，研究互不信任的各方之间如何复用计算结果与证明结果。一个结果由其内容地址（*q*，即结果内容的 SHA-256
+摘要）标识，而不由产出者或构建它的工具链版本标识；结果只有经过对照形式语义的机械检查，才被接纳。
 
-> **状态：** 研究版本 **0.1**，即 rsd 编译器的最小自举闭合。
+项目的语言 **rsd** 的设计目标是：程序和证明是同一个依赖类型理论中的项，同一个项既被编译为原生或 WebAssembly 代码，又由证明内核
+检查。0.1 版交付这一设计中编译的那一半：一条自举的编译链，任何第三方都可以从仓库中提交的种子出发验证其来源。证明检查的那一半
+（R-CIC 内核）是后续版本的内容。
+
+> **状态。** 研究版本 **0.1**（2026-11-19）：rsd 编译器的最小自举闭合。
 > 目前还不是通用语言，见[限制](#限制)。
 
-## 为什么
+## 动机
 
-- **检查本身并不贵。** 对形式化结果来说，上游变化后的重新检查、修复、协调和审查，成本远高于内核检查本身。
-- **产出者将是机器。** 未来大多数结果来自不可信的自动化 agent，能扩展到这种规模的只有机械检查和内容标识。
-- **语义彼此隔离。** 结果分散在不同系统里（Lean、Rocq、K、WebAssembly、EVM），彼此之间无法直接组合。
+1. **形式化结果的成本主要在维护。** 在形式化开发中，上游变化后的重新检查、修复、协调和审查，成本远高于内核检查本身。
+2. **产出者越来越多地是自动化程序。** 未来的大多数结果来自自动化 agent，其产出不能凭产出者的声明被接受。能扩展到这种情形的，只有
+   机械检查和内容标识。
+3. **语义彼此隔离。** 结果分散在不同系统中（Lean、Rocq、K、WebAssembly、EVM），彼此之间不能直接沿用。
+4. **结果与工具链版本绑定。** 在现有的证明助手中，编译后的库只能用于构建它的那个工具链版本（例如 Lean 的 `.olean` 文件），所以
+   版本一变，下游就要全部重新构建、重新检查。以内容标识的结果，跨版本仍是同一个结果。
 
-## 0.1 提供什么
+## 方法
 
-**来源可验证的编译。** 拿到一份源码和一个产物，任何人只用 C 编译器，就能从仓库里提交的 WebAssembly 种子重建编译器，并逐字节核对产物确实来自这份源码；
-既不需要信任发布者，也不需要信任庞大的二进制工具链。
+- **以内容为身份。** 产物和结果都由内容地址 *q* 标识。能否复用只看 *q* 是否相等，不看名字、位置或产出者。
+- **以检查为接纳。** 结果只有通过对照形式语义的机械检查才能进入系统。产出者无论是人、编译器还是自动化 agent，都在可信基之外
+  （de Bruijn 准则 [9]）。
+- **程序与证明同一种语言。** 按设计，一个 rsd 项既被编译，又由同一个内核检查，所以关于程序的陈述，说的就是实际运行的那个项。
+- **可验证的工具链。** 产出其他一切产物的编译器，本身可以从一个已提交的种子复现，所以它的来源是被检查的，而不是被假定的。
+
+## 0.1 版
+
+### 贡献
+
+**来源可验证的编译。** 给定一份源码和一个产物，任何一方只用 C 编译器，就能从仓库中提交的 WebAssembly 种子重建编译器，并逐字节
+核对该产物确实由这份源码得到；既不需要信任发布者，也不需要信任庞大的二进制工具链。
 
 | 组成 | 内容 |
 |---|---|
@@ -32,13 +48,14 @@ Residua 是一个研究项目，目标是构建这样一套基础设施：使用
 | 性能记录 | 在固定硬件上与 Koka 及另外六种语言对比（[`perf/`](perf/README.zh-CN.md)） |
 | 文档 | 安装、验证流程、架构、信任模型、术语表、稳定性策略、FAQ（`release/docs/`，中英文） |
 
-### 本版本的验证
+### 证据
 
-- 一个对项目一无所知的独立 agent，只凭文档，在全新的 Linux 虚拟机上复现了种子配方：两个编译器重建后与种子逐字节一致。
-- 本版本经过两个相互独立的模型家族审查。
-- 标签 `rsd-0.1` 上的仓库内容与发布的源码包逐字节一致。
+- **独立复现。** 一个对项目一无所知的独立 agent，只凭文档，在全新的 Linux 虚拟机上复现了种子配方：两个编译器重建后与种子
+  逐字节一致。
+- **独立审查。** 本版本经过两个相互独立的模型家族审查。
+- **源码包一致。** 标签 `rsd-0.1` 上的仓库内容与发布的源码包逐字节一致。
 
-## 快速开始
+## 复现自举
 
 环境要求：Linux x86-64、GCC、GNU binutils、coreutils、Bash、curl 和 tar。不需要 Lean、Node 或 OCaml。
 
@@ -52,32 +69,28 @@ env -i PATH=/usr/bin:/bin bash --noprofile --norc
 #    然后执行 bootstrap/seed/stage-14274/README.md 中的命令
 ```
 
-配方会下载钉住版本的 WABT，把两个种子执行器翻译成 C 并编译，再从源码重新编译两个编译器；只有重建结果与提交的种子逐字节一致时才返回 0。
+配方会下载钉住版本的 WABT，把两个种子执行器翻译成 C 并编译，再从源码重新编译两个编译器；只有重建结果与提交的种子逐字节一致时
+才返回 0。
 
-接下来：
+延伸阅读：
 
 - [`release/docs/QUICKSTART`](release/docs/QUICKSTART)：第一次运行的详细步骤，以及如何编译一个源文件
 - [`release/docs/VERIFY-RELEASE`](release/docs/VERIFY-RELEASE)：本版本的全部摘要核对
 - [`release/docs/OVERVIEW.zh-CN`](release/docs/OVERVIEW.zh-CN) 和 [`release/docs/ARCHITECTURE.zh-CN`](release/docs/ARCHITECTURE.zh-CN)：0.1 是什么，各层如何衔接
 
-## 性能
+## 评测
 
-测于 GCP t2d-standard-4（两台全新虚拟机，5 次运行取中位数，固定核心）。比值 = Residua 用时 / 对方用时，小于 1 表示 Residua 更快。程序原样取自
-Koka 的基准套件（Perceus 论文，PLDI 2021）和 Lean 4 的基准。
+**方法。** GCP t2d-standard-4；两台全新虚拟机；固定核心上 5 次运行取中位数。比值 = Residua 的墙钟时间 / 参照的墙钟时间，小于 1
+表示 Residua 更快。程序原样取自 Koka 的基准套件（Perceus 论文 [5] 所用的套件）和 Lean 4 的基准。
 
 | 几何平均，Residua 0.1 / … | Koka（原生） | Koka（wasm） | C++ | OCaml | Haskell | Java | Lean 4.14 |
 |---|---:|---:|---:|---:|---:|---:|---:|
 | 比值 | 0.973 | 1.047 | 0.822 | 0.586 | 0.281 | 0.451 | 0.570 |
 
-从种子自举用时 1162 秒（峰值 3.6 GiB）。逐程序的表格、空格及其原因、每个版本的历史，见 [`perf/`](perf/README.zh-CN.md)。
+从种子自举用时 1162 秒（峰值 3.6 GiB）。
 
-## 版本记录
-
-| 版本 | 日期 | 源码包 SHA-256 | 说明 |
-|---|---|---|---|
-| [0.1](https://github.com/residua-labs/Residua/releases/tag/rsd-0.1) | 2026-11-19 | `59d0956e…` | 首个公开版本：最小自举闭合 |
-
-完整记录：[CHANGELOG.zh-CN.md](CHANGELOG.zh-CN.md)。
+**适用范围。** 这些数字描述的是一种机型上的一个小套件，刻画的是本版本，并不是对所比较语言的一般性排名。逐程序的表格、空格及其
+原因、工具链版本和每个版本的历史，见 [`perf/`](perf/README.zh-CN.md)。
 
 ## 限制
 
@@ -90,15 +103,31 @@ Koka 的基准套件（Perceus 论文，PLDI 2021）和 Lean 4 的基准。
 - 内容标识（q）的格式尚未定稿。
 - 0.1 的表面语言是严格的自举子集，拒绝 `theorem`、`axiom`、`class`、`abbrev` 和 `by`（[`release/docs/LANGUAGE`](release/docs/LANGUAGE)）。
 
-## 路线图
+## 研究议程
 
-版本按目标闭合的顺序编号为 0.2、0.3……，不承诺日期。
+功能版本按目标完成的先后编号为 0.2、0.3……。哪个目标对应哪个编号不预先指定，也不承诺日期。目标如下：
 
-1. **检查他人的结果。** R-CIC 证明内核：在 Lean4Lean 检查过的语料上与其结论一致，并且不接受 Lean Kernel Arena 中的任何无效输入；最终的 q 格式；
-   结果的发布与查询入口。
-2. **编程完整性。** 模块、`UInt64`、64 位寻址、I/O 执行层、真实应用套件。
-3. **低成本确认执行。** wasm0 → AIR → 零知识证明。
-4. **连接外部语义。** K/KORE、Lean 和 Rocq 导入。
+- **检查他人的结果。** R-CIC 证明内核：结论与 Lean4Lean [7] 一致，并且不接受 Lean Kernel Arena 中的任何无效输入；最终的 q 格式；
+  结果的发布与查询入口。
+- **编程完整性。** 模块、`UInt64`、64 位寻址、I/O 执行层、真实应用套件。
+- **低成本确认执行。** wasm0 → AIR → 零知识证明。
+- **连接外部语义。** K/KORE、Lean 和 Rocq 导入。
+
+## 相关工作
+
+基于种子的自举针对的是"信任之信任"（trusting trust）问题 [1]；相关的途径有多样化双重编译（diverse double-compiling）[2] 和
+可自举构建（bootstrappable builds）[3]，编译器的经验证自举由 CakeML [4] 确立。后端以带复用的引用计数管理内存，方法来自 "Counting Immutable Beans" [6] 和 Perceus [5]；其各遍移植自 Lean 4 的编译器
+[11]，目标是 WebAssembly [12]。凭可检查的证据接受不可信产出者的结果，属于携带证明的代码（proof-carrying code）[8] 这一传统；逐层的翻译检查属于
+翻译验证（translation validation）[10] 这一传统。计划中的证明内核以 Lean4Lean [7] 为对照。[ACKNOWLEDGEMENTS.zh-CN.md](ACKNOWLEDGEMENTS.zh-CN.md) 列出了
+本项目移植的代码、用作测试参照的工具，以及研究过的设计。
+
+## 版本记录
+
+| 版本 | 日期 | 源码包 SHA-256 | 说明 |
+|---|---|---|---|
+| [0.1](https://github.com/residua-labs/Residua/releases/tag/rsd-0.1) | 2026-11-19 | `59d0956e…` | 首个公开版本：最小自举闭合 |
+
+完整记录：[CHANGELOG.zh-CN.md](CHANGELOG.zh-CN.md)。
 
 ## 仓库结构
 
@@ -110,14 +139,47 @@ Koka 的基准套件（Perceus 论文，PLDI 2021）和 Lean 4 的基准。
 | `release/` | 发布清单、来源记录、声明、许可证和文档 |
 | `perf/` | 每个版本的性能记录 |
 
+## 引用
+
+请引用你所使用的版本，并附其源码包的摘要：
+
+```bibtex
+@software{residua_0_1,
+  title   = {Residua: Verifiable Computation and Proof, Identified by Content},
+  author  = {{Residua Labs contributors}},
+  year    = {2026},
+  version = {0.1},
+  url     = {https://github.com/residua-labs/Residua/releases/tag/rsd-0.1},
+  note    = {Source archive SHA-256 59d0956e3bbaed0ddf176b9bc3ffa0e9fdb401acb1e021400f0e8b99ce110ef1}
+}
+```
+
 ## 贡献与安全
 
 欢迎提交 issue。安全问题请通过本仓库的 GitHub 私密漏洞报告提交，见 [`release/docs/CONTRIBUTING-SECURITY.zh-CN`](release/docs/CONTRIBUTING-SECURITY.zh-CN)。
 
 ## 致谢
 
-Residua 建立在许多其他项目之上。[ACKNOWLEDGEMENTS.zh-CN.md](ACKNOWLEDGEMENTS.zh-CN.md) 列出了我们移植的代码、用作测试参照的工具，以及研究过的设计；
-逐文件的署名见 `release/NOTICES.md` 和 `release/PROVENANCE.tsv`。如果你发现自己的工作被使用却没有致谢，请开 issue 或使用私密漏洞报告，我们会改正。
+Residua 建立在许多其他项目之上。[ACKNOWLEDGEMENTS.zh-CN.md](ACKNOWLEDGEMENTS.zh-CN.md) 列出了我们移植的代码、用作测试参照的工具，
+以及研究过的设计；逐文件的署名见 `release/NOTICES.md` 和 `release/PROVENANCE.tsv`。如果你发现自己的工作被使用却没有致谢，请开 issue
+或使用私密漏洞报告，我们会改正。
+
+## 参考文献
+
+1. K. Thompson. Reflections on trusting trust. *Communications of the ACM* 27(8), 1984.
+2. D. A. Wheeler. Countering trusting trust through diverse double-compiling. *ACSAC*, 2005.
+3. Bootstrappable Builds. https://bootstrappable.org
+4. R. Kumar, M. O. Myreen, M. Norrish, S. Owens. CakeML: a verified implementation of ML. *POPL*, 2014.
+5. A. Reinking, N. Xie, L. de Moura, D. Leijen. Perceus: garbage free reference counting with reuse. *PLDI*, 2021.
+6. S. Ullrich, L. de Moura. Counting immutable beans: reference counting optimized for purely functional programming.
+   *IFL*, 2019.
+7. M. Carneiro. Lean4Lean: verifying a typechecker for Lean, in Lean. arXiv:2403.14064, 2024.
+8. G. C. Necula. Proof-carrying code. *POPL*, 1997.
+9. H. Barendregt, F. Wiedijk. The challenge of computer mathematics. *Philosophical Transactions of the Royal Society A*
+   363, 2005.
+10. A. Pnueli, M. Siegel, E. Singerman. Translation validation. *TACAS*, 1998.
+11. L. de Moura, S. Ullrich. The Lean 4 theorem prover and programming language. *CADE*, 2021.
+12. A. Haas et al. Bringing the web up to speed with WebAssembly. *PLDI*, 2017.
 
 ## 许可证
 

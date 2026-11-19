@@ -2,13 +2,20 @@
 
 English | [中文](README.zh-CN.md)
 
-One record per version, measured the same way so that versions can be compared. Every row of every version is in
-[HISTORY.tsv](HISTORY.tsv) (machine-readable; a new version appends its rows). The full form and rules of a record are in
-`release/docs/PERF-RECORD` of that version's source.
+There is one record per version, measured by one fixed method so that versions can be compared. Every row of every
+version is in [HISTORY.tsv](HISTORY.tsv) (machine-readable; a new version appends its rows). The full form and rules of
+a record are in `release/docs/PERF-RECORD` of that version's source.
 
-**Machine:** GCP t2d-standard-4 (AMD EPYC 7B13, 4 vCPUs), Linux x86_64; two fresh VMs per version; each value is the mean of
-the two VMs' medians of 5 runs on a pinned core. **Reference:** Koka 3.2.9 on the same machine and the same benchmark suite.
-A ratio is residua wall time / Koka wall time (below 1 = faster than Koka).
+## Method
+
+**Machine.** GCP t2d-standard-4 (AMD EPYC 7B13, 4 vCPUs), Linux x86_64; two fresh virtual machines per version. Each value
+is the mean of the two machines' medians of 5 runs on a pinned core. **Reference.** Koka 3.2.9 on the same machine and
+the same benchmark suite. **Metric.** A ratio is Residua's wall time divided by Koka's; below 1, Residua is faster.
+
+**Scope and limitations.** The suite is small; its programs are allocation-heavy functional workloads, each run on one
+pinned core; and one machine type is measured. The ratios characterise a release on this suite; they are not a general ranking of
+the languages compared. Rows that are not like-for-like ports are recorded and excluded from the geometric means, as
+marked below.
 
 ## Summary
 
