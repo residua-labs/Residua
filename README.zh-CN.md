@@ -16,11 +16,23 @@ Residua 的设计是计算和证明一体：在它的语言 rsd 中，程序和�
 - 将来的结果大多由不可信的机器产出。能扩展到这种规模的，只有机械检查和按内容识别。
 - 形式语义彼此割裂（证明助手、编程语言、虚拟机），结果无法跨越它们组合。
 
-## 状态
+## 0.1 版本
 
-本仓库正在为第一个版本 0.1 做准备。之前的内容是开发测试，已经移除。0.1 将提供可验证来源的编译：一个提交在仓库中
-的种子，只用 C 编译器就能从源码逐字节重建 rsd 编译器；每一层编译都有冻结的形式语义；一份实测的性能记录；以及写明
-的版本局限。发布说明会准确说明它包含什么、不包含什么。
+0.1 是最小的自举闭合：两个 rsd 编译器（前端 `rsdc`、后端 `rsc`）提交在仓库里的 WebAssembly 种子、构建这个种子所用的 54 个源文件、
+运行时、每一层的形式语义，以及文档。它以一个源码包的形式发布在
+[rsd-0.1 release](https://github.com/residua-labs/Residua/releases/tag/rsd-0.1)：
+
+- `rsd-src.tar`，sha256 `59d0956e3bbaed0ddf176b9bc3ffa0e9fdb401acb1e021400f0e8b99ce110ef1`，201 个文件；
+- `rsd-src.tar.sha256`。
+
+可以验证什么：在一台干净的 Linux x86-64 机器上，只用 C 编译器和常用的命令行工具（不需要 Lean、Node 或 OCaml），按
+`bootstrap/seed/stage-14274/README.md` 里的配方，从源码重建两个编译器，并逐字节复现提交的种子。从 `release/docs/QUICKSTART`
+开始；`release/docs/VERIFY-RELEASE` 列出了每一项哈希核对。一个事先对项目一无所知的独立 agent，只凭文档，在全新的虚拟机上复现了这个不动点。
+
+不包括什么：证明检查器、模块和 agent 工具在后续版本。限制见 `release/docs/RELEASE-NOTES`、`TRUST`、`STABILITY` 和 `RESIDUES`；
+`release/docs/PERF-RECORD` 给出在固定硬件上和 Koka 对比的实测性能。
+
+安全问题：请使用本仓库的 GitHub 私密漏洞报告。
 
 ## 许可证
 
