@@ -2,6 +2,8 @@
 
 English | [中文](README.zh-CN.md)
 
+Performance: [perf/](perf/README.md) holds the performance record of every version, measured the same way so versions can be compared.
+
 Residua is infrastructure for using another party's computation or proof
 without trusting that party: results are identified by content (q) and
 admitted only by mechanical checking, over a network of formally defined
