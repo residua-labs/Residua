@@ -4,6 +4,10 @@ Residua is infrastructure for using another party's computation or proof without
 identified by the content address (q) of what they are, not by who produced them or which toolchain version built them,
 and they are admitted only by mechanical checking, over a network of formally defined semantics.
 
+Residua is designed so that computation and proof are one: in rsd, its language, a program and a proof are terms of the
+same dependent type theory, and the same term is both compiled to native or WebAssembly code and checked by the kernel.
+This is not yet demonstrated end to end; version 0.1 ships the compilation half.
+
 ## Why
 
 - Re-checking, repair after upstream changes, coordination and review dominate the cost of formal results; the kernel
