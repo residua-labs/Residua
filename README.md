@@ -83,6 +83,14 @@ benchmarks.
 Self-bootstrap from the seed takes 1162 s (peak 3.6 GiB). Per-program tables, empty cells and their causes, and the history
 of every version are in [`perf/`](perf/README.md).
 
+## Releases
+
+| Version | Date | Archive SHA-256 | Notes |
+|---|---|---|---|
+| [0.1](https://github.com/residua-labs/Residua/releases/tag/rsd-0.1) | 2026-11-19 | `59d0956e…` | First public release: minimal self-bootstrapping closure |
+
+Full history: [CHANGELOG.md](CHANGELOG.md).
+
 ## Limitations
 
 Release 0.1 is for reproducible, auditable compilation and for research on verified, bootstrappable compilers.

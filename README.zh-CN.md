@@ -71,6 +71,14 @@ Koka 的基准套件（Perceus 论文，PLDI 2021）和 Lean 4 的基准。
 
 从种子自举用时 1162 秒（峰值 3.6 GiB）。逐程序的表格、空格及其原因、每个版本的历史，见 [`perf/`](perf/README.zh-CN.md)。
 
+## 版本记录
+
+| 版本 | 日期 | 源码包 SHA-256 | 说明 |
+|---|---|---|---|
+| [0.1](https://github.com/residua-labs/Residua/releases/tag/rsd-0.1) | 2026-11-19 | `59d0956e…` | 首个公开版本：最小自举闭合 |
+
+完整记录：[CHANGELOG.zh-CN.md](CHANGELOG.zh-CN.md)。
+
 ## 限制
 
 0.1 用于可复现、可审计的编译，以及可验证、可自举编译器的研究。
