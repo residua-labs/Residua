@@ -1,84 +1,116 @@
 # Residua
 
+**以内容标识的可验证计算与证明。**
+
 [English](README.md) | 中文
 
-性能：[perf/](perf/README.zh-CN.md) 保存每个版本的性能记录，测量方法相同，版本之间可以比较。
+Residua 是一个研究项目，目标是构建这样一套基础设施：使用别人的计算或证明，而不必信任对方。每个结果都由内容地址（*q*，即结果本身的 SHA-256
+摘要）标识，而不是由谁产出、用哪个版本的工具链构建来标识；结果只有经过对照形式语义的机械检查，才会被接纳。
 
-Residua 是一套基础设施，让人无需信任对方，就能使用对方的计算或证明。一个结果按其内容的地址（q）来识别，
-而不是按谁产出了它、或用哪个版本的工具链构建了它；结果只凭机械检查准入，建立在一张形式化定义的语义网络之上。
-Residua 的设计是计算和证明一体：在它的语言 rsd 中，程序和证明是同一个依赖类型论中的项，同一个项既被编译成
-原生代码或 WebAssembly，又由内核检查。这一点尚未端到端证实；0.1 版本交付的是编译这一半——证明检查那一半
-（R-CIC 内核）在后续版本，见下文的版本局限。
+语言 **rsd** 的设计目标是：程序和证明是同一个依赖类型理论里的项，同一个项既被编译成原生或 WebAssembly 代码，又被证明内核检查。0.1 交付的是这个设计中
+编译的那一半；证明检查的那一半（R-CIC 内核）是下一个版本的内容。
+
+> **状态：** 研究版本 **0.1**，即 rsd 编译器的最小自举闭合。
+> 目前还不是通用语言，见[限制](#限制)。
 
 ## 为什么
 
-- 形式化结果的成本主要花在重复检查、上游变化后的修补、协调和审查上；内核检查本身只占一小部分。
-- 将来的结果大多由不可信的机器产出。能扩展到这种规模的，只有机械检查和按内容识别。
-- 形式语义彼此割裂（Lean、Rocq、K、wasm、EVM），结果无法跨越它们组合。
+- **检查本身并不贵。** 对形式化结果来说，上游变化后的重新检查、修复、协调和审查，成本远高于内核检查本身。
+- **产出者将是机器。** 未来大多数结果来自不可信的自动化 agent，能扩展到这种规模的只有机械检查和内容标识。
+- **语义彼此隔离。** 结果分散在不同系统里（Lean、Rocq、K、WebAssembly、EVM），彼此之间无法直接组合。
 
 ## 0.1 提供什么
 
-可验证来源的编译。给定一份源码和一份产物，任何人都可以从提交在仓库中的 wasm 种子出发——只用 C 编译器，
-不需要别的工具链——逐字节重建，核验这份产物确实来自这份源码：既不必信任发布者，也不必信任一个庞大的
-二进制工具链。
+**来源可验证的编译。** 拿到一份源码和一个产物，任何人只用 C 编译器，就能从仓库里提交的 WebAssembly 种子重建编译器，并逐字节核对产物确实来自这份源码；
+既不需要信任发布者，也不需要信任庞大的二进制工具链。
 
-支撑它的：
+| 组成 | 内容 |
+|---|---|
+| 编译链 | `rsd → rscm → wasm`：前端 `rsdc` 和后端 `rsc`，附完整源码（54 个文件，以 SHA-256 钉住） |
+| 种子 | `bootstrap/seed/stage-14274/`：两个编译器的 WebAssembly 形式、重建配方及其核对的全部摘要 |
+| 形式语义 | 每一层（scm、λRC、wasm0）冻结的规范，以内容摘要钉住（`semantics/`、`gates/semalign/`、`lean/rsd-cert/`） |
+| 性能记录 | 在固定硬件上与 Koka 及另外六种语言对比（[`perf/`](perf/README.zh-CN.md)） |
+| 文档 | 安装、验证流程、架构、信任模型、术语表、稳定性策略、FAQ（`release/docs/`，中英文） |
 
-- rsd 编译器链 `rsd -> rscm -> wasm`（`rsdc`、`rsc`），其自身源码就在本归档中
-- 逐层冻结的形式语义（scm、lambda-RC、wasm0），按内容地址钉住，以规范文本形式随
-  `semantics/`、`gates/semalign/` 与 `lean/rsd-cert/` 发货
-- 每版本一份的性能记录（`release/docs/PERF-RECORD.tsv`；固定的 PERF-RECORD-0 形式
-  见 `release/docs/PERF-RECORD`）
-- 两个不同模型族的封签，以及种子配方的第三方复现（证据在仓库侧）
+### 本版本的验证
 
-从这里开始：
+- 一个对项目一无所知的独立 agent，只凭文档，在全新的 Linux 虚拟机上复现了种子配方：两个编译器重建后与种子逐字节一致。
+- 本版本经过两个相互独立的模型家族审查。
+- 标签 `rsd-0.1` 上的仓库内容与发布的源码包逐字节一致。
 
-- `release/docs/INSTALL` — 最少步骤
-- `release/docs/QUICKSTART` — 第一次运行，逐步说明
-- `release/docs/VERIFY-RELEASE` — 完整核验规程
-- `release/docs/OVERVIEW` — 0.1 有什么、没有什么
-- `release/docs/ARCHITECTURE` — 语义链、表面语法、身份与信任
-- `release/docs/TRUST`、`GLOSSARY`、`STABILITY`、`FAQ`、
-  `RELATED-WORK`、`CONTRIBUTING-SECURITY` — 0.1 信任什么、用语、
-  承诺，以及与其他工作的关系（各在 `release/docs/` 下，英文附
-  中文镜像）
-- `release/MANIFEST.md` — 本归档按之构建的发布需求
+## 快速开始
 
-## 0.1 的版本局限
+环境要求：Linux x86-64、GCC、GNU binutils、coreutils、Bash、curl 和 tar。不需要 Lean、Node 或 OCaml。
 
-- 单模块程序（不接受 `import`）
-- 没有 I/O 执行层
-- 没有证明检查（R-CIC 检查器不在本版本中；随附的 `theorem` 文本是钉住的规范，
-  不是被检查的断言）
-- 没有 UInt64；4 GiB 地址空间
-- q 内容寻址格式尚未定稿
-- 没有结果的发布/查询入口
-- 0.1 的 `.rsd` 面是严格的引导子集——`theorem`、`axiom`、`class`、`abbrev`、
-  `by` 均被拒绝（`release/docs/LANGUAGE`）
+```sh
+# 1. 从 rsd-0.1 发布页下载并核对源码包
+sha256sum -c rsd-src.tar.sha256
+mkdir rsd-src && tar -xf rsd-src.tar -C rsd-src && cd rsd-src
 
-0.1 面向可复现、可审计的编译——供应链、可信执行之前的那一步——以及可验证、可
-自举编译器的研究。它不以通用语言的面目发布。
+# 2. 在干净环境中从种子重建两个编译器（20–45 分钟）
+env -i PATH=/usr/bin:/bin bash --noprofile --norc
+#    然后执行 bootstrap/seed/stage-14274/README.md 中的命令
+```
 
-## 0.1 之后的顺序
+配方会下载钉住版本的 WABT，把两个种子执行器翻译成 C 并编译，再从源码重新编译两个编译器；只有重建结果与提交的种子逐字节一致时才返回 0。
 
-每项都带验收对象；不写日期。
+接下来：
 
-1. 不信任对方即可使用其结果，第一个实例：R-CIC 内核（Lean Kernel Arena：任何非法
-   输入都不被接受，然后 init/std，再然后 16 GiB 内的 mathlib）加上 q 格式和 Jig 的
-   发布/查询入口——这是陌生人第一次能找到、检查并复用他人结果的点；排在编程
-   特性之前。
-2. 编程完备性：模块、真实程序、UInt64、执行层（I/O 作类型化效果）、64 位寻址，
-   以及应用套件（Cedar、Anvil、Tendril、SQLite）作为验收。
-3. 廉价的执行确认：wasm0 -> AIR -> zk。
-4. 网络：通往外部语义的通用连接器（K/KORE、Lean/Rocq 导入），按一座桥能打开
-   多少语义排序。
+- [`release/docs/QUICKSTART`](release/docs/QUICKSTART)：第一次运行的详细步骤，以及如何编译一个源文件
+- [`release/docs/VERIFY-RELEASE`](release/docs/VERIFY-RELEASE)：本版本的全部摘要核对
+- [`release/docs/OVERVIEW.zh-CN`](release/docs/OVERVIEW.zh-CN) 和 [`release/docs/ARCHITECTURE.zh-CN`](release/docs/ARCHITECTURE.zh-CN)：0.1 是什么，各层如何衔接
 
-## 命名
+## 性能
 
-Residua 是项目。`rsd` 是语言和工具链。`raisin` 留在内部。
+测于 GCP t2d-standard-4（两台全新虚拟机，5 次运行取中位数，固定核心）。比值 = Residua 用时 / 对方用时，小于 1 表示 Residua 更快。程序原样取自
+Koka 的基准套件（Perceus 论文，PLDI 2021）和 Lean 4 的基准。
 
-closure_claim = 0
+| 几何平均，Residua 0.1 / … | Koka（原生） | Koka（wasm） | C++ | OCaml | Haskell | Java | Lean 4.14 |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| 比值 | 0.973 | 1.047 | 0.822 | 0.586 | 0.281 | 0.451 | 0.570 |
 
-## 研究项目与致谢
+从种子自举用时 1162 秒（峰值 3.6 GiB）。逐程序的表格、空格及其原因、每个版本的历史，见 [`perf/`](perf/README.zh-CN.md)。
 
-Residua 是一个研究项目，建立在许多其他项目之上；[ACKNOWLEDGEMENTS.zh-CN.md](ACKNOWLEDGEMENTS.zh-CN.md) 列出了我们移植过的代码、用作测试参照的工具，以及研究过的设计。如果你发现自己的工作被使用却没有致谢，请开 issue 或使用私密漏洞报告；我们会补上致谢并修正发布。
+## 限制
+
+0.1 用于可复现、可审计的编译，以及可验证、可自举编译器的研究。
+
+- 只支持单模块程序（没有 `import`）。
+- 没有 I/O 执行层。
+- 不检查证明：R-CIC 内核不在本版本中，发布的 `theorem` 文本是规范，不是已检查的结论。
+- 没有 `UInt64`；地址空间为 4 GiB。
+- 内容标识（q）的格式尚未定稿。
+- 0.1 的表面语言是严格的自举子集，拒绝 `theorem`、`axiom`、`class`、`abbrev` 和 `by`（[`release/docs/LANGUAGE`](release/docs/LANGUAGE)）。
+
+## 路线图
+
+版本按目标闭合的顺序编号为 0.11、0.12……，不承诺日期。
+
+1. **检查他人的结果。** R-CIC 证明内核：在 Lean4Lean 检查过的语料上与其结论一致，并且不接受 Lean Kernel Arena 中的任何无效输入；最终的 q 格式；
+   结果的发布与查询入口。
+2. **编程完整性。** 模块、`UInt64`、64 位寻址、I/O 执行层、真实应用套件。
+3. **低成本确认执行。** wasm0 → AIR → 零知识证明。
+4. **连接外部语义。** K/KORE、Lean 和 Rocq 导入。
+
+## 仓库结构
+
+| 路径 | 内容 |
+|---|---|
+| `bootstrap/` | 提交的种子、重建配方和 C 主机桥接 |
+| `rsdc/`、`rsc/`、`lib/` | 编译器源码（前端、后端、共享库和运行时） |
+| `semantics/`、`gates/`、`lean/` | 冻结的形式语义和逐层翻译检查 |
+| `release/` | 发布清单、来源记录、声明、许可证和文档 |
+| `perf/` | 每个版本的性能记录 |
+
+## 贡献与安全
+
+欢迎提交 issue。安全问题请通过本仓库的 GitHub 私密漏洞报告提交，见 [`release/docs/CONTRIBUTING-SECURITY.zh-CN`](release/docs/CONTRIBUTING-SECURITY.zh-CN)。
+
+## 致谢
+
+Residua 建立在许多其他项目之上。[ACKNOWLEDGEMENTS.zh-CN.md](ACKNOWLEDGEMENTS.zh-CN.md) 列出了我们移植的代码、用作测试参照的工具，以及研究过的设计；
+逐文件的署名见 `release/NOTICES.md` 和 `release/PROVENANCE.tsv`。如果你发现自己的工作被使用却没有致谢，请开 issue 或使用私密漏洞报告，我们会改正。
+
+## 许可证
+
+Apache License 2.0。见 [LICENSE](LICENSE) 和 [NOTICE](NOTICE)。
