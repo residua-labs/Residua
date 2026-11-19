@@ -2,7 +2,7 @@
 
 English | [中文](CHANGELOG.zh-CN.md)
 
-Versions: a feature release is 0.11, 0.12, …; a small iteration of a published release (documents, attribution, packaging,
+Versions: a feature release is 0.2, 0.3, …; a small iteration of a published release (documents, attribution, packaging,
 shipped test suites, with the bootstrap recipe's inputs unchanged) is 0.1.1, 0.1.2, …. A published tag is never moved.
 Each release lists its source archive's SHA-256; the repository tree at the tag equals the archive.
 

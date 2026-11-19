@@ -105,7 +105,7 @@ Release 0.1 is for reproducible, auditable compilation and for research on verif
 
 ## Roadmap
 
-Releases are numbered 0.11, 0.12, … in the order their goals close. No dates are promised.
+Releases are numbered 0.2, 0.3, … in the order their goals close. No dates are promised.
 
 1. **Checking another party's result.** The R-CIC proof kernel, verdict-equal with Lean4Lean on its checked corpus and
    accepting no invalid input of the Lean Kernel Arena; the final q format; a publish and query entry for results.
