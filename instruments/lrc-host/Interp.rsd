@@ -1,0 +1,736 @@
+-- LRC host oracle: an interpreter of the IR with a counting heap (stock Lean only). closure_claim = 0.
+-- It runs IR before the RC pass (nothing is ever released) and after it (every `inc`, `dec`,
+-- `reset`, `reuse`, `set` and `del` acts on a count), and reports the value, the number of
+-- allocations, and what is still live at the end. A read of a freed object, a release below zero
+-- and an in-place write to a shared object are errors: they are how a wrong RC pass shows.
+-- Semantics of the forms: lean.h and src/lean/Lean/Compiler/IR/EmitC.lean (emitInc, emitDec,
+-- emitReset :: `lean_is_exclusive`, emitReuse, emitProj, emitSProj), with the wire's refusals for
+-- the primitives (lib/lrc/Prim.rsd) and the fuel guard (lib/lrc/Ir.rsd `mkGuard`).
+namespace Lrc.Host
+
+inductive V where
+  | int (n : Int)
+  | box (tag : Nat)
+  | ptr (a : Nat)
+  | str (s : String)
+  | irr
+  deriving Inhabited, BEq, Repr
+
+structure Obj where
+  rc : Int
+  tag : Nat
+  objs : Array V
+  scalars : List (Nat × Int)
+  -- the bytes each scalar was written with (lib/lrc/Ir.rsd `tyWidth` of the `sset`'s type): a read of another
+  -- width at the same place is an error of the stage, since the module would read other bytes
+  widths : List (Nat × Nat) := []
+  freed : Bool := false
+  -- the bytes of its cell: the header, the object fields and the scalar area, in whole words
+  bytes : Nat := 0
+  -- a constant cell (lib/lrc/Closed.rsd): count 0, never counted, never freed, never written
+  persistent : Bool := false
+  deriving Inhabited
+
+structure HeapSt where
+  heap : Array Obj := #[]
+  allocs : Nat := 0
+  reuses : Nat := 0
+  frees : Nat := 0
+  incs : Nat := 0
+  decs : Nat := 0
+  live : Nat := 0
+  peak : Nat := 0
+  -- the bytes of the live cells, and their largest sum: what the program needs of any allocator
+  liveBytes : Nat := 0
+  peakBytes : Nat := 0
+  steps : Nat := 0
+  -- The number of the image's functions, 0 when the program has none of the stage's own. A
+  -- function from this index on (lib/lrc/FromWire.rsd `helperDecls`) takes no fuel: it runs at
+  -- its caller's fuel and never refuses on it.
+  nImg : Nat := 0
+  -- the run counts references (the IR after the RC pass): only then is an object nothing else holds written in place
+  counted : Bool := false
+  -- The module's object fields are four bytes (rsc's layer `narrow`, lib/lrc/Emit.rsd "The width of an object
+  -- field"): a box holds 31 bits, and a number that does not fit one is an error of the stage, which is how a
+  -- wrong bound in lib/lrc/FromWire.rsd `magLimsOf` shows. A cell's bytes are counted with fields of four.
+  narrow : Bool := false
+
+abbrev IM := StateT HeapSt (Except String)
+
+-- the wire's refusals, as the run's outcome
+def refuse (what : String) : IM α := throw s!"refusal:{what}"
+
+def objAt (a : Nat) : IM Obj := do
+  let s ← get
+  match s.heap[a]? with
+  | some o => if o.freed then throw s!"use after free of object {a}" else pure o
+  | none => throw s!"no object {a}"
+
+def setObj (a : Nat) (o : Obj) : IM Unit := modify fun s => { s with heap := s.heap.set! a o }
+
+def cellBytes (info : Lrc.CtorInfo) (fw : Nat := 8) : Nat := 8 * ((8 + fw * info.size + info.ssize + 7) / 8)
+
+def alloc (info : Lrc.CtorInfo) (objs : Array V) : IM V := do
+  let s ← get
+  let a := s.heap.size
+  let live := s.live + 1
+  let bytes := cellBytes info (if s.narrow then 4 else 8)
+  set { s with heap := s.heap.push { rc := 1, tag := info.cidx, objs := objs, scalars := [], bytes := bytes }, allocs := s.allocs + 1,
+               live := live, peak := max s.peak live, liveBytes := s.liveBytes + bytes,
+               peakBytes := max s.peakBytes (s.liveBytes + bytes) }
+  return .ptr a
+
+def incV (v : V) (n : Nat) : IM Unit :=
+  match v with
+  | .ptr a => do
+    let o ← objAt a
+    if o.persistent then return
+    setObj a { o with rc := o.rc + n }
+    modify fun s => { s with incs := s.incs + 1 }
+  | _ => pure ()
+
+-- lean.h lean_dec_ref and lean_dec_ref_cold: at one the object is freed and its fields released
+partial def decV (v : V) : IM Unit :=
+  match v with
+  | .ptr a => do
+    let o ← objAt a
+    if o.persistent then return
+    modify fun s => { s with decs := s.decs + 1 }
+    if o.rc <= 0 then throw s!"release of object {a} with count {o.rc}"
+    if o.rc == 1 then
+      setObj a { o with rc := 0, freed := true }
+      modify fun s => { s with frees := s.frees + 1, live := s.live - 1, liveBytes := s.liveBytes - o.bytes }
+      for f in o.objs do decV f
+    else setObj a { o with rc := o.rc - 1 }
+  | _ => pure ()
+
+/-! ### Arrays (lib/lrc/Prim.rsd `primIsArr` to `primArrSlice`; lean.h `lean_array_object`)
+
+An array is an object of tag 246 (elements that are objects) or 248 (one-word scalars); its
+elements are its fields here. Its cell has a header, the size and the capacity, then a word for
+each place: the capacity is 4 at least and doubles. The empty array is the empty list. Before the
+RC pass nothing is counted and nothing may be written in place: every operation then gives a new
+array. -/
+
+def isArrTag (t : Nat) : Bool := t == 246 || t == 248
+def arrTag (shape : Int) : Nat := if shape == 0 then 248 else 246
+def arrBytes (cap : Nat) : Nat := 24 + 8 * cap
+partial def arrCapGo (c n : Nat) : Nat := if c >= n then c else arrCapGo (2 * c) n
+def arrCapFor (n : Nat) : Nat := arrCapGo 4 n
+
+def allocArr (tag : Nat) (elems : Array V) : IM V := do
+  let s ← get
+  let a := s.heap.size
+  let live := s.live + 1
+  let bytes := arrBytes (arrCapFor elems.size)
+  set { s with heap := s.heap.push { rc := 1, tag := tag, objs := elems, scalars := [], bytes := bytes }, allocs := s.allocs + 1,
+               live := live, peak := max s.peak live, liveBytes := s.liveBytes + bytes,
+               peakBytes := max s.peakBytes (s.liveBytes + bytes) }
+  return .ptr a
+
+-- the object leaves the heap without its fields being released: they were moved out
+def freeCell (a : Nat) (o : Obj) : IM Unit := do
+  setObj a { o with rc := 0, freed := true }
+  modify fun s => { s with frees := s.frees + 1, live := s.live - 1, liveBytes := s.liveBytes - o.bytes }
+
+-- The word an object word holds (lib/lrc/FromWire.rsd "A scalar head where an object field is four bytes"): the
+-- number of a boxed number, or the word in the box of one word.
+def wordOfHead (w : V) : IM Int := do
+  match w with
+  | .box t => return (t : Int)
+  | .ptr b =>
+    let o ← objAt b
+    if o.tag != 0 || o.objs.size != 0 then throw s!"the word of object {b}, which is no box of a word"
+    return (o.scalars.lookup 0).getD 0
+  | _ => throw s!"the word of {repr w}, which is no object word"
+
+-- The elements of the list `v`, of which the caller holds one reference when `owned`. A cell that
+-- nothing else holds gives its head away and is freed; from the first cell that something else
+-- holds on, every head is counted once more and the cells stay.
+-- With narrow fields a scalar's cell is the cell of an object head whose head is the scalar's object word: the
+-- element is the word it holds, and a box of a word goes with a cell that is freed.
+partial def listElems (shape : Int) (v : V) (owned : Bool) (acc : Array V) : IM (Array V) := do
+  match v with
+  | .box 0 => return acc
+  | .ptr a =>
+    let o ← objAt a
+    if o.tag != 1 then throw s!"the elements of object {a}, which is no list cell"
+    let boxed := shape == 0 && (← get).narrow
+    if boxed && o.objs.size != 2 then throw s!"the elements of object {a}, a cell of {o.objs.size} fields where a scalar's head is an object word"
+    let h ← if boxed then (do return V.int (← wordOfHead o.objs[0]!)) else pure (if shape == 0 then V.int ((o.scalars.lookup 0).getD 0) else o.objs[0]!)
+    let t := if shape == 0 && !boxed then o.objs[0]! else o.objs[1]!
+    if !(← get).counted then listElems shape t false (acc.push h)
+    else if owned && o.rc == 1 && !o.persistent then
+      freeCell a o
+      if boxed then decV o.objs[0]!
+      listElems shape t true (acc.push h)
+    else
+      incV h 1
+      if owned then decV v
+      listElems shape t false (acc.push h)
+  | _ => throw s!"the elements of {repr v}, which is no list"
+
+def arrOfList (shape : Int) (v : V) : IM V := do
+  match v with
+  | .box 0 => return v
+  | .ptr a =>
+    let o ← objAt a
+    if isArrTag o.tag then return v
+    let es ← listElems shape v true #[]
+    allocArr (arrTag shape) es
+  | _ => throw s!"the array of {repr v}, which is no list"
+
+def consCell (shape : Nat) (e tl : V) : IM V := do
+  if shape == 0 && (← get).narrow then
+    -- narrow fields: the scalar's object word, its box below 2^31 and a box of its own otherwise, in the cell of an object head
+    let n ← (match e with | .int n => pure n | _ => throw "a scalar element was expected")
+    if n >= 0 && n < 2147483648 then alloc (Lrc.consInfo Lrc.lsObject) #[.box n.toNat, tl]
+    else
+      match ← alloc Lrc.wordBoxInfo #[] with
+      | .ptr b =>
+        let o ← objAt b
+        setObj b { o with scalars := [(0, n)] }
+        alloc (Lrc.consInfo Lrc.lsObject) #[.ptr b, tl]
+      | v => return v
+  else if shape == 0 then
+    match ← alloc (Lrc.consInfo Lrc.lsScalar) #[tl] with
+    | .ptr c =>
+      let o ← objAt c
+      setObj c { o with scalars := [(0, ← (match e with | .int n => pure n | _ => throw "a scalar element was expected"))] }
+      return .ptr c
+    | v => return v
+  else alloc (Lrc.consInfo Lrc.lsObject) #[e, tl]
+
+-- the list of an array's elements; any other value as it is
+def arrToList (v : V) : IM V := do
+  match v with
+  | .ptr a =>
+    let o ← objAt a
+    if !isArrTag o.tag then return v
+    let counted := (← get).counted
+    let unique := counted && o.rc == 1 && !o.persistent
+    if counted && !unique then for e in o.objs do incV e 1
+    let mut acc : V := .box 0
+    for e in o.objs.reverse do
+      acc ← consCell (if o.tag == 246 then 1 else 0) e acc
+    if unique then freeCell a o
+    else if counted then decV v
+    return acc
+  | _ => return v
+
+partial def arrPush (shape : Int) (a v : V) : IM V := do
+  match a with
+  | .box 0 => allocArr (arrTag shape) #[v]
+  | .ptr p =>
+    let o ← objAt p
+    if !isArrTag o.tag then arrPush shape (← arrOfList shape a) v
+    else
+      let counted := (← get).counted
+      if counted && o.rc == 1 && !o.persistent then
+        let cap := (o.bytes - 24) / 8
+        if o.objs.size < cap then
+          setObj p { o with objs := o.objs.push v }
+        else
+          -- a cell of twice the capacity: the elements move, the old cell is freed
+          let nb := arrBytes (2 * cap)
+          setObj p { o with objs := o.objs.push v, bytes := nb }
+          modify fun s => { s with allocs := s.allocs + 1, frees := s.frees + 1, liveBytes := s.liveBytes + nb - o.bytes,
+                                   peakBytes := max s.peakBytes (s.liveBytes + nb) }
+        return a
+      else
+        if counted then for e in o.objs do incV e 1
+        let r ← allocArr o.tag (o.objs.push v)
+        if counted then decV a
+        return r
+  | _ => throw s!"push on {repr a}, which is no list"
+
+partial def arrSet (shape : Int) (a : V) (i : Int) (v : V) : IM V := do
+  match a with
+  | .ptr p =>
+    let o ← objAt p
+    if !isArrTag o.tag then arrSet shape (← arrOfList shape a) i v
+    else if i < 0 || i >= o.objs.size then throw s!"a write at index {i} of an array of {o.objs.size} elements"
+    else
+      let counted := (← get).counted
+      if counted && o.rc == 1 && !o.persistent then
+        decV o.objs[i.toNat]!
+        setObj p { (← objAt p) with objs := o.objs.set! i.toNat v }
+        return a
+      else
+        if counted then
+          for j in [0:o.objs.size] do
+            if j != i.toNat then incV o.objs[j]! 1
+        let r ← allocArr o.tag (o.objs.set! i.toNat v)
+        if counted then decV a
+        return r
+  | _ => throw s!"a write at an index of {repr a}, which is no array"
+
+def arrSlice (shape : Int) (a : V) (lo hi : Int) : IM V := do
+  match a with
+  | .box 0 => return a
+  | .ptr p =>
+    let o ← objAt p
+    if !isArrTag o.tag then throw s!"a slice of object {p}, which is no array"
+    let l := if lo < 0 then 0 else lo.toNat
+    let h := if hi > o.objs.size then o.objs.size else if hi < 0 then 0 else hi.toNat
+    if l >= h then return .box 0
+    let es := o.objs.extract l h
+    for e in es do incV e 1
+    allocArr (arrTag shape) es
+  | _ => throw s!"a slice of {repr a}, which is no array"
+
+structure Frame where
+  vars : Std.HashMap Nat V := {}
+  jps : Std.HashMap Nat (List Lrc.Param × Lrc.N) := {}
+
+def Frame.get (fr : Frame) (y : Int) : IM V :=
+  if y < 0 then pure .irr
+  else match fr.vars[y.toNat]? with
+    | some v => pure v
+    | none => throw s!"unbound variable x_{y}"
+
+def asInt (v : V) : IM Int :=
+  match v with
+  | .int n => pure n
+  | _ => throw s!"an integer was expected, got {repr v}"
+
+-- A parameter or a result of a declared width (lib/lrc/Ir.rsd `tyWidth` below a word: the wire's fixed-width scalars
+-- and the Bool view, lib/lrc/FromWire.rsd `tysOfWidth`) holds a number of that many bytes. lib/lrc/Range.rsd reads
+-- the type as that fact and lib/lrc/Pack.rsd lays a field out by it, so a value outside it is an error of whoever
+-- made the value: it is named here, at the call, and not where a field or a comparison would show it later.
+def widthHeld (what : String) (f : Nat) (ty : Int) (v : V) : IM Unit := do
+  let w := Lrc.tyWidth ty
+  if w < 8 then
+    let lim : Int := if w == 1 then 256 else if w == 2 then 65536 else 4294967296
+    match v with
+    | .int n => if n < 0 || n >= lim then throw s!"{what} of f{f}: {n} where the type has {w} byte(s)"
+    | _ => throw s!"{what} of f{f}: {repr v} where the type has {w} byte(s)"
+
+def paramsHeld (f : Nat) : List Lrc.Param → List V → IM Unit
+  | p :: ps, v :: vs => do widthHeld "an argument" f p.ty v; paramsHeld f ps vs
+  | _, _ => pure ()
+
+def retsHeld (f : Nat) (tys : List Int) (vs : List V) : IM Unit :=
+  if tys.length != vs.length then pure () else
+  (tys.zip vs).forM (fun (ty, v) => widthHeld "a result" f ty v)
+
+def i64Min : Int := -9223372036854775808
+def i64Max : Int := 9223372036854775807
+
+-- checked add, sub, mul and neg refuse as stuck (rsc/rsc.rsd `refuseChecked`)
+def checked (n : Int) : IM V :=
+  if n < i64Min || n > i64Max then refuse "stuck:checkedArithmetic" else pure (.int n)
+
+-- lib/lrc/Prim.rsd: the wire's operators (docs/GRAMMAR.md 1.3; lib/RscBase.rsd detDiv0, detInexact)
+def prim (op : Nat) (args : List V) : IM V := do
+  match op, args with
+  | 6, [a, b] => checked ((← asInt a) + (← asInt b))
+  | 7, [a, b] => checked ((← asInt a) - (← asInt b))
+  | 8, [a, b] => checked ((← asInt a) * (← asInt b))
+  | 9, [a] => checked (0 - (← asInt a))
+  | 10, [a, b] =>
+    let x ← asInt a
+    let y ← asInt b
+    if y == 0 then refuse "residue:divisionByZero"
+    else if Int.tmod x y != 0 then refuse "residue:nonExactDivision"
+    else if x == i64Min && y == -1 then refuse "residue:signedOverflow"
+    else pure (.int (Int.tdiv x y))
+  | 11, [a, b] =>
+    -- rsc/rsc.rsd `tMod`: the remainder takes the divisor's sign
+    let x ← asInt a
+    let y ← asInt b
+    if y == 0 then refuse "residue:divisionByZero" else pure (.int (Int.fmod x y))
+  | 12, [a, b] => return .int (if (← asInt a) < (← asInt b) then 1 else 0)
+  | 13, [a, b] => return .int (if (← asInt a) > (← asInt b) then 1 else 0)
+  | 14, [a, b] => return .int (if (← asInt a) == (← asInt b) then 1 else 0)
+  | 15, [a, b] => return .int (if (← asInt a) != 0 && (← asInt b) != 0 then 1 else 0)
+  | 16, [a, b] => return .int (if (← asInt a) != 0 || (← asInt b) != 0 then 1 else 0)
+  | 17, [a] => return .int (if (← asInt a) == 0 then 1 else 0)
+  | 101, _ => refuse "stuck:typeMismatch"
+  | 102, [.str a, .str b] => return .int (if a == b then 1 else 0)
+  | 100, [.box t] => return .int t
+  | 100, [.ptr a] => return .int (← objAt a).tag
+  -- a magnitude's word (lib/lrc/Prim.rsd `primIsScalar`, `primBox`, `primUnbox`)
+  | 107, [.box _] => return .int 1
+  | 107, [.ptr _] => return .int 0
+  | 108, [.int n] =>
+    if n < 0 then throw s!"a negative number was boxed: {n}"
+    else if (← get).narrow && n >= 2147483648 then throw s!"a number that no narrow box holds was boxed: {n}"
+    else return .box n.toNat
+  | 109, [.box t] => return .int t
+  -- an integer's word (lib/lrc/Prim.rsd `primBoxS`, `primUnboxS`): a box holds 63 bits, and a number below zero is the
+  -- upper half of them, as the module's shift leaves it. A narrow box holds 31, the same way.
+  | 127, [.int n] =>
+    if (← get).narrow then
+      if n >= 1073741824 || n <= -1073741824 then throw s!"an integer that no narrow box holds was boxed: {n}"
+      else return .box (n % 2147483648).toNat
+    else return .box (n % 9223372036854775808).toNat
+  | 128, [.box t] =>
+    if (← get).narrow then return .int (if t >= 1073741824 then (t : Int) - 2147483648 else (t : Int))
+    else return .int (if t >= 4611686018427387904 then (t : Int) - 9223372036854775808 else (t : Int))
+  -- words as unsigned numbers
+  | 117, [a, b] => do
+    let d ← asInt b
+    if d == 0 then throw "an unsigned quotient by zero" else return .int ((← asInt a).toNat / d.toNat)
+  | 118, [a, b] => do
+    let d ← asInt b
+    if d == 0 then throw "an unsigned remainder by zero" else return .int ((← asInt a).toNat % d.toNat)
+  | _, _ => throw s!"primitive {op} on {args.length} arguments is not interpreted"
+
+-- The operators lib/lrc/Range.rsd writes where a fact keeps the operands in range: the wire's
+-- operator without its test. Here the fact is put to the test: a result outside i64 is an error
+-- of the stage, not a refusal of the program.
+def proved (n : Int) : IM V :=
+  if n < i64Min || n > i64Max then throw "an operator written as proved in range left i64" else pure (.int n)
+
+def primFact (op : Nat) (imm : Int) (args : List V) : IM V := do
+  -- the refusing primitive with a detail of its own (lib/RscBase.rsd `stNegativeFixBound`)
+  if op == 101 && imm == 13 then refuse "stuck:negativeFixBound"
+  match op, args with
+  -- arrays (lib/lrc/Prim.rsd): the immediate is the shape of a cell of the list's type
+  | 119, [v] =>
+    match v with
+    | .ptr a => return .int (if isArrTag (← objAt a).tag then 1 else 0)
+    | _ => return .int 0
+  | 120, [v] =>
+    match v with
+    | .box 0 => return .int 0
+    | .ptr a =>
+      let o ← objAt a
+      if isArrTag o.tag then return .int o.objs.size else throw s!"the size of object {a}, which is no array"
+    | _ => throw s!"the size of {repr v}, which is no array"
+  | 121, [v, i] =>
+    match v with
+    | .ptr a =>
+      let o ← objAt a
+      let k ← asInt i
+      if !isArrTag o.tag then throw s!"a read at an index of object {a}, which is no array"
+      else if k < 0 || k >= o.objs.size then throw s!"a read at index {k} of an array of {o.objs.size} elements"
+      else
+        let e := o.objs[k.toNat]!
+        incV e 1
+        return e
+    | _ => throw s!"a read at an index of {repr v}, which is no array"
+  | 122, [a, v] => arrPush imm a v
+  | 123, [a, i, v] => do arrSet imm a (← asInt i) v
+  | 124, [xs] => arrOfList imm xs
+  | 125, [a] => arrToList a
+  | 126, [a, lo, hi] => do arrSlice imm a (← asInt lo) (← asInt hi)
+  | 103, [a, b] => proved ((← asInt a) + (← asInt b))
+  | 104, [a, b] => proved ((← asInt a) - (← asInt b))
+  | 105, [a, b] => proved ((← asInt a) * (← asInt b))
+  | 106, [a] => return .int (Int.fmod (← asInt a) (imm + 1))
+  | 116, [a] => return .int ((← asInt a).toNat >>> imm.toNat)
+  | _, _ => prim op args
+
+def tagOfV (v : V) : IM Nat :=
+  match v with
+  | .int n => pure n.toNat
+  | .box t => pure t
+  | .ptr a => do
+    let o ← objAt a
+    if isArrTag o.tag then throw s!"a case on object {a}, which is an array"
+    return o.tag
+  | _ => throw "a case on a value without a tag"
+
+mutual
+partial def evalExpr (ds : List Lrc.Decl) (fuel : Nat) (fr : Frame) (e : Lrc.N) : IM (List V) := do
+  if e.op == Lrc.opCtor then
+    let info := Lrc.infoOf e
+    if info.isScalar then
+      if (← get).narrow && info.cidx >= 2147483648 then throw s!"a constant constructor that no narrow box holds: {info.cidx}"
+      else return [.box info.cidx]
+    return [← alloc info (← e.ys.mapM fr.get).toArray]
+  else if e.op == Lrc.opReset then
+    -- EmitC.emitReset: an exclusive object releases its fields and is the token; any other is released
+    let v ← fr.get (Lrc.resetVar e)
+    match v with
+    | .ptr a =>
+      let o ← objAt a
+      if o.rc == 1 then
+        for f in o.objs do decV f
+        setObj a { o with objs := o.objs.map (fun _ => .box 0) }
+        return [v]
+      else
+        decV v
+        return [.box 0]
+    | _ => return [.box 0]
+  else if e.op == Lrc.opReuse then
+    -- EmitC.emitReuse: a scalar token means allocate; otherwise the cell is written in place
+    let info := Lrc.infoOf e
+    let args ← (Lrc.reuseArgs e).mapM fr.get
+    match ← fr.get (Lrc.reuseVar e) with
+    | .ptr a =>
+      let o ← objAt a
+      if o.rc != 1 then throw s!"reuse of object {a} with count {o.rc}"
+      setObj a { o with tag := (if Lrc.reuseUpdt e then info.cidx else o.tag), objs := args.toArray }
+      modify fun s => { s with reuses := s.reuses + 1 }
+      return [.ptr a]
+    | _ => return [← alloc info args.toArray]
+  else if e.op == Lrc.opProj then
+    match ← fr.get (Lrc.projVar e) with
+    | .ptr a =>
+      let o ← objAt a
+      if isArrTag o.tag then throw s!"proj[{Lrc.projIdx e}] of object {a}, which is an array"
+      match o.objs[Lrc.projIdx e]? with
+      | some v => return [v]
+      | none => throw s!"proj[{Lrc.projIdx e}] of object {a} with {o.objs.size} fields"
+    | v => throw s!"proj of {repr v}"
+  else if e.op == Lrc.opSProj then
+    match ← fr.get (Lrc.sprojVar e) with
+    | .ptr a =>
+      let o ← objAt a
+      if Lrc.sprojN e != o.objs.size then throw s!"sproj[{Lrc.sprojN e}, _] of object {a} with {o.objs.size} object fields"
+      match o.widths.lookup (Lrc.sprojOff e) with
+      | some w =>
+        if w != Lrc.sprojWidth e then throw s!"sproj of {Lrc.sprojWidth e} bytes at byte {Lrc.sprojOff e} of object {a}, written with {w}"
+      | none => pure ()
+      return [.int ((o.scalars.lookup (Lrc.sprojOff e)).getD 0)]
+    | v => throw s!"sproj of {repr v}"
+  else if e.op == Lrc.opFap then
+    let nImg := (← get).nImg
+    let own := (nImg > 0 && Lrc.isOwnFn nImg (Lrc.fapFn e)) || Lrc.fapSame e
+    callFn ds (if own then fuel else fuel - 1 - Lrc.fapDepth e) (Lrc.fapFn e) (← e.ys.mapM fr.get)
+  else if e.op == Lrc.opPrim then return [← primFact (Lrc.primOp e) e.b (← e.ys.mapM fr.get)]
+  else if e.op == Lrc.opLit then return [.int e.a]
+  else if Lrc.isLitObj e then
+    let s ← get
+    let fields := Lrc.litObjFields e
+    let scalars := (List.range (fields.length / 3)).map (fun i => ((fields.getD (3 * i) 0).toNat, fields.getD (3 * i + 2) 0))
+    let widths := (List.range (fields.length / 3)).map (fun i => ((fields.getD (3 * i) 0).toNat, Lrc.tyWidth (fields.getD (3 * i + 1) 0)))
+    set { s with heap := s.heap.push { rc := 0, tag := Lrc.litObjTag e, objs := #[], scalars := scalars, widths := widths, persistent := true } }
+    return [.ptr s.heap.size]
+  else if e.op == Lrc.opLitStr then
+    return [.str (if (Lrc.litBytes e).isEmpty then e.s else String.mk ((Lrc.litBytes e).map (fun b => Char.ofNat b.toNat)))]
+  else if e.op == Lrc.opIsShared then
+    -- lean.h lean_is_exclusive: a pointer with count one
+    match ← fr.get (Lrc.isSharedVar e) with
+    | .ptr a => return [.int (if (← objAt a).rc == 1 then 0 else 1)]
+    | _ => return [.int 1]
+  else throw s!"expression op {e.op}"
+
+partial def bindAll (fr : Frame) : List Int → List V → IM Frame
+  | x :: _ :: rest, v :: vs => bindAll { fr with vars := fr.vars.insert x.toNat v } rest vs
+  | [], [] => pure fr
+  -- the binder of a call that returns nothing (lib/lrc/Trmc.rsd, the plain form)
+  | x :: ty :: rest, [] =>
+    if Lrc.tyIsIrr ty then bindAll { fr with vars := fr.vars.insert x.toNat .irr } rest []
+    else throw "a binder list and its values differ in length"
+  | _, _ => throw "a binder list and its values differ in length"
+
+-- One activation, as a loop: an instruction, a case, a join point and a jump continue the loop,
+-- and so does a call whose results are returned at once (the callee's body replaces this one, at
+-- the callee's fuel), so that a tail-recursive program runs in constant depth here as it does in
+-- the emitted code. Only a call that is not in tail position recurses.
+partial def runBody (ds : List Lrc.Decl) (fuel0 : Nat) (fr0 : Frame) (n0 : Lrc.N) : IM (List V) := do
+  let mut fuel := fuel0
+  let mut fr := fr0
+  let mut n := n0
+  let mut result : Option (List V) := none
+  -- the functions entered by a call in tail position whose results have a declared width: what this body returns
+  -- is their result too
+  let mut tails : List (Nat × List Int) := []
+  while result.isNone do
+    modify fun s => { s with steps := s.steps + 1 }
+    if n.op == Lrc.opVDecl then
+      let e := Lrc.vdeclExpr n
+      let k := Lrc.bodyOf n
+      let binds := Lrc.vdeclBinds n
+      let live := (List.range (binds.length / 2)).filterMap (fun i =>
+        if Lrc.tyIsIrr (binds.getD (2 * i + 1) 0) then none else some (binds.getD (2 * i) 0))
+      if e.op == Lrc.opFap && k.op == Lrc.opRet && Lrc.retArgs k == live then
+        -- a call in tail position
+        let args ← e.ys.mapM fr.get
+        let nImg := (← get).nImg
+        let own := (nImg > 0 && Lrc.isOwnFn nImg (Lrc.fapFn e)) || Lrc.fapSame e
+        if !own && fuel - 1 - Lrc.fapDepth e == 0 then refuse "fuel"
+        match Lrc.declAt (Lrc.fapFn e) ds with
+        | some d =>
+          if d.ext then throw s!"call of f{d.f}, which has no body"
+          if d.xs.length != args.length then throw s!"call of f{d.f} with {args.length} arguments for {d.xs.length} parameters"
+          paramsHeld d.f d.xs args
+          if d.rets.any (fun ty => Lrc.tyWidth ty < 8) && !tails.any (fun t => t.1 == d.f) then tails := (d.f, d.rets) :: tails
+          fr := (d.xs.zip args).foldl (fun (fr : Frame) (p, v) => { fr with vars := fr.vars.insert p.x v }) {}
+          if !own then fuel := fuel - 1 - Lrc.fapDepth e
+          n := d.body
+        | none => throw s!"call of an unknown function f{Lrc.fapFn e}"
+      else
+        let vs ← evalExpr ds fuel fr e
+        fr ← bindAll fr binds vs
+        n := k
+    else if n.op == Lrc.opJDecl then
+      fr := { fr with jps := fr.jps.insert (Lrc.jdeclId n) (Lrc.jdeclParams n, Lrc.jdeclBody n) }
+      n := Lrc.bodyOf n
+    else if n.op == Lrc.opSet then
+      match ← fr.get n.a with
+      | .ptr a =>
+        let o ← objAt a
+        if o.rc != 1 then throw s!"set on object {a} with count {o.rc}"
+        let i ← if Lrc.setIsAt n then (do pure (← asInt (← fr.get (Lrc.setAtVar n))).toNat) else pure (Lrc.setIdx n)
+        if i >= o.objs.size then throw s!"set of field {i} of object {a} with {o.objs.size} object fields"
+        setObj a { o with objs := o.objs.set! i (← fr.get (Lrc.setArg n)) }
+      | v => throw s!"set on {repr v}"
+      n := Lrc.bodyOf n
+    else if n.op == Lrc.opSetTag then
+      match ← fr.get n.a with
+      | .ptr a =>
+        let o ← objAt a
+        setObj a { o with tag := n.b.toNat }
+      | v => throw s!"setTag on {repr v}"
+      n := Lrc.bodyOf n
+    else if n.op == Lrc.opSSet then
+      match ← fr.get n.a with
+      | .ptr a =>
+        let o ← objAt a
+        if o.rc != 1 then throw s!"sset on object {a} with count {o.rc}"
+        if Lrc.ssetN n != o.objs.size then throw s!"sset[{Lrc.ssetN n}, _] on object {a} with {o.objs.size} object fields"
+        let v ← asInt (← fr.get (Lrc.ssetArg n))
+        if n.d == Lrc.tyU8 && (v < 0 || v > 255) then throw s!"sset of {v} into a byte field of object {a}"
+        -- a field of two or of four bytes (lib/lrc/Pack.rsd): a value outside it is an error of the stage
+        if Lrc.tyWidth n.d == 2 && (v < 0 || v > 65535) then throw s!"sset of {v} into a field of 2 bytes of object {a}"
+        if Lrc.tyWidth n.d == 4 && (v < 0 || v > 4294967295) then throw s!"sset of {v} into a field of 4 bytes of object {a}"
+        setObj a { o with scalars := (Lrc.ssetOff n, v) :: o.scalars.filter (·.1 != Lrc.ssetOff n),
+                          widths := (Lrc.ssetOff n, Lrc.tyWidth n.d) :: o.widths.filter (·.1 != Lrc.ssetOff n) }
+      | v => throw s!"sset on {repr v}"
+      n := Lrc.bodyOf n
+    else if n.op == Lrc.opInc then
+      incV (← fr.get n.a) (Lrc.rcN n)
+      n := Lrc.bodyOf n
+    else if n.op == Lrc.opDec then
+      decV (← fr.get n.a)
+      n := Lrc.bodyOf n
+    else if n.op == Lrc.opDel then
+      match ← fr.get n.a with
+      | .ptr a =>
+        let o ← objAt a
+        setObj a { o with rc := 0, freed := true }
+        modify fun s => { s with frees := s.frees + 1, live := s.live - 1, liveBytes := s.liveBytes - o.bytes }
+      | v => throw s!"del of {repr v}"
+      n := Lrc.bodyOf n
+    else if n.op == Lrc.opMData then
+      if n.a == 1 && fuel <= n.b.toNat then refuse "fuel"
+      n := Lrc.bodyOf n
+    else if n.op == Lrc.opCase then
+      let t ← tagOfV (← fr.get n.a)
+      let alts := Lrc.caseAlts n
+      match alts.find? (fun alt => alt.op == Lrc.opAltCtor && alt.a.toNat == t) with
+      | some alt => n := Lrc.altBody alt
+      | none =>
+        match alts.find? Lrc.altIsDefault with
+        | some alt => n := Lrc.altBody alt
+        | none => throw s!"a case without an alternative for tag {t}"
+    else if n.op == Lrc.opRet then
+      let vs ← n.ys.mapM fr.get
+      for t in tails do retsHeld t.1 t.2 vs
+      result := some vs
+    else if n.op == Lrc.opJmp then
+      match fr.jps[Lrc.jmpId n]? with
+      | some (ps, body) =>
+        let vs ← n.ys.mapM fr.get
+        if ps.length != vs.length then throw "a jump and its join point differ in arity"
+        fr := (ps.zip vs).foldl (fun fr (p, v) => { fr with vars := fr.vars.insert p.x v }) fr
+        n := body
+      | none => throw s!"jump to an unknown join point {Lrc.jmpId n}"
+    else if n.op == Lrc.opUnreachable then throw "unreachable was reached"
+    else throw s!"body op {n.op}"
+  return result.getD []
+
+-- a call: the callee runs at the fuel it is given and refuses at zero (lib/RscBase.rsd fuelPrologue)
+partial def callFn (ds : List Lrc.Decl) (fuel : Nat) (f : Nat) (args : List V) : IM (List V) := do
+  let nImg := (← get).nImg
+  if fuel == 0 && !(nImg > 0 && Lrc.isOwnFn nImg f) then refuse "fuel"
+  match Lrc.declAt f ds with
+  | some d =>
+    if d.ext then throw s!"call of f{f}, which has no body"
+    if d.xs.length != args.length then throw s!"call of f{f} with {args.length} arguments for {d.xs.length} parameters"
+    paramsHeld f d.xs args
+    let fr := (d.xs.zip args).foldl (fun (fr : Frame) (p, v) => { fr with vars := fr.vars.insert p.x v }) {}
+    let vs ← runBody ds fuel fr d.body
+    retsHeld f d.rets vs
+    return vs
+  | none => throw s!"call of an unknown function f{f}"
+end
+
+-- A result as text, for a row's expected value: an integer as itself; a list (lib/lrc/FromWire.rsd
+-- "Lists") as [e e ...], an element in a box as {words in the box's order}, a list as an element
+-- again as a list.
+partial def showV (v : V) : IM String := do
+  match v with
+  | .int n => return toString n
+  | .box 0 => return "[]"
+  | .box t => return s!"#{t}"
+  | .str t => return t
+  | .irr => return "_"
+  | .ptr a =>
+    let o ← objAt a
+    if isArrTag o.tag then
+      -- an array, which no value at the boundary is (lib/lrc/FromWire.rsd "The boundary")
+      return "#[" ++ " ".intercalate (← o.objs.toList.mapM showV) ++ "]"
+    else if o.tag == 0 then
+      -- a box: its object words, then its scalar words by offset
+      let objs ← o.objs.toList.mapM showV
+      let scal := (o.scalars.toArray.qsort (fun x y => x.1 < y.1)).toList.map (fun x => toString x.2)
+      return "{" ++ " ".intercalate (objs ++ scal) ++ "}"
+    else
+      let mut out : Array String := #[]
+      let mut cur := v
+      let mut go := true
+      while go do
+        match cur with
+        | .ptr b =>
+          let c ← objAt b
+          if c.objs.size == 1 then
+            out := out.push (toString ((c.scalars.lookup 0).getD 0))
+            cur := c.objs[0]!
+          else if c.objs.size == 2 then
+            out := out.push (← showV c.objs[0]!)
+            cur := c.objs[1]!
+          else throw s!"showV: object {b} is not a list cell"
+        | _ => go := false
+      return "[" ++ " ".intercalate out.toList ++ "]"
+
+structure Outcome where
+  -- "value" with the values, or the refusal or error text
+  status : String
+  values : List V
+  -- the values as text (`showV`), a space between two
+  text : String := ""
+  allocs : Nat
+  reuses : Nat
+  frees : Nat
+  incs : Nat
+  decs : Nat
+  -- objects live after the results were released
+  leaked : Nat
+  peak : Nat
+  peakBytes : Nat := 0
+  steps : Nat
+
+-- run function f on integer arguments; with `counted` the results are released at the end
+-- (`narrow`: the declarations are a translation under the narrow bounds, `HeapSt.narrow`)
+def runEntry (ds : List Lrc.Decl) (f : Nat) (args : List Int) (fuel : Nat) (counted : Bool) (nImg : Nat := 0) (narrow : Bool := false) : Outcome :=
+  let act : IM (List V × String) := do
+    let d ← match Lrc.declAt f ds with
+      | some d => pure d
+      | none => throw s!"no function f{f}"
+    -- an irrelevant parameter takes no argument
+    let (vs, _) := d.xs.foldl (fun (acc : List V × List Int) p =>
+      if Lrc.tyIsIrr p.ty then (acc.1 ++ [V.irr], acc.2)
+      else match acc.2 with
+        | a :: rest => (acc.1 ++ [V.int a], rest)
+        | [] => (acc.1 ++ [V.irr], [])) ([], args)
+    let rs ← callFn ds fuel f vs
+    let text := " ".intercalate (← (rs.filter (· != V.irr)).mapM showV)
+    if counted then for r in rs do decV r
+    return (rs, text)
+  match act.run { nImg := nImg, counted := counted, narrow := narrow } with
+  | .ok ((rs, text), s) =>
+    { status := "value", values := rs, text := text, allocs := s.allocs, reuses := s.reuses, frees := s.frees, incs := s.incs, decs := s.decs,
+      leaked := s.live, peak := s.peak, peakBytes := s.peakBytes, steps := s.steps }
+  | .error e =>
+    { status := e, values := [], allocs := 0, reuses := 0, frees := 0, incs := 0, decs := 0, leaked := 0, peak := 0, steps := 0 }
+
+def Outcome.show (o : Outcome) : String :=
+  s!"status={o.status} values={repr o.values} text={o.text} allocs={o.allocs} reuses={o.reuses} frees={o.frees} incs={o.incs} decs={o.decs} leaked={o.leaked} peak={o.peak} peak_bytes={o.peakBytes} steps={o.steps}"
+
+end Lrc.Host

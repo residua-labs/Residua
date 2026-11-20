@@ -1,0 +1,198 @@
+-- queens: the Bend bench/runtime queens program (HigherOrderCO/Bend,
+-- bench/runtime/queens/main.bend), ported to P1' Lean 4.14. Same algorithm: parallel exhaustive
+-- N-queens backtracking search, 1-to-1 from Bend3's par_queens. Rows 0-3 are placed up front:
+-- batch forks the flat (c0,c1,c2,c3) prefix index space 0..2^d as a balanced tree; each leaf
+-- permutes its index by an odd multiplier, decodes its column quad (base-N digits), keeps it
+-- when legal under the solver's own bitmask rules, and runs the classic recursive bitmask
+-- backtracker over the remaining N - 4 rows: peel the lowest candidate bit b = cand & (0 - cand),
+-- descend on the child row's candidate word full & ~(nc|nl|nr), then continue on the sibling
+-- set cand - b; the acc Stats{sols, nodes} counts one node per peel. smerge adds Stats pairwise
+-- up the fork tree. The prefix mask is 2^d - 1 threaded through batch, so small sizes shrink
+-- the prefix space the same way. Each decision bool is computed by the caller and passed as an
+-- argument (a match scrutinizes only a parameter); solve receives z = is_zero(cand) and
+-- e = is_eq(nc, full) with the peeled words, and each self-call site precomputes the next
+-- level's words; the child's Stats result rides into the sibling call as the acc argument. A
+-- Nat fuel rides ahead of every self-call (the checker cannot see the shrinking candidate
+-- word); the initial call seeds n^2, which exceeds (n-3)*(n-2)+1 frames for n >= 5, so the 0
+-- arm is dead code and the count is exact. Checksum = (sols * 2654435761) ^ nodes.
+-- Departure (named, u32-exact): the source's U32 words are modeled exactly in checked Int
+-- arithmetic — every op wraps mod 2^32, xor/and/or decompose bit by bit, not maps to
+-- 2^32 - 1 - x, shl/shr scale by 2^k; values stay in [0, 2^32), so every modeled op equals the
+-- U32 op it replaces (verified by the value check).
+-- The source's small size (d 10, n 5, limit 625) expects 774553824 (verified against a Bend3 C
+-- run there); its main() runs (17, 17, 11730), out of reach here.
+-- Source pin (the source table, 2026-11-07): HigherOrderCO/Bend commit be236f324ed0338fe907fe50474468e4d3b94157
+-- (main), bench/runtime/queens/main.bend, sha256
+-- 9ba530618a3449470b294a01a7d8670b67ba959d9bd09b67bb748917ade0676f
+-- (raw.githubusercontent.com/HigherOrderCO/Bend/be236f324ed0338fe907fe50474468e4d3b94157/bench/runtime/queens/main.bend).
+
+def W : Int := 4294967296
+
+def w32 (x : Int) : Int := x % W
+
+def bitXorLoop : Nat → Int → Int → Int → Int → Int
+  | 0, _, _, acc, _ => acc
+  | k + 1, a, b, acc, sc => bitXorLoop k (a / 2) (b / 2) (acc + ((a % 2 + b % 2) % 2) * sc) (sc * 2)
+
+def xor32 (a b : Int) : Int := bitXorLoop 32 a b 0 1
+
+def bitAndLoop : Nat → Int → Int → Int → Int → Int
+  | 0, _, _, acc, _ => acc
+  | k + 1, a, b, acc, sc => bitAndLoop k (a / 2) (b / 2) (acc + (a % 2 * b % 2) * sc) (sc * 2)
+
+def and32 (a b : Int) : Int := bitAndLoop 32 a b 0 1
+
+def bitOrLoop : Nat → Int → Int → Int → Int → Int
+  | 0, _, _, acc, _ => acc
+  | k + 1, a, b, acc, sc => bitOrLoop k (a / 2) (b / 2) (acc + (a % 2 + b % 2 - a % 2 * b % 2) * sc) (sc * 2)
+
+def or32 (a b : Int) : Int := bitOrLoop 32 a b 0 1
+
+def wAdd (a b : Int) : Int := w32 (a + b)
+def wSub (a b : Int) : Int := w32 (a - b + W)
+-- wMul is split at 16 bits so the intermediates stay under the checked-i64
+-- bound (a_lo * b, a_hi * b < 2^48); a*b mod 2^32 is unchanged
+-- (checkedArithmeticStuck at ~2^63 on the flat form, probe-verified)
+def wMul (a b : Int) : Int :=
+  w32 (w32 (w32 (a % 65536) * b) + w32 (w32 (w32 (a / 65536) * b) % 65536) * 65536)
+def wInc (a : Int) : Int := w32 (a + 1)
+
+def pw2 : Nat → Int
+  | 0 => 1
+  | k + 1 => 2 * pw2 k
+
+def wShlN (a : Int) (k : Nat) : Int := w32 (a * pw2 k)
+def wShrN (a : Int) (k : Nat) : Int := a / pw2 k
+
+-- U32.shl / U32.shr (one-bit shifts), U32.not
+def wShl1 (a : Int) : Int := w32 (a * 2)
+def wShr1 (a : Int) : Int := a / 2
+def not32 (a : Int) : Int := W - 1 - a
+
+def b2u (b : Bool) : Int := if b then 1 else 0
+
+-- t == 0 picks x, else y (the source's sel)
+def sel (t x y : Int) : Int := if t == 0 then x else y
+
+/-- The source's Stats: Stat0 / Stats{sols, nodes}. -/
+inductive Stats where
+  | stat0
+  | stats (sols nodes : Int)
+
+-- a returned child Stats merges into the running counts (the source's
+-- Stat0/Stats match arms, folded into one helper)
+def retAdd : Stats → Int → Int → Stats
+  | Stats.stat0, sols, nodes => Stats.stats sols nodes
+  | Stats.stats s1 n1, sols, nodes => Stats.stats (wAdd sols s1) (wAdd nodes n1)
+
+-- the ret argument's contribution to the sols/nodes accumulators
+def rSols : Stats → Int → Int
+  | Stats.stat0, s => s
+  | Stats.stats s1 _, s => wAdd s s1
+
+def rNodes : Stats → Int → Int
+  | Stats.stat0, n => n
+  | Stats.stats _ n1, n => wAdd n n1
+
+-- the classic bitmask backtracker: descend on the child candidate word,
+-- then continue on the sibling set; fuel f bounds the call depth; z =
+-- is_zero(cand) and e = is_eq(nc, full) arrive precomputed, ret carries
+-- the finished child result into the sibling call
+def solve (f : Nat) (z e : Bool) (sib nc nl nr cols ld rd full : Int) (ret : Stats)
+    (sols nodes : Int) : Stats :=
+  match f with
+  | 0 => retAdd ret sols nodes
+  | g + 1 =>
+    if z then retAdd ret sols nodes
+    else
+      let b2 := and32 sib (wSub 0 sib)
+      let n2 := or32 cols b2
+      if e then
+        solve g (sib == 0) (n2 == full) (wSub sib b2) n2 (wShl1 (or32 ld b2)) (wShr1 (or32 rd b2))
+          cols ld rd full Stats.stat0 (wInc (rSols ret sols)) (wInc (rNodes ret nodes))
+      else
+        let cc := and32 full (not32 (or32 nc (or32 nl nr)))
+        let cb := and32 cc (wSub 0 cc)
+        let cn := or32 nc cb
+        solve g (sib == 0) (n2 == full) (wSub sib b2) n2 (wShl1 (or32 ld b2)) (wShr1 (or32 rd b2))
+          cols ld rd full
+          (solve g (cc == 0) (cn == full) (wSub cc cb) cn (wShl1 (or32 nl cb)) (wShr1 (or32 nr cb))
+            nc nl nr full Stats.stat0 (rSols ret sols) (wInc (rNodes ret nodes))) 0 0
+
+-- the four-digit prefix decode, staged as in the source (each stage matches
+-- the legality bool its caller computed)
+def pfxS3 (t : Bool) (nn2 full b3 c3 l3 r3 : Int) : Stats :=
+  match t with
+  | false => Stats.stats 0 0
+  | true =>
+    let c4 := or32 c3 b3
+    let l4 := wShl1 (or32 l3 b3)
+    let r4 := wShr1 (or32 r3 b3)
+    let cc := and32 full (not32 (or32 c4 (or32 l4 r4)))
+    let cb := and32 cc (wSub 0 cc)
+    let cn := or32 c4 cb
+    solve nn2.toNat (cc == 0) (cn == full) (wSub cc cb) cn
+      (wShl1 (or32 l4 cb)) (wShr1 (or32 r4 cb)) c4 l4 r4 full Stats.stat0 0 0
+
+def pfxS2 (t : Bool) (nn2 i nn full b2 c2 l2 r2 : Int) : Stats :=
+  match t with
+  | false => Stats.stats 0 0
+  | true =>
+    let b3 := wShlN 1 (i % nn).toNat
+    let c3 := or32 c2 b2
+    let l3 := wShl1 (or32 l2 b2)
+    let r3 := wShr1 (or32 r2 b2)
+    pfxS3 (and32 b3 (or32 c3 (or32 l3 r3)) == 0) nn2 full b3 c3 l3 r3
+
+def pfxS1 (t : Bool) (nn2 i nn full b0 b1 : Int) : Stats :=
+  match t with
+  | false => Stats.stats 0 0
+  | true =>
+    let b2 := wShlN 1 ((i / nn) % nn).toNat
+    let c2 := or32 b0 b1
+    let l2 := wShl1 (or32 (wShl1 b0) b1)
+    let r2 := wShr1 (or32 (wShr1 b0) b1)
+    pfxS2 (and32 b2 (or32 c2 (or32 l2 r2)) == 0) nn2 i nn full b2 c2 l2 r2
+
+def pfxD (nn2 i nn full : Int) : Stats :=
+  let b0 := wShlN 1 (i / (wMul nn2 nn)).toNat
+  let b1 := wShlN 1 ((i / nn2) % nn).toNat
+  pfxS1 (and32 b1 (or32 b0 (or32 (wShl1 b0) (wShr1 b0))) == 0) nn2 i nn full b0 b1
+
+def pfxGo2 (t : Bool) (i nn full : Int) : Stats :=
+  match t with
+  | false => Stats.stats 0 0
+  | true => pfxD (wMul nn nn) i nn full
+
+def pfxGo (i nn full bound : Int) : Stats := pfxGo2 (i < bound) i nn full
+
+-- one leaf: permute the fork index (odd-multiplier bijection on the 2^d space)
+def pfx (j m nn full bound : Int) : Stats := pfxGo (and32 (wMul j 2654435761) m) nn full bound
+
+def smerge : Stats → Stats → Stats
+  | Stats.stats s1 n1, Stats.stats s2 n2 => Stats.stats (wAdd s1 s2) (wAdd n1 n2)
+  | Stats.stats s1 n1, Stats.stat0 => Stats.stats s1 n1
+  | Stats.stat0, Stats.stats s2 n2 => Stats.stats s2 n2
+  | Stats.stat0, Stats.stat0 => Stats.stat0
+
+-- batch tree over the prefix index space: leaf checksums merge pairwise
+def batch : Nat → Int → Int → Int → Int → Int → Stats
+  | 0, i, m, nn, full, bound => pfx i m nn full bound
+  | p + 1, i, m, nn, full, bound =>
+    smerge (batch p i m nn full bound) (batch p (wAdd i (wShlN 1 p)) m nn full bound)
+
+def runFin : Stats → Int
+  | Stats.stat0 => 0
+  | Stats.stats s w => xor32 (wMul s 2654435761) w
+
+def sq (x : Int) : Int := wMul x x
+
+def run (d : Nat) (n lim : Int) : Int :=
+  let nnnn := sq (sq n)
+  let full := wSub (wShlN 1 n.toNat) 1
+  runFin (batch d 0 (wSub (wShlN 1 d) 1) n full
+    (sel (b2u (lim < nnnn)) nnnn lim))
+
+/-- Root: `queens d n lim` is run(d, n, lim); the source's documented small
+size (10, 5, 625) expects 774553824, its main() runs (17, 17, 11730). -/
+def queens (d n lim : Int) : Int := run d.toNat n lim

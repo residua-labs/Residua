@@ -1,0 +1,159 @@
+-- symreg: the Bend bench/runtime symreg program (HigherOrderCO/Bend,
+-- bench/runtime/symreg/main.bend), ported to P1' Lean 4.14. Same algorithm: symbolic regression
+-- over expression-tree ADTs, 1-to-1 from Bend3's par_symreg. A population of 2^SIZE candidate
+-- programs (each a depth-5 arithmetic AST — add/sub/mul/xor internals, x/literal leaves —
+-- materialized from a xorshift32 stream) hunts f(x) = x*x + 3x + 7 over the dataset x = 0..PTS - 1.
+-- Per candidate: gen builds the tree, floop folds the dataset through eval (a pattern-matching
+-- interpreter), and the fitness adds a parsimony penalty of 8 per AST node (esize). batch forks
+-- the population as a balanced tree; pick runs the tournament pairwise up the forks, keeping the
+-- (fit, seed) winner and summing per-candidate checksums. climb then hill-climbs the winner for
+-- 32 sequential mutation rounds. Result mixes the climbed winner with the population checksum.
+-- Node dispatch is on a Nat opcode.
+-- Departure (named, u32-exact): the source's U32 words are modeled exactly in checked Int
+-- arithmetic — every op wraps mod 2^32, xor/and/or decompose bit by bit; values stay in
+-- [0, 2^32), so every modeled op equals the U32 op it replaces (verified by the value check).
+-- The source's small size (size 6, pts 16; s0 42, rounds 32) expects 2490246820 (verified
+-- against a Bend3 C run there); its main() runs (18, 42, 32, 110), out of reach here.
+-- Source pin (the source table, 2026-11-07): HigherOrderCO/Bend commit be236f324ed0338fe907fe50474468e4d3b94157
+-- (main), bench/runtime/symreg/main.bend, sha256
+-- 5aafee4856cde2259dd2efac84ed02fe1d999e68ab026d975d1a3593b430fbf0
+-- (raw.githubusercontent.com/HigherOrderCO/Bend/be236f324ed0338fe907fe50474468e4d3b94157/bench/runtime/symreg/main.bend).
+
+def W : Int := 4294967296
+
+def w32 (x : Int) : Int := x % W
+
+def bitXorLoop : Nat → Int → Int → Int → Int → Int
+  | 0, _, _, acc, _ => acc
+  | k + 1, a, b, acc, sc => bitXorLoop k (a / 2) (b / 2) (acc + ((a % 2 + b % 2) % 2) * sc) (sc * 2)
+
+def xor32 (a b : Int) : Int := bitXorLoop 32 a b 0 1
+
+def bitAndLoop : Nat → Int → Int → Int → Int → Int
+  | 0, _, _, acc, _ => acc
+  | k + 1, a, b, acc, sc => bitAndLoop k (a / 2) (b / 2) (acc + (a % 2 * b % 2) * sc) (sc * 2)
+
+def and32 (a b : Int) : Int := bitAndLoop 32 a b 0 1
+
+def wAdd (a b : Int) : Int := w32 (a + b)
+def wSub (a b : Int) : Int := w32 (a - b + W)
+-- wMul is split at 16 bits so the intermediates stay under the checked-i64
+-- bound (a_lo * b, a_hi * b < 2^48); a*b mod 2^32 is unchanged
+-- (checkedArithmeticStuck at ~2^63 on the flat form, probe-verified)
+def wMul (a b : Int) : Int :=
+  w32 (w32 (w32 (a % 65536) * b) + w32 (w32 (w32 (a / 65536) * b) % 65536) * 65536)
+def wInc (a : Int) : Int := w32 (a + 1)
+
+def pw2 : Nat → Int
+  | 0 => 1
+  | k + 1 => 2 * pw2 k
+
+def wShlN (a : Int) (k : Nat) : Int := w32 (a * pw2 k)
+def wShrN (a : Int) (k : Nat) : Int := a / pw2 k
+
+def b2u (b : Bool) : Int := if b then 1 else 0
+
+-- t == 0 picks x, else y (the source's sel)
+def sel (t x y : Int) : Int := if t == 0 then x else y
+
+/-- The source's Expr: Var / Lit{v} / Add / Sub / Mul / Xor. -/
+inductive Expr where
+  | var
+  | lit (v : Int)
+  | eadd (a b : Expr)
+  | esub (a b : Expr)
+  | emul (a b : Expr)
+  | exor (a b : Expr)
+
+/-- The source's Sel{fit, seed, sum}. -/
+structure Sel where
+  fit : Int
+  seed : Int
+  sum : Int
+
+-- xorshift: x ^= x<<13; x ^= x>>17; x ^= x<<5
+def prng (x : Int) : Int :=
+  let b := xor32 x (wShlN x 13)
+  let d := xor32 b (wShrN b 17)
+  xor32 d (wShlN d 5)
+
+def adiff (a b : Int) : Int := sel (b2u (a < b)) (wSub a b) (wSub b a)
+
+-- node dispatch on the Nat opcode
+def node (o : Nat) (a b : Expr) : Expr :=
+  match o with
+  | 0 => Expr.eadd a b
+  | 1 => Expr.esub a b
+  | 2 => Expr.emul a b
+  | _ => Expr.exor a b
+
+-- materialize a candidate AST straight off the hash stream
+def genLeaf (h : Int) (z : Bool) : Expr :=
+  match z with
+  | true => Expr.var
+  | false => Expr.lit (and32 h 255)
+
+def gen : Nat → Int → Expr
+  | 0, h => genLeaf h (and32 (wShrN h 8) 1 == 0)
+  | p + 1, h =>
+    let a := gen p (prng (xor32 h 2654435761))
+    let b := gen p (prng (wAdd h 340573321))
+    node (h % 4).toNat a b
+
+-- pattern-matching interpreter reading the shared tree
+def eval : Expr → Int → Int
+  | Expr.var, x => x
+  | Expr.lit v, _ => v
+  | Expr.eadd a b, x => wAdd (eval a x) (eval b x)
+  | Expr.esub a b, x => wSub (eval a x) (eval b x)
+  | Expr.emul a b, x => wMul (eval a x) (eval b x)
+  | Expr.exor a b, x => xor32 (eval a x) (eval b x)
+
+-- parsimony: AST node count off the shared tree
+def esize : Expr → Int
+  | Expr.var => 1
+  | Expr.lit _ => 1
+  | Expr.eadd a b => wAdd 1 (wAdd (esize a) (esize b))
+  | Expr.esub a b => wAdd 1 (wAdd (esize a) (esize b))
+  | Expr.emul a b => wAdd 1 (wAdd (esize a) (esize b))
+  | Expr.exor a b => wAdd 1 (wAdd (esize a) (esize b))
+
+-- dataset fold: error sum over x = 0..j-1, then the parsimony penalty
+def floop : Nat → Expr → Int → Int
+  | 0, e, acc => wAdd acc (wMul (esize e) 8)
+  | p + 1, e, acc =>
+    let xx := (p : Int)
+    let v := eval e xx
+    let t := wAdd (wMul xx xx) (wAdd (wMul 3 xx) 7)
+    floop p e (wAdd acc (adiff v t))
+
+def cand (s : Int) (pts : Nat) : Sel :=
+  let t := gen 5 (prng s)
+  let f := floop pts t 0
+  Sel.mk f s (xor32 f (wMul s 2654435761))
+
+-- tournament: keep the lower-fitness candidate, sum the checksums
+def pick (a b : Sel) : Sel :=
+  let w := b2u (a.fit < b.fit)
+  Sel.mk (sel w b.fit a.fit) (sel w b.seed a.seed) (wAdd a.sum b.sum)
+
+def batch : Nat → Int → Nat → Sel
+  | 0, s, pts => cand (prng s) pts
+  | p + 1, s, pts =>
+    pick (batch p (wAdd (wMul s 1664525) 1) pts) (batch p (wAdd (wMul s 214013) 3) pts)
+
+-- hill-climb the tournament winner: mutate the seed, keep improvements
+def climb : Nat → Int → Int → Nat → Int
+  | 0, bs, bf, _ => xor32 bf (wMul bs 2654435761)
+  | p + 1, bs, bf, pts =>
+    let cn := cand (prng (xor32 bs (wMul ((p : Int) + 1) 40503))) pts
+    let w := b2u (cn.fit < bf)
+    climb p (sel w bs cn.seed) (sel w bf cn.fit) pts
+
+def runFin (r p : Nat) (t : Sel) : Int := wAdd (climb r t.seed t.fit p) t.sum
+
+def run (d : Nat) (s0 : Int) (r p : Nat) : Int := runFin r p (batch d s0 p)
+
+/-- Root: `symreg d s0 r pts` is run(d, s0, r, pts); the source's documented
+small size (6, 42, 32, 16) expects 2490246820, its main() runs (18, 42, 32, 110). -/
+def symreg (d s0 r pts : Int) : Int := run d.toNat s0 r.toNat pts.toNat

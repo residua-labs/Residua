@@ -1,0 +1,105 @@
+-- micro program for scalar fields of one, two and four bytes (lib/lrc/Pack.rsd): a node whose fields are a UInt32, a
+-- UInt16, a UInt8 and a Bool, built from values at the edges of each width (the last value of a width, and the sum
+-- that goes round it), read back, and written again through a second pass over the tree (`bump`: every field one
+-- below, by adding the width's last value). A second node (`L`) has a field that takes its value through a choice
+-- between two parameters, a field that only ever holds a literal of two bytes, and a Char, which is a word: the wire
+-- gives it no width. A third (`M`) has a sum of two UInt32, a literal of four bytes and the result of a call.
+-- `widen` has a result of 32 bits behind a first parameter of 8: a result's width is its own, not a parameter's.
+-- `low8` and `lowL` read a field of 16 and of 32 bits and bring the value down to 8 and to 16: the reduction has
+-- to stay, since the field holds more.
+-- A node of the front end has three places for numbers and two for flags, so the fields are spread over three
+-- types; and the pass lays a node out by its constructor's number whatever its type, so the three constructors
+-- have three numbers (the constructors without fields before them are there for that).
+inductive T where
+  | leaf : T
+  | node : T → UInt32 → UInt16 → UInt8 → Bool → T → T
+
+def build : Nat → UInt32 → UInt16 → UInt8 → T
+  | 0, _, _, _ => T.leaf
+  | d + 1, a, b, c => T.node (build d (a + 1) (b + 1) (c + 1)) a b c (a < 5) (build d (a * 3) (b * 3) (c * 3))
+
+def bump : T → T
+  | T.leaf => T.leaf
+  | T.node l a b c f r => T.node (bump l) (a + 4294967295) (b + 65535) (c + 255) (!f) (bump r)
+
+def sum32 : T → Nat
+  | T.leaf => 0
+  | T.node l a _ _ _ r => sum32 l + a.toNat + sum32 r
+
+def sum16 : T → Nat
+  | T.leaf => 0
+  | T.node l _ b _ _ r => sum16 l + b.toNat + sum16 r
+
+def sum8 : T → Nat
+  | T.leaf => 0
+  | T.node l _ _ c _ r => sum8 l + c.toNat + sum8 r
+
+def sumB : T → Nat
+  | T.leaf => 0
+  | T.node l _ _ _ f r => sumB l + (if f then 1 else 0) + sumB r
+
+-- a field of 16 bits read and brought down to 8
+def low8 : T → Nat
+  | T.leaf => 0
+  | T.node l _ b _ _ r => low8 l + b.toUInt8.toNat + low8 r
+
+-- the largest of a field: a value read from a field is compared as the width it has
+def max32 : T → UInt32 → UInt32
+  | T.leaf, m => m
+  | T.node l a _ _ _ r, m => max32 r (max32 l (if a > m then a else m))
+
+inductive L where
+  | nil : L
+  | none : L
+  | cons : UInt32 → UInt16 → Char → L → L
+
+def link (a b : UInt32) (f : Bool) (w : Char) (rest : L) : L :=
+  L.cons (if f then a else b) 1000 w rest
+
+def chain : Nat → UInt32 → L → L
+  | 0, _, acc => acc
+  | k + 1, a, acc =>
+    chain k (a * 65537) (link a (a + 4294967290) (a < 2147483648) (if a < 9 then Char.ofNat 3 else Char.ofNat 1114111) acc)
+
+def sumL : L → Nat
+  | L.nil => 0
+  | L.none => 1
+  | L.cons a c w rest => a.toNat + c.toNat * 5 + w.toNat * 11 + sumL rest
+
+-- a field of 32 bits read and brought down to 16
+def lowL : L → Nat
+  | L.nil => 0
+  | L.none => 1
+  | L.cons a _ _ rest => a.toUInt16.toNat + lowL rest
+
+inductive M where
+  | nil : M
+  | one : M
+  | two : M
+  | cons : UInt32 → UInt32 → UInt16 → M → M
+
+-- a result of 16 bits that is no sum: the smaller of two numbers' low halves
+def low (a b : UInt32) : UInt16 := if a < b then a.toUInt16 else b.toUInt16
+
+def chainM : Nat → UInt32 → UInt32 → M → M
+  | 0, _, _, acc => acc
+  | k + 1, a, b, acc => chainM k (a * 3 + 1) (b + 4294967291) (M.cons (a + b) 70000 (low a b) acc)
+
+-- a loop, so that it stays a call
+def widen : UInt8 → Nat → UInt32 → UInt32
+  | _, 0, a => a
+  | c, k + 1, a => widen c k (a + c.toUInt32)
+
+def sumM : M → Nat
+  | M.nil => 0
+  | M.one => 1
+  | M.two => 2
+  | M.cons s d c rest => s.toNat + d.toNat * 7 + c.toNat * 13 + sumM rest
+
+def packMain : List Nat :=
+  let t := build 6 4294967294 65534 254
+  let u := bump (bump t)
+  [sum32 t, sum16 t, sum8 t, sumB t, (max32 t 0).toNat,
+   sum32 u, sum16 u, sum8 u, sumB u, (max32 u 7).toNat,
+   sumL (chain 9 5 L.nil), sumM (chainM 12 4294967290 9 M.nil), (widen 250 3 1000).toNat,
+   low8 t, lowL (chain 9 5 L.nil)]

@@ -1,0 +1,76 @@
+-- rbtree: the Koka/Perceus suite program test/bench/koka/rbtree.kk (koka-lang/koka, master), itself adapted
+-- from the Lean 4 IFL19 benchmark tests/bench/rbmap.lean. Same algorithm: insert the keys n-1, n-2, ..., 0
+-- (value = key is a multiple of 10) one at a time into a persistent red-black tree with the Okasaki-style
+-- `balance-left` / `balance-right` of that source, then fold the tree counting the keys whose value is true.
+-- Koka's int32 key is Int; Koka's counter loop is structural recursion on a Nat. The fold is specialised to
+-- the counting function (Koka passes it as a closure; the emitter specialises function arguments anyway).
+-- `rbtree n` returns the count (n / 10 rounded up); the host prints it.
+-- Source pin (the source table, 2026-11-06): koka-lang/koka commit facb7932ce6871fdb063f762a304bd8238f35fba
+-- (master), test/bench/koka/rbtree.kk, sha256
+-- 68e80aba037591f2b3ebe3acccc2a53a7ffb3e1828e661d46aa077a9e96827db
+-- (byte-identical to the 2026-11-04 the benchmark kit fetch). Rechecked against it function by function
+-- (balance-left/right arms and order, ins cases, set-black, fold, make-tree key order): no drift.
+
+-- Official OCaml reference (suite provenance, fetched 2026-11-06): koka-lang/koka commit facb7932ce6871fdb063f762a304bd8238f35fba
+-- (master), test/bench/ocaml/rbtree.ml, sha256
+-- 06f2324829c85242ad80bfc86ef0c3d731193a08e5103f19e5fc3cd70269751f
+-- (raw.githubusercontent.com/koka-lang/koka/facb7932ce6871fdb063f762a304bd8238f35fba/test/bench/ocaml/rbtree.ml). Same algorithm as the
+-- Koka twin this port was checked against (balance/ins/insert with blacken-if-red, fold, mk_map);
+-- rechecked line by line against the OCaml: no drift. Its main runs n = 4200000.
+inductive Color where
+  | red : Color
+  | black : Color
+
+inductive Tree where
+  | leaf : Tree
+  | node : Color -> Tree -> Int -> Bool -> Tree -> Tree
+
+def isRed : Tree -> Bool
+  | Tree.node Color.red _ _ _ _ => true
+  | _ => false
+
+def balanceLeft (l : Tree) (k : Int) (v : Bool) (r : Tree) : Tree :=
+  match l with
+  | Tree.node _ (Tree.node Color.red lx kx vx rx) ky vy ry =>
+    Tree.node Color.red (Tree.node Color.black lx kx vx rx) ky vy (Tree.node Color.black ry k v r)
+  | Tree.node _ ly ky vy (Tree.node Color.red lx kx vx rx) =>
+    Tree.node Color.red (Tree.node Color.black ly ky vy lx) kx vx (Tree.node Color.black rx k v r)
+  | Tree.node _ lx kx vx rx => Tree.node Color.black (Tree.node Color.red lx kx vx rx) k v r
+  | Tree.leaf => Tree.leaf
+
+def balanceRight (l : Tree) (k : Int) (v : Bool) (r : Tree) : Tree :=
+  match r with
+  | Tree.node _ (Tree.node Color.red lx kx vx rx) ky vy ry =>
+    Tree.node Color.red (Tree.node Color.black l k v lx) kx vx (Tree.node Color.black rx ky vy ry)
+  | Tree.node _ lx kx vx (Tree.node Color.red ly ky vy ry) =>
+    Tree.node Color.red (Tree.node Color.black l k v lx) kx vx (Tree.node Color.black ly ky vy ry)
+  | Tree.node _ lx kx vx rx => Tree.node Color.black l k v (Tree.node Color.red lx kx vx rx)
+  | Tree.leaf => Tree.leaf
+
+def ins : Tree -> Int -> Bool -> Tree
+  | Tree.node Color.red l kx vx r, k, v =>
+    if k < kx then Tree.node Color.red (ins l k v) kx vx r
+    else if k > kx then Tree.node Color.red l kx vx (ins r k v)
+    else Tree.node Color.red l k v r
+  | Tree.node Color.black l kx vx r, k, v =>
+    if k < kx then (if isRed l then balanceLeft (ins l k v) kx vx r else Tree.node Color.black (ins l k v) kx vx r)
+    else if k > kx then (if isRed r then balanceRight l kx vx (ins r k v) else Tree.node Color.black l kx vx (ins r k v))
+    else Tree.node Color.black l k v r
+  | Tree.leaf, k, v => Tree.node Color.red Tree.leaf k v Tree.leaf
+
+def setBlack : Tree -> Tree
+  | Tree.node _ l k v r => Tree.node Color.black l k v r
+  | t => t
+
+def insert (t : Tree) (k : Int) (v : Bool) : Tree := setBlack (ins t k v)
+
+-- Koka: t.fold(zero) fn(k, v, r) { if v then r + 1 else r }
+def foldCount : Tree -> Int -> Int
+  | Tree.node _ l _ v r, b => foldCount r (if v then foldCount l b + 1 else foldCount l b)
+  | Tree.leaf, b => b
+
+def makeTreeAux : Nat -> Tree -> Tree
+  | 0, t => t
+  | n + 1, t => makeTreeAux n (insert t (Int.ofNat n) (n % 10 == 0))
+
+def rbtree (n : Nat) : Int := foldCount (makeTreeAux n Tree.leaf) 0

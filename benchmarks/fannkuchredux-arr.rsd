@@ -1,0 +1,80 @@
+-- fannkuch-redux on arrays: the row of this program in a table against C and Rust.
+-- Computer Language Benchmarks Game, fannkuch-redux; the algorithm is the Rust entry #2's, run on one thread
+-- (benchmarks/rust/fannkuchredux_bg2_t1.rs; pins in the header of benchmarks/fannkuchredux.rsd): visit the n!
+-- permutations of 1..n in the order of the rotation-count scheme, flip the prefix of length perm[0] of a copy
+-- until its first element is 1, count the flips, add them to the checksum with alternating sign, keep the
+-- maximum. benchmarks/fannkuchredux.rsd, the pinned port, holds perm and cnt as lists and builds a new list
+-- for every rotation and reversal (its header says so). This file holds them as arrays, as the entry does:
+-- `Array.set!` writes in place when the array has one owner, and the copy that `countFlips` works on is the
+-- copy the entry makes. The numbers are Nat for the elements and the counters and Int for the checksum.
+-- `fannkuch n` returns the checksum and the maximum flip count, as the pinned port does.
+structure Result where
+  checksum : Int
+  maxflips : Int
+
+structure PC where
+  perm : Array Nat
+  cnt : Array Nat
+
+structure State where
+  perm : Array Nat
+  cnt : Array Nat
+  even : Bool
+  checksum : Int
+  maxflips : Int
+
+-- a[lo..hi] reversed in place
+partial def revRange : Array Nat -> Nat -> Nat -> Array Nat
+  | a, lo, hi =>
+    if lo < hi then
+      let x := a.get! lo
+      let y := a.get! hi
+      revRange ((a.set! lo y).set! hi x) (lo + 1) (hi - 1)
+    else a
+
+-- the flips of p: reverse the prefix of length p[0] until p[0] = 1
+partial def countFlips : Int -> Array Nat -> Int
+  | acc, p =>
+    let k := p.get! 0
+    if k == 1 then acc else countFlips (acc + 1) (revRange p 0 (k - 1))
+
+-- a[j..i] moved one place to the left: a[j] := a[j+1] for j < i
+partial def shiftLeft : Array Nat -> Nat -> Nat -> Array Nat
+  | a, j, i => if j < i then shiftLeft (a.set! j (a.get! (j + 1))) (j + 1) i else a
+
+-- next_permutation: for i = 1.., rotate the first i+1 elements left by one; if cnt[i] >= i set it to 0 and
+-- go on, else increment it and stop. The walk ends at the array's length.
+partial def nextPermAux : Nat -> Nat -> PC -> PC
+  | n, i, s =>
+    if i >= n then s
+    else
+      let t := s.perm.get! 0
+      let p := (shiftLeft s.perm 0 i).set! i t
+      let ci := s.cnt.get! i
+      if ci >= i then nextPermAux n (i + 1) { perm := p, cnt := s.cnt.set! i 0 }
+      else { perm := p, cnt := s.cnt.set! i (ci + 1) }
+
+def range1 : Nat -> Array Nat -> Array Nat
+  | 0, a => a
+  | k + 1, a => (range1 k a).push (k + 1)
+
+def zeros : Nat -> Array Nat -> Array Nat
+  | 0, a => a
+  | k + 1, a => zeros k (a.push 0)
+
+def fact : Nat -> Nat
+  | 0 => 1
+  | k + 1 => (k + 1) * fact k
+
+def work (n : Nat) : Nat -> State -> State
+  | 0, s => s
+  | f + 1, s =>
+    let flips := countFlips 0 s.perm
+    let cs := if s.even then s.checksum + flips else s.checksum - flips
+    let mf := if flips > s.maxflips then flips else s.maxflips
+    let nx := nextPermAux n 1 { perm := s.perm, cnt := s.cnt }
+    work n f { perm := nx.perm, cnt := nx.cnt, even := !s.even, checksum := cs, maxflips := mf }
+
+def fannkuch (n : Nat) : Result :=
+  let s := work n (fact n) { perm := range1 n (Array.mkEmpty n), cnt := zeros n (Array.mkEmpty n), even := true, checksum := 0, maxflips := 0 }
+  { checksum := s.checksum, maxflips := s.maxflips }

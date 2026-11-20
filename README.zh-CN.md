@@ -13,7 +13,8 @@ Residua 为研究项目，研究互不信任的各方之间如何复用计算结
 检查。0.1 版交付此设计中编译那部分：自举编译链，任何外部方都可从仓库中已提交的种子出发验证其来源。证明检查那部分
 （R-CIC 内核）是后续版本的内容。
 
-> **状态。** 研究版本 **0.1.1**（2026-11-19）：rsd 编译器的最小自举闭合。
+> **状态。** 研究版本 **0.1.2**（2026-11-19）：rsd 编译器的最小自举闭合，
+> 附测试与基准套件。
 > 目前还不是通用语言，见[限制](#限制)。
 
 ## 动机
@@ -30,37 +31,38 @@ Residua 为研究项目，研究互不信任的各方之间如何复用计算结
 - **以内容为身份。** 产物和结果都由内容地址 *q* 标识。能否复用只看 *q* 是否相等，不看名字、位置或产出者。
 - **以检查为接纳。** 结果只有通过对照形式语义的机械检查才能进入系统。产出者无论是人、编译器还是自动化 agent，都在可信基之外
   （de Bruijn 准则 [9]）。
-- **程序与证明同种语言。** 按设计，某 rsd 项既被编译，又由同内核检查，所以关于程序的陈述，说的就是实际运行的那个项。
+- **程序与证明同种语言。** 按设计，rsd 项既被编译，又由同个内核检查，所以关于程序的陈述，说的就是实际运行的那个项。
 - **可验证的工具链。** 产出其他全部产物的编译器，本身可从已提交的种子复现，所以它的来源是被检查的，而不是被假定的。
 
 ## 0.1 版
 
 ### 贡献
 
-**来源可验证的编译。** 给定源码和产物，任何方只用 C 编译器，就能从仓库中提交的 WebAssembly 种子重建编译器，并逐字节
+**来源可验证的编译。** 给定源码与产物，任何外部方只用 C 编译器，就能从仓库中提交的 WebAssembly 种子重建编译器，并逐字节
 核对该产物确实由这份源码得到；既不需要信任发布者，也不必信任庞大的 binary 工具链。
 
 | 组成 | 内容 |
 |---|---|
 | 编译链 | `rsd → rscm → wasm`：前端 `rsdc` 和后端 `rsc`，附完整源码（54 个文件，以 SHA-256 钉住） |
-| 种子 | `bootstrap/seed/stage-14274/`：`rsdc` 与 `rsc` 的 WebAssembly 形式、重建配方及其核对的全部摘要 |
+| 种子 | `bootstrap/seed/stage-14274/`：`rsdc` 与 `rsc` 编译器的 WebAssembly 形式、重建配方及其核对的全部摘要 |
 | 形式语义 | 各层（scm、λRC、wasm0）冻结的规范，以内容摘要钉住（`semantics/`、`gates/semalign/`、`lean/rsd-cert/`） |
 | 性能记录 | 在固定硬件上与 Koka 及另外 6 门语言对比（[`perf/`](perf/README.zh-CN.md)） |
 | 文档 | 安装、验证流程、架构、信任模型、术语表、稳定性策略、FAQ（`release/docs/`，中英文） |
+| 测试与基准套件 | `benchmarks/`（基准程序与对比框架）与 `instruments/lrc-host/`（对拍测试套件），用法见 `release/docs/TESTING` |
 
 ### 证据
 
 - **独立复现。** 某对项目全无了解的独立 agent，只凭文档，在全新的 Linux 虚拟机上复现了种子配方：`rsdc` 与 `rsc` 重建后与种子
   逐字节相同。
-- **独立审查。** 本版本经相互独立的模型家族审查。
-- **源码包逐字节相同。** 标签 `rsd-0.1.1` 上的仓库内容与发布的源码包逐字节相同。
+- **独立审查。** 本发布线的早期 head 经相互独立的模型家族审查（最近为 `891b1a122a`）；裁决记录保存在本归档之外。
+- **源码包逐字节相同。** 标签 `rsd-0.1.2` 上的仓库内容与发布的源码包逐字节相同。
 
 ## 复现自举
 
 环境要求：Linux x86-64、GCC、GNU binutils、coreutils、Bash、curl 和 tar。不需要 Lean、Node 或 OCaml。
 
 ```sh
-# 1. 从 rsd-0.1.1 发布页下载并核对源码包
+# 1. 从 rsd-0.1.2 发布页下载并核对源码包
 sha256sum -c rsd-src.tar.sha256
 mkdir rsd-src && tar -xf rsd-src.tar -C rsd-src && cd rsd-src
 
@@ -69,12 +71,12 @@ env -i PATH=/usr/bin:/bin bash --noprofile --norc
 #    然后执行 bootstrap/seed/stage-14274/README.md 中的命令
 ```
 
-配方会下载钉住版本的 WABT，将种子执行器翻译成 C 并编译，再从源码重建 `rsdc` 与 `rsc`；只有重建结果与提交的种子逐字节相同时
+配方会下载钉住版本的 WABT，把种子执行器翻译成 C 并编译，再从源码重新编译 `rsdc` 与 `rsc`；只有重建结果与提交的种子逐字节相同时
 才返回 0。
 
 延伸阅读：
 
-- [`release/docs/QUICKSTART`](release/docs/QUICKSTART)：首次运行的详细步骤，以及如何编译源文件
+- [`release/docs/QUICKSTART`](release/docs/QUICKSTART)：初次运行的详细步骤，以及如何编译源文件
 - [`release/docs/VERIFY-RELEASE`](release/docs/VERIFY-RELEASE)：本版本的全部摘要核对
 - [`release/docs/OVERVIEW.zh-CN`](release/docs/OVERVIEW.zh-CN) 和 [`release/docs/ARCHITECTURE.zh-CN`](release/docs/ARCHITECTURE.zh-CN)：0.1 是什么，各层如何衔接
 
@@ -92,25 +94,25 @@ env -i PATH=/usr/bin:/bin bash --noprofile --norc
 
 从种子自举用时 1162 秒（峰值 3.6 GiB）。
 
-**适用范围。** 这些数字描述的是固定机型上的小型套件，刻画的是本版本，并非对所比较语言的总体排名。逐程序的表格、空格及其
+**适用范围。** 这些数字描述某机型上的小型套件，刻画本版本，`并非对所比较语言的通用排名`。逐程序的表格、空格及其
 原因、工具链版本和每个版本的历史，见 [`perf/`](perf/README.zh-CN.md)。
 
 ## 限制
 
-0.1.1 用于可复现、可审计的编译，以及可验证、可自举编译器的研究。
+0.1.2 用于可复现、可审计的编译，以及可验证、可自举编译器的研究。
 
 - 只支持单模块程序（没有 `import`）。
 - 没有 I/O 执行层。
 - 不检查证明：R-CIC 内核不在本版本中，发布的 `theorem` 文本是规范，不是已检查的结论。
 - 没有 `UInt64`；地址空间为 4 GiB。
 - 内容标识（q）的格式尚未定稿。
-- 0.1.1 的表面语言是严格的自举子集，拒绝 `theorem`、`axiom`、`class`、`abbrev` 和 `by`（[`release/docs/LANGUAGE`](release/docs/LANGUAGE)）。
+- 0.1.2 的表面语言是严格的自举子集，拒绝 `theorem`、`axiom`、`class`、`abbrev` 和 `by`（[`release/docs/LANGUAGE`](release/docs/LANGUAGE)）。
 
 ## 研究议程
 
 功能版本按目标完成的先后编号为 0.2、0.3……。哪个目标对应哪个编号不预先指定，也不承诺日期。目标如下：
 
-- **检查他人的结果。** R-CIC 证明内核：结论与 Lean4Lean [7] 相同，并且不接受 Lean Kernel Arena 中的任何无效输入；最终的 q 格式；
+- **检查他人的结果。** R-CIC 证明内核：结论与 Lean4Lean [7] 相符，并且不接受 Lean Kernel Arena 中的任何无效输入；最终的 q 格式；
   结果的发布与查询入口。
 - **编程完整性。** 模块、`UInt64`、64 位寻址、I/O 执行层、真实应用套件。
 - **低成本确认执行。** wasm0 → AIR → zero-knowledge 证明。
@@ -130,6 +132,7 @@ env -i PATH=/usr/bin:/bin bash --noprofile --norc
 |---|---|---|---|
 | [0.1](https://github.com/residua-labs/Residua/releases/tag/rsd-0.1) | 2026-11-19 | `59d0956e…` | 首个公开版本：最小自举闭合 |
 | [0.1.1](https://github.com/residua-labs/Residua/releases/tag/rsd-0.1.1) | 2026-11-19 | 见发布页 | 修订版：性能记录进入源码包，署名补全，内部标识符移除 |
+| [0.1.2](https://github.com/residua-labs/Residua/releases/tag/rsd-0.1.2) | 2026-11-19 | 见发布页 | 修订版：基准与对拍测试套件进入源码包 |
 
 完整记录：[CHANGELOG.zh-CN.md](CHANGELOG.zh-CN.md)。
 
@@ -142,18 +145,20 @@ env -i PATH=/usr/bin:/bin bash --noprofile --norc
 | `semantics/`、`gates/`、`lean/` | 冻结的形式语义和逐层翻译检查 |
 | `release/` | 发布清单、来源记录、声明、许可证和文档 |
 | `perf/` | 每个版本的性能记录 |
+| `benchmarks/` | 基准程序、生成的模块、期望输出与对比框架 |
+| `instruments/` | 宿主机测试工具，包括对拍测试套件 |
 
 ## 引用
 
 请引用你所使用的版本，并附其源码包的摘要：
 
 ```bibtex
-@software{residua_0_1_1,
+@software{residua_0_1_2,
   title   = {Residua: Verifiable Computation and Proof, Identified by Content},
   author  = {{Residua Labs contributors}},
   year    = {2026},
-  version = {0.1.1},
-  url     = {https://github.com/residua-labs/Residua/releases/tag/rsd-0.1.1},
+  version = {0.1.2},
+  url     = {https://github.com/residua-labs/Residua/releases/tag/rsd-0.1.2},
   note    = {Source archive SHA-256 recorded on the release page}
 }
 ```

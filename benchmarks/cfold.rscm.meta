@@ -1,0 +1,6 @@
+# the source table sidecar: the .rscm beside this file was emitted from the .rsd beside this file
+# by the current emitter (emitTyped, the current emitter's lowered form) under stock Lean 4.14.0 on
+# the benchmark source at e1e122c (closure_claim = 0). It names both hashes; edit neither file.
+rscm_file	benchmarks/cfold.rscm	rscm_sha256	c7c24445d1d632b801345ae0bdd31d6a8dfc226ea19e3f3a9813144c1e7dc400	rscm_bytes	73836
+rsd_file	benchmarks/cfold.rsd	rsd_sha256	f62e3a925968fc7cc6929ce7da1deac83591b04fd24622865bd9ced0cad739bf
+root	cfoldMain	entry	9	declared_arity	2	modules	13

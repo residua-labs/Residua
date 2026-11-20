@@ -1,0 +1,15 @@
+# FILE	FROM	TO  (FROM occurs exactly once in FILE; every row must make the differential report a mismatch)
+lib/lrc/PushProj.rsd	if !vsContains ctxF x then pushProjs rest	if vsContains ctxF x then pushProjs rest
+lib/lrc/PushProj.rsd	(if vsContains s x then altSetBody alt (setBody b (altBody alt)) else alt)	(altSetBody alt (setBody b (altBody alt)))
+lib/lrc/PushProj.rsd	else if b.op == opVDecl && v.op == opIsShared then	else if b.op == opVDecl && v.op == opLit then
+lib/lrc/LiveVars.rsd	let s := vsEraseAll s (bindVars (vdeclBinds n))	let s := vsEraseAll s []
+lib/lrc/FreeVars.rsd	freeGo (bodyOf n) (vsInsert bv (jdeclId n)) fv	freeGo (bodyOf n) bv fv
+lib/lrc/NormIds.rsd	binds := (next : Int) :: ty :: r.binds }	binds := x :: ty :: r.binds }
+lib/lrc/ElimDead.rsd	else if curr.op == opJDecl then vsContains used (jdeclId curr)	else if curr.op == opJDecl then true
+lib/lrc/ElimDead.rsd	(setBody curr b) (collectFreeIndices curr used)	(setBody curr b) used
+lib/lrc/ElimDead.rsd	edAnyUsed used (bindVars (vdeclBinds curr)) ||	true ||
+lib/lrc/SimpCase.rsd	if m.n == 1 then alts	if m.n == 0 then alts
+lib/lrc/SimpCase.rsd	if (altBody alt).op == opUnreachable then scFilterUnreachable alts	if (altBody alt).op == opRet then scFilterUnreachable alts
+lib/lrc/SimpCase.rsd	  | [alt] => altBody alt	  | [_] => mkUnreachable
+lib/lrc/AlphaEqv.rsd	else if b1.op == opJmp then b1.a == b2.a && aeqArgs rho b1.ys b2.ys	else if b1.op == opJmp then aeqArgs rho b1.ys b2.ys
+lib/lrc/AlphaEqv.rsd	if x1 == x2 then rho else imInsert rho x1 x2	if x1 == x2 then rho else rho

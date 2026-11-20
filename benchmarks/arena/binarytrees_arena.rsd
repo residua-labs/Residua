@@ -1,0 +1,60 @@
+-- arena-route variant of binarytrees.rsd: `*` and `/` replaced (pow2 by addition, the level count by a fuel of maxDepth
+-- with a stop test) because the arena generator has no `*`, `/` or `mod` primitive ([unknown_prim]). Same output.
+-- binary-trees: Computer Language Benchmarks Game, binary-trees
+-- (benchmarksgame-team.pages.debian.net/benchmarksgame/description/binarytrees.html, fetched 2026-11-04).
+-- Same algorithm as the rules state: allocate a 'stretch' tree and check it; allocate a long-lived tree;
+-- for every even depth d from 4 to maxDepth allocate, walk and drop 2^(maxDepth-d+4) bottom-up trees of
+-- depth d; check the long-lived tree last. The tree is an algebraic data type (the rules allow it); there
+-- is no arena and no sharing: every node, leaves included, is its own `Tree.node` construction, and a
+-- depth-d tree has 2^(d+1)-1 nodes as in the Rust entry (an absent child is `Tree.nil`, a node is
+-- allocated for depth >= 0). Counts are Int (i64); the program text of the lines is rendered by the host
+-- because the 53 constructors have no number-to-string.
+--
+-- `lines n` returns the output lines as records: kind 0 = "stretch tree of depth {depth}\t check: {check}",
+-- kind 1 = "{iterations}\t trees of depth {depth}\t check: {check}",
+-- kind 2 = "long lived tree of depth {depth}\t check: {check}".
+
+inductive Tree where
+  | nil : Tree
+  | node : Tree -> Tree -> Tree
+
+structure Line where
+  kind : Int
+  iterations : Int
+  depth : Int
+  check : Int
+
+-- bottomUp k builds the perfect tree of depth k-1 (k levels of nodes); bottomUp 0 is the absent child.
+def bottomUp : Nat -> Tree
+  | 0 => Tree.nil
+  | k + 1 => Tree.node (bottomUp k) (bottomUp k)
+
+def itemCheck : Tree -> Int
+  | Tree.nil => 0
+  | Tree.node l r => 1 + itemCheck l + itemCheck r
+
+def pow2 : Nat -> Int
+  | 0 => 1
+  | k + 1 => pow2 k + pow2 k
+
+-- sum of itemCheck over `iterations` freshly built trees of depth d (d + 1 levels of nodes)
+def inner : Nat -> Nat -> Int -> Int
+  | 0, _, chk => chk
+  | i + 1, d, chk => inner i d (chk + itemCheck (bottomUp (d + 1)))
+
+-- the depths minDepth, minDepth+2, ..., maxDepth, `cnt` of them, starting at depth d
+def levels (maxDepth : Nat) : Nat -> Nat -> List Line
+  | 0, _ => []
+  | c + 1, d =>
+    if d > maxDepth then [] else
+    let iterations := pow2 (maxDepth - d + 4)
+    { kind := 1, iterations := iterations, depth := Int.ofNat d,
+      check := inner iterations.toNat d 0 } :: levels maxDepth c (d + 2)
+
+def lines (n : Nat) : List Line :=
+  let maxDepth := if 6 > n then 6 else n
+  let stretch := bottomUp (maxDepth + 2)
+  let longLived := bottomUp (maxDepth + 1)
+  { kind := 0, iterations := 0, depth := Int.ofNat (maxDepth + 1), check := itemCheck stretch } ::
+    (levels maxDepth maxDepth 4 ++
+      [{ kind := 2, iterations := 0, depth := Int.ofNat maxDepth, check := itemCheck longLived }])

@@ -1,4 +1,4 @@
-# OVERVIEW — Residua 是什么，0.1.1 提供什么，它的局限
+# OVERVIEW — Residua 是什么，0.1.2 提供什么，它的局限
 
 [English](OVERVIEW) | 中文
 
@@ -13,8 +13,8 @@ Residua 为基础设施，让人无需信任对方，就能使用对方的计算
 语义网络之上。Residua 的设计中计算与证明属同项工作：在它的语言 rsd 中，
 程序与证明为同种依赖类型论中的项——同个对象既被编译成原生
 代码或 WebAssembly，又由内核检查，而非靠同步维持的异体系统。
-此点属设计，尚未端到端证实；0.1.1 交付的是编译部分——证明检查
-证明检查部分（R-CIC 内核）在下文"版本局限"和"0.1.1 之后的顺序"中列名。
+此点属设计，尚未端到端证实；0.1.2 交付的是编译部分——证明检查
+证明检查部分（R-CIC 内核）在下文"版本局限"和"0.1.2 之后的顺序"中列名。
 
 为什么——以下事实，首页不写使命宣言：形式化结果的成本主要花在
 重复检查、上游变化后的修补、协调和审查上（内核检查只占小部分）；
@@ -22,7 +22,7 @@ Residua 为基础设施，让人无需信任对方，就能使用对方的计算
 识别；形式语义彼此割裂（Lean、Rocq、K、wasm、EVM），结果无法跨越
 它们组合。
 
-## 0.1.1 提供什么——且只有这些
+## 0.1.2 提供什么——且只有这些
 
 可验证来源的编译：给定源码与产物，任何人都可以从提交的
 wasm 种子出发，只用 C 编译器、不需要别的工具链，逐字节重建并核验
@@ -71,9 +71,9 @@ wasm 种子出发，只用 C 编译器、不需要别的工具链，逐字节重
 
 ## 文件格式
 
-| 格式 | 是什么 | 出处 | 0.1.1 发货 |
+| 格式 | 是什么 | 出处 | 0.1.2 发货 |
 |---|---|---|---|
-| `.rsd` | 精化前树的文本拼写；0.1.1 前缘接受的是引导子集 | `release/docs/LANGUAGE` | 是——54 个源码成员加上 `semantics/`/`gates/semalign/` 规范文本 |
+| `.rsd` | 精化前树的文本拼写；0.1.2 前缘接受的是引导子集 | `release/docs/LANGUAGE` | 是——54 个源码成员加上 `semantics/`/`gates/semalign/` 规范文本 |
 | `.rsj` | 同棵树的文本拼写，Reason 风格 | 仓库侧文法描述 | 否——仅仓库 |
 | `.rsm` | 同棵树的文本拼写，Racket 系（由 `.rsl` 改名） | 仓库侧文法描述 | 否——仅仓库 |
 | `.rsx` | 规范内核形式：源码级 AST 的规范 S 表达式的 csexp | 仓库侧文法 | 否——仅仓库 |
@@ -84,12 +84,12 @@ wasm 种子出发，只用 C 编译器、不需要别的工具链，逐字节重
 
 `semantics/` 与 `gates/semalign/` 下的语义 `.rsd` 文件是作为规范
 发货的 Lean 4.14 程序文本（`release/docs/SPECS` 标该行 GATED；
-`gates/semalign/METHOD.md` 载明规程）。0.1.1 的 `rsdc` 前缘不接受
-它们——0.1.1 的 `.rsd` 文法是 `release/docs/LANGUAGE` 的引导子集，
+`gates/semalign/METHOD.md` 载明规程）。0.1.2 的 `rsdc` 前缘不接受
+它们——0.1.2 的 `.rsd` 文法是 `release/docs/LANGUAGE` 的引导子集，
 拒绝 `theorem`、`axiom`、`class`、`abbrev`、`variable`、`opaque`、
 `by` 与 `import`。
 
-## 0.1.1 的版本局限
+## 0.1.2 的版本局限
 
 - 单模块程序：前缘拒绝 `import`。
 - 没有 I/O 执行层：程序的输入输出是阶段宿主的文件契约，不是语言效果。
@@ -100,10 +100,10 @@ wasm 种子出发，只用 C 编译器、不需要别的工具链，逐字节重
 - 没有结果的发布/查询入口；没有调度器命令。
 - 没有可导入的标准库（`release/docs/STDLIB`）。
 
-0.1.1 面向谁：可复现、可审计的编译——供应链、可信执行之前的那步——
+0.1.2 面向谁：可复现、可审计的编译——供应链、可信执行之前的那步——
 以及可验证、可自举编译器的研究。它不以通用语言的面目发布。
 
-## 0.1.1 之后的顺序
+## 0.1.2 之后的顺序
 
 每项都带验收对象；不写日期。
 
@@ -127,7 +127,7 @@ Residua 是项目；`rsd` 是语言和工具链。
 仓库侧，Residua 源码以同棵精化前树的多面拼写存在——`surface rsd`
 文法（Lean 4.14.0 语法子集，移植自 stock Lean 4.14.0 提交
 `410fab7284703f41660ca2454218dcca9b2ec896`）、Reason 风格拼写
-和 Racket 系拼写——加上规范内核形式 `.rsx`。0.1.1 只发 `.rsd`
+和 Racket 系拼写——加上规范内核形式 `.rsx`。0.1.2 只发 `.rsd`
 拼写，且只接受它的引导子集（`release/docs/LANGUAGE`：链自身源码
 与 1,247,797 字节拼接 bundle 均 parse `err=0`；refuse 语料逐行
 拒绝——证据在仓库侧）。
@@ -135,8 +135,8 @@ Residua 是项目；`rsd` 是语言和工具链。
 逐层的设计——语义链、表面语法、身份与信任——见
 `release/docs/ARCHITECTURE`。面向外部读者的
 `release/docs/{TRUST,GLOSSARY,STABILITY,FAQ,RELATED-WORK,
-CONTRIBUTING-SECURITY}` 说明 0.1.1 信任什么、其用语、承诺与关系，
+CONTRIBUTING-SECURITY}` 说明 0.1.2 信任什么、其用语、承诺与关系，
 均以中英对照发货。
 
-`closure_claim=0`（`release/MANIFEST.md`："No release tag, seal or
+`closure_claim = 0`（`release/MANIFEST.md`："No release tag, seal or
 author attestation is made here"）。

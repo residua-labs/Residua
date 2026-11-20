@@ -1,0 +1,23 @@
+-- micro program for a numeral beside an Int under no expected type
+-- (reports/backend-opt/the numeral landing.md): the left operand of an operation is a numeral, the
+-- right operand is an operation on an Int whose own left operand is a numeral, and nothing around
+-- them gives a type (a comparison, a `let` without a type). Lean gives the leaves one type, Int.
+def numEq (k : Int) : Int := if 16 + 8 * k == 256 then 1 else 0
+
+def numLe (k : Int) : Int := if 16 + 8 * k <= 256 then 1 else 0
+
+def numSub (k : Int) : Int := if 16 - 8 * k < 0 then 1 else 0
+
+def numMul (k : Int) : Int := if 16 * (8 + k) == 256 then 1 else 0
+
+def numLet (k : Int) : Int :=
+  let v := 2 + 3 * (1 + k)
+  v
+
+def numDeep (k : Int) : Int := if 1 + 2 * (3 + 4 * k) == 47 then 1 else 0
+
+def numMain (k : Int) : Int :=
+  numEq 30 * 100000 + numEq k * 10000 + numLe 30 * 1000 + numLe 31 * 100 + numSub 3 * 10 + numMul 8
+    + numLet k + numDeep 5
+
+def numAt3 : Int := numMain 3

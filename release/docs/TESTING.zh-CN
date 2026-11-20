@@ -1,0 +1,69 @@
+# TESTING — 随归档发货的测试与基准套件
+
+[English](TESTING) | 中文
+
+本归档发货的套件：`benchmarks/`（0.1 性能记录与正确性语料背后的程序）
+和 `instruments/lrc-host/`（移植编译遍做差分检查所用的测试套件）。
+都不属于自举配方：配方只含种子目录及其 C 宿主桥
+（`release/docs/INSTALL`、`release/docs/VERIFY-RELEASE`）。
+
+## benchmarks/ — 性能与正确性语料
+
+内容：各 `.rsd` 基准程序及其发射的 `.rscm` 模块、
+`benchmarks/MANIFEST.tsv`（逐程序来源与复核声明）、
+`benchmarks/expected/`（逐字节期望输出）、`benchmarks/rust/`（对比引用的
+Rust 参照移植）、`benchmarks/koka/`（Koka 对比工具，含 `timecell.c`）、
+`benchmarks/langs/`（移植所本的上游套件快照：Koka `test/bench` 与
+Lean 4.14 test/bench 程序）。
+
+用发货链跑单个程序：以 `rsdc` 编译其 `.rsd`，以 `rsc` 下降 `.rscm`，
+在 wasm 运行时上执行，或经 `wasm2c` 加 C 宿主——与种子自身程序相同的
+`release/docs/RSD-COMMAND` 接口。输出与
+`benchmarks/expected/<name>.txt` 逐字节比对；MANIFEST 行给出各程序核
+查所用输入及状态词表（`rsd:equal`、`rscm:compiled_equal`、已命名
+拒绝）。
+
+工具链：rsd 链只需 C 编译器与已提交种子（同 QUICKSTART）。对比列为
+可选外部项：Rust 参照需 `rustc`（记录用的是 1.99.1），Koka 工具需
+C 编译器构建 `timecell.c` 及 Koka 工具链重建的 `.kk` 端。
+`benchmarks/langs/` 下上游文件是为 provenance 保留的源码快照；重建
+它们需要各自工具链，不属于这里的任何检查。
+
+## instruments/lrc-host/ — 差分测试套件
+
+内容：`Diff.rsd`（检查驱动）、`Images.tsv`（钉住的前端映像及其值）、
+`Sides.rsd`/`SidesMutants.tsv` 与 `Mutants*.tsv` 各表（变异行）、
+`Peaks.tsv`、`img/`（钉住的映像文件），以及映像所出的 `Prog*` 等
+辅助 `.rsd` 程序。
+
+以 `lean --run` 运行——`lean-toolchain` 钉住的 Lean 4.14.0 工具链。
+这里 `lean --run` 是测试工具：发布配方中没有任何环节需要 Lean。
+
+- `lean --run instruments/lrc-host/Diff.rsd`——全部检查：`lib/lrc/`
+  中每个移植遍与其引用的 Lean 4.14.0 原版遍（oracle）做差分；退出
+  码 0 即无差异。
+- `lean --run instruments/lrc-host/Diff.rsd quick`——同上，映像检查
+  取短式。
+- `lean --run instruments/lrc-host/Diff.rsd mutants [TAG]`——
+  `Mutants*.tsv` 全部行（或指定单个表）：每个变异必须改变该遍输出或
+  被拒绝。
+- `lean --run instruments/lrc-host/Diff.rsd plants`——每个变异行须
+  植入：其 FROM 文本必须在其 FILE 中仅出现。
+- `lean --run instruments/lrc-host/Diff.rsd ir` / `cite` / `mag`——
+  写出映像 IR、核对移植模块的 Lean 行号引用、或前端整数运算表。
+
+`Diff.rsd` 的 `rsdc` 子命令运行前端 twin
+`instruments/rsdc-ml/rsdc.ml`（OCaml 仪器，仓库侧、不发货）；其余
+子命令只需发货文件加 Lean 工具链。
+
+## 性能记录如何产出
+
+`release/docs/PERF-RECORD.tsv` 是测量记录（其形式与词表见
+`release/docs/PERF-RECORD`）。产出规程——记录的运行命令——
+在仓库侧 `reports/perf-record/` 之下的 `README.md` 按版本 `0.1` 归档：每台 VM 全新实例
+GCP t2d-standard-4 作业，把种子提交的 `git archive` 提交进全新仓库，
+在 `env -i PATH=/usr/bin:/bin` 下跑
+`bootstrap/seed/stage-14274/README.md` 的 bash 块，然后 2 台 VM 上各
+做 3 遍串行的自编译与编译速度测量；`wall_s` 列为 2 台 VM 均值，
+`vm_spread_pct` 为逐行离散度。基准映像来自发货的 `benchmarks/` 程序；
+Koka 列用同组 VM 上的 `benchmarks/koka/` 测得。

@@ -1,0 +1,60 @@
+-- pidigits: the Benchmarks Game program, per its description page (benchmarksgame-team.pages.debian.net/
+-- benchmarksgame/description/pidigits.html, fetched 2026-11-04): "use arbitrary precision arithmetic and
+-- the same step-by-step single-threaded algorithm to generate digits of Pi. Do both extract(3) and
+-- extract(4). Don't optimize away the work", adapting "the step-by-step algorithm given on pages 4, 6
+-- and 7 of Unbounded Spigot Algorithms for the Digits of Pi" (Gibbons' unbounded spigot; not the page-2
+-- version, not Rabinowitz-Wagon). This is the algorithm of the Game's C entry (Mr Ledrug) and Rust
+-- entries (TeXitoi, Brubeck; entry #4 with `rug`, #2 with GMP FFI), stated here from the fetched Game
+-- pages: the streaming state is four numbers (k, acc, den, num), all arbitrary-precision SIGNED
+-- integers (mpz), starting (0, 0, 1, 1); each step composes the next term (k := k + 1; k2 := 2k + 1;
+-- acc := (acc + 2*num) * k2; den := den * k2; num := num * k) until num <= acc and extract(3) =
+-- extract(4) (extract(j) = (num * j + acc) / den, truncating), then emits the digit d = extract(3)
+-- and eliminates it (acc := (acc - den * d) * 10; num := num * 10). `acc` does go negative between
+-- steps (mpz carries the sign; e.g. the elimination after the first digit computes 6 - 9), which is
+-- why the state is Int, not Nat; `num` and `den` stay positive. Division truncates toward zero, as
+-- mpz_tdiv_q and the Game entries do. `piDigits n` returns the first n digits; the host renders them
+-- 10 to a line with the running total, padding a partial last line with spaces, exactly as the Game's
+-- output file formats them. The term-composition loop recurses on a Nat fuel (1000 covers it: each
+-- digit needs only a few terms); everything else is structural on the digit count.
+-- Source pin (the source table, 2026-11-06): Benchmarks Game C entry (Mr Ledrug)
+-- (benchmarksgame-team.pages.debian.net/benchmarksgame/program/pidigits-gcc-1.html) sha256
+-- a448fb8076da1da7cc7f353c2519abdac35c0e409e8b76d9f2d4e53e1c44065f, identical at salsa.debian.org/
+-- benchmarksgame-team/benchmarksgame commit 40296663ed350d5fe4a6ab5e367bab61cb77c219; rules page
+-- (description/pidigits.html) sha256 631c639b397e941609e1df1c43aa10009fa43a53af418a387997102f052f2c81;
+-- expected/pidigits-30.txt is byte-equal to the Game's published output file (kept by the benchmark kit).
+-- Rechecked against the entry (state, update order, extract/eliminate arithmetic): no drift beyond
+-- the stated Int/i64-vs-mpz departure, which is the named chain refusal checkedArithmeticStuck
+-- (i64 leaves the range at the 6th digit; the chain has no bignum).
+
+-- Official OCaml reference (suite provenance, fetched 2026-11-06): Benchmarks Game OCaml
+-- entry #5 (the fastest listed OCaml), salsa commit 40296663ed350d5fe4a6ab5e367bab61cb77c219, program page
+-- benchmarksgame-team.pages.debian.net/benchmarksgame/program/pidigits-ocaml-5.html, code sha256
+-- (extracted from the page) a54f331aa072b75ebf547b60b107555f830e5bf6e7de9df582567a09c886c200. The
+-- OCaml (Zarith) runs this port's spigot verbatim (extract/next/safe/prod/cons over (num, den, acc),
+-- ten-column rows with ":n" suffixes); its bignums are arbitrary precision, this port's Int stays
+-- checked i64 -- the same named refusal stands.
+def extract (j num acc den : Int) : Int := (num * j + acc) / den
+
+def nextTerm (k acc den num : Int) : Int × Int × Int × Int :=
+  let k' := k + 1
+  let k2 := 2 * k' + 1
+  (k', (acc + 2 * num) * k2, den * k2, num * k')
+
+-- compose terms until num <= acc and extract(3) = extract(4); fuel bounds the composition loop
+def safeDigitAux : Nat -> Int -> Int -> Int -> Int -> Int × Int × Int × Int × Int
+  | 0, k, acc, den, num => (k, acc, den, num, extract 3 num acc den)
+  | fuel + 1, k, acc, den, num =>
+    let (k1, acc1, den1, num1) := nextTerm k acc den num
+    if num1 <= acc1 then
+      let d3 := extract 3 num1 acc1 den1
+      if d3 == extract 4 num1 acc1 den1 then (k1, acc1, den1, num1, d3)
+      else safeDigitAux fuel k1 acc1 den1 num1
+    else safeDigitAux fuel k1 acc1 den1 num1
+
+def piDigitsAux : Nat -> Int -> Int -> Int -> Int -> List Int
+  | 0, _, _, _, _ => []
+  | n + 1, k, acc, den, num =>
+    let (k1, acc1, den1, num1, d) := safeDigitAux 1000 k acc den num
+    d :: piDigitsAux n k1 ((acc1 - den1 * d) * 10) den1 (num1 * 10)
+
+def piDigits (n : Nat) : List Int := piDigitsAux n 0 0 1 1

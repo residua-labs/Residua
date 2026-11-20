@@ -1,4 +1,4 @@
-# OVERVIEW — what Residua is, what release 0.1.1 offers, its limits
+# OVERVIEW — what Residua is, what release 0.1.2 offers, its limits
 
 English | [中文](OVERVIEW.zh-CN)
 
@@ -17,7 +17,7 @@ in rsd a program and a proof are meant to be terms of the same
 dependent type theory — one object that is both compiled to fast native
 or wasm code and checked by the kernel, not 2 systems kept in sync.
 That unity is the design and is not yet demonstrated end to end;
-release 0.1.1 ships the compilation half of it — the proof-checking half
+release 0.1.2 ships the compilation half of it — the proof-checking half
 (the R-CIC kernel) is named under the limits and the order below.
 
 Why — 3 facts, no mission claims: re-checking, repair after upstream
@@ -27,7 +27,7 @@ that cannot be trusted, so only mechanical checking and content identity
 scale; semantics are siloed (Lean, Rocq, K, wasm, EVM) and results do
 not compose across them.
 
-## What 0.1.1 offers — and only this
+## What 0.1.2 offers — and only this
 
 Verifiable-provenance compilation: given a source and an artifact,
 anyone can rebuild from a committed wasm seed, with a C compiler and no
@@ -82,9 +82,9 @@ Supporting it:
 
 ## File formats
 
-| format | what it is | source | shipped in 0.1.1 |
+| format | what it is | source | shipped in 0.1.2 |
 |---|---|---|---|
-| `.rsd` | text spelling of the pre-elaboration tree; the 0.1.1 front edge accepts the bootstrap subset | `release/docs/LANGUAGE` | yes — the 54 source members plus the `semantics/`/`gates/semalign/` specification texts |
+| `.rsd` | text spelling of the pre-elaboration tree; the 0.1.2 front edge accepts the bootstrap subset | `release/docs/LANGUAGE` | yes — the 54 source members plus the `semantics/`/`gates/semalign/` specification texts |
 | `.rsj` | text spelling of the same tree, Reason-style | repository-side grammar profile | no — repository-only |
 | `.rsm` | text spelling of the same tree, Racket-family (renamed from `.rsl`) | repository-side grammar profile | no — repository-only |
 | `.rsx` | canonical kernel form: csexp of the canonical s-expression over the source-level AST | repository-side grammar | no — repository-only |
@@ -96,12 +96,12 @@ Supporting it:
 The semantics `.rsd` files under `semantics/` and `gates/semalign/` are
 Lean 4.14 program texts shipped as specifications (`release/docs/SPECS`
 marks the row GATED; `gates/semalign/METHOD.md` names the protocol).
-They are not accepted by the 0.1.1 `rsdc` front edge — the 0.1.1 `.rsd`
+They are not accepted by the 0.1.2 `rsdc` front edge — the 0.1.2 `.rsd`
 grammar is the bootstrap subset of `release/docs/LANGUAGE`, which
 refuses `theorem`, `axiom`, `class`, `abbrev`, `variable`, `opaque`,
 `by` and `import`.
 
-## Stated limits of 0.1.1
+## Stated limits of 0.1.2
 
 - Single-module programs: `import` is refused by the front edge.
 - No I/O execution layer: program input/output is the stage host's
@@ -114,11 +114,11 @@ refuses `theorem`, `axiom`, `class`, `abbrev`, `variable`, `opaque`,
 - No publish/query entry for results; no dispatcher command.
 - No importable standard library (`release/docs/STDLIB`).
 
-Who 0.1.1 is for: reproducible, auditable compilation — supply chain, the
+Who 0.1.2 is for: reproducible, auditable compilation — supply chain, the
 step before trusted execution — and research on verified, bootstrappable
 compilers. It is not presented as a general-purpose language.
 
-## Order after 0.1.1
+## Order after 0.1.2
 
 Each item names its acceptance object; no dates.
 
@@ -149,7 +149,7 @@ single pre-elaboration tree — the `surface rsd` grammar (a Lean 4.14.0
 syntax subset ported from stock Lean 4.14.0 commit
 `410fab7284703f41660ca2454218dcca9b2ec896`), a Reason-style spelling and
 a Racket-family spelling — alongside the canonical kernel form `.rsx`.
-In 0.1.1 only the `.rsd` spelling ships and only the bootstrap subset of
+In 0.1.2 only the `.rsd` spelling ships and only the bootstrap subset of
 it is accepted (`release/docs/LANGUAGE`: the chain's own sources and the
 1,247,797-byte concatenated bundle parse `err=0`, and every refuse-corpus
 row refuses — repository-side evidence).
@@ -157,7 +157,7 @@ row refuses — repository-side evidence).
 For the layer-by-layer design — the semantic chain, the surface
 syntaxes, identity and trust — see `release/docs/ARCHITECTURE`. The
 outside-reader set `release/docs/{TRUST,GLOSSARY,STABILITY,FAQ,
-RELATED-WORK,CONTRIBUTING-SECURITY}` covers what 0.1.1 trusts, its terms,
+RELATED-WORK,CONTRIBUTING-SECURITY}` covers what 0.1.2 trusts, its terms,
 its promises and its relations; each ships in English and Chinese.
 
 `closure_claim=0` (`release/MANIFEST.md`: "No release tag, seal or

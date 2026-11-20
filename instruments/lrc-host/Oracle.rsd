@@ -1,0 +1,544 @@
+-- LRC host oracle (stock Lean 4.14 only; no part of the chain). closure_claim = 0.
+-- It converts LRC IR (lib/lrc/Ir.rsd) to Lean's own IR (Lean.IR.Decl), so that a ported pass can be
+-- compared with the pass it was ported from, run by stock Lean on the same input. It also converts
+-- Lean's compiled declarations into LRC IR, as a corpus for the passes that need no caller or callee.
+-- Appended after the LRC modules by instruments/lrc-host/Diff.rsd; never imported by rsc.
+open Lean IR
+
+namespace Lrc.Host
+
+/-! ## LRC to Lean -/
+
+-- Lean's scalar widths other than the wire's word are carried as codes 10 to 14, so that Lean's own
+-- IR survives the round trip (lib/lrc/Ir.rsd `tyIsScalar` counts them as scalars).
+def toTy (t : Int) : IRType :=
+  if t == 0 then .uint64 else if t == 2 then .object else if t == 3 then .tobject
+  else if t == 4 then .irrelevant else if t == 10 then .uint8 else if t == 11 then .uint16
+  else if t == 12 then .uint32 else if t == 13 then .usize else .float
+
+def ofTy : IRType → Option Int
+  | .uint64 => some 0 | .object => some 2 | .tobject => some 3 | .irrelevant => some 4
+  | .uint8 => some 10 | .uint16 => some 11 | .uint32 => some 12 | .usize => some 13 | .float => some 14
+  | _ => none
+
+def toVar (x : Nat) : VarId := { idx := x }
+def toJP (j : Nat) : JoinPointId := { idx := j }
+def toArg (y : Int) : Arg := if y < 0 then Arg.irrelevant else Arg.var (toVar y.toNat)
+def toArgs (ys : List Int) : Array Arg := (ys.map toArg).toArray
+
+-- the type is the name's prefix, which is what Lean compares (ResetReuse.lean:32 mayReuse)
+-- Type 0 is Bool, under Lean's own names: Lean's passes build `Bool.false` and `Bool.true`
+-- alternatives themselves (IR/Basic.lean:606 mkIf).
+def toInfo (i : Lrc.CtorInfo) : IR.CtorInfo :=
+  let name := if i.tid == 0 then (if i.cidx == 0 then ``Bool.false else ``Bool.true)
+    else (Name.mkSimple s!"T{i.tid}").str s!"c{i.cidx}"
+  { name := name, cidx := i.cidx, size := i.size, usize := 0, ssize := i.ssize }
+
+def fnName (f : Nat) : Name := Name.mkSimple s!"f{f}"
+def primName (e : Lrc.N) : Name := Name.mkSimple s!"prim_{e.a}_{e.b}_{e.c}"
+
+def toParam (p : Lrc.Param) : IR.Param := { x := toVar p.x, borrow := p.borrow, ty := toTy p.ty }
+def toParams (ps : List Lrc.Param) : Array IR.Param := (ps.map toParam).toArray
+
+def toExpr (e : Lrc.N) : Except String IR.Expr :=
+  if e.op == Lrc.opCtor then pure (.ctor (toInfo (Lrc.infoOf e)) (toArgs e.ys))
+  else if e.op == Lrc.opReset then pure (.reset (Lrc.resetN e) (toVar (Lrc.resetVar e)))
+  else if e.op == Lrc.opReuse then
+    pure (.reuse (toVar (Lrc.reuseVar e)) (toInfo (Lrc.infoOf e)) (Lrc.reuseUpdt e) (toArgs (Lrc.reuseArgs e)))
+  else if e.op == Lrc.opProj then pure (.proj (Lrc.projIdx e) (toVar (Lrc.projVar e)))
+  else if e.op == Lrc.opSProj then pure (.sproj (Lrc.sprojN e) (Lrc.sprojOff e) (toVar (Lrc.sprojVar e)))
+  else if e.op == Lrc.opFap then pure (.fap (fnName (Lrc.fapFn e)) (toArgs e.ys))
+  else if e.op == Lrc.opPrim then pure (.fap (primName e) (toArgs e.ys))
+  else if e.op == Lrc.opLit then
+    pure (if e.a >= 0 then .lit (.num e.a.toNat) else .lit (.str s!"int:{e.a}"))
+  else if Lrc.isLitObj e then throw "toExpr: a constant cell has no Lean form"
+  else if e.op == Lrc.opLitStr then
+    -- a literal given by bytes goes to Lean as text that `canonExpr` reads back
+    pure (.lit (.str (if (Lrc.litBytes e).isEmpty then e.s else "bytes:" ++ ",".intercalate ((Lrc.litBytes e).map toString))))
+  else if e.op == Lrc.opIsShared then pure (.isShared (toVar (Lrc.isSharedVar e)))
+  else throw s!"toExpr: op {e.op}"
+
+partial def toBody (n : Lrc.N) : Except String FnBody := do
+  if n.op == Lrc.opVDecl then
+    if !n.ys.isEmpty then throw "toBody: a vdecl with several results has no Lean form"
+    return .vdecl (toVar (Lrc.vdeclVar n)) (toTy (Lrc.vdeclTy n)) (← toExpr (Lrc.vdeclExpr n)) (← toBody (Lrc.bodyOf n))
+  else if n.op == Lrc.opJDecl then
+    return .jdecl (toJP (Lrc.jdeclId n)) (toParams (Lrc.jdeclParams n)) (← toBody (Lrc.jdeclBody n)) (← toBody (Lrc.bodyOf n))
+  else if n.op == Lrc.opSet then
+    if Lrc.setIsAt n then throw "toBody: a set with its index in a variable has no Lean form"
+    return .set (toVar (Lrc.setVar n)) (Lrc.setIdx n) (toArg (Lrc.setArg n)) (← toBody (Lrc.bodyOf n))
+  else if n.op == Lrc.opSetTag then return .setTag (toVar n.a.toNat) n.b.toNat (← toBody (Lrc.bodyOf n))
+  else if n.op == Lrc.opSSet then
+    return .sset (toVar (Lrc.ssetVar n)) (Lrc.ssetN n) (Lrc.ssetOff n) (toVar (Lrc.ssetArg n)) (toTy n.d) (← toBody (Lrc.bodyOf n))
+  else if n.op == Lrc.opInc then
+    return .inc (toVar (Lrc.rcVar n)) (Lrc.rcN n) (Lrc.rcCheck n) (Lrc.rcPersistent n) (← toBody (Lrc.bodyOf n))
+  else if n.op == Lrc.opDec then
+    return .dec (toVar (Lrc.rcVar n)) (Lrc.rcN n) (Lrc.rcCheck n) (Lrc.rcPersistent n) (← toBody (Lrc.bodyOf n))
+  else if n.op == Lrc.opDel then return .del (toVar n.a.toNat) (← toBody (Lrc.bodyOf n))
+  else if n.op == Lrc.opMData then
+    return .mdata ((({} : KVMap).setInt `kind n.a).setInt `value n.b) (← toBody (Lrc.bodyOf n))
+  else if n.op == Lrc.opCase then
+    let alts ← (Lrc.caseAlts n).mapM fun alt => do
+      let b ← toBody (Lrc.altBody alt)
+      if alt.op == Lrc.opAltCtor then pure (Alt.ctor (toInfo (Lrc.infoOf alt)) b)
+      else if alt.op == Lrc.opAltDefault then pure (Alt.default b)
+      else throw s!"toBody: alternative op {alt.op}"
+    -- The case's type name is compared (IR/Basic.lean:588) and not printed. Lean's own `mkIf`
+    -- names it Bool (IR/Basic.lean:606); a case over type 0 gets that name, any other the name T.
+    let isBool := (Lrc.caseAlts n).any (fun alt => alt.op == Lrc.opAltCtor && alt.d == 0)
+    return .case (if isBool then `Bool else `T) (toVar (Lrc.caseVar n)) (toTy (Lrc.caseTy n)) alts.toArray
+  else if n.op == Lrc.opRet then
+    match n.ys with
+    | [y] => return .ret (toArg y)
+    | _ => throw "toBody: a ret of several values has no Lean form"
+  else if n.op == Lrc.opJmp then return .jmp (toJP (Lrc.jmpId n)) (toArgs n.ys)
+  else if n.op == Lrc.opUnreachable then return .unreachable
+  else throw s!"toBody: op {n.op}"
+
+def toDecl (d : Lrc.Decl) : Except String IR.Decl := do
+  let ty ← match d.rets with
+    | [t] => pure (toTy t)
+    | _ => throw "toDecl: several results have no Lean form"
+  if d.ext then return .extern (fnName d.f) (toParams d.xs) ty { entries := [] }
+  else return .fdecl (fnName d.f) (toParams d.xs) ty (← toBody d.body) {}
+
+def toDecls (ds : List Lrc.Decl) : Except String (Array IR.Decl) := do
+  return (← ds.mapM toDecl).toArray
+
+/-! ## Lean to LRC: Lean's own compiled declarations as a corpus
+
+Names become indices in order of first appearance. A declaration that uses a form LRC lacks
+(`pap`, `ap`, `box`, `unbox`, `uproj`, `uset`, a usize area, `struct` or `union` types) is refused. -/
+
+structure ImportSt where
+  fns : Std.HashMap Name Nat := {}
+  tys : Std.HashMap Name Nat := {}
+
+abbrev ImportM := StateT ImportSt (Except String)
+
+def fnIdx (n : Name) : ImportM Nat := do
+  let s ← get
+  match s.fns[n]? with
+  | some i => return i
+  | none =>
+    let i := s.fns.size
+    set { s with fns := s.fns.insert n i }
+    return i
+
+def tyIdx (n : Name) : ImportM Nat := do
+  let s ← get
+  match s.tys[n]? with
+  | some i => return i
+  | none =>
+    let i := s.tys.size + 1
+    set { s with tys := s.tys.insert n i }
+    return i
+
+def ofArg : Arg → Int
+  | .var x => x.idx
+  | .irrelevant => Lrc.argIrr
+
+def ofArgs (ys : Array Arg) : List Int := ys.toList.map ofArg
+
+def ofTyM (t : IRType) : ImportM Int :=
+  match ofTy t with
+  | some c => pure c
+  | none => throw "import: struct or union type"
+
+def ofInfo (i : IR.CtorInfo) : ImportM Lrc.CtorInfo := do
+  if i.usize != 0 then throw "import: usize area"
+  return { cidx := i.cidx, size := i.size, ssize := i.ssize, tid := ← tyIdx i.name.getPrefix }
+
+def ofParams (ps : Array IR.Param) : ImportM (List Lrc.Param) :=
+  ps.toList.mapM fun p => do return { x := p.x.idx, borrow := p.borrow, ty := ← ofTyM p.ty }
+
+def ofExpr : IR.Expr → ImportM Lrc.N
+  | .ctor i ys => do return Lrc.mkCtor (← ofInfo i) (ofArgs ys)
+  | .reset n x => pure (Lrc.mkReset n x.idx)
+  | .reuse x i u ys => do return Lrc.mkReuse x.idx (← ofInfo i) u (ofArgs ys)
+  | .proj i x => pure (Lrc.mkProj i x.idx)
+  | .sproj n o x => pure (Lrc.mkSProj n o x.idx)
+  | .fap c ys => do return Lrc.mkFap (← fnIdx c) (ofArgs ys)
+  | .lit (.num v) => pure (Lrc.mkLit v)
+  | .lit (.str s) => pure (Lrc.mkLitStr s)
+  | .isShared x => pure (Lrc.mkIsShared x.idx)
+  | _ => throw "import: pap, ap, box, unbox or uproj"
+
+partial def ofBody : FnBody → ImportM Lrc.N
+  | .vdecl x t v b => do return Lrc.mkVDecl x.idx (← ofTyM t) (← ofExpr v) (← ofBody b)
+  | .jdecl j xs v b => do return Lrc.mkJDecl j.idx (← ofParams xs) (← ofBody v) (← ofBody b)
+  | .set x i y b => do return Lrc.mkSet x.idx i (ofArg y) (← ofBody b)
+  | .setTag x c b => do return Lrc.mkSetTag x.idx c (← ofBody b)
+  | .sset x n o y t b => do return Lrc.mkSSet x.idx n o y.idx (← ofTyM t) (← ofBody b)
+  | .inc x n c p b => do return Lrc.mkInc x.idx n c p (← ofBody b)
+  | .dec x n c p b => do return Lrc.mkDec x.idx n c p (← ofBody b)
+  | .del x b => do return Lrc.mkDel x.idx (← ofBody b)
+  | .case _ x t alts => do
+    let as ← alts.toList.mapM fun alt =>
+      match alt with
+      | .ctor i b => do return Lrc.mkAltCtor (← ofInfo i) (← ofBody b)
+      | .default b => do return Lrc.mkAltDefault (← ofBody b)
+    return Lrc.mkCase x.idx (← ofTyM t) as
+  | .ret (.var x) => pure (Lrc.mkRet [x.idx])
+  | .ret .irrelevant => pure (Lrc.mkRet [Lrc.argIrr])
+  | .jmp j ys => pure (Lrc.mkJmp j.idx (ofArgs ys))
+  | .unreachable => pure Lrc.mkUnreachable
+  | _ => throw "import: uset or mdata"
+
+def ofDecl : IR.Decl → ImportM Lrc.Decl
+  | .fdecl f xs t b _ => do
+    return { f := ← fnIdx f, xs := ← ofParams xs, rets := [← ofTyM t], body := ← ofBody b, ext := false }
+  | .extern f xs t _ => do
+    return { f := ← fnIdx f, xs := ← ofParams xs, rets := [← ofTyM t], body := Lrc.mkUnreachable, ext := true }
+
+/-! ## Comparison in Lean's IR, up to the names of bound variables (IR/Basic.lean:574 FnBody.alphaEqv) -/
+
+def sameParams (a b : Array IR.Param) : Bool :=
+  a.size == b.size && (a.zip b).all (fun (p, q) => p.borrow == q.borrow && p.ty == q.ty)
+
+def sameDecl (a b : IR.Decl) : Bool :=
+  match a, b with
+  | .fdecl f xs t body _, .fdecl g ys u body' _ =>
+    f == g && t == u && sameParams xs ys &&
+      (match addParamsRename {} xs ys with
+       | some ρ => FnBody.alphaEqv ρ body body'
+       | none => false)
+  | .extern f xs t _, .extern g ys u _ => f == g && t == u && sameParams xs ys
+  | _, _ => false
+
+structure Prog where
+  name : String
+  decls : List Lrc.Decl
+
+def showDecl (d : IR.Decl) : String := toString (format d)
+
+-- One declaration at a time: Lean's pass on the converted declaration against the port's result.
+def checkPure (pass : String) (leanPass : IR.Decl → IR.Decl) (port : Lrc.Decl → Lrc.Decl)
+    (corpus : List Prog) (verbose : Nat := 3) : IO Nat := do
+  let mut n := 0
+  let mut bad := 0
+  let mut skipped := 0
+  for p in corpus do
+    for d in p.decls do
+      if d.ext then continue
+      match toDecl d, toDecl (port d) with
+      | .ok input, .ok got =>
+        n := n + 1
+        let want := leanPass input
+        if !sameDecl want got then
+          bad := bad + 1
+          if bad <= verbose then
+            IO.println s!"MISMATCH pass={pass} program={p.name} f={d.f}\n-- input\n{showDecl input}\n-- Lean\n{showDecl want}\n-- port\n{showDecl got}"
+      | _, _ => skipped := skipped + 1
+  IO.println s!"check pass={pass} decls={n} skipped={skipped} mismatch={bad}"
+  return bad
+
+-- A whole program at a time, for the passes that read the other declarations.
+def checkProgram (pass : String) (leanPass : Array IR.Decl → Array IR.Decl) (port : List Lrc.Decl → List Lrc.Decl)
+    (corpus : List Prog) (verbose : Nat := 3) : IO Nat := do
+  let mut n := 0
+  let mut bad := 0
+  let mut skipped := 0
+  for p in corpus do
+    match toDecls p.decls, toDecls (port p.decls) with
+    | .ok input, .ok got =>
+      let want := leanPass input
+      if want.size != got.size then
+        bad := bad + 1
+        IO.println s!"MISMATCH pass={pass} program={p.name} declarations {want.size} against {got.size}"
+      else
+        for i in [:want.size] do
+          n := n + 1
+          if !sameDecl want[i]! got[i]! then
+            bad := bad + 1
+            if bad <= verbose then
+              IO.println s!"MISMATCH pass={pass} program={p.name} decl={i}\n-- input\n{showDecl input[i]!}\n-- Lean\n{showDecl want[i]!}\n-- port\n{showDecl got[i]!}"
+    | _, _ => skipped := skipped + 1
+  IO.println s!"check pass={pass} decls={n} skipped_programs={skipped} mismatch={bad}"
+  return bad
+
+/-! ## Canonical Lean IR back to LRC
+
+The inverse of `toDecl` on what `toDecl` and Lean's passes produce from it: the names `f<n>`,
+`prim_<a>_<b>_<c>`, `T<tid>.c<cidx>`, the literal `int:<v>` and the guard datum. With it every
+pass is checked on the input Lean's own earlier passes produced, so one port's defect cannot reach
+the check of another. -/
+
+def numAfter (pre : String) (s : String) : Except String Int :=
+  if s.startsWith pre then
+    match (s.drop pre.length).toInt? with
+    | some v => pure v
+    | none => throw s!"canon: number after {pre} in {s}"
+  else throw s!"canon: {s} lacks {pre}"
+
+def canonInfo (i : IR.CtorInfo) : Except String Lrc.CtorInfo := do
+  if i.name == ``Bool.false || i.name == ``Bool.true then
+    return { cidx := i.cidx, size := i.size, ssize := i.ssize, tid := 0 }
+  match i.name with
+  | .str (.str .anonymous t) _ =>
+    return { cidx := i.cidx, size := i.size, ssize := i.ssize, tid := (← numAfter "T" t).toNat }
+  | _ => throw s!"canon: constructor name {i.name}"
+
+def canonFap (c : Name) (ys : Array Arg) : Except String Lrc.N := do
+  match c with
+  | .str .anonymous s =>
+    if s.startsWith "prim_" then
+      match (s.drop 5).splitOn "_" with
+      | [a, b, c] =>
+        match a.toNat?, b.toInt?, c.toInt? with
+        | some a, some b, some c => return Lrc.mkPrim a b c (ofArgs ys)
+        | _, _, _ => throw s!"canon: {s}"
+      | _ => throw s!"canon: {s}"
+    else return Lrc.mkFap (← numAfter "f" s).toNat (ofArgs ys)
+  | _ => throw s!"canon: function name {c}"
+
+def canonTy (t : IRType) : Except String Int :=
+  match ofTy t with
+  | some c => pure c
+  | none => throw "canon: struct or union type"
+
+def canonParams (ps : Array IR.Param) : Except String (List Lrc.Param) :=
+  ps.toList.mapM fun p => do return { x := p.x.idx, borrow := p.borrow, ty := ← canonTy p.ty }
+
+def canonExpr : IR.Expr → Except String Lrc.N
+  | .ctor i ys => do return Lrc.mkCtor (← canonInfo i) (ofArgs ys)
+  | .reset n x => pure (Lrc.mkReset n x.idx)
+  | .reuse x i u ys => do return Lrc.mkReuse x.idx (← canonInfo i) u (ofArgs ys)
+  | .proj i x => pure (Lrc.mkProj i x.idx)
+  | .sproj n o x => pure (Lrc.mkSProj n o x.idx)
+  | .fap c ys => canonFap c ys
+  | .lit (.num v) => pure (Lrc.mkLit v)
+  | .lit (.str s) =>
+    if s.startsWith "int:" then
+      match (s.drop 4).toInt? with
+      | some v => pure (Lrc.mkLit v)
+      | none => pure (Lrc.mkLitStr s)
+    else if s.startsWith "bytes:" then pure (Lrc.mkLitBytes (((s.drop 6).splitOn ",").filterMap (·.toInt?)))
+    else pure (Lrc.mkLitStr s)
+  | .isShared x => pure (Lrc.mkIsShared x.idx)
+  | _ => throw "canon: pap, ap, box, unbox or uproj"
+
+partial def canonBody : FnBody → Except String Lrc.N
+  | .vdecl x t v b => do return Lrc.mkVDecl x.idx (← canonTy t) (← canonExpr v) (← canonBody b)
+  | .jdecl j xs v b => do return Lrc.mkJDecl j.idx (← canonParams xs) (← canonBody v) (← canonBody b)
+  | .set x i y b => do return Lrc.mkSet x.idx i (ofArg y) (← canonBody b)
+  | .setTag x c b => do return Lrc.mkSetTag x.idx c (← canonBody b)
+  | .sset x n o y t b => do return Lrc.mkSSet x.idx n o y.idx (← canonTy t) (← canonBody b)
+  | .inc x n c p b => do return Lrc.mkInc x.idx n c p (← canonBody b)
+  | .dec x n c p b => do return Lrc.mkDec x.idx n c p (← canonBody b)
+  | .del x b => do return Lrc.mkDel x.idx (← canonBody b)
+  | .mdata d b => do
+    let body ← canonBody b
+    return { Lrc.n0 Lrc.opMData with a := d.getInt `kind, b := d.getInt `value, kids := [body] }
+  | .case _ x t alts => do
+    let as ← alts.toList.mapM fun alt =>
+      match alt with
+      | .ctor i b => do return Lrc.mkAltCtor (← canonInfo i) (← canonBody b)
+      | .default b => do return Lrc.mkAltDefault (← canonBody b)
+    return Lrc.mkCase x.idx (← canonTy t) as
+  | .ret (.var x) => pure (Lrc.mkRet [x.idx])
+  | .ret .irrelevant => pure (Lrc.mkRet [Lrc.argIrr])
+  | .jmp j ys => pure (Lrc.mkJmp j.idx (ofArgs ys))
+  | .unreachable => pure Lrc.mkUnreachable
+  | _ => throw "canon: uset"
+
+def canonDecl : IR.Decl → Except String Lrc.Decl
+  | .fdecl f xs t b _ => do
+    match f with
+    | .str .anonymous s =>
+      return { f := (← numAfter "f" s).toNat, xs := ← canonParams xs, rets := [← canonTy t], body := ← canonBody b, ext := false }
+    | _ => throw s!"canon: declaration name {f}"
+  | .extern f xs t _ => do
+    match f with
+    | .str .anonymous s =>
+      return { f := (← numAfter "f" s).toNat, xs := ← canonParams xs, rets := [← canonTy t], body := Lrc.mkUnreachable, ext := true }
+    | _ => throw s!"canon: declaration name {f}"
+
+def canonDecls (ds : Array IR.Decl) : Except String (List Lrc.Decl) := ds.toList.mapM canonDecl
+
+/-! ## Lean's pipeline, stage by stage (IR.lean:36-57), on one program
+
+`explicitBoxing` (IR.lean:50) is left out: the wire is monomorphic and LRC has no boxed form.
+A primitive is an `extern` declaration for Lean, with every parameter borrowed. -/
+
+structure Staged where
+  name : String
+  -- the program's declarations without a body, for a port that reads callee signatures
+  exts : List Lrc.Decl
+  init : Array IR.Decl
+  edb : Array IR.Decl   -- after elimDeadBranches
+  pp1 : Array IR.Decl   -- after pushProj
+  rr : Array IR.Decl    -- after insertResetReuse
+  ed : Array IR.Decl    -- after elimDead
+  sc : Array IR.Decl    -- after simpCase
+  ni : Array IR.Decl    -- after normalizeIds
+  bw : Array IR.Decl    -- after inferBorrow
+  rc : Array IR.Decl    -- after explicitRC
+  err : Array IR.Decl   -- after expandResetReuse
+  pp2 : Array IR.Decl   -- after the second pushProj
+
+-- the primitives a program applies, as extern declarations
+partial def primsOfBody (b : FnBody) (acc : Array (Name × Nat)) : Array (Name × Nat) :=
+  match b with
+  | .vdecl _ _ (.fap c ys) k =>
+    let acc := if c.toString.startsWith "prim_" && !acc.any (·.1 == c) then acc.push (c, ys.size) else acc
+    primsOfBody k acc
+  | .jdecl _ _ v k => primsOfBody k (primsOfBody v acc)
+  | .case _ _ _ alts => alts.foldl (fun acc alt => primsOfBody alt.body acc) acc
+  | other => if other.isTerminal then acc else primsOfBody other.body acc
+
+def primDecls (ds : Array IR.Decl) : Array IR.Decl := Id.run do
+  let mut acc : Array (Name × Nat) := #[]
+  for d in ds do
+    match d with
+    | .fdecl (body := b) .. => acc := primsOfBody b acc
+    | _ => pure ()
+  -- the primitive's code is the first number of its name; an argument it consumes is an owned parameter (lib/lrc/Prim.rsd `primOwned`)
+  return acc.map fun (c, n) =>
+    let op := (((c.toString.drop 5).splitOn "_").headD "").toNat!
+    IR.Decl.extern c ((List.range n).map (fun i => ({ x := { idx := i + 1 }, borrow := !Lrc.primOwned op i, ty := .tobject } : IR.Param))).toArray
+      .tobject { entries := [] }
+
+def runM (env : Environment) (x : CompilerM α) : Except String α :=
+  match (x.run {}).run { env := env } with
+  | .ok a _ => .ok a
+  | .error e _ => .error e
+
+def stage (env : Environment) (p : Prog) : Except String Staged := do
+  -- Only declarations with a body are compiled (IR.lean:65 `compile` receives those). One without
+  -- a body is found in the environment (Borrow.lean:193 getParamInfo, CompilerM.lean:95), where
+  -- ElimDeadBranches reads it as an unknown value; inside the compiled array it would read as
+  -- "never returns" and every branch on its result would be removed.
+  let exts := p.decls.filter (·.ext)
+  let init ← toDecls (p.decls.filter (!·.ext))
+  -- a declaration without a body that has no Lean form (a reserved form's place holder, which
+  -- nothing calls) is left out of the environment
+  let extDecls := exts.filterMap (fun d => (toDecl d).toOption)
+  let env := (extDecls.toArray ++ primDecls init).foldl Lean.IR.addDeclAux env
+  -- Lean's own names are written in full: inside this namespace a port's `Lrc.elimDeadBranches` would be found first
+  let edb ← runM env (Lean.IR.elimDeadBranches init)
+  let pp1 := edb.map IR.Decl.pushProj
+  let rr := pp1.map IR.Decl.insertResetReuse
+  let ed := rr.map IR.Decl.elimDead
+  let sc := ed.map IR.Decl.simpCase
+  let ni := sc.map IR.Decl.normalizeIds
+  let bw := Lean.IR.Borrow.applyParamMap ni (Lean.IR.Borrow.infer env ni)
+  let rc := bw.map (Lean.IR.ExplicitRC.visitDecl env bw)
+  let err := rc.map IR.Decl.expandResetReuse
+  let pp2 := err.map IR.Decl.pushProj
+  return { name := p.name, exts := exts, init := init, edb := edb, pp1 := pp1, rr := rr, ed := ed, sc := sc,
+           ni := ni, bw := bw, rc := rc, err := err, pp2 := pp2 }
+
+-- every program through Lean's pipeline, and the number of programs it refused
+def stageAll (env : Environment) (ps : List Prog) : IO (List Staged × Nat) := do
+  let mut out := []
+  let mut refused := 0
+  for p in ps do
+    match stage env p with
+    | .ok s => out := s :: out
+    | .error e =>
+      refused := refused + 1
+      IO.println s!"stage: program {p.name} refused: {e}"
+  return (out.reverse, refused)
+
+def countChanged (a b : Array IR.Decl) : Nat := Id.run do
+  let mut n := 0
+  for i in [:a.size] do
+    if !sameDecl a[i]! b[i]! then n := n + 1
+  return n
+
+-- how many declarations each of Lean's passes changed: a pass that changes none checks nothing
+def stageChanges (ss : List Staged) : String :=
+  let sum := fun (f : Staged → Nat) => ss.foldl (fun n s => n + f s) 0
+  s!"declarations={sum (·.init.size)} changed_by: elimDeadBranches={sum (fun s => countChanged s.init s.edb)} pushProj={sum (fun s => countChanged s.edb s.pp1)} insertResetReuse={sum (fun s => countChanged s.pp1 s.rr)} elimDead={sum (fun s => countChanged s.rr s.ed)} simpCase={sum (fun s => countChanged s.ed s.sc)} inferBorrow={sum (fun s => countChanged s.ni s.bw)} explicitRC={sum (fun s => countChanged s.bw s.rc)} expandResetReuse={sum (fun s => countChanged s.rc s.err)} pushProj2={sum (fun s => countChanged s.err s.pp2)}"
+
+-- a pass that rewrites one declaration: the port on Lean's input against Lean's output
+def checkDeclPass (pass : String) (inp out : Staged → Array IR.Decl) (port : Lrc.Decl → Lrc.Decl)
+    (staged : List Staged) (verbose : Nat := 3) : IO Nat := do
+  let mut n := 0
+  let mut bad := 0
+  for s in staged do
+    let input := inp s
+    let want := out s
+    for i in [:input.size] do
+      match input[i]! with
+      | .extern .. => pure ()
+      | d =>
+        n := n + 1
+        let got := (canonDecl d).bind (fun ld => toDecl (port ld))
+        let ok := match got with
+          | .ok g => sameDecl want[i]! g
+          | .error _ => false
+        if !ok then
+          bad := bad + 1
+          if bad <= verbose then
+            let shown := match got with
+              | .ok g => showDecl g
+              | .error e => s!"refused: {e}"
+            IO.println s!"MISMATCH pass={pass} program={s.name} decl={i}
+-- input
+{showDecl d}
+-- Lean
+{showDecl want[i]!}
+-- port
+{shown}"
+  IO.println s!"check pass={pass} decls={n} mismatch={bad}"
+  return bad
+
+-- a pass that reads the whole program
+def checkProgPass (pass : String) (inp out : Staged → Array IR.Decl) (port : List Lrc.Decl → List Lrc.Decl)
+    (staged : List Staged) (verbose : Nat := 3) : IO Nat := do
+  let mut n := 0
+  let mut bad := 0
+  for s in staged do
+    let want := out s
+    -- the port receives the declarations without a body after the others, and returns them there
+    match (canonDecls (inp s)).bind (fun ds => toDecls ((port (ds ++ s.exts)).filter (!·.ext))) with
+    | .error e =>
+      bad := bad + 1
+      IO.println s!"MISMATCH pass={pass} program={s.name} refused: {e}"
+    | .ok got =>
+      if got.size != want.size then
+        bad := bad + 1
+        IO.println s!"MISMATCH pass={pass} program={s.name} declarations {want.size} against {got.size}"
+      else
+        for i in [:want.size] do
+          n := n + 1
+          if !sameDecl want[i]! got[i]! then
+            bad := bad + 1
+            if bad <= verbose then
+              IO.println s!"MISMATCH pass={pass} program={s.name} decl={i}
+-- input
+{showDecl (inp s)[i]!}
+-- Lean
+{showDecl want[i]!}
+-- port
+{showDecl got[i]!}"
+  IO.println s!"check pass={pass} decls={n} mismatch={bad}"
+  return bad
+
+/-! ## Lean's library as a corpus -/
+
+-- every compiled declaration of the imported modules that LRC can hold, in groups of `group`
+def leanCorpus (env : Environment) (limit : Nat) (group : Nat := 50) : List Prog := Id.run do
+  let mut st : ImportSt := {}
+  let mut cur : List Lrc.Decl := []
+  let mut out : List Prog := []
+  let mut taken := 0
+  for modIdx in [:env.header.moduleNames.size] do
+    for d in Lean.IR.declMapExt.getModuleEntries env modIdx do
+      if taken >= limit then break
+      match (ofDecl d).run st with
+      | .ok (ld, st') =>
+        st := st'
+        if !ld.ext then
+          cur := ld :: cur
+          taken := taken + 1
+          if cur.length >= group then
+            out := { name := s!"lean{out.length}", decls := cur.reverse } :: out
+            cur := []
+      | .error _ => pure ()
+  if !cur.isEmpty then out := { name := s!"lean{out.length}", decls := cur.reverse } :: out
+  return out.reverse
+
+end Lrc.Host

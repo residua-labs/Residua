@@ -1,0 +1,68 @@
+-- rbtree as Koka's benchmark suite runs it.
+-- Source: koka-lang/koka facb7932ce6871fdb063f762a304bd8238f35fba, test/bench/koka/rbtree.kk.
+-- sha256 68e80aba037591f2b3ebe3acccc2a53a7ffb3e1828e661d46aa077a9e96827db.
+-- Keys, loop counter and fold count use UInt32 for Koka's int32. On the
+-- nonnegative int32 input domain, countdown, comparisons, modulo 10 and the
+-- count agree. The loop inserts the keys n-1 through 0, and rbtree returns
+-- the number whose value is true.
+inductive Color where
+  | red : Color
+  | black : Color
+
+inductive Tree where
+  | leaf : Tree
+  | node : Color -> Tree -> UInt32 -> Bool -> Tree -> Tree
+  deriving Inhabited
+
+def isRed : Tree -> Bool
+  | Tree.node Color.red _ _ _ _ => true
+  | _ => false
+
+def balanceLeft (l : Tree) (k : UInt32) (v : Bool) (r : Tree) : Tree :=
+  match l with
+  | Tree.node _ (Tree.node Color.red lx kx vx rx) ky vy ry =>
+    Tree.node Color.red (Tree.node Color.black lx kx vx rx) ky vy (Tree.node Color.black ry k v r)
+  | Tree.node _ ly ky vy (Tree.node Color.red lx kx vx rx) =>
+    Tree.node Color.red (Tree.node Color.black ly ky vy lx) kx vx (Tree.node Color.black rx k v r)
+  | Tree.node _ lx kx vx rx => Tree.node Color.black (Tree.node Color.red lx kx vx rx) k v r
+  | Tree.leaf => Tree.leaf
+
+def balanceRight (l : Tree) (k : UInt32) (v : Bool) (r : Tree) : Tree :=
+  match r with
+  | Tree.node _ (Tree.node Color.red lx kx vx rx) ky vy ry =>
+    Tree.node Color.red (Tree.node Color.black l k v lx) kx vx (Tree.node Color.black rx ky vy ry)
+  | Tree.node _ lx kx vx (Tree.node Color.red ly ky vy ry) =>
+    Tree.node Color.red (Tree.node Color.black l k v lx) kx vx (Tree.node Color.black ly ky vy ry)
+  | Tree.node _ lx kx vx rx => Tree.node Color.black l k v (Tree.node Color.red lx kx vx rx)
+  | Tree.leaf => Tree.leaf
+
+def ins : Tree -> UInt32 -> Bool -> Tree
+  | Tree.node Color.red l kx vx r, k, v =>
+    if k < kx then Tree.node Color.red (ins l k v) kx vx r
+    else if k > kx then Tree.node Color.red l kx vx (ins r k v)
+    else Tree.node Color.red l k v r
+  | Tree.node Color.black l kx vx r, k, v =>
+    if k < kx then (if isRed l then balanceLeft (ins l k v) kx vx r else Tree.node Color.black (ins l k v) kx vx r)
+    else if k > kx then (if isRed r then balanceRight l kx vx (ins r k v) else Tree.node Color.black l kx vx (ins r k v))
+    else Tree.node Color.black l k v r
+  | Tree.leaf, k, v => Tree.node Color.red Tree.leaf k v Tree.leaf
+
+def setBlack : Tree -> Tree
+  | Tree.node _ l k v r => Tree.node Color.black l k v r
+  | t => t
+
+def insert (t : Tree) (k : UInt32) (v : Bool) : Tree := setBlack (ins t k v)
+
+-- Koka: t.fold(zero) fn(k, v, r) { if v then r + 1 else r }
+def foldCount : Tree -> UInt32 -> UInt32
+  | Tree.node _ l _ v r, b => foldCount r (if v then foldCount l b + 1 else foldCount l b)
+  | Tree.leaf, b => b
+
+partial def makeTreeAux (n : UInt32) (t : Tree) : Tree :=
+  if n == 0 then t
+  else
+    let k : UInt32 := n - 1
+    makeTreeAux k (insert t k (k % 10 == 0))
+
+def rbtree (n : UInt32) : UInt32 :=
+  foldCount (makeTreeAux n Tree.leaf) 0

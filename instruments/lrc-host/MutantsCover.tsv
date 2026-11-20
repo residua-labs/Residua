@@ -1,0 +1,102 @@
+# FILE	FROM	TO  (FROM occurs exactly once in FILE; every row must make the differential report a mismatch)
+# Coverage of the stage (lib/lrc/FromWire.rsd): the type a place expects and the absent option, sums, the loops lifted into functions that
+# keep the fuel, the classes that decide a node's tag (lib/lrc/Classes.rsd), a tag with allocations of different width, the equality of
+# two lists, and the call at the caller's fuel in the guard pass and in inlining. The programs that meet them: instruments/lrc-host/ProgLoops.rsd,
+# instruments/lrc-host/ProgKinds.rsd (rows loops* and kinds* of Images.tsv).
+# A class whose reads find no single tag has one layout for all its tags (lib/lrc/FromWire.rsd `layMergeTag`, `layUnion`). The host
+# check lays every image out as one class, where most reads find no single tag: the last four rows are the union not taken, the
+# flags and the children of one tag alone (the row order of Images.tsv: the scan of instruments/lrc-host/ProgOrder.rsd's image
+# finds the childless tag last), and a read that does not merge its class (a refusal as one class is a mismatch since this rule,
+# instruments/lrc-host/CheckImage.rsd). Not a row: the fewest children of one tag alone. That number only decides whether a read of a
+# child tests for the word that fills a place an allocation does not have, and no program of the table reads such a place.
+lib/lrc/FromWire.rsd	{ ok := true, err := none, next := d.next, items := mkVDecl next tyI64 (mkLit 0) mkUnreachable :: d.items,	{ ok := true, err := none, next := d.next, items := mkVDecl next tyI64 (mkLit 1) mkUnreachable :: d.items,
+lib/lrc/FromWire.rsd	let v := trVal cx cx.rty env facts next rest0	let v := trVal cx [] env facts next rest0
+lib/lrc/FromWire.rsd	let c := sumItems (sumTid cx.g want) ix.n.toNat a.val.ws a.val.ts a.next	let c := sumItems (sumTid cx.g want) (ix.n.toNat + 1) a.val.ws a.val.ts a.next
+lib/lrc/FromWire.rsd	let r := trArms cx want env facts b.next tail tid x (k + 1) more b.rest j	let r := trArms cx want env facts b.next tail tid x k more b.rest j
+lib/lrc/FromWire.rsd	let rd := boxReads x info.size 0 0 next ft.ts	let rd := boxReads x info.size 1 0 next ft.ts
+lib/lrc/FromWire.rsd	sumItems (sumTid cx.g want)	sumItems (sumTid cx.g want + 1)
+lib/lrc/FromWire.rsd	(liveWords b.val.ws accTs ++ mapNews le.map))) b.next	(liveWords pa.vars accTs ++ mapNews le.map))) b.next
+lib/lrc/FromWire.rsd	(mkFapSame tmp (fxs.ws ++ liveWords z.val.ws accTs ++ mapOlds le.map)) fxs.next	(mkFapSame tmp (fxs.ws ++ liveWords z.val.ws accTs ++ mapNews le.map)) fxs.next
+lib/lrc/FromWire.rsd	valTyped pa.vars accTs accTy :: liftEnvGo le.map fv.acc 0 env)	valTyped pa.vars accTs accTy :: env)
+lib/lrc/FromWire.rsd	else { ok := true, acc := (if ix.n.toNat >= depth then fvAdd (ix.n.toNat - depth) acc else acc), rest := ix.rest }	else { ok := true, acc := (if ix.n.toNat >= depth then fvAdd (ix.n.toNat - depth + 1) acc else acc), rest := ix.rest }
+lib/lrc/FromWire.rsd	(mkVDecl isz tyI64 (mkPrim primEq 0 0 [(pBound : Int), (z0 : Int)])	(mkVDecl isz tyI64 (mkPrim primEq 0 0 [(pSteps : Int), (z0 : Int)])
+lib/lrc/FromWire.rsd	(mkIfW isz spent more))	(mkIfW isz more spent))
+lib/lrc/FromWire.rsd	mkVDecl neg tyI64 (mkPrim primLt 0 0 [bound0, (zero : Int)]) mkUnreachable, chk,	mkVDecl neg tyI64 (mkPrim primLt 0 0 [(zero : Int), bound0]) mkUnreachable, chk,
+lib/lrc/FromWire.rsd	(mkFapSame tmp (liveWords s2.val.ws st.ts ++ [(st1 : Int), (bd1 : Int)] ++ mapNews le.map)) (bd1 + 1)	(mkFapSame tmp (liveWords ps0.vars st.ts ++ [(st1 : Int), (bd1 : Int)] ++ mapNews le.map)) (bd1 + 1)
+lib/lrc/Classes.rsd	match ocMinus (ocListOf t.c.tags (ocFind t.c h.toNat)) tested with	match ocListOf t.c.tags (ocFind t.c h.toNat) with
+lib/lrc/Classes.rsd	| some d => ocResults cx.self f 0 (vdeclBinds n) (ocArgs cx.self f e.ys d.xs c)	| some d => ocResults cx.self f 0 (vdeclBinds n) c
+lib/lrc/Classes.rsd	ocResults self f (i + 1) rest (if tyIsScalar ty || tyIsIrr ty then c else ocUnion c (ocVar self x.toNat) (ocRetId f i))	ocResults self f (i + 1) rest c
+lib/lrc/Classes.rsd	else if n.op == opRet then { s with c := ocRets cx.self 0 n.ys rets s.c }	else if n.op == opRet then s
+lib/lrc/Classes.rsd	else if n.op == opJmp then { s with c := ocArgs cx.self cx.self n.ys (ocJpParams n.a jps) s.c }	else if n.op == opJmp then s
+lib/lrc/Classes.rsd	let excl1 := if alt.op == opAltDefault && !tested.isEmpty then ocPairs x tested ++ excl else excl	let excl1 := excl
+lib/lrc/FromWire.rsd	  let cmp := mkVDecl 5 tyI64 (mkPrim primEq 0 0 [3, 4]) (mkIfW 5 tails (eqNo 9))	  let cmp := mkVDecl 5 tyI64 (mkPrim primEq 0 0 [3, 3]) (mkIfW 5 tails (eqNo 9))
+lib/lrc/FromWire.rsd	[mkAltCtor nilInfo (mkCase 2 tyTObj [mkAltCtor nilInfo (mkVDecl 10 tyI64 (mkLit 1) (mkRet [10])), mkAltCtor (consInfo shape) (eqNo 11)]),	[mkAltCtor nilInfo (mkCase 2 tyTObj [mkAltCtor nilInfo (mkVDecl 10 tyI64 (mkLit 0) (mkRet [10])), mkAltCtor (consInfo shape) (eqNo 11)]),
+lib/lrc/GuardElim.rsd	let after := if e.op == opFap && !fapSame e && nImg > 0 && !isOwnFn nImg (fapFn e) && fapDepth e + 1 > known then fapDepth e + 1 else known	let after := if e.op == opFap && nImg > 0 && !isOwnFn nImg (fapFn e) && fapDepth e + 1 > known then fapDepth e + 1 else known
+lib/lrc/GuardElim.rsd	let after := if e.op == opFap && !fapSame e && fkTakesFuel nImg (fapFn e) && fapDepth e + 1 > known then fapDepth e + 1 else known	let after := if e.op == opFap && fkTakesFuel nImg (fapFn e) && fapDepth e + 1 > known then fapDepth e + 1 else known
+lib/lrc/Inline.rsd	let e2 := if e.op == opFap && !isOwnFn nImg (fapFn e) then { e with b := e.b + (k : Int) } else e	let e2 := if e.op == opFap && !fapSame e && !isOwnFn nImg (fapFn e) then { e with b := e.b + (k : Int) } else e
+# The nodes laid out for each class of objects ("Layout" in lib/lrc/FromWire.rsd) and the classes that decide it (rows kinds*, the bench
+# trees, mapat*): a node's tag in its class, its children's classes, the place of a child, an alternative's constructor, a stored
+# scalar, the places an allocation leaves empty, the longest list of children of a class and tag.
+lib/lrc/Classes.rsd	let c1 := ocAddTag (ocAddKind c x ockNode) x e.b	let c1 := ocAddKind c x ockNode
+lib/lrc/Classes.rsd	ocNodeKids self x t (i + 1) ys (ocUnion f.c f.id (ocVar self y.toNat))	ocNodeKids self x t (i + 1) ys f.c
+lib/lrc/FromWire.rsd	if p == primNodeKid then (if layConst l || i >= l.kids then mkPrim primFail 0 0 [argIrr] else mkProj (layChild l i) h)	if p == primNodeKid then (if layConst l || i >= l.kids then mkPrim primFail 0 0 [argIrr] else mkProj (layChild l (i + 1)) h)
+lib/lrc/FromWire.rsd	alts := (if t >= 0 then mkAltCtor (layInfo (layAt lx (layRoot lx f h) t) t) b.node else altSetBody alt b.node) :: rest.alts }	alts := (if t >= 0 then mkAltCtor (layInfo (layAt lx (layRoot lx f h) t) (t + 1)) b.node else altSetBody alt b.node) :: rest.alts }
+lib/lrc/FromWire.rsd	else if p == primNodeScalar then (if layConst l || off < 0 then mkLit 0 else mkSProj (layInfo l t).size off.toNat h)	else if p == primNodeScalar then (if true then mkLit 0 else mkSProj (layInfo l t).size off.toNat h)
+lib/lrc/FromWire.rsd	let kidW : List Int := if built then cells.ws else if l.list then kids else kids ++ padWords (l.kids - kids.length) (n2 : Int)	let kidW : List Int := if built then cells.ws else kids
+lib/lrc/FromWire.rsd	mapPut m (layKey root t) (if k > kids0 then k else kids0) (bitsOr 15 (if has then hit.sa else 0) flags)	mapPut m (layKey root t) k (bitsOr 15 (if has then hit.sa else 0) flags)
+lib/lrc/FromWire.rsd	let cs := mkCase x tyTObj [mkAltCtor padInfo (mkVDecl next tyI64 (mkPrim primFail 0 0 [argIrr]) mkUnreachable), mkAltDefault k.node]	let cs := mkCase x tyTObj [mkAltCtor padInfo k.node, mkAltDefault (mkVDecl next tyI64 (mkPrim primFail 0 0 [argIrr]) mkUnreachable)]
+# A list of children (row mapat*: lib/AvlMap.rsd's `left : List Map`): the list given to an allocation is its class's list of children,
+# a literal list of children in such a class is built as a list, its numbered children are the list's elements, the read of the
+# children is the list's field, and the scalar fields an allocation sets are the layout's.
+lib/lrc/Classes.rsd	if l < 0 then f.c else ocUnion f.c f.id (ocVar self l.toNat)	f.c
+lib/lrc/Classes.rsd	ocKidsToElem t elem rest { c := ocUnion a.c id.toNat elem, changed := true }	ocKidsToElem t elem rest a
+lib/lrc/FromWire.rsd	let built := l.list && e.c >= 0	let built := false
+lib/lrc/FromWire.rsd	else if p == primNodeKids then (if l.list then mkProj (layListIdx l) h else mkCtor nilInfo [])	else if p == primNodeKids then (if l.list then mkProj (layListIdx l + 1) h else mkCtor nilInfo [])
+lib/lrc/FromWire.rsd	(if intAt 5 e.ys >= 0 then 1 else 0) + (if intAt 6 e.ys >= 0 then 2 else 0) + (if e.c < 0 then 4 else 0) + 8 * nnMask 5 e.ys	(if intAt 5 e.ys >= 0 then 1 else 0) + (if intAt 6 e.ys >= 0 then 2 else 0) + (if e.c < 0 then 4 else 0)
+lib/lrc/FromWire.rsd	{ a with next := x + 1, items := a.items ++ [mkVDecl x tyTObj (mkPrim primNodeKids 0 0 a.val.ws) mkUnreachable],	{ a with next := x + 1, items := a.items ++ [mkVDecl x tyTObj (mkPrim primNodeInts 0 0 a.val.ws) mkUnreachable],
+# Equality at a record and at a list of any element (row eqat7; mapat* compare integers that are records of a sign and limbs).
+lib/lrc/FromWire.rsd	items := a.items ++ b.items ++ [mkVDecl b.next tyI64 (mkPrim primAnd 0 0 [a.r, b.r]) mkUnreachable] }	items := a.items ++ b.items ++ [mkVDecl b.next tyI64 (mkPrim primAnd 0 0 [a.r, a.r]) mkUnreachable] }
+lib/lrc/FromWire.rsd	let e := eqItems cx elem ha.ws hb.ws hb.next	let e := eqItems cx elem ha.ws ha.ws hb.next
+lib/lrc/FromWire.rsd	mkVDecl tb tyTObj (mkProj (consTail shape) pb) mkUnreachable, again.item] (mkRet again.vars)	mkVDecl tb tyTObj (mkProj (consTail shape) pa) mkUnreachable, again.item] (mkRet again.vars)
+lib/lrc/FromWire.rsd	mkAltCtor (consInfo shape) (mkCase pb tyTObj [mkAltCtor nilInfo (eqNo z3), mkAltCtor (consInfo shape) both])]	mkAltCtor (consInfo shape) (mkCase pb tyTObj [mkAltCtor nilInfo both, mkAltCtor (consInfo shape) both])]
+# The tables the passes look functions up in (every image row): the 32-way tree of the declarations, the map read without `get`,
+# the call graph's components.
+lib/lrc/Ir.rsd	else dtAt1 (f % 32) (dtAt2 (f / 32 % 32) (dtAt3 (f / 1024 % 32) (dtAt4 (f / 32768) tab.root)))	else dtAt1 ((f + 1) % 32) (dtAt2 (f / 32 % 32) (dtAt3 (f / 1024 % 32) (dtAt4 (f / 32768) tab.root)))
+lib/lrc/Set.rsd	def mapXs (m : Map) (k : Int) : List Int := (mapNode m k).extra	def mapXs (m : Map) (k : Int) : List Int := []
+lib/lrc/CallGraph.rsd	| [v] => sccMark adj gs (if (mapXs adj v).contains v then { c with recs := vsInsert c.recs v.toNat } else c)	| [v] => sccMark adj gs c
+# FromWire: a call of a function that takes the node record, translated in place (`trCall`, `trKid`, `litOf`). Images: mapat1b, mapat9b,
+# recatb. The child's number is a literal held by the callee's variable; the arguments are the callee's variables in order.
+# (The depth of the child's guard inside such a body is a row of SidesMutants.tsv: Diff.rsd cannot see a fuel depth.)
+lib/lrc/FromWire.rsd	      | some v => litHeld v	      | some v => -1
+lib/lrc/FromWire.rsd	          if !b.ok then b else { b with items := a.items ++ b.items, env := a.val :: b.env }	          if !b.ok then b else { b with items := a.items ++ b.items, env := b.env ++ [a.val] }
+# the port audit r1. case 1 and case 2: a parameter that gets the irrelevant argument stays unbound (Multi.rsd irrelevant-through-inline, irrelevant-through-join).
+lib/lrc/Inline.rsd	  | p :: ps, y :: ys, m => ilBind ps ys (imInsert m p.x (if y >= 0 then y.toNat else irrIdx))	  | p :: ps, y :: ys, m => ilBind ps ys (if y >= 0 then imInsert m p.x y.toNat else m)
+lib/lrc/JoinOnce.rsd	  | p :: ps, y :: ys, m => joBind ps ys (imInsert m p.x (if y >= 0 then y.toNat else irrIdx))	  | p :: ps, y :: ys, m => joBind ps ys (if y >= 0 then imInsert m p.x y.toNat else m)
+# The modules the audit found without a row. DropSpec: the two branches of the unique test swapped. Cse: two expressions the same whatever their arguments.
+# Pack: a constructor's index taken for any type. SinkProj: a read moved into a join point's body although the code after the join point reads it.
+# Prim: checked division counted as total (Multi.rsd dead-division).
+# lib/lrc/Closed.rsd has no row. No word selects the pass (option 32 of lib/lrc/Pipeline.rsd, which rsc/rsc.rsd `lrcCompile` never sets), so the real
+# compiler never runs it; the replay's `quick` runs the default options only; and the bytes it writes for a constant cell are read by the emitter
+# alone. The full check runs every image with it (option 34: value and counts). A row is due on the day a word selects the pass.
+lib/lrc/DropSpec.rsd	mkVDecl c tyU8 (mkIsShared y) (mkIf c slow fast.body)	mkVDecl c tyU8 (mkIsShared y) (mkIf c fast.body slow)
+lib/lrc/Cse.rsd	e1.d == e2.d && e1.s == e2.s && e1.ys == e2.ys	e1.d == e2.d && e1.s == e2.s
+lib/lrc/Pack.rsd	if x == y then (if tid == 1 then c else -1) else pkCidx x rest	if x == y then c else pkCidx x rest
+lib/lrc/SinkProj.rsd	    if !vsContains (freeIndices (bodyOf rest)) x && sjReadOnly (bodyOf rest) then	    if sjReadOnly (bodyOf rest) then
+lib/lrc/Prim.rsd	  p == primLt || p == primGt || p == primEq	  p == primDiv || p == primLt || p == primGt || p == primEq
+# The gate (lib/lrc/FromWire.rsd `admit`, the NF checker), caught by the row of the image table that names a refusal (litlong): the bound on a
+# string literal not applied (the gate admits the image); the function of the refusal lost; another class for the cause.
+lib/lrc/FromWire.rsd	      else if s.bs.length > litMax then tvFail fwLit bs	      else if s.bs.length > litMax + 1000000 then tvFail fwLit bs
+lib/lrc/FromWire.rsd	  | some e => Except.error (residueAt im.fn e)	  | some e => Except.error e
+lib/lrc/FromWire.rsd	  | Residue.literalTooLong _ => 2011	  | Residue.literalTooLong _ => 2012
+lib/lrc/FromWire.rsd	def layAt (lx : LayCx) (root : Nat) (t : Int) : Lay := if layMerged lx.m root then layUnion lx.m lx.tags root else layOf lx.m root t	def layAt (lx : LayCx) (root : Nat) (t : Int) : Lay := layOf lx.m root t
+lib/lrc/FromWire.rsd	sa := bitsOr 15 acc.sa hit.sa }	sa := hit.sa }
+lib/lrc/FromWire.rsd	kids := (if hit.val > acc.kids then hit.val else acc.kids), minKids	kids := hit.val, minKids
+lib/lrc/FromWire.rsd	      else if isNodeRead e && t == -1 then layAdd m (layRoot lx f h) layMergeTag false (-1) rd	      else if false then layAdd m (layRoot lx f h) layMergeTag false (-1) rd
+# A closed constructor term built again (lib/lrc/Cse.rsd): the last three rows are a cell found without its scalars compared, a cell
+# found by its tag alone, and the scalars' key without their values. Row `closed` of Images.tsv (two literals that differ in the last
+# character) is what they answer to. Not rows: a cell taken for closed that is not (Lean shares any constructor application; the
+# value is the same), the test for later writes (the IR has none before the counting passes), the `sset`s of the dropped cell left
+# in place (they store the same literals into the kept one).
+lib/lrc/Cse.rsd	        && (kidAt 1 p.kids).op == opLit && (kidAt 1 p.kids).ys == key then p.a	        && (kidAt 1 p.kids).op == opLit then p.a
+lib/lrc/Cse.rsd	    if p.ys.isEmpty && p.b == ty && (vdeclExpr p).op == opCtor && csSame (vdeclExpr p) e	    if p.ys.isEmpty && p.b == ty && (vdeclExpr p).op == opCtor && (vdeclExpr p).a == e.a
+lib/lrc/Cse.rsd	    { ok := r.ok && (csDef v avail).op == opLit, key := n.b :: n.c :: n.d :: v :: r.key, rest := r.rest }	    { ok := r.ok && (csDef v avail).op == opLit, key := n.b :: n.c :: n.d :: r.key, rest := r.rest }

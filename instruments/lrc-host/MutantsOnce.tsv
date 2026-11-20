@@ -1,0 +1,47 @@
+# FILE	FROM	TO  (FROM occurs exactly once in FILE; every row must make the differential report a mismatch)
+# The inlining of a function called once, the sinking of count-ups, the form of tail recursion modulo cons that also returns its root,
+# the release of an unread call result, the range facts and the join point jumped to once.
+# A small join point at its jumps and what a jump knows (lib/lrc/JoinOnce.rsd `joinSmall`, `foldKnown`): the last five rows are the
+# test of a box answered 0, a test on a known literal that takes the other alternative, every count-down dropped, `and` with 0
+# answered 1, and a copy of a join point without its parameters bound. Not a row: the unsigned number taken out of a box with a
+# sign (the two kinds of box told apart in `foldKnown`): no code of the table takes one, since the equality of two integers takes
+# both numbers with their signs.
+# A modulus that gives back its dividend (lib/lrc/Range.rsd `rgSame`; the row `width` of Images.tsv): the last three rows are a
+# dividend that may equal the divisor, a dividend that may be negative, and the binding named after the divisor. Not a row:
+# `used + 2` for `used + 1` in the same rule. It changes which functions get a clone and no value.
+# A test brought down to the case that reads it (lib/lrc/JoinOnce.rsd `condDown`): the last two rows are the case on a negation
+# with its alternatives not exchanged, and the two bodies of a case on a truth value taken the wrong way round. A test moved although
+# something else reads its word too is a row of SidesMutants.tsv: the interpreter still finds the word, an emitted module does not.
+lib/lrc/Inline.rsd	let depth := if isOwnFn nImg (fapFn e) || fapSame e then 0 else fapDepth e + 1	let depth := if isOwnFn nImg (fapFn e) || fapSame e then 0 else fapDepth e
+lib/lrc/Inline.rsd	let body := if depth == 0 then c.node else mkGuard depth (ilDeepen nImg depth c.node)	let body := if depth == 0 then c.node else mkGuard depth c.node
+lib/lrc/SinkInc.rsd	then siGo pi py pt (pend ++ [n]) (bodyOf n) next	then siGo pi py pt pend (bodyOf n) next
+lib/lrc/SinkInc.rsd	{ found := true, rest := if rcN i <= 1 then rest else { i with b := i.b - 1 } :: rest }	{ found := true, rest := i :: rest }
+lib/lrc/SinkInc.rsd	let pair := [mkVDecl v (imFind pt z) (mkProj f.toNat y) (n0 opUnreachable), { i with a := (v : Int) }]	let pair := [mkVDecl v (imFind pt z) (mkProj (f.toNat + 1) y) (n0 opUnreachable), { i with a := (v : Int) }]
+lib/lrc/SinkInc.rsd	{ next := r.next, node := siEmit (p.plain ++ p.pairs) (setBody n r.node) }	{ next := r.next, node := siEmit p.pairs (setBody n r.node) }
+lib/lrc/SinkInc.rsd	(e.op == opProj || e.op == opSProj || e.op == opLit || siPurePrim e)	(e.op == opProj || e.op == opSProj || e.op == opLit || e.op == opFap || siPurePrim e)
+lib/lrc/SinkInc.rsd	let b := siGo pi py pt pend (altBody alt) next	let b := siGo pi py pt [] (altBody alt) next
+lib/lrc/SinkInc.rsd	{ next := r.next, node := siEmit (p.plain ++ p.pairs) { n with kids := [e, r.node] } }	{ next := r.next, node := siEmit p.pairs { n with kids := [e, r.node] } }
+lib/lrc/Trmc.rsd	(mkIfW cx.cv hasNot has)	(mkIfW cx.cv has hasNot)
+lib/lrc/Trmc.rsd	(tcJumpG cx e.ys z (cx.iv : Int) z)	(tcJumpG cx e.ys z (cx.iv : Int) (cx.root : Int))
+lib/lrc/Trmc.rsd	mkVDecl mv tyI64 (mkLit (-1))	mkVDecl mv tyI64 (mkLit 0)
+lib/lrc/Trmc.rsd	(mkRet [v])	(mkRet [(cx.root : Int)])
+lib/lrc/Trmc.rsd	tcJumpG cx e.ys (cx.dst : Int) (cx.di : Int) (cx.root : Int)	tcJumpG cx e.ys (cx.dst : Int) (cx.di : Int) (cx.dst : Int)
+lib/lrc/Trmc.rsd	tcIfDest cx (mkSetAt cx.dst cx.di z (tcJumpG cx e.ys z (cx.iv : Int) (cx.root : Int)))	tcIfDest cx (tcJumpG cx e.ys z (cx.iv : Int) (cx.root : Int))
+lib/lrc/Pipeline.rsd	if e.op == opFap && n.ys.isEmpty && tyIsObj (vdeclTy n) && !hasFreeVar b (vdeclVar n) then	if e.op == opFap && n.ys.isEmpty && tyIsObj (vdeclTy n) && false then
+lib/lrc/Range.rsd	rgParams f pub ps (i + 1) rest (rgBindIv env p.x p.ty (if pub then ivTop else ivmFind ps (rgAt f i) ivBot))	rgParams f pub ps (i + 1) rest (rgBindIv env p.x p.ty (ivmFind ps (rgAt f i) ivBot))
+lib/lrc/Range.rsd	(y.hi <= 0 || x.hi <= ivMax - y.hi) && (y.lo >= 0 || x.lo >= ivMin - y.lo)	(y.hi <= 0 || x.hi <= ivMax) && (y.lo >= 0 || x.lo >= ivMin - y.lo)
+lib/lrc/Range.rsd	{ e with a := (primMask : Int), b := b.lo - 1, ys := [intAt 0 e.ys] }	{ e with a := (primMask : Int), b := b.lo, ys := [intAt 0 e.ys] }
+lib/lrc/Range.rsd	(if a.hi < b.lo || b.hi < a.lo then ivConst 0	(if a.hi < b.lo || b.hi < a.lo then ivConst 1
+lib/lrc/Range.rsd	let p := ivmJoin s.ps (rgAt f i) (rgIv env y) wide	let p := ivmJoin s.ps (rgAt f i) (ivConst 0) wide
+lib/lrc/Range.rsd	else if ((infoOf alt).cidx : Int) == v then some (altBody alt) else rgPick v alts	else if ((infoOf alt).cidx : Int) != v then some (altBody alt) else rgPick v alts
+lib/lrc/JoinOnce.rsd	| p :: ps, y :: ys, m => joBind ps ys (imInsert m p.x (if y >= 0 then y.toNat else irrIdx))	| p :: ps, y :: ys, m => joBind ps ys m
+lib/lrc/JoinOnce.rsd	    else if primOp e == primIsScalar && knIsBox a env then { n with kids := [mkLit 1, knGo (x :: 1 :: 1 :: env) rest] }	    else if primOp e == primIsScalar && knIsBox a env then { n with kids := [mkLit 0, knGo (x :: 1 :: 0 :: env) rest] }
+lib/lrc/JoinOnce.rsd	if alt.op == opAltCtor && ((infoOf alt).cidx : Int) == v && (infoOf alt).tid == 0 then some (altBody alt)	if alt.op == opAltCtor && ((infoOf alt).cidx : Int) != v && (infoOf alt).tid == 0 then some (altBody alt)
+lib/lrc/JoinOnce.rsd	  else if (n.op == opInc || n.op == opDec) && knIsBox (rcVar n : Int) env then knGo env (bodyOf n)	  else if n.op == opDec then knGo env (bodyOf n)
+lib/lrc/JoinOnce.rsd	    else if primOp e == primAnd && (knIsLit a 0 env || knIsLit b 0 env) then { n with kids := [mkLit 0, knGo (x :: 1 :: 0 :: env) rest] }	    else if primOp e == primAnd && (knIsLit a 0 env || knIsLit b 0 env) then { n with kids := [mkLit 1, knGo (x :: 1 :: 1 :: env) rest] }
+lib/lrc/JoinOnce.rsd	    if jmpId n == j && (all || jsAnyKnown known (jmpArgs n)) then normGo v (joBind ps (jmpArgs n) imEmpty) next else { next := next, node := n }	    if jmpId n == j && (all || jsAnyKnown known (jmpArgs n)) then normGo v imEmpty next else { next := next, node := n }
+lib/lrc/Range.rsd	!ivIsBot a && !ivIsBot b && a.lo >= 0 && b.lo > a.hi)	!ivIsBot a && !ivIsBot b && a.lo >= 0 && b.lo >= a.hi)
+lib/lrc/Range.rsd	!ivIsBot a && !ivIsBot b && a.lo >= 0 && b.lo > a.hi)	!ivIsBot a && !ivIsBot b && b.lo > a.hi)
+lib/lrc/Range.rsd	rgGo cx env { s with used := s.used + 2 } (replaceVar x (intAt 0 e.ys).toNat (bodyOf n))	rgGo cx env { s with used := s.used + 2 } (replaceVar x (intAt 1 e.ys).toNat (bodyOf n))
+lib/lrc/JoinOnce.rsd	cdGo (mkCase (intAt 0 e.ys).toNat (caseTy k) [mkAltCtor (boolInfo 0) two.one, mkAltDefault two.zero])	cdGo (mkCase (intAt 0 e.ys).toNat (caseTy k) [mkAltCtor (boolInfo 0) two.zero, mkAltDefault two.one])
+lib/lrc/JoinOnce.rsd	(if a.a == 0 && b.a == 1 then { ok := true, zero := altBody a, one := altBody b }	(if a.a == 0 && b.a == 1 then { ok := true, zero := altBody b, one := altBody a }

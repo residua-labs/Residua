@@ -1,0 +1,154 @@
+-- LRC host program (instruments/lrc-host/Images.tsv): several inductive types in one image.
+-- closure_claim = 0.
+--
+-- What it holds for lib/lrc/FromWire.rsd: recursive types of two and of three constructors that
+-- share tag numbers (Tree, Chain, Rope: the last alternative of a match is decided by the classes
+-- of lib/lrc/Classes.rsd; Wrap has one child, Road has its children in the first constructor), types without
+-- recursion that the frontend writes as sums (Shape, Tok),
+-- absent options, and the equality of two lists of integers. The row of Images.tsv gives what
+-- stock Lean 4.14 evaluates `kindsMain` to.
+inductive Shape where
+  | dot
+  | circle (r : Int)
+  | rect (w : Int) (h : Int)
+
+inductive Tok where
+  | num (v : Int)
+  | word (name : List Int)
+  | stop
+
+inductive Tree where
+  | leaf
+  | node (l : Tree) (k : Int) (r : Tree)
+
+inductive Chain where
+  | done
+  | link (t : Tree) (next : Chain)
+
+inductive Rope where
+  | emp
+  | one (v : Int)
+  | cat (l : Rope) (r : Rope)
+
+inductive Wrap where
+  | bare
+  | one (v : Int) (inner : Wrap)
+
+-- Its name comes before the functions that build a `Tree.node`, a `Chain.link` or a `Wrap.one`:
+-- the first allocation of tag 1 that the stage meets has no child, and the tag takes the widest.
+def oneOf (v : Int) : Rope := Rope.one v
+
+def seqOf : Nat → Int → Rope
+  | 0, x => oneOf x
+  | n + 1, x => Rope.cat (seqOf n (x + 1)) (if x % 2 == 0 then Rope.emp else seqOf n (x * 2))
+
+def seqSum : Rope → Int
+  | Rope.emp => 1
+  | Rope.one v => v
+  | Rope.cat l r => seqSum l * 3 + seqSum r
+
+def area : Shape → Int
+  | Shape.dot => 0
+  | Shape.circle r => 3 * r * r
+  | Shape.rect w h => w * h
+
+def shapeOf (i : Int) : Shape :=
+  if i % 3 == 0 then Shape.dot else if i % 3 == 1 then Shape.circle i else Shape.rect i (i + 1)
+
+def areas : Nat → Int → Int → Int
+  | 0, _, acc => acc
+  | k + 1, i, acc => areas k (i + 1) (acc * 7 + area (shapeOf i))
+
+def tokOf (i : Int) : Tok :=
+  if i % 4 == 0 then Tok.stop else if i % 2 == 0 then Tok.word [i, i + 1] else Tok.num (i * 5)
+
+def tokVal : Tok → Int
+  | Tok.num v => v
+  | Tok.word name => if name == [2, 3] then 100 else 1
+  | Tok.stop => 0 - 1
+
+def toks : Nat → Int → Int → Int
+  | 0, _, acc => acc
+  | k + 1, i, acc => toks k (i + 1) (acc * 11 + tokVal (tokOf i))
+
+def insert : Tree → Int → Tree
+  | Tree.leaf, x => Tree.node Tree.leaf x Tree.leaf
+  | Tree.node l k r, x => if x < k then Tree.node (insert l x) k r else Tree.node l k (insert r x)
+
+def build : Nat → Int → Tree → Tree
+  | 0, _, t => t
+  | n + 1, x, t => build n ((x * 37 + 11) % 101) (insert t x)
+
+def sumTree : Tree → Int
+  | Tree.leaf => 0
+  | Tree.node l k r => sumTree l + k + sumTree r
+
+def chain : Nat → Int → Chain
+  | 0, _ => Chain.done
+  | n + 1, x => Chain.link (build 3 x Tree.leaf) (chain n (x + 9))
+
+def sumChain : Chain → Int → Int
+  | Chain.done, acc => acc
+  | Chain.link t next, acc => sumChain next (acc * 3 + sumTree t)
+
+def first? : List Int → Option Int
+  | [] => none
+  | x :: _ => some x
+
+def pick (i : Int) : Option Int := if i % 2 == 0 then none else first? [i, 7]
+
+def optSum : Nat → Int → Int → Int
+  | 0, _, acc => acc
+  | k + 1, i, acc =>
+    match pick i with
+    | some v => optSum k (i + 1) (acc * 5 + v)
+    | none => optSum k (i + 1) (acc + 2)
+
+-- a loop (the fold of `getLast?`), then a constructor built and matched with no call in between:
+-- at fuel 1 the constructor's guard refuses, whatever ran at this function's own fuel before it
+-- (one child, so that no guard here is deeper than 1)
+def tip (n : Int) : Int :=
+  match [n, n + 1, n + 2].getLast? with
+  | none => 0
+  | some v =>
+    match Wrap.one v Wrap.bare with
+    | Wrap.bare => 1
+    | Wrap.one k _ => k * 2
+
+-- a node that reaches its match through a join point and nothing else
+def pickTree (i : Int) : Int :=
+  let t := if i % 2 == 0 then Tree.leaf else Tree.node Tree.leaf i Tree.leaf
+  match t with
+  | Tree.leaf => 0
+  | Tree.node _ k _ => k + 1
+
+-- A type whose first constructor has the children: its match tests that tag, so the child is
+-- read under a known tag. The child is a Tree, matched where it is read and passed to nothing
+-- before; the last alternative of that match reads a field, and Tree leaves two of the image's
+-- tags untested, so that field's place is decided by the child's class alone.
+inductive Road where
+  | fork (t : Tree) (r : Road)
+  | flat
+  | sign (v : Int)
+
+def roadOf (i : Int) : Road := Road.fork (Tree.node Tree.leaf (i + 40) Tree.leaf) Road.flat
+
+def signLeft : Road → Int
+  | Road.fork t _ =>
+    (match t with
+     | Tree.leaf => 1
+     | Tree.node _ k _ => k)
+  | _ => 7
+
+-- a child read where the tag is the one left over, matched where it is read
+def leftDeep : Rope → Int
+  | Rope.cat l _ =>
+    (match l with
+     | Rope.emp => 0
+     | Rope.one v => v
+     | Rope.cat a _ => seqSum a + 100)
+  | _ => 7
+
+def kindsMain (n : Int) : Int :=
+  areas n.toNat 1 0 + toks n.toNat 1 0 + sumChain (chain n.toNat 5) 1 + optSum n.toNat 0 0 + seqSum (seqOf n.toNat 2)
+    + pickTree n + pickTree (n + 1) + leftDeep (seqOf n.toNat 2) + signLeft (roadOf n)

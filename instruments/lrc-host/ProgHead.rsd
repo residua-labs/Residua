@@ -1,0 +1,116 @@
+-- micro program for a list's scalar heads where an object field is four bytes (lib/lrc/FromWire.rsd "A scalar head
+-- where an object field is four bytes"; the object-layout document "Narrow fields"): there the word of a head sits in the
+-- cell as an object word, a boxed number below 2^31 and a box of its own from 2^31 on. The lists here hold UInt32
+-- on both sides of that bound (`edge`: 2^31 - 1 is the last word boxed in line, 2^31 the first that takes a box).
+-- They are built by cells, read, measured, cut, appended, compared (two boxes of one word are equal, and a box is
+-- never equal to a boxed number), made arrays and lists again, and held by two values at once while one of them
+-- becomes an array; lists written out as literals. `headList` and `headBack` leave as lists of words: a host reads
+-- their cells.
+-- With eight-byte fields the same program runs with the word in the cell; every row has one value for both.
+def edge (i : Nat) : UInt32 :=
+  if i % 8 == 0 then 0
+  else if i % 8 == 1 then 2147483647
+  else if i % 8 == 2 then 2147483648
+  else if i % 8 == 3 then 1
+  else if i % 8 == 4 then 4294967295
+  else if i % 8 == 5 then 2147483649
+  else if i % 8 == 6 then 255
+  else 4294967294
+
+-- edge 1 .. edge k before acc: built from the back
+def mk : Nat → List UInt32 → List UInt32
+  | 0, acc => acc
+  | k + 1, acc => mk k (edge (k + 1) :: acc)
+
+-- a sum that tells the order: each element times its place
+def weigh : List UInt32 → Nat → Nat → Nat
+  | [], _, acc => acc
+  | x :: xs, i, acc => weigh xs (i + 1) (acc + x.toNat * (i + 1))
+
+def sum : List UInt32 → Nat → Nat
+  | [], acc => acc
+  | x :: xs, acc => sum xs (acc + x.toNat)
+
+-- every element one more, round the top of the width: 4294967295 becomes 0 and 2147483647 becomes 2147483648
+def bump : List UInt32 → List UInt32
+  | [] => []
+  | x :: xs => (x + 1) :: bump xs
+
+def flag (b : Bool) : Nat := if b then 1 else 0
+
+-- lists of flags: a head that is 0 or 1
+def lows : List UInt32 → List Bool
+  | [] => []
+  | x :: xs => (x < 2147483648) :: lows xs
+
+def countTrue : List Bool → Nat → Nat
+  | [], acc => acc
+  | b :: bs, acc => countTrue bs (if b then acc + 1 else acc)
+
+-- lists of lists: the cells of the outer list hold objects, those of the inner lists words
+def rows : Nat → List (List UInt32) → List (List UInt32)
+  | 0, acc => acc
+  | k + 1, acc => rows k (mk (k + 1) [] :: acc)
+
+def sumRows : List (List UInt32) → Nat → Nat
+  | [], acc => acc
+  | r :: rs, acc => sumRows rs (acc + weigh r 0 0)
+
+-- an array of words, filled from the edges
+def fill : Nat → Array UInt32 → Array UInt32
+  | 0, a => a
+  | k + 1, a => fill k (a.push (edge k))
+
+def sumArr : Nat → Array UInt32 → Nat → Nat
+  | 0, _, acc => acc
+  | k + 1, a, acc => sumArr k a (acc + (a.getD k 7).toNat * (k + 1))
+
+-- cells: built, read in order, measured, cut, appended
+def headCells : List Nat :=
+  let xs : List UInt32 := mk 16 [];
+  [weigh xs 0 0, sum xs 0, xs.length, weigh (xs.drop 3) 0 0, (xs.drop 20).length, weigh (xs ++ mk 5 []) 0 0,
+   weigh (bump xs) 0 0, sum (bump (bump xs)) 0, countTrue (lows xs) 0, sumRows (rows 9 []) 0]
+
+-- equality: the same words in other cells and other boxes; a difference at a word that takes a box, at one that
+-- does not, between a box and a boxed number (2147483648 against 0, whose low halves differ by one bit of the
+-- field), and in the length
+def headEq : List Nat :=
+  let xs : List UInt32 := mk 9 [];
+  let ys : List UInt32 := mk 9 [];
+  [flag (xs == ys), flag (bump xs == bump ys), flag (xs == bump ys), flag ([edge 2] == [edge 2]), flag ([edge 2] == [edge 5]),
+   flag ([edge 2] == [edge 0]), flag ([edge 1] == [edge 2]), flag (xs == xs.drop 1), flag (mk 3 [] == mk 3 [edge 2]),
+   flag (([] : List UInt32) == []), flag ([edge 4, edge 4] == [edge 4, edge 4]), flag ([edge 4, edge 4] == [edge 4, edge 7])]
+
+-- arrays: a list made an array (its heads become the array's words), an array made a list (its words become
+-- heads), an element read at an index of an array and of a list that is cells (a boxed number, a box, an index
+-- past the end), a list with one more element at its end
+def headArr : List Nat :=
+  let xs : List UInt32 := mk 12 [];
+  let a : Array UInt32 := xs.toArray;
+  let b : Array UInt32 := fill 12 (Array.mkEmpty 0);
+  let ys : List UInt32 := bump xs;
+  [sumArr 12 a 0, weigh a.toList 0 0, weigh b.toList 0 0, sum (b.push 2147483648).toList 0, (a.getD 2 5).toNat, (a.getD 40 5).toNat,
+   weigh (xs ++ [edge 2]) 0 0, weigh ((xs ++ [edge 4]) ++ [edge 1]) 0 0, flag (a.toList == xs), flag (b.toList == xs),
+   weigh ((a.setD 1 2147483650).toList) 0 0, weigh ((b.extract 1 6).toList) 0 0,
+   (xs.getD 2 5).toNat, (xs.getD 1 5).toNat, (xs.getD 3 5).toNat, (xs.getD 40 5).toNat, (ys.getD 0 5).toNat]
+
+-- a list that two values hold while one of them becomes an array: its cells and their boxes stay, and new boxes
+-- are made in between (`bump`), so a box given back too early would be written over before `xs` is read again
+def headShare : List Nat :=
+  let xs : List UInt32 := mk 10 [];
+  let a : Array UInt32 := xs.toArray;
+  let ys : List UInt32 := bump (mk 10 []);
+  let c : Array UInt32 := (bump ys).toArray;
+  [sumArr 10 a 0, weigh ys 0 0, sumArr 10 c 0, weigh xs 0 0, sum xs 0, weigh a.toList 0 0]
+
+-- lists written out: a literal's object word is written without a test, a box for 2147483648 and for 4294967295,
+-- and the cells are constants; the same list written twice is one
+def headLits : List Nat :=
+  [weigh [2147483648, 7, 4294967295, 0, 2147483647] 0 0, flag ([2147483648, 1] == [2147483648, 1]), flag ([2147483648] == [0]),
+   sum [4294967295, 4294967295] 0, weigh [2147483648, 7, 4294967295, 0, 2147483647] 0 0 + sum [2147483647, 2147483648] 0]
+
+-- lists of words as they are, for whoever reads the module's cells
+def headList : List UInt32 := mk 8 []
+def headBack : List UInt32 := (fill 8 (Array.mkEmpty 0)).toList ++ bump (mk 3 [])
+
+def headMain : List Nat := headCells ++ headEq ++ headArr ++ headShare ++ headLits

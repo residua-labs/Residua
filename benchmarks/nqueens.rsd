@@ -1,0 +1,41 @@
+-- nqueens: the Koka/Perceus suite program test/bench/koka/nqueens.kk (koka-lang/koka, master),
+-- ported to P1' Lean 4.14. Same algorithm: solutions are lists of queen columns, extended one row at a
+-- time; `safe` checks column and both diagonals against the queens already placed; `appendSafe` walks the
+-- candidate columns n..1 and conses every safe extension. Koka's int32 is Int here; Koka's recursion on
+-- the queen number (a counter) is structural recursion on a Nat count `k` whose queen is `k + 1`
+-- (Lean has no structural recursion on Int). Output of `queens n` is the number of solutions.
+-- Source pin (the source table, 2026-11-06): koka-lang/koka commit facb7932ce6871fdb063f762a304bd8238f35fba
+-- (master), test/bench/koka/nqueens.kk, sha256
+-- a2c9f603aae2d9096616899795de3109bc71d68454120cf5b413894ad6bf41eb
+-- (raw.githubusercontent.com/koka-lang/koka/facb7932ce6871fdb063f762a304bd8238f35fba/test/bench/koka/nqueens.kk;
+-- byte-identical to the 2026-11-04 the benchmark kit fetch). Rechecked against it line by line: no drift.
+
+-- Official OCaml reference (suite provenance, fetched 2026-11-06): koka-lang/koka commit facb7932ce6871fdb063f762a304bd8238f35fba
+-- (master), test/bench/ocaml/nqueens.ml, sha256
+-- a07892092877700af40b1ba05e5f2347eb3183ce891a3fd27fe8b0c5ba826784
+-- (raw.githubusercontent.com/koka-lang/koka/facb7932ce6871fdb063f762a304bd8238f35fba/test/bench/ocaml/nqueens.ml). The OCaml twin is
+-- this port's algorithm verbatim (safe/append_safe/extend/find_solutions/queens); rechecked line by
+-- line against it: no drift. Its main prints queens 13 (73712); this suite's published input stays 8.
+def safe (queen diag : Int) : List Int -> Bool
+  | [] => true
+  | q :: qs => queen != q && queen != q + diag && queen != q - diag && safe queen (diag + 1) qs
+
+def appendSafe : Nat -> List Int -> List (List Int) -> List (List Int)
+  | 0, _, xss => xss
+  | k + 1, xs, xss =>
+    if safe (Int.ofNat k + 1) 1 xs then appendSafe k xs (((Int.ofNat k + 1) :: xs) :: xss)
+    else appendSafe k xs xss
+
+def extend (n : Nat) (acc : List (List Int)) : List (List Int) -> List (List Int)
+  | [] => acc
+  | xs :: rest => extend n (appendSafe n xs acc) rest
+
+def findSolutions (n : Nat) : Nat -> List (List Int)
+  | 0 => [[]]
+  | k + 1 => extend n [] (findSolutions n k)
+
+def len : List (List Int) -> Int
+  | [] => 0
+  | _ :: xs => 1 + len xs
+
+def queens (n : Nat) : Int := len (findSolutions n n)

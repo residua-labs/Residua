@@ -11,6 +11,9 @@ exact:semantics/Wasm0/Hop.rsd	specification	ship-set-source	s7_hop_statement_lam
 exact:semantics/Rsx/Lower.rsd	specification	ship-set-source	s7_hop_statement_rsx_to_scm_adequacy
 prefix:gates/semalign/	specification	ship-set-source	s7_per_hop_translation_validation_gate
 exact:docs/EMITTER.md	specification	ship-set-source	rscm_wire_format_prose_spec
+prefix:benchmarks/	benchmark-suite	ship-set-source	published_performance_and_correctness_evidence_programs
+prefix:perf/	performance-record	ship-set-source	published_performance_record_of_every_version
+prefix:instruments/lrc-host/	test-suite	ship-set-source	published_correctness_differential_test_suite
 ext:.lean	lean-source	repository-only	lean_sources_outside_the_specification_prefix_set_excluded
 exact:release/scan/leakage.tsv	historical-diagnostic	repository-only	raw_release_scan_evidence_not_an_executable_or_release_artifact
 exact:release/scan/leakage-evidence.tsv	historical-diagnostic	repository-only	raw_release_scan_evidence_not_an_executable_or_release_artifact

@@ -1,0 +1,26 @@
+# FILE	FROM	TO  (FROM occurs exactly once in FILE; every row must make the differential report a mismatch)
+# The short forms of the front end's integer operations and the magnitude's word (lib/lrc/FromWire.rsd "Magnitudes"): the operand
+# order of a reversed operation, the difference below zero, the product of two numbers that do not fit, the quotient by zero, an
+# integer sum written as a difference, an operation taken for another, a magnitude of nine limbs written small, a limb of seven
+# bits, and two magnitudes of different forms compared as small numbers. The program that meets them: instruments/lrc-host/ProgMag.rsd
+# (rows magnat, magint, magsum of Images.tsv) and the rows of the front end's integers.
+# Not a row: `rev` taken as false. An operation numbered 100 higher then has no short form and runs as the image wrote it.
+# Not rows, and why: the bounds below which a sum and a product are computed small (`magLim`, `magHalf`) are below what a word
+# holds, so a larger bound gives the same values on every row; they are bounds of the form, checked by the row of nine limbs.
+lib/lrc/FromWire.rsd	  let x0 := if !rev then y0 else y1	  let x0 := y0
+lib/lrc/FromWire.rsd	    magBoth a b v j (assemble [magI (v + 5) primLt [x, y]] (mkIfW (v + 5) zero diff))	    magBoth a b v j (assemble [magI (v + 5) primLt [x, y]] (mkIfW (v + 5) diff zero))
+lib/lrc/FromWire.rsd	    magBoth a b v j (assemble small (mkIfW (v + 8) prod (mkJmp j [])))	    magBoth a b v j (assemble small (mkIfW (v + 8) prod prod))
+lib/lrc/FromWire.rsd	    magBoth a b v j (assemble [magL (v + 5) 0, magI (v + 6) primEq [y, ((v + 5 : Nat) : Int)]] (mkIfW (v + 6) (mkJmp j []) quot))	    magBoth a b v j (assemble [magL (v + 5) 0, magI (v + 6) primEq [y, ((v + 5 : Nat) : Int)]] (mkIfW (v + 6) quot quot))
+lib/lrc/FromWire.rsd	  if op == 6 then magBothS a b v j (assemble [magI r primAddW [x, y]] (magOfS lims r v j))	  if op == 6 then magBothS a b v j (assemble [magI r primSubW [x, y]] (magOfS lims r v j))
+lib/lrc/FromWire.rsd	    if op >= 0 then (x.f : Int) :: op :: magPairs rest else magPairs rest	    if op >= 0 then (x.f : Int) :: (if op == 12 then 14 else op) :: magPairs rest else magPairs rest
+lib/lrc/FromWire.rsd	def magLimbs : Nat := 7	def magLimbs : Nat := 9
+lib/lrc/FromWire.rsd	  let low := mkVDecl 7 tyI64 (mkPrim primMask 255 0 [1]) cell	  let low := mkVDecl 7 tyI64 (mkPrim primMask 127 0 [1]) cell
+lib/lrc/FromWire.rsd	      (mkVDecl 5 tyI64 (mkPrim primAnd 0 0 [3, 4]) (mkIfW 5 small lists))) }	      (mkVDecl 5 tyI64 (mkPrim primAnd 0 0 [3, 4]) (mkIfW 5 small small))) }
+# An integer as one word (lib/lrc/FromWire.rsd "An integer is one word"): an operand read without its sign, the sign of a small
+# integer turned round, the magnitude of a small integer read with its sign.
+# Not a row: the bound of the range in which a sum is written as a small integer (`magOfS`). A larger bound writes a number of 2^56
+# or more in the small form, which every place takes (two forms of one number are equal by `hIntEq`, and the boundary writes the
+# limbs of either): planted, it changed no value (`mutant SURVIVED table=Mag row=11`, 0673aebd0). As `magLim` in "Magnitudes".
+lib/lrc/FromWire.rsd	  let nums := [magI (v + 3) primUnboxS [(a : Int)], magI (v + 4) primUnboxS [(b : Int)]]	  let nums := [magI (v + 3) primUnbox [(a : Int)], magI (v + 4) primUnboxS [(b : Int)]]
+lib/lrc/FromWire.rsd	  let small := mkVDecl 3 tyI64 (mkPrim primUnboxS 0 0 [1]) (mkVDecl 4 tyI64 (mkLit 0) (mkVDecl 5 tyI64 (mkPrim primLt 0 0 [3, 4]) (mkRet [5])))	  let small := mkVDecl 3 tyI64 (mkPrim primUnboxS 0 0 [1]) (mkVDecl 4 tyI64 (mkLit 0) (mkVDecl 5 tyI64 (mkPrim primLt 0 0 [4, 3]) (mkRet [5])))
+lib/lrc/FromWire.rsd	  let word := mkVDecl 10 tyI64 (mkPrim primMulW 0 0 [3, 9]) (mkVDecl 11 tyTObj (mkPrim primBox 0 0 [10]) (mkRet [11]))	  let word := mkVDecl 10 tyI64 (mkPrim primMulW 0 0 [3, 8]) (mkVDecl 11 tyTObj (mkPrim primBox 0 0 [10]) (mkRet [11]))

@@ -1,0 +1,39 @@
+-- micro program for fixed-width arithmetic at the edges of each width, under the facts of lib/lrc/Range.rsd.
+-- The front end writes `a + b` of a UInt as `((a % m) + (b % m)) % m`. A modulus of a word that is not negative and
+-- below the divisor is that word, so the reductions of the operands go; the reduction of the result stays, and the
+-- rows are the values where leaving it out shows: a sum that is exactly the modulus (`inc8 255`), a difference below
+-- zero (`dec8 0`), a product above it. `wrap8` carries its counter as a parameter round the top of the width.
+-- `edges` asks for the two ends of what `UInt32.ofNat` gives, from a small number and from one above the width.
+def inc8 (a : UInt8) : UInt8 := a + 1
+def dec8 (a : UInt8) : UInt8 := a - 1
+def add8 (a b : UInt8) : UInt8 := a + b
+def sub8 (a b : UInt8) : UInt8 := a - b
+def mul8 (a b : UInt8) : UInt8 := a * b
+def inc16 (a : UInt16) : UInt16 := a + 1
+def dec16 (a : UInt16) : UInt16 := a - 1
+def inc32 (a : UInt32) : UInt32 := a + 1
+def dec32 (a : UInt32) : UInt32 := a - 1
+def add32 (a b : UInt32) : UInt32 := a + b
+def sub32 (a b : UInt32) : UInt32 := a - b
+def mul32 (a b : UInt32) : UInt32 := a * b
+
+def wrap8 : Nat -> UInt8 -> Nat -> Nat
+  | 0, _, n => n
+  | k + 1, x, n => if x + 1 == 0 then n + 1 else wrap8 k (x + 1) (n + 1)
+
+def wrap32 : Nat -> UInt32 -> UInt32 -> Nat -> Nat
+  | 0, _, _, n => n
+  | k + 1, x, d, n => if x + d < x then n + 1 else wrap32 k (x + d) d (n + 1)
+
+def flag (b : Bool) : Nat := if b then 1 else 0
+
+def edges (n : Nat) : Nat :=
+  flag (UInt32.ofNat n == 4294967295) * 2 + flag (UInt32.ofNat n == 0)
+
+def widthMain : List Nat :=
+  [ (inc8 255).toNat, (dec8 0).toNat, (add8 200 100).toNat, (sub8 5 250).toNat, (mul8 16 16).toNat, (mul8 255 255).toNat,
+    (inc16 65535).toNat, (dec16 0).toNat,
+    (inc32 4294967295).toNat, (dec32 0).toNat, (add32 4294967295 4294967295).toNat, (sub32 5 4294967290).toNat,
+    (mul32 65536 65536).toNat, (mul32 4294967295 4294967295).toNat,
+    wrap8 300 250 0, wrap32 20 4294967000 100 0,
+    edges 4294967295, edges 0, edges 4294967296, edges 8589934591, edges 7 ]

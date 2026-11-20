@@ -1,6 +1,6 @@
-# STDLIB — what a 0.1.1 source can use, measured
+# STDLIB — what a 0.1.2 source can use, measured
 
-Version 0.1.1 ships no separate standard-library binary and no
+Version 0.1.2 ships no separate standard-library binary and no
 user-facing module library: "basic data" is substrate-level (wired
 into the front edge and the lowerer), `import` refuses `err=1`, and the
 shipped `lib/` members are toolchain internals of the `rsdc`/`rsc`
@@ -27,7 +27,7 @@ literals, the 14 binary operators and `!`/`-` unary.
 `Option` constructors are builtin identities (`rsdc/Compile.rsd`
 index `~6536`): `some`/`none` work without imports.
 
-## No modules in 0.1.1
+## No modules in 0.1.2
 
 `import` is a named refusal of the bootstrap grammar (`err=1`;
 `release/docs/LANGUAGE` probe table). The 54 shipped source members
@@ -41,13 +41,13 @@ compiler's own closure — the `lib/lrc/*` lowering passes, the
 internals, not an importable user API (the import machinery is
 deferred to a feature release; `release/MANIFEST.md`).
 
-## Not in 0.1.1
+## Not in 0.1.2
 
 The user-facing `lib/` module tree of the earlier 0.1.1 plan (the Proc,
 Session, Receipt, Gate, Word and Arena modules, and the example
 programs), richer data modules (`Num`, `Vec`, `Coll`, `OrderedMap`,
 `Sha256`, `Float`, `Word32`, `Word64`, `Proc9`), the `9P` device host
-tree and any `import` path — repository-only or refused in 0.1.1
+tree and any `import` path — repository-only or refused in 0.1.2
 (`release/MANIFEST.md`).
 
 closure_claim = 0

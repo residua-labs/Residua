@@ -1,0 +1,194 @@
+-- lexer: the Bend bench/runtime lexer program (HigherOrderCO/Bend,
+-- bench/runtime/lexer/main.bend), ported to P1' Lean 4.14. Same algorithm: a tokenizer over
+-- generated source text, the suite's String stress case. 2^size lines fork as a balanced batch
+-- tree. Leaf i hashes its index into a seed and expands the template
+-- "i = ( n o i ) o ( n o i ) o ( n o i ) ;" into one line of source: i becomes an identifier of
+-- 1-8 random lowercase letters, n a number of 1-6 random decimal digits, o one of + - * /, and
+-- any other template character copies itself; placeholder k draws from an xorshift stream salted
+-- by the seed and k, so the tail of the line is built first and each expansion is consed in
+-- front of it. The lexer then walks the line character by character as a three-mode machine
+-- (between tokens, inside an identifier, inside a number) and folds every token into the line
+-- checksum in order, acc = acc * 2654435761 ^ (kind * 40503 + payload): an identifier is kind 1
+-- with the FNV-1a hash of its letters, a number kind 2 with its decimal value (wrapping), an
+-- operator or punctuation character kind 3 with its code; spaces are skipped. Line checksums
+-- sum up the fork tree. A template or source character is classified by comparisons on its
+-- code; a helper decides on the class.
+-- Departures (named): u32-exact — the source's U32 words are modeled exactly in checked Int
+-- arithmetic (wrap mod 2^32, xor/and bit-decomposed; values stay in [0, 2^32)); string-model —
+-- the source's String (a cons list of Char) rides as a List Int of character codes (the frozen
+-- language has no Char/String type), one element per SCon/Chr node.
+-- The source's small size 8 expects 1822208108 (verified against the C twin there); its main()
+-- runs size 23, out of reach here.
+-- Source pin (the source table, 2026-11-07): HigherOrderCO/Bend commit be236f324ed0338fe907fe50474468e4d3b94157
+-- (main), bench/runtime/lexer/main.bend, sha256
+-- 5187685d61672de9434f3902e06c427af4f2fa5648723fd869a8c26ab311fcf6
+-- (raw.githubusercontent.com/HigherOrderCO/Bend/be236f324ed0338fe907fe50474468e4d3b94157/bench/runtime/lexer/main.bend).
+
+def W : Int := 4294967296
+
+def w32 (x : Int) : Int := x % W
+
+def bitXorLoop : Nat → Int → Int → Int → Int → Int
+  | 0, _, _, acc, _ => acc
+  | k + 1, a, b, acc, sc => bitXorLoop k (a / 2) (b / 2) (acc + ((a % 2 + b % 2) % 2) * sc) (sc * 2)
+
+def xor32 (a b : Int) : Int := bitXorLoop 32 a b 0 1
+
+def bitAndLoop : Nat → Int → Int → Int → Int → Int
+  | 0, _, _, acc, _ => acc
+  | k + 1, a, b, acc, sc => bitAndLoop k (a / 2) (b / 2) (acc + (a % 2 * b % 2) * sc) (sc * 2)
+
+def and32 (a b : Int) : Int := bitAndLoop 32 a b 0 1
+
+def wAdd (a b : Int) : Int := w32 (a + b)
+def wSub (a b : Int) : Int := w32 (a - b + W)
+-- wMul is split at 16 bits so the intermediates stay under the checked-i64
+-- bound (a_lo * b, a_hi * b < 2^48); a*b mod 2^32 is unchanged
+-- (checkedArithmeticStuck at ~2^63 on the flat form, probe-verified)
+def wMul (a b : Int) : Int :=
+  w32 (w32 (w32 (a % 65536) * b) + w32 (w32 (w32 (a / 65536) * b) % 65536) * 65536)
+def wInc (a : Int) : Int := w32 (a + 1)
+
+def pw2 : Nat → Int
+  | 0 => 1
+  | k + 1 => 2 * pw2 k
+
+def wShlN (a : Int) (k : Nat) : Int := w32 (a * pw2 k)
+def wShrN (a : Int) (k : Nat) : Int := a / pw2 k
+
+/-- The source's Slot: Id / Nm / Op / Lit. -/
+inductive Slot where
+  | sid | snm | sop | slit
+
+/-- The source's Cls: Letter / Digit / Space / Punct. -/
+inductive Cls where
+  | letter | digit | space | punct
+
+/-- The source's Mode: Gap / InId{h} / InNm{v}. -/
+inductive Mode where
+  | gap | inId (h : Int) | inNm (v : Int)
+
+-- xorshift: x ^= x<<13; x ^= x>>17; x ^= x<<5
+def prng (x : Int) : Int :=
+  let b := xor32 x (wShlN x 13)
+  let d := xor32 b (wShrN b 17)
+  xor32 d (wShlN d 5)
+
+-- line seed: hash of the line index
+def seed (i : Int) : Int := prng (wMul (wInc i) 2654435761)
+
+-- placeholder seed: the line seed salted by the template position
+def salt (s k : Int) : Int := prng (xor32 s (wMul k 2654435761))
+
+-- is_ne on 0, as a Bool (the source's U32.is_ne)
+def ne0 (a : Int) : Bool := if a == 0 then false else true
+
+-- the operator: + - * / by the two low bits of the seed
+def opPick : Bool → Bool → Int
+  | false, false => 43
+  | false, true => 45
+  | true, false => 42
+  | true, true => 47
+
+def op (t : Int) (rest : List Int) : List Int :=
+  opPick (ne0 (and32 t 2)) (ne0 (and32 t 1)) :: rest
+
+-- an identifier: n random lowercase letters, one prng step each
+def ident : Nat → Int → List Int → List Int
+  | 0, _, rest => rest
+  | p + 1, t, rest =>
+    let u := prng t
+    (97 + u % 26) :: ident p u rest
+
+-- a number: n random decimal digits, one prng step each
+def num : Nat → Int → List Int → List Int
+  | 0, _, rest => rest
+  | p + 1, t, rest =>
+    let u := prng t
+    (48 + u % 10) :: num p u rest
+
+-- one placeholder in front of the rest of the line: an identifier of
+-- 1 + (t & 7) letters, a number of 1 + t % 6 digits, an operator, or
+-- the template character itself
+def expand (sl : Slot) (c t : Int) (rest : List Int) : List Int :=
+  match sl with
+  | Slot.sid => ident ((and32 t 7).toNat + 1) t rest
+  | Slot.snm => num ((t % 6).toNat + 1) t rest
+  | Slot.sop => op t rest
+  | Slot.slit => c :: rest
+
+-- the slot of a template character: i, n, o, or a literal
+def slotGo (i n o : Bool) : Slot :=
+  if i then Slot.sid else if n then Slot.snm else if o then Slot.sop else Slot.slit
+
+def slot (c : Int) : Slot := slotGo (c == 105) (c == 110) (c == 111)
+
+-- one template character, read twice: for its slot and as a literal
+def genAt (c t : Int) (rest : List Int) : List Int := expand (slot c) c t rest
+
+-- the line: the template expanded character by character, placeholder
+-- k seeded by salt(s, k), each expansion consed onto the built tail
+def gen : List Int → Int → Int → List Int
+  | [], _, _ => []
+  | c :: u, s, k => genAt c (salt s k) (gen u s (wInc k))
+
+-- the template "i = ( n o i ) o ( n o i ) o ( n o i ) ;" as character codes
+def tpl : List Int :=
+  [105, 32, 61, 32, 40, 32, 110, 32, 111, 32, 105, 32, 41, 32, 111, 32, 40, 32, 110, 32,
+   111, 32, 105, 32, 41, 32, 111, 32, 40, 32, 110, 32, 111, 32, 105, 32, 41, 32, 59]
+
+-- the class of a source character
+def clsGo (l d s : Bool) : Cls :=
+  if l then Cls.letter else if d then Cls.digit else if s then Cls.space else Cls.punct
+
+def cls (c : Int) : Cls := clsGo (97 <= c && c <= 122) (48 <= c && c <= 57) (c == 32)
+
+-- one token into the line checksum
+def mix (acc kind x : Int) : Int := xor32 (wMul acc 2654435761) (wAdd (wMul kind 40503) x)
+
+-- FNV-1a: one letter into the identifier hash
+def fnv (h c : Int) : Int := wMul (xor32 h c) 16777619
+
+-- the machine: (mode, acc) steps over one classified character; a
+-- letter extends an identifier, a digit a number, and anything else
+-- closes the open token, then starts what the character begins
+def stepAt (m : Mode) (k : Cls) (c acc : Int) : Mode × Int :=
+  match m, k with
+  | Mode.gap, Cls.letter => (Mode.inId (fnv 2166136261 c), acc)
+  | Mode.gap, Cls.digit => (Mode.inNm (wSub c 48), acc)
+  | Mode.gap, Cls.space => (Mode.gap, acc)
+  | Mode.gap, Cls.punct => (Mode.gap, mix acc 3 c)
+  | Mode.inId h, Cls.letter => (Mode.inId (fnv h c), acc)
+  | Mode.inId h, Cls.digit => (Mode.inNm (wSub c 48), mix acc 1 h)
+  | Mode.inId h, Cls.space => (Mode.gap, mix acc 1 h)
+  | Mode.inId h, Cls.punct => (Mode.gap, mix (mix acc 1 h) 3 c)
+  | Mode.inNm v, Cls.letter => (Mode.inId (fnv 2166136261 c), mix acc 2 v)
+  | Mode.inNm v, Cls.digit => (Mode.inNm (wAdd (wMul v 10) (wSub c 48)), acc)
+  | Mode.inNm v, Cls.space => (Mode.gap, mix acc 2 v)
+  | Mode.inNm v, Cls.punct => (Mode.gap, mix (mix acc 2 v) 3 c)
+
+def step (m : Mode) (c acc : Int) : Mode × Int := stepAt m (cls c) c acc
+
+-- end of line: close the open token
+def flush (m : Mode) (acc : Int) : Int :=
+  match m with
+  | Mode.gap => acc
+  | Mode.inId h => mix acc 1 h
+  | Mode.inNm v => mix acc 2 v
+
+-- the lexer: one step per character, (mode, acc) riding as r
+def lex : List Int → Mode × Int → Int
+  | [], r => flush r.1 r.2
+  | c :: t, r => lex t (step r.1 c r.2)
+
+-- one line: generate it, then lex it
+def line (i : Int) : Int := lex (gen tpl (seed i) 0) (Mode.gap, 0)
+
+-- batch tree over the line index space; line checksums sum
+def batch : Nat → Int → Int
+  | 0, i => line i
+  | p + 1, i => wAdd (batch p i) (batch p (wAdd i (pw2 p)))
+
+/-- Root: `lexer size` is batch(size, 0); the source's documented small
+size 8 expects 1822208108, its main() runs size 23. -/
+def lexer (size : Int) : Int := batch size.toNat 0

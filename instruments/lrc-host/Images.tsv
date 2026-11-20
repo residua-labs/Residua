@@ -1,0 +1,214 @@
+# NAME	SOURCE	KINDS	ENTRY	ARGS	VALUE
+# SOURCE `file:PATH` is an image file of this tree, `git:REV:PATH` one of another commit; any other SOURCE would be a program for the
+# front end's twin. The files under instruments/lrc-host/img are pinned: an image is what one front end wrote, and the front end changes (since
+# f9592679b it writes an integer as limbs, so the same program has another image, other arguments and another form of its value).
+# rbtree, treebitonic, treematmul, nqueens, rbtreeck, binarytrees, binarytreeskk, nqueenskk (benchmarks/<name>.rsd, -kk for the two ports),
+# progloops (instruments/lrc-host/ProgLoops.rsd) and progkinds (instruments/lrc-host/ProgKinds.rsd) were emitted by the twin backend run
+# 178af9a97 (instruments/rsdc-ml/rsdc.ml sha256 662790a8c44dac27); progeq (instruments/lrc-host/ProgEq.rsd) and progmap
+# (instruments/lrc-host/ProgMap.rsd) by the twin of main be6719f72 (sha256 e8b21e3542956874). ARGS may be empty. KINDS gives the reserved functions as f:k (3 alloc, 4 read, 5 kid), as
+# rsc/rsc.rsd `intrinsicKinds` finds them under a word that holds the ctor bit. ENTRY, ARGS (comma separated) and VALUE are one row
+# of the bench programs: VALUE is what the present lowering returns at the default word (rsc compile, then the row host), for rbtree 100
+# as in reports/backend-opt/evidence/regen5.table.tsv, for treebitonic 4 run on the backend optimizer 8bda362c3 (8 gives 971629740 there
+# and in that table; 4 keeps the interpreted run short). nqueens 6 and rbtreeck (5, 200): the present lowering at word 1920, run on
+# the backend optimizer after 06c3f6353 (stock-rsc compile, then the row host). KINDS is - for an image without reserved functions.
+# VALUE is text as instruments/lrc-host/Interp.rsd `showV` prints a result: a list as [e e ...], a record element as {its words}. binarytrees 6:
+# the four fields of each line, read from the present lowering's result with the row host's `lw=8,16,OFFSET` at offsets 8, 16, 24, 32.
+# SOURCE `git:REV:PATH` names an image file of another commit: this branch's twin refuses cfold.rsd, and its image is the typed emitter's
+# (the bench-regen branch). cfold 6: the two result words of the present lowering at word 1920 (block + 96 and block + 104).
+rbtree	file:instruments/lrc-host/img/rbtree.rscm	0:3,3:4,2:5	12	100	10
+treebitonic	file:instruments/lrc-host/img/treebitonic.rscm	0:3,3:4,2:5	28	4	3124287222
+nqueens	file:instruments/lrc-host/img/nqueens.rscm	-	4	6	4
+rbtreeck	file:instruments/lrc-host/img/rbtreeck.rscm	0:3,3:4,2:5	13	5,200	20
+binarytrees	file:instruments/lrc-host/img/binarytrees.rscm	0:3,3:4,2:5	8	6	[{0 0 7 255} {1 64 4 1984} {1 16 6 2032} {2 0 6 127}]
+cfold	file:instruments/lrc-host/img/cfold.rscm	0:3,2:4,1:5	6	6	118 118
+deriv	file:instruments/lrc-host/img/deriv.rscm	0:3,2:4,1:5	9	3	[6 22 90]
+# binarytreeskk: benchmarks/binarytrees-kk.rsd as it was until 2026-11-18 (git be00d02bb:benchmarks/binarytrees-kk.rsd): Koka's `checkv`
+# visitor on the builder and the counts of benchmarks/binarytrees.rsd, so the value is the pinned port's. The file as it is now, Koka's
+# program definition by definition, is the row btkoka below.
+binarytreeskk	file:instruments/lrc-host/img/binarytreeskk.rscm	0:3,3:4,2:5	9	6	[{0 0 7 255} {1 64 4 1984} {1 16 6 2032} {2 0 6 127}]
+# nqueenskk: the port of Koka's nqueens in its fixed-width arithmetic (UInt32), benchmarks/nqueens-kk.rsd; the value is the pinned port's,
+# and what stock Lean 4.14 evaluates `queens 6` of the file to (benchmarks/nqueens-kk.rscm.meta).
+nqueenskk	file:instruments/lrc-host/img/nqueenskk.rscm	-	5	6	4
+# loops*: instruments/lrc-host/ProgLoops.rsd, the wire's fold and fixpoint as the frontend writes them for List.take, List.reverse,
+# List.getLast?, List.foldl and List.map; VALUE is what stock Lean 4.14 evaluates the entry to (`#eval takeSum 10 4`, `revSum 6`,
+# `dropTake 12 3 5`, `lastOr 5`, `lastOr 0`, `sqSum 4`, `sqPlus 4`, `mapSum 4`). kinds: instruments/lrc-host/ProgKinds.rsd, `#eval kindsMain 6`.
+loopstake	file:instruments/lrc-host/img/progloops.rscm	-	12	10,4	6498509
+loopsrev	file:instruments/lrc-host/img/progloops.rscm	-	10	6	6682902718
+loopsdrop	file:instruments/lrc-host/img/progloops.rscm	-	8	12,3,5	42084851
+loopslast	file:instruments/lrc-host/img/progloops.rscm	-	2	5	14
+loopsnone	file:instruments/lrc-host/img/progloops.rscm	-	2	0	-1
+loopssq	file:instruments/lrc-host/img/progloops.rscm	-	3	4	618
+loopsplus	file:instruments/lrc-host/img/progloops.rscm	-	4	4	619
+loopsmap	file:instruments/lrc-host/img/progloops.rscm	-	9	4	6665353
+# loopsdeep: `#eval deepPlus 1`; the fold stands in a function the stage puts into its one caller, and its body needs fuel to the last unit
+loopsdeep	file:instruments/lrc-host/img/progloops.rscm	-	5	1	11
+kinds	file:instruments/lrc-host/img/progkinds.rscm	0:3,3:4,2:5	19	6	2443811
+# kindstip: `#eval tip 5` of the same file: a loop at the function's own fuel, then a constructor's guard with no call before it
+kindstip	file:instruments/lrc-host/img/progkinds.rscm	0:3,3:4,2:5	12	5	14
+# treematmul: benchmarks/treematmul.rsd, `#eval treeMatmul 2 1 2` under stock Lean 4.14 (the bench row 3 2 3 gives 4292995302 there and in
+# the table of section 13). Two of its types share a tag with different numbers of children: laid out as one class (the host check's
+# second run of every image) the shorter allocation's places are filled and a read of a child tests for the filling.
+treematmul	file:instruments/lrc-host/img/treematmul.rscm	0:3,3:4,2:5	25	2,1,2	4293305763
+# eqat7: `#eval eqMain 7` of instruments/lrc-host/ProgEq.rsd under stock Lean 4.14 is 5225, which the front end of main writes as the record of
+# a sign and base-256 limbs, least first: equality at strings, lists of strings and lists of lists, on integers that are limb lists
+eqat7	file:instruments/lrc-host/img/progeq.rscm	-	7		0 [105 20]
+# mapat1, mapat9: `#eval lbMain 1` = 8769029 and `#eval lbMain 9` = 43693874 of instruments/lrc-host/ProgMap.rsd: lib/AvlMap.rsd filled and read
+# back (nodes whose children are a list, `left : List Map`, written as a literal list in `single` and as a list value elsewhere); a
+# second type whose children only its own node connects to their readers (`Tw`: a literal list of children read by `firstVal`, a
+# list made elsewhere read by `firstValL`); a result with both constructors only through its own recursion (`flipP`).
+# wideat: `#eval wideAt` = 8, the last of eight node fields of a node. recat: `#eval recAt` = 8, the last of eight integer fields.
+mapat1	file:instruments/lrc-host/img/progmap.rscm	0:3,3:4,2:5	26		0 [5 206 133]
+mapat9	file:instruments/lrc-host/img/progmap.rscm	0:3,3:4,2:5	28		0 [50 183 154 2]
+wideat	file:instruments/lrc-host/img/progmap.rscm	0:3,3:4,2:5	14		0 [8]
+recat	file:instruments/lrc-host/img/progmap.rscm	0:3,3:4,2:5	11		0 [8]
+# An integer of a front end that writes limbs shows as its sign word and its magnitude. Inside, the stage holds a magnitude below 2^56 as
+# a small number (lib/lrc/FromWire.rsd "Magnitudes"); a row's value is what leaves through the entry, where a magnitude is limbs again
+# ("The boundary"): 5225 is `0 [105 20]`.
+# eqat7b, mapat1b, mapat9b: the same two programs through the front end of main df158cb71 (instruments/rsdc-ml/rsdc.ml sha256
+# 1df586efa70ab226), which writes each integer composition and each node helper once, as a function of the image (the image writer), and the
+# child of a record through one that takes the record (`f r i = call kid (r.f1) i`): the stage translates a call of it in place
+# (lib/lrc/FromWire.rsd `trCall`). The values are stock Lean's, as above.
+eqat7b	file:instruments/lrc-host/img/progeq2.rscm	-	7		0 [105 20]
+# eqat7x: the image of eqat7b with the two field names of the integer's record changed (`\0IntSgn1` to `\0XntSgn1`, `\0IntMag1` to
+# `\0XntMag1`, 221 places each; sha256 8e19c719400fe47a from d8740a9469f4a539). No front end writes it: the image is made so that
+# a record of two fields is compared field by field (lib/lrc/FromWire.rsd `eqItems`), which an integer's record no longer is since
+# it has an equality of its own ("Magnitudes"). The image's functions read the fields by their place, so the value is eqat7b's.
+eqat7x	file:instruments/lrc-host/img/progeq2x.rscm	-	7		0 [105 20]
+mapat1b	file:instruments/lrc-host/img/progmap2.rscm	0:3,3:4,2:5	26		0 [5 206 133]
+mapat9b	file:instruments/lrc-host/img/progmap2.rscm	0:3,3:4,2:5	28		0 [50 183 154 2]
+wideatb	file:instruments/lrc-host/img/progmap2.rscm	0:3,3:4,2:5	14		0 [8]
+recatb	file:instruments/lrc-host/img/progmap2.rscm	0:3,3:4,2:5	11		0 [8]
+# litlong: an image the stage's gate must refuse (a VALUE that starts with `!` names the residue, its class and the function,
+# instruments/lrc-host/CheckImage.rsd; instruments/lrc-host/Sides.rsd asks the real compiler for the same). No front end of the chain writes a string
+# as a byte literal (the twins of 178af9a97, be6719f72 and today's write a list of code points), so the image is written by hand, 4022
+# bytes: the header `RSCM` 1; 2 functions; signatures (Int) : Int and (Int) : String (01 00 00, 01 00 02); body 0 its argument
+# (01 03 00); body 1 a string literal of 4001 bytes `a` (01 02 01 A1 1F, the bytes); the end byte 00. 4001 is one byte more than the
+# emitter writes (lib/lrc/Ir.rsd `litMax`). sha256 945698a040aa626d4f68e02456dd5c405e5656e31e9b5834623b13180fb4044a.
+litlong	file:instruments/lrc-host/img/litlong.rscm	-	1	0	!lrc_literal_too_long class=2011 function=1
+# numeral: `#eval numAt3` = 101026 of instruments/lrc-host/ProgNumeral.rsd under stock Lean 4.14: operations whose left operand is a numeral and
+# whose right operand is an operation on an Int with a numeral of its own, under no expected type. The image is the one the front end
+# writes since reports/backend-opt/the numeral landing.md (instruments/rsdc-ml/rsdc.ml sha256 1ee31299fdd2c045; image sha256 0c7f1544fbfd4afb);
+# the image of the front end before it holds a Nat beside an Int and both lowerings refuse it.
+numeral	file:instruments/lrc-host/img/prognumeral.rscm	-	7		0 [162 138 1]
+# magnat, magint, magsum: `#eval magNat`, `#eval magInt` and `#eval magSum 300` of instruments/lrc-host/ProgMag.rsd under stock Lean 4.14
+# (195 naturals, 255 integers, and 601): every integer operation on small numbers, around 2^56 (where a magnitude stops being a small
+# number), around 2^28 (where a product of two stops being one), on zero and on both signs. A value is written as it leaves through
+# the entry (lib/lrc/FromWire.rsd "The boundary"): a magnitude is `[l0 l1 ...]`, limbs in base 256, the least first, `[]` for zero; an
+# integer is `{magnitude sign}`, sign 1 below zero. The image is the twin's (instruments/rsdc-ml/rsdc.ml sha256 1ee31299fdd2c045; image sha256
+# 42d90d1a4779c4b7). The rows also run with the integer operations as the image writes them (`plain_ints`): the same values.
+magnat	file:instruments/lrc-host/img/progmag.rscm	-	7		[[] [] [] [] [] [] [] [] [] [1] [] [1] [1] [1] [] [1] [] [] [] [] [1] [1] [1] [] [] [] [1] [1] [] [] [] [1] [] [] [] [] [1] [1] [] [10] [4] [] [21] [2] [1] [] [3] [] [] [1] [1] [] [255 1] [] [1] [0 255] [] [255] [1] [1] [1] [1] [] [] [] [255 255 1] [] [1] [0 0 255 255] [] [255 255] [1] [1] [1] [1] [] [] [] [0 0 0 0 0 0 0 1] [254 255 255 255 255 255 255] [] [255 255 255 255 255 255 255] [255 255 255 255 255 255 255] [] [] [1] [] [] [1] [1] [] [254 255 255 255 255 255 255 1] [] [] [1 0 0 0 0 0 0 254 255 255 255 255 255 255] [1] [] [1] [] [] [1] [] [1] [1] [1 0 0 0 0 0 0 1] [255 255 255 255 255 255 255] [] [0 0 0 0 0 0 0 1] [0 0 0 0 0 0 0 1] [] [] [1] [] [] [1] [1] [] [0 0 0 0 0 0 0 2] [] [] [0 0 0 0 0 0 0 0 0 0 0 0 0 0 1] [1] [] [1] [] [] [1] [] [1] [1] [2 0 0 0 0 0 0 2] [8] [] [241 255 255 255 255 255 255 1 0 0 0 0 0 0 1] [1] [8] [] [253 255 255 255 255 255 255] [] [] [1] [1] [] [0 0 0 32] [] [] [0 0 0 0 0 0 0 1] [1] [] [1] [] [] [1] [] [1] [1] [0 0 0 32] [] [2] [255 255 255 255 255 255 255] [] [255 255 255 15] [1] [2] [1] [1] [] [] [] [3 0 0 0 0 0 0 1] [253 255 255 255 255 255 255] [] [0 0 0 0 0 0 0 3] [85 85 85 85 85 85 85] [1] [] [3] [] [] [1] [1] [] [131 115 253 37 141 169 84 171] [33 162 64 176 140 169 84 171] [] [50 203 247 34 82 103 227 207 229 7 102 39] [143 220 14 233 2] [243 115 60 20] [] [177 104 222 58] [] [] [1] [1] []]
+magint	file:instruments/lrc-host/img/progmag.rscm	-	5		[{[] 0} {[] 0} {[] 0} {[] 0} {[] 0} {[] 0} {[] 0} {[] 0} {[] 0} {[] 0} {[] 0} {[1] 0} {[] 0} {[1] 0} {[1] 0} {[1] 0} {[1] 1} {[1] 0} {[] 0} {[] 0} {[] 0} {[] 0} {[1] 0} {[] 0} {[1] 1} {[1] 0} {[1] 0} {[] 0} {[] 0} {[] 0} {[1] 0} {[1] 0} {[1] 1} {[] 0} {[] 0} {[1] 0} {[] 0} {[] 0} {[1] 1} {[] 0} {[] 0} {[] 0} {[1] 0} {[1] 0} {[] 0} {[10] 0} {[4] 0} {[4] 1} {[21] 0} {[2] 0} {[1] 0} {[] 0} {[3] 0} {[7] 1} {[3] 1} {[] 0} {[] 0} {[1] 0} {[1] 0} {[] 0} {[4] 1} {[10] 1} {[10] 0} {[21] 1} {[3] 1} {[2] 0} {[] 0} {[3] 0} {[7] 0} {[3] 1} {[1] 0} {[1] 0} {[] 0} {[] 0} {[] 0} {[4] 0} {[10] 0} {[10] 1} {[21] 1} {[2] 1} {[1] 0} {[1] 1} {[4] 0} {[7] 1} {[3] 0} {[] 0} {[] 0} {[1] 0} {[1] 0} {[] 0} {[10] 1} {[4] 1} {[4] 0} {[21] 0} {[3] 0} {[2] 0} {[1] 0} {[4] 0} {[7] 0} {[3] 0} {[1] 0} {[1] 0} {[] 0} {[] 0} {[] 0} {[5] 1} {[5] 0} {[5] 1} {[] 0} {[] 0} {[] 0} {[] 0} {[5] 1} {[] 0} {[5] 0} {[] 0} {[] 0} {[1] 0} {[1] 0} {[] 0} {[0 0 0 0 0 0 0 1] 0} {[254 255 255 255 255 255 255] 0} {[254 255 255 255 255 255 255] 1} {[255 255 255 255 255 255 255] 0} {[255 255 255 255 255 255 255] 0} {[] 0} {[] 0} {[1] 0} {[255 255 255 255 255 255 255] 1} {[1] 1} {[] 0} {[] 0} {[1] 0} {[1] 0} {[] 0} {[254 255 255 255 255 255 255] 1} {[0 0 0 0 0 0 0 1] 1} {[0 0 0 0 0 0 0 1] 0} {[255 255 255 255 255 255 255] 1} {[255 255 255 255 255 255 255] 1} {[] 0} {[] 0} {[1] 0} {[255 255 255 255 255 255 255] 0} {[1] 1} {[1] 0} {[1] 0} {[] 0} {[] 0} {[] 0} {[] 0} {[254 255 255 255 255 255 255 1] 0} {[254 255 255 255 255 255 255 1] 1} {[1 0 0 0 0 0 0 254 255 255 255 255 255 255] 1} {[1] 1} {[] 0} {[1] 1} {[] 0} {[255 255 255 255 255 255 255] 1} {[255 255 255 255 255 255 255] 0} {[] 0} {[] 0} {[1] 0} {[1] 0} {[] 0} {[] 0} {[0 0 0 0 0 0 0 2] 0} {[0 0 0 0 0 0 0 2] 1} {[0 0 0 0 0 0 0 0 0 0 0 0 0 0 1] 1} {[1] 1} {[] 0} {[1] 1} {[] 0} {[0 0 0 0 0 0 0 1] 1} {[0 0 0 0 0 0 0 1] 0} {[] 0} {[] 0} {[1] 0} {[1] 0} {[] 0} {[8] 0} {[2 0 0 0 0 0 0 2] 0} {[2 0 0 0 0 0 0 2] 1} {[241 255 255 255 255 255 255 1 0 0 0 0 0 0 1] 1} {[1] 1} {[8] 0} {[1] 1} {[8] 0} {[5 0 0 0 0 0 0 1] 1} {[253 255 255 255 255 255 255] 0} {[] 0} {[] 0} {[1] 0} {[1] 0} {[] 0} {[0 0 0 32] 0} {[] 0} {[] 0} {[0 0 0 0 0 0 0 1] 0} {[1] 0} {[] 0} {[1] 0} {[] 0} {[0 0 0 16] 1} {[0 0 0 16] 1} {[] 0} {[1] 0} {[] 0} {[1] 0} {[1] 0} {[] 0} {[0 0 0 32] 1} {[0 0 0 32] 0} {[0 0 0 0 0 0 0 1] 1} {[1] 1} {[] 0} {[1] 1} {[] 0} {[0 0 0 16] 0} {[0 0 0 16] 1} {[1] 0} {[1] 0} {[] 0} {[] 0} {[] 0} {[2] 1} {[0 0 0 32] 0} {[0 0 0 32] 1} {[255 255 255 255 255 255 255] 1} {[] 0} {[255 255 255 15] 0} {[2] 1} {[253 255 255 15] 0} {[255 255 255 15] 1} {[1 0 0 16] 0} {[] 0} {[] 0} {[1] 0} {[1] 0} {[] 0} {[33 162 64 176 140 169 84 171] 0} {[131 115 253 37 141 169 84 171] 0} {[131 115 253 37 141 169 84 171] 1} {[50 203 247 34 82 103 227 207 229 7 102 39] 1} {[143 220 14 233 2] 1} {[243 115 60 20] 0} {[1] 1} {[33 162 64 176 140 169 84 171] 0} {[210 10 31 235 140 169 84 171] 1} {[177 104 222 58] 0} {[] 0} {[] 0} {[1] 0} {[1] 0} {[] 0}]
+magsum	file:instruments/lrc-host/img/progmag.rscm	-	9		[89 2]
+# The rows arr*: `#eval arrBig` ... `#eval arrTrees` of instruments/lrc-host/ProgArr.rsd under stock Lean 4.14: an array built by
+# pushes, read and written at an index (also at its size and outside it), cut (also at and past its ends), its last element read
+# and taken off, made into a list and back, held by two values while one is written, a copy dropped while the first is kept,
+# arrays of arrays, integers with a sign, flags, and objects of two inductive types as elements, an array where a list is taken
+# apart (a cell before it, its tail, an append, an equality, a loop, a first element), cells that are an array by their type alone
+# or by `++ []`, a write to the empty array, and arrays of 2000 and 3000 elements, whose cells are larger than the heap's sizes
+# (lib/lrc/FromWire.rsd "Arrays", lib/lrc/Emit.rsd "Arrays"). Each VALUE is stock Lean's value in the boundary's forms.
+# The image is the twin's (instruments/rsdc-ml/rsdc.ml sha256 5e9643b5074d1c2a; image sha256 f53a162e442b9440).
+arrbig	file:instruments/lrc-host/img/progarr.rscm	0:3,3:4,2:5	6		[[184 11] [252 112 13] [8 7] [5] [208 7] [209 7] [156 78 1]]
+arrboxes	file:instruments/lrc-host/img/progarr.rscm	0:3,3:4,2:5	7		[[108] [6] [48] [6] [129]]
+arrcut	file:instruments/lrc-host/img/progarr.rscm	0:3,3:4,2:5	8		[[65 2] [18 2] [229 1] [186 1] [145 1] [106 1] [2] [1]]
+arredge	file:instruments/lrc-host/img/progarr.rscm	0:3,3:4,2:5	9		[[7] [5] [] [5] [9] [6] []]
+arremptyset	file:instruments/lrc-host/img/progarr.rscm	0:3,3:4,2:5	4		[]
+arrends	file:instruments/lrc-host/img/progarr.rscm	0:3,3:4,2:5	10		[[77] [1] [5] [9] [5] [] [1] [] [4] [2] [1]]
+arrflags	file:instruments/lrc-host/img/progarr.rscm	0:3,3:4,2:5	11		[1 0 0 1 0 0 1]
+arrints	file:instruments/lrc-host/img/progarr.rscm	0:3,3:4,2:5	12		[{[44] 0} {[4] 0} {[3] 1} {[231 9] 0} {[2] 0} {[1] 0} {[] 0}]
+arrkeep	file:instruments/lrc-host/img/progarr.rscm	0:3,3:4,2:5	13		[[1] [] [3] [2] [1] [] [6] [6] [5] [2] [1] [1] [] [3] [2] [1] []]
+arrlist	file:instruments/lrc-host/img/progarr.rscm	0:3,3:4,2:5	14		[[106 1] [69 1] [34 1] [1 1] [226] [197] [170] [145] [122] [101] [82] [65] [50] [37] [26] [17] [10] [5] [2] [1]]
+arrmix	file:instruments/lrc-host/img/progarr.rscm	0:3,3:4,2:5	15		[[25] [5] [2] [] [1] [9] [7] [17] [3] [10] [10] [50] [10] [33] [3]]
+arrnest	file:instruments/lrc-host/img/progarr.rscm	0:3,3:4,2:5	16		[[] [3] [2] [1] [] [3] [2] [1] [] [] [3] [2] [2] [] [3] [2] [1] [] [1] [42]]
+arrof	file:instruments/lrc-host/img/progarr.rscm	0:3,3:4,2:5	5		[[3] [6] [44] [9] [2] [4] [8] [2] [1] [9] [5] [6] [7]]
+arrset	file:instruments/lrc-host/img/progarr.rscm	0:3,3:4,2:5	17		[[122] [102] [84] [68] [54] [42] [32] [24] [18] [14] [12] [12]]
+arrshare	file:instruments/lrc-host/img/progarr.rscm	0:3,3:4,2:5	18		[[26] [17] [10] [5] [2] [1] [26] [17] [232 3] [5] [2] [1] [26] [17] [10] [5] [2] [1] [77]]
+arrsum	file:instruments/lrc-host/img/progarr.rscm	0:3,3:4,2:5	19		[172 246 7]
+arrtrees	file:instruments/lrc-host/img/progarr.rscm	0:3,3:4,2:5	20		[[7] [6] [6] [] [9] [41] [151]]
+# The rows num*: `#eval natsAt3`, `intsAt3`, `numEdgeN`, `numEdgeI`, `namesAt5` of instruments/lrc-host/ProgNum.rsd and `#eval chainAt9` of
+# instruments/lrc-host/ProgNumInd.rsd under stock Lean 4.14: fields of type Nat, Int, List Nat and List Int of recursive types read,
+# summed, rebuilt and updated (zero, both signs, the bounds of a small number, numbers far above them, empty lists), a String beside
+# a Nat, and constructors that hold a number of a different type each (lib/lrc/FromWire.rsd "Numbers in nodes"). Each VALUE is stock
+# Lean's value in the boundary's forms. The images are the twin's (instruments/rsdc-ml/rsdc.ml sha256 5e9643b5074d1c2a; images sha256 d2b0fe2bb93970b6, 5796e9912f4c07ea).
+numnats	file:instruments/lrc-host/img/prognum.rscm	0:3,3:4,2:5	19		[[92] [112 1] [128] [93] [127 1] [158] [8] [9] [9] [10] [10] [11] [11] [12] [12] [13] [13] [14] [14] [15] [15] [16] [92] [8] [9] [9] [10] [10] [11] [11] [12] [12] [13] [13] [14] [14] [15] [15] [16]]
+numints	file:instruments/lrc-host/img/prognum.rscm	0:3,3:4,2:5	13		[{[60] 0} {[195 1] 0} {[60] 1} {[116] 0} {[13] 1} {[13] 0} {[2] 0} {[2] 1} {[4] 1} {[4] 0} {[7] 1} {[7] 0} {[2] 0} {[2] 1} {[13] 1} {[13] 0} {[19] 1} {[19] 0} {[8] 0} {[8] 1} {[13] 1} {[13] 0} {[2] 0} {[2] 1} {[4] 1} {[4] 0} {[7] 1} {[7] 0} {[2] 0} {[2] 1} {[13] 1} {[13] 0} {[19] 1} {[19] 0} {[8] 0} {[8] 1} {[60] 0}]
+numedgen	file:instruments/lrc-host/img/prognum.rscm	0:3,3:4,2:5	21		[[] [5 0 0 0 0 0 0 0 0 0 1] [255 255 255 255 255 255 255] [0 0 0 0 0 0 0 1] [4 0 0 0 0 0 0 2 0 0 1] [12 0 0 0 0 0 0 6 0 0 3] [8 0 0 0 0 0 0 4 0 0 2] [] [] [4] [] [5 0 0 0 0 0 0 0 0 0 1] [255 255 255 255 255 255 255] [0 0 0 0 0 0 0 1] [8 0 0 0 0 0 0 4 0 0 2] [] [5 0 0 0 0 0 0 0 0 0 1] [255 255 255 255 255 255 255] [0 0 0 0 0 0 0 1]]
+numedgei	file:instruments/lrc-host/img/prognum.rscm	0:3,3:4,2:5	20		[{[] 0} {[5 0 0 0 0 0 0 0 0 0 1] 1} {[255 255 255 255 255 255 255] 1} {[0 0 0 0 0 0 0 1] 0} {[4 0 0 0 0 0 0 2 0 0 1] 0} {[15 0 0 0 0 0 0 12 0 0 4] 0} {[8 0 0 0 0 0 0 4 0 0 2] 0} {[] 0} {[5 0 0 0 0 0 0 0 0 0 1] 0} {[5 0 0 0 0 0 0 0 0 0 1] 1} {[255 255 255 255 255 255 255] 0} {[255 255 255 255 255 255 255] 1} {[0 0 0 0 0 0 0 1] 0} {[0 0 0 0 0 0 0 1] 1} {[] 0} {[5 0 0 0 0 0 0 0 0 0 1] 0} {[5 0 0 0 0 0 0 0 0 0 1] 1} {[255 255 255 255 255 255 255] 0} {[255 255 255 255 255 255 255] 1} {[0 0 0 0 0 0 0 1] 0} {[0 0 0 0 0 0 0 1] 1} {[8 0 0 0 0 0 0 4 0 0 2] 0}]
+numnames	file:instruments/lrc-host/img/prognum.rscm	0:3,3:4,2:5	18		[[175 17] [44 1] [4]]
+numchain	file:instruments/lrc-host/img/prognumind.rscm	0:3,3:4,2:5	7		[{[99 0 0 0 0 0 0 0 0 0 2] 0} {[95 0 0 0 0 0 0 0 0 0 2] 0} {[95 255 255 255 255 255 255 255 255 255 1] 0}]
+# numxlen, numxnum: two images that are not the front end's. Each is the twin's image of a program with one byte changed, the number
+# of the child that one read takes (`cmp -l` against the twin's image). numxlen: instruments/lrc-host/ProgNumX.rsd (image sha256
+# 1336dd5e4226df6f), byte 4111, 1 to 0: `rawLen` reads the node of the Nat as the String's list of code points. numxnum:
+# instruments/lrc-host/ProgNumY.rsd (image sha256 c1a17ec73430e577), byte 3791, 0 to 1: `rawNum` reads the node of the String as a packed
+# Nat, and nothing else reads that node. A node is then read in another form than it was written in, which no source program does,
+# and the stage must leave both places as the image wrote them. VALUE is what the wire says: the packed words of 300 are [2 44 1] and
+# of 0 are [0], four words in all; the 33 code points of the String are the count 32 and 32 limbs. The present lowering gives the
+# same (Sides.rsd).
+numxlen	file:instruments/lrc-host/img/prognumxlen.rscm	0:3,3:4,2:5	7		[4]
+numxnum	file:instruments/lrc-host/img/prognumxnum.rscm	0:3,3:4,2:5	6		[97 98 99 100 101 102 103 104 105 106 107 108 109 110 111 112 113 114 115 116 117 118 119 120 121 122 65 66 67 68 69 70]
+# numxtag: a third image that is not the front end's: the twin's image of instruments/lrc-host/ProgNumT.rsd (image sha256
+# 1bf8a516b0b08489), bytes 2091 and 2589, 1 to 0: both reads of the child in `kidKind` take the node of the Nat, so a match asks a
+# number's node for its tag. VALUE is what the wire says: such a node has the tag 0, which is `leaf`'s, so the value is 300 + 1, the
+# limbs [45 1]. The stage then keeps that node an object (lib/lrc/FromWire.rsd `Lay.box`, `layMarkTag`). The present lowering gives
+# the same (Sides.rsd).
+numxtag	file:instruments/lrc-host/img/prognumxtag.rscm	0:3,3:4,2:5	6		[45 1]
+# order: `#eval orderMain` of instruments/lrc-host/ProgOrder.rsd under stock Lean 4.14 is 222. The image is the twin's (image sha256
+# cf68e16bc039b785). Its scan finds the tag with children first and the childless tag last (tags 0, 1); as one class the read of a
+# number's node finds no single tag and the class has one layout (lib/lrc/FromWire.rsd `layUnion`).
+order	file:instruments/lrc-host/img/progorder.rscm	0:3,3:4,2:5	9		[222]
+# convnats, convints: `#eval convNats` and `#eval convInts` of instruments/lrc-host/ProgConv.rsd under stock Lean 4.14: a Nat as an Int
+# and an Int as a Nat, the test for zero that a match on a Nat is, the index of an array's element and an array's size, each on zero,
+# on small numbers, at 2^56 and far above (lib/lrc/FromWire.rsd "A magnitude where no list is needed", `magToWord`, `magOfWord`).
+# Each VALUE is stock Lean's value in the boundary's forms. The image is the twin's (image sha256 a631f5d57fcafc86).
+convnats	file:instruments/lrc-host/img/progconv.rscm	-	9		[[] [5] [] [255 255 255 255 255 255 255] [0 0 0 0 0 0 0 1] [] [5 0 0 0 0 0 0 0 0 0 1] [] [] [] [1] [255 255 255 255 255 255 255] [0 0 0 0 0 0 0 1] [4 0 0 0 0 0 0 0 0 0 1] [7] [10] [27] [10] [30] [77] [77] [77] [77] [65 1] [65 1] [65 1]]
+convints	file:instruments/lrc-host/img/progconv.rscm	-	7		[{[] 0} {[5] 0} {[255 255 255 255 255 255 255] 0} {[0 0 0 0 0 0 0 1] 0} {[5 0 0 0 0 0 0 0 0 0 1] 0} {[5 0 0 0 0 0 0 0 0 0 1] 1} {[] 0} {[1] 0} {[1] 0} {[1] 0} {[] 0} {[3] 0} {[] 0}]
+# closed (instruments/lrc-host/ProgClosed.rsd, by today's twin, sha256 8c50f29bcc1b2700): closed constructor terms built again on one
+# path, string literals among them (lib/lrc/Cse.rsd). VALUE is stock Lean 4.14's `#eval closedMain`, [144, 72012, 473737], each as the
+# front end's integer: its limbs to the base 256, the lowest first, and its sign.
+closed	file:instruments/lrc-host/img/progclosed.rscm	0:3,3:4,2:5	4		[{[144] 0} {[76 25 1] 0} {[137 58 7] 0}]
+# btkoka (instruments/lrc-host/ProgBtKoka.rsd, by the twin of main 64873458d, rsdc.ml sha256 cd1478184544aa3b; image sha256 9355ba9a6e7325ff): the definitions of
+# benchmarks/binarytrees-kk.rsd and `lines 6` as a main without an argument. VALUE is what Koka's program prints for 6 (Koka 3.2.9,
+# test/bench/koka/binarytrees.kk of commit facb7932: checks 255, 2263, 3175, 127; `psum-count` makes count + 9 trees for a line) and
+# what stock Lean 4.14 evaluates `btKokaMain` to, [(0, 0, 7, 255), (1, 64, 4, 2263), (1, 16, 6, 3175), (2, 0, 6, 127)], in the boundary's
+# form: a line is its four magnitudes (limbs to the base 256, the lowest first, [] for zero) and then its four signs.
+btkoka	file:instruments/lrc-host/img/progbtkoka.rscm	0:3,3:4,2:5	4		[{[] [] [7] [255] 0 0 0 0} {[1] [64] [4] [215 8] 0 0 0 0} {[1] [16] [6] [103 12] 0 0 0 0} {[2] [] [6] [127] 0 0 0 0}]
+# width (instruments/lrc-host/ProgWidth.rsd, by the twin of main 5c60b4d93, rsdc.ml sha256 bfe6f3c5f8b82fdd; image sha256 28539f4f05ba6cc2): the
+# arithmetic of UInt8, UInt16 and UInt32 at the edges of each width, through the facts of lib/lrc/Range.rsd: a sum that is exactly the
+# modulus, a difference below zero, a product above it, a counter carried round the top of its width as a parameter, and both ends of
+# what `UInt32.ofNat` gives. VALUE is stock Lean 4.14's `#eval widthMain`,
+# [0, 255, 44, 11, 0, 1, 0, 65535, 0, 4294967295, 4294967294, 11, 0, 1, 6, 3, 2, 1, 1, 2, 0], each as limbs.
+width	file:instruments/lrc-host/img/progwidth.rscm	-	14		[[] [255] [44] [11] [] [1] [] [255 255] [] [255 255 255 255] [254 255 255 255] [11] [] [1] [6] [3] [2] [1] [1] [2] []]
+# tests (instruments/lrc-host/ProgTest.rsd, by the twin of main 6392a238c, rsdc.ml sha256 bfe6f3c5f8b82fdd; image sha256 4a8c4b8fd2a29809): a test read in two
+# places, by the case that chooses a value and by the join point that takes it (`twice`); three tests in a row (`chain`); a test
+# whose word is stored in the alternative it selects and nowhere else (`markOne`); on numbers taken out of a list at run time
+# (lib/lrc/JoinOnce.rsd `condDown`, lib/lrc/Emit.rsd `emTest`). VALUE is stock Lean 4.14's `#eval testMain`,
+# [44, 505, 909, 1, 0, 0, 0, 819], each as limbs.
+tests	file:instruments/lrc-host/img/progtest.rscm	-	6		[[44] [249 1] [141 3] [1] [] [] [] [51 3]]
+# narrownat, narrowint, narrowconv, narrowmix (instruments/lrc-host/ProgNarrow.rsd, by the twin of main d6d7ecc6b, rsdc.ml sha256 eda216029e53523f; image sha256
+# 4b2532a16713c460): numbers at the edges of a small number in a module whose object fields are four bytes (rsc's layer `narrow`,
+# lib/lrc/FromWire.rsd `magLimsOf`): 2^31 for a natural number, 2^30 either way for an integer, two factors at 2^15, lists of three and
+# four limbs; the conversions there, a word of 32 bits at 2^31 and at its top, sums that cross an edge while they run, a list of integers
+# on both sides of the edge, a tree that holds such numbers. Under the layers without `narrow` they are small numbers far below the
+# bound; the host check translates every row under the narrow bounds too, and Sides.rsd runs every row's module of narrow fields.
+# VALUE is stock Lean 4.14's `#eval` of the four lists.
+narrownat	file:instruments/lrc-host/img/prognarrow.rscm	0:3,3:4,2:5	18		[[0 0 0 128] [254 255 255 127] [] [255 255 255 127] [255 255 255 127] [] [] [1] [] [] [1] [1] [] [254 255 255 255] [] [] [1 0 0 0 255 255 255 63] [1] [] [1] [] [] [1] [] [1] [1] [1 0 0 128] [255 255 255 127] [] [0 0 0 128] [0 0 0 128] [] [] [1] [] [] [1] [1] [] [0 0 0 0 1] [] [] [0 0 0 0 0 0 0 64] [1] [] [1] [] [] [1] [] [1] [1] [2 0 0 0 1] [8] [] [241 255 255 255 0 0 0 64] [1] [8] [] [253 255 255 127] [] [] [1] [1] [] [0 0 0 64] [254 255 255 63] [] [255 255 255 63] [255 255 255 63] [] [] [1] [] [] [1] [1] [] [0 0 0 128] [] [] [0 0 0 0 0 0 0 16] [1] [] [1] [] [] [1] [] [1] [1] [255 255 255 127] [] [1] [0 0 0 192 255 255 255 15] [] [255 255 255 63] [1] [1] [1] [1] [] [] [] [0 0 1] [] [] [0 0 0 64] [1] [] [1] [] [] [1] [] [1] [1] [0 0 1] [] [2] [255 255 255 63] [] [255 127] [1] [2] [1] [1] [] [] [] [254 255] [] [] [1 0 255 63] [1] [] [1] [] [] [1] [] [1] [1] [255 127 1] [1 128] [] [0 0 255 127] [2] [2] [] [255 127] [] [] [1] [1] [] [9 106 1] [] [1] [20 93 255 127] [] [4 181] [1] [1] [1] [1] [] [] [] [10 106 1] [] [] [25 18 0 128] [1] [] [1] [] [] [1] [] [1] [1] [0 0 0 1] [254 255 255] [] [255 255 255] [255 255 255] [] [] [1] [] [] [1] [1] [] [255 0 0 1] [1 255 255] [] [0 0 0 255] [1 1 1] [1] [] [255] [] [] [1] [1] [] [0 0 0 0 1] [254 255 255 255] [] [255 255 255 255] [255 255 255 255] [] [] [1] [] [] [1] [1] [] [255 255 255 255 1] [1] [] [0 0 0 0 255 255 255 255] [1] [1] [] [255 255 255 255] [] [] [1] [1] [] [3 0 0 0 0 0 0 64] [253 255 255 255 255 255 255 63] [] [0 0 0 0 0 0 0 192] [85 85 85 85 85 85 85 21] [1] [] [3] [] [] [1] [1] []]
+narrowint	file:instruments/lrc-host/img/prognarrow.rscm	0:3,3:4,2:5	16		[{[0 0 0 64] 0} {[254 255 255 63] 0} {[254 255 255 63] 1} {[255 255 255 63] 0} {[255 255 255 63] 0} {[] 0} {[] 0} {[1] 0} {[255 255 255 63] 1} {[1] 1} {[] 0} {[] 0} {[1] 0} {[1] 0} {[] 0} {[254 255 255 63] 1} {[0 0 0 64] 1} {[0 0 0 64] 0} {[255 255 255 63] 1} {[255 255 255 63] 1} {[] 0} {[] 0} {[1] 0} {[255 255 255 63] 0} {[1] 1} {[1] 0} {[1] 0} {[] 0} {[] 0} {[] 0} {[0 0 0 64] 1} {[254 255 255 63] 1} {[254 255 255 63] 0} {[255 255 255 63] 0} {[255 255 255 63] 0} {[] 0} {[1] 0} {[254 255 255 63] 0} {[255 255 255 63] 0} {[1] 0} {[1] 0} {[1] 0} {[] 0} {[] 0} {[] 0} {[] 0} {[254 255 255 127] 0} {[254 255 255 127] 1} {[1 0 0 128 255 255 255 15] 1} {[1] 1} {[] 0} {[1] 1} {[] 0} {[255 255 255 63] 1} {[255 255 255 63] 0} {[] 0} {[] 0} {[1] 0} {[1] 0} {[] 0} {[] 0} {[0 0 0 128] 0} {[0 0 0 128] 1} {[0 0 0 0 0 0 0 16] 1} {[1] 1} {[] 0} {[1] 1} {[] 0} {[0 0 0 64] 1} {[0 0 0 64] 0} {[] 0} {[] 0} {[1] 0} {[1] 0} {[] 0} {[8] 0} {[2 0 0 128] 0} {[2 0 0 128] 1} {[241 255 255 127 0 0 0 16] 1} {[1] 1} {[8] 0} {[1] 1} {[8] 0} {[5 0 0 64] 1} {[253 255 255 63] 0} {[] 0} {[] 0} {[1] 0} {[1] 0} {[] 0} {[0 0 0 128] 0} {[254 255 255 127] 0} {[254 255 255 127] 1} {[255 255 255 127] 0} {[255 255 255 127] 0} {[] 0} {[] 0} {[1] 0} {[255 255 255 127] 1} {[1] 1} {[] 0} {[] 0} {[1] 0} {[1] 0} {[] 0} {[0 0 0 128] 1} {[254 255 255 127] 1} {[254 255 255 127] 0} {[255 255 255 127] 0} {[255 255 255 127] 0} {[] 0} {[1] 0} {[254 255 255 127] 0} {[255 255 255 127] 0} {[1] 0} {[1] 0} {[1] 0} {[] 0} {[] 0} {[] 0} {[] 0} {[0 0 0 0 1] 0} {[0 0 0 0 1] 1} {[0 0 0 0 0 0 0 64] 1} {[1] 1} {[] 0} {[1] 1} {[] 0} {[0 0 0 128] 1} {[0 0 0 128] 0} {[] 0} {[] 0} {[1] 0} {[1] 0} {[] 0} {[0 0 1] 0} {[] 0} {[] 0} {[0 0 0 64] 0} {[1] 0} {[] 0} {[1] 0} {[] 0} {[0 128] 1} {[0 128] 1} {[] 0} {[1] 0} {[] 0} {[1] 0} {[1] 0} {[] 0} {[0 0 1] 1} {[0 0 1] 0} {[0 0 0 64] 1} {[1] 1} {[] 0} {[1] 1} {[] 0} {[0 128] 0} {[0 128] 1} {[1] 0} {[1] 0} {[] 0} {[] 0} {[] 0} {[2] 1} {[0 0 1] 0} {[0 0 1] 1} {[255 255 255 63] 1} {[] 0} {[255 127] 0} {[2] 1} {[253 127] 0} {[255 127] 1} {[1 128] 0} {[] 0} {[] 0} {[1] 0} {[1] 0} {[] 0} {[254 255] 0} {[] 0} {[] 0} {[1 0 255 63] 0} {[1] 0} {[] 0} {[1] 0} {[] 0} {[255 127] 1} {[255 127] 1} {[] 0} {[1] 0} {[] 0} {[1] 0} {[1] 0} {[] 0} {[254 255] 1} {[254 255] 0} {[1 0 255 63] 1} {[1] 1} {[] 0} {[1] 1} {[] 0} {[255 127] 0} {[255 127] 1} {[1] 0} {[1] 0} {[] 0} {[] 0} {[] 0} {[254 255 255 127] 0} {[] 0} {[] 0} {[1 0 0 128 255 255 255 15] 0} {[1] 0} {[] 0} {[1] 0} {[] 0} {[255 255 255 63] 1} {[255 255 255 63] 1} {[] 0} {[1] 0} {[] 0} {[1] 0} {[1] 0} {[254 255 255 127] 1} {[] 0} {[] 0} {[1 0 0 128 255 255 255 15] 0} {[1] 0} {[] 0} {[1] 0} {[] 0} {[255 255 255 63] 0} {[255 255 255 63] 0} {[] 0} {[1] 0} {[] 0} {[1] 0} {[1] 0}]
+narrowconv	file:instruments/lrc-host/img/prognarrow.rscm	0:3,3:4,2:5	24		[[255 255 255 63] [0 0 0 64] [255 255 255 127] [0 0 0 128] [] [] [255 255 255 63] [0 0 0 64] [255 255 255 127] [0 0 0 128] [255 255 255 255] [255 255 255 127] [0 0 0 128] [255 255 255 255] [] [7 0 0 128] [0 0 0 128] [254 255 255 255] [0 0 0 128] [255 255 255 255] [0 210 73 107] [0 117 43 125] [0 24 13 143] [5 94 208 178]]
+narrowmix	file:instruments/lrc-host/img/prognarrow.rscm	0:3,3:4,2:5	26		[{[255 255 255 63] 0} {[0 0 0 64] 0} {[255 255 255 127] 0} {[0 0 0 128] 0} {[0 0 0 0 1] 0} {[0 0 0 64] 1} {[255 255 255 63] 1} {[0 0 0 128] 1} {[1] 0} {[1] 0} {[1] 0} {[] 0} {[128 178 230 14] 1} {[128 155 139 68] 1} {[0 78 114 83] 1} {[] 0} {[] 0} {[11] 0} {[1] 0} {[11] 0} {[11] 0} {[11] 1} {[0 0 0 192 2] 0} {[78 255 255 63 20] 0} {[19 0 0 128 13] 0} {[252 255 255 8] 0} {[94 255 255 63 20] 0} {[13 255 255 191 60] 1} {[0 0 0 128 13] 0} {[255 255 255 63] 0} {[0 0 0 64] 0} {[255 255 255 63] 1} {[0 0 0 64] 1} {[0 0 0 128] 0} {[0 0 0 128] 1} {[] 0} {[1] 1} {[1] 0} {[255 255 255 127] 0} {[255 255 255 127] 1} {[255 255 255 63] 1} {[0 0 0 64] 1} {[255 255 255 63] 0} {[0 0 0 64] 0} {[0 0 0 128] 1} {[0 0 0 128] 0} {[] 0} {[1] 0} {[1] 1} {[255 255 255 127] 1} {[255 255 255 127] 0}]
+# pack (instruments/lrc-host/ProgPack.rsd, by the twin of main 7ab305d0a, rsdc.ml sha256 8c38c9820e82db3e; image sha256 f90bafa1c97490db): scalar fields of
+# one, two and four bytes (lib/lrc/Pack.rsd): a node of a UInt32, a UInt16, a UInt8 and a Bool at the edges of each width, built, read,
+# and written again by a second pass; a node with a field chosen between two parameters, a literal of two bytes and a Char (a word);
+# a node with a sum of two UInt32, a literal of four bytes and a choice of two literals. The interpreter of the host check refuses a
+# value stored into a field that does not hold it and a read of another width than the field was written with; Sides.rsd runs the
+# modules. VALUE is stock Lean 4.14's `#eval packMain`, each number as limbs.
+pack	file:instruments/lrc-host/img/progpack.rscm	0:3,3:4,2:5	13		[[225 247 255 255 46] [225 247 46] [225 39] [14] [255 255 255 255] [99 247 255 255 54] [99 247 54] [99 47] [14] [255 255 255 255] [190 175 140 6] [202 133 154 0 11] [214 6] [225 39] [45]]
+inl	file:instruments/lrc-host/img/proginl.rscm	-	3		[[67 166 46 82] [19] [9] [10]]
+inlempty	file:instruments/lrc-host/img/proginl.rscm	-	2		7
+# head, headlist, headback (instruments/lrc-host/ProgHead.rsd, by the twin of main 835d6c953, rsdc.ml sha256 8c38c9820e82db3e; image sha256
+# b296112b83bcd944): lists of UInt32 on both sides of 2^31, where an object field of four bytes holds a list's scalar head as an object word
+# (lib/lrc/FromWire.rsd "A scalar head where an object field is four bytes"): built by cells, read, measured, cut, appended, compared, made
+# arrays and back, held twice while one holder becomes an array, and written out as literals. headlist and headback leave as lists of words:
+# with narrow fields their heads are read as object words (instruments/lrc-host/Sides.rsd `sameValue`). VALUE is stock Lean 4.14's
+# `#eval headMain` (each number as limbs), `#eval headList` and `#eval headBack`.
+head	file:instruments/lrc-host/img/proghead.rscm	-	11		[[198 19 0 0 58] [250 1 0 0 7] [16] [214 13 0 128 38] [] [201 19 0 0 106] [78 20 0 0 42] [26 2 0 0 3] [8] [194 23 0 128 74] [1] [1] [] [1] [] [] [] [] [] [1] [1] [] [229 5 0 128 36] [229 5 0 128 36] [235 5 0 128 29] [253 0 0 0 5] [1] [5] [229 5 0 0 43] [202 5 0 128 56] [1] [] [233 5 0 128 36] [241 4 0 128 5] [1] [0 0 0 128] [255 255 255 255] [5] [0 0 0 128] [230 5 0 128 24] [29 6 0 128 20] [84 6 0 128 13] [230 5 0 128 24] [252 0 0 128 4] [230 5 0 128 24] [6 0 0 0 6] [1] [] [254 255 255 255 1] [5 0 0 0 7]]
+headlist	file:instruments/lrc-host/img/proghead.rscm	-	9		[2147483647 2147483648 1 4294967295 2147483649 255 4294967294 0]
+headback	file:instruments/lrc-host/img/proghead.rscm	-	6		[4294967294 255 2147483649 4294967295 1 2147483648 2147483647 0 2147483648 2147483649 2]

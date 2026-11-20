@@ -114,6 +114,38 @@ CHANGELOG.zh-CN.md	https://github.com/leanprover/lean4	410fab7284703f41660ca2454
 CHANGELOG.zh-CN.md	https://github.com/h5i-dev/h5i	9774f28a2a115af9e89ca3ed74ded4a2f5b2058c	Apache-2.0	reference-only	CHANGELOG.zh-CN.md (h5i provenance named)
 CHANGELOG.zh-CN.md	https://github.com/koka-lang/koka	unspecified	Apache-2.0	reference-only	CHANGELOG.zh-CN.md (Koka named in 0.1 entry)
 CHANGELOG.zh-CN.md	https://github.com/WebAssembly/spec	release 2.0	W3C	reference-only	CHANGELOG.zh-CN.md (WebAssembly seed named)
+benchmarks	https://github.com/koka-lang/koka	facb7932ce6871fdb063f762a304bd8238f35fba	Apache-2.0	ported-code	benchmarks/MANIFEST.tsv; benchmarks/README.md; release/licenses/koka-LICENSE; release/licenses/UPSTREAM.tsv
+benchmarks	https://salsa.debian.org/benchmarksgame-team/benchmarksgame	40296663ed350d5fe4a6ab5e367bab61cb77c219	BSD-3-Clause	ported-code	benchmarks/MANIFEST.tsv; benchmarks/README.md; benchmarks/expected/; release/licenses/benchmarksgame-LICENSE.md; release/licenses/UPSTREAM.tsv
+benchmarks	https://github.com/bendlang/bend	be236f324ed0338fe907fe50474468e4d3b94157	Apache-2.0	ported-code	benchmarks/MANIFEST.tsv; benchmarks/README.md; release/licenses/bend-LICENSE; release/licenses/UPSTREAM.tsv
+benchmarks/README.md	https://github.com/smarr/are-we-fast-yet	unspecified	MIT	reference-only	benchmarks/README.md (read, not adopted)
+benchmarks/README.md	https://github.com/attractivechaos/plb2	unspecified	MIT	reference-only	benchmarks/README.md (read, not adopted)
+benchmarks/README.zh-CN.md	https://github.com/attractivechaos/plb2	unspecified	MIT	reference-only	benchmarks/README.zh-CN.md (read, not adopted)
+benchmarks/README.md	https://github.com/hanabi1224/Programming-Language-Benchmarks	unspecified	unknown	reference-only	benchmarks/README.md (read, not adopted)
+benchmarks/README.md	https://github.com/kostya/benchmarks	unspecified	BSD-3-Clause	reference-only	benchmarks/README.md (read, not adopted)
+benchmarks/README.md	https://github.com/ziglang/zig	unspecified	MIT	reference-only	benchmarks/README.md (Zig baseline comparison)
+benchmarks/README.zh-CN.md	https://github.com/ziglang/zig	unspecified	MIT	reference-only	benchmarks/README.zh-CN.md (Zig baseline comparison)
+benchmarks/langs/src/koka	https://github.com/koka-lang/koka	facb7932ce6871fdb063f762a304bd8238f35fba	Apache-2.0	vendored	benchmarks/langs/README.md; release/licenses/koka-LICENSE; release/licenses/UPSTREAM.tsv
+benchmarks/langs/src/lean4	https://github.com/leanprover/lean4	410fab7284703f41660ca2454218dcca9b2ec896	Apache-2.0	vendored	benchmarks/langs/README.md; release/licenses/lean4-LICENSE; release/licenses/UPSTREAM.tsv
+benchmarks	https://github.com/leanprover/lean4	410fab7284703f41660ca2454218dcca9b2ec896	Apache-2.0	reference-only	benchmarks/README.md (stock Lean 4.14.0 toolchain as comparison engine and runner)
+instruments/lrc-host	https://github.com/leanprover/lean4	410fab7284703f41660ca2454218dcca9b2ec896	Apache-2.0	oracle-only	instruments/lrc-host/Diff.rsd (each ported pass diffed against the pinned Lean 4.14.0 pass it cites); instruments/lrc-host/Oracle.rsd
+instruments/lrc-host/ProgBtKoka.rsd	https://github.com/koka-lang/koka	facb7932ce6871fdb063f762a304bd8238f35fba	Apache-2.0	ported-code	instruments/lrc-host/ProgBtKoka.rsd header (koka-lang/koka test/bench/koka/binarytrees.kk)
+instruments/lrc-host/Images.tsv	https://github.com/koka-lang/koka	facb7932ce6871fdb063f762a304bd8238f35fba	Apache-2.0	reference-only	instruments/lrc-host/Images.tsv comment rows (Koka visitor semantics cited)
+release/docs/TESTING	https://github.com/leanprover/lean4	410fab7284703f41660ca2454218dcca9b2ec896	Apache-2.0	reference-only	release/docs/TESTING (stock Lean 4.14.0 oracle toolchain named)
+release/docs/TESTING	https://github.com/koka-lang/koka	facb7932ce6871fdb063f762a304bd8238f35fba	Apache-2.0	reference-only	release/docs/TESTING (Koka benchmark harness named)
+release/docs/TESTING.zh-CN	https://github.com/leanprover/lean4	410fab7284703f41660ca2454218dcca9b2ec896	Apache-2.0	reference-only	release/docs/TESTING.zh-CN (stock Lean 4.14.0 oracle toolchain named)
+release/docs/TESTING.zh-CN	https://github.com/koka-lang/koka	facb7932ce6871fdb063f762a304bd8238f35fba	Apache-2.0	reference-only	release/docs/TESTING.zh-CN (Koka benchmark harness named)
+release/docs/RELEASE-NOTES	https://github.com/koka-lang/koka	facb7932ce6871fdb063f762a304bd8238f35fba	Apache-2.0	reference-only	release/docs/RELEASE-NOTES (Koka suite named in changes section)
+release/docs/RELEASE-NOTES	https://github.com/bendlang/bend	be236f324ed0338fe907fe50474468e4d3b94157	Apache-2.0	reference-only	release/docs/RELEASE-NOTES (Bend suite named in changes section)
+release/docs/RELEASE-NOTES	https://salsa.debian.org/benchmarksgame-team/benchmarksgame	40296663ed350d5fe4a6ab5e367bab61cb77c219	BSD-3-Clause	reference-only	release/docs/RELEASE-NOTES (benchmarksgame suite named in changes section)
+release/docs/RELEASE-NOTES.zh-CN	https://github.com/koka-lang/koka	facb7932ce6871fdb063f762a304bd8238f35fba	Apache-2.0	reference-only	release/docs/RELEASE-NOTES.zh-CN (Koka suite named in changes section)
+release/docs/RELEASE-NOTES.zh-CN	https://github.com/bendlang/bend	be236f324ed0338fe907fe50474468e4d3b94157	Apache-2.0	reference-only	release/docs/RELEASE-NOTES.zh-CN (Bend suite named in changes section)
+release/docs/RELEASE-NOTES.zh-CN	https://salsa.debian.org/benchmarksgame-team/benchmarksgame	40296663ed350d5fe4a6ab5e367bab61cb77c219	BSD-3-Clause	reference-only	release/docs/RELEASE-NOTES.zh-CN (benchmarksgame suite named in changes section)
+CHANGELOG.md	https://github.com/bendlang/bend	be236f324ed0338fe907fe50474468e4d3b94157	Apache-2.0	reference-only	CHANGELOG.md (Bend suite named in 0.1.2 entry)
+CHANGELOG.md	https://salsa.debian.org/benchmarksgame-team/benchmarksgame	40296663ed350d5fe4a6ab5e367bab61cb77c219	BSD-3-Clause	reference-only	CHANGELOG.md (benchmarksgame suite named in 0.1.2 entry)
+CHANGELOG.zh-CN.md	https://github.com/bendlang/bend	be236f324ed0338fe907fe50474468e4d3b94157	Apache-2.0	reference-only	CHANGELOG.zh-CN.md (Bend suite named in 0.1.2 entry)
+CHANGELOG.zh-CN.md	https://salsa.debian.org/benchmarksgame-team/benchmarksgame	40296663ed350d5fe4a6ab5e367bab61cb77c219	BSD-3-Clause	reference-only	CHANGELOG.zh-CN.md (benchmarksgame suite named in 0.1.2 entry)
+benchmarks/koka/KokaBase.rsd	https://github.com/WebAssembly/wabt	ff0ef7e0009402740c805a9744c09b05be063e48	Apache-2.0	reference-only	benchmarks/koka/KokaBase.rsd (wasm2c/wasm-validate pins named in run script)
+benchmarks/koka/KokaBase.rsd	https://github.com/WebAssembly/spec	release 2.0	W3C	reference-only	benchmarks/koka/KokaBase.rsd (WebAssembly spec named)
 perf/README.md	https://github.com/leanprover/lean4	410fab7284703f41660ca2454218dcca9b2ec896	Apache-2.0	reference-only	perf/README.md (stock Lean 4.14.0 named as a reference column)
 perf/README.zh-CN.md	https://github.com/leanprover/lean4	410fab7284703f41660ca2454218dcca9b2ec896	Apache-2.0	reference-only	perf/README.zh-CN.md (stock Lean 4.14.0 named as a reference column)
 perf/README.md	https://github.com/koka-lang/koka	facb7932ce6871fdb063f762a304bd8238f35fba	Apache-2.0	reference-only	perf/README.md (Koka named as the comparison baseline)

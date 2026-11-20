@@ -16,7 +16,8 @@ same term is compiled to native or WebAssembly code and is checked by a proof ke
 compilation half of this design, a self-bootstrapping compiler chain whose provenance any third party can verify from a
 committed seed. The proof-checking half (the R-CIC kernel) is the subject of later releases.
 
-> **Status.** Research release **0.1.1** (2026-11-19): the minimal self-bootstrapping closure of the rsd compiler.
+> **Status.** Research release **0.1.2** (2026-11-19): the minimal self-bootstrapping closure of the rsd compiler,
+> with its test and benchmark suites shipped.
 > Not yet a general-purpose language; see [Limitations](#limitations).
 
 ## Motivation
@@ -59,21 +60,23 @@ trusting neither the publisher nor a large binary toolchain.
 | Formal semantics | Frozen specifications of each layer (scm, λRC, wasm0), pinned by content digest (`semantics/`, `gates/semalign/`, `lean/rsd-cert/`) |
 | Performance record | Measured against Koka and 6 other languages on fixed hardware ([`perf/`](perf/README.md)) |
 | Documentation | Installation, verification protocol, architecture, trust model, glossary, stability policy, FAQ (`release/docs/`, English and Chinese) |
+| Test and benchmark suites | `benchmarks/` (the benchmark programs and comparison harnesses) and `instruments/lrc-host/` (the differential test suite), with `release/docs/TESTING` |
 
 ### Evidence
 
 - **Independent reproduction.** The seed recipe was reproduced from the documentation alone, by an independent agent with
   no prior knowledge of the project, on a fresh Linux virtual machine: both compilers were rebuilt byte-identical to the
   seed.
-- **Independent review.** The release was reviewed by 2 independent model families.
-- **Archive identity.** The repository tree at tag `rsd-0.1.1` is byte-identical to the published source archive.
+- **Independent review.** Earlier heads on this release line were reviewed by 2 independent model
+  families, most recently `891b1a122a`; the verdict records are kept outside this archive.
+- **Archive identity.** The repository tree at tag `rsd-0.1.2` is byte-identical to the published source archive.
 
 ## Reproducing the bootstrap
 
 Requirements: Linux x86-64, GCC, GNU binutils, coreutils, Bash, curl and tar. No Lean, Node or OCaml.
 
 ```sh
-# 1. Download and verify the archive (from the rsd-0.1.1 release page)
+# 1. Download and verify the archive (from the rsd-0.1.2 release page)
 sha256sum -c rsd-src.tar.sha256
 mkdir rsd-src && tar -xf rsd-src.tar -C rsd-src && cd rsd-src
 
@@ -82,7 +85,7 @@ env -i PATH=/usr/bin:/bin bash --noprofile --norc
 #    then run the commands of bootstrap/seed/stage-14274/README.md
 ```
 
-The recipe fetches a pinned WABT release, translates the 2 seed executors to C, builds them, recompiles both compilers
+The recipe fetches a pinned WABT release, translates the 2 seed executors to C, builds them, recompiles the compilers
 from source, and exits 0 only if the rebuilt compilers are byte-identical to the committed seed.
 
 Further reading:
@@ -114,14 +117,14 @@ history of every version are in [`perf/`](perf/README.md).
 
 ## Limitations
 
-Release 0.1.1 is for reproducible, auditable compilation and for research on verified, bootstrappable compilers.
+Release 0.1.2 is for reproducible, auditable compilation and for research on verified, bootstrappable compilers.
 
 - Single-module programs only (no `import`).
 - No I/O execution layer.
 - No proof checking: the R-CIC kernel is not in this release, and shipped `theorem` texts are specifications, not checked claims.
 - No `UInt64`; a 4 GiB address space.
 - The content-identity (q) format is not final.
-- The 0.1.1 surface language is a strict bootstrap subset; `theorem`, `axiom`, `class`, `abbrev` and `by` are refused
+- The 0.1.2 surface language is a strict bootstrap subset; `theorem`, `axiom`, `class`, `abbrev` and `by` are refused
   ([`release/docs/LANGUAGE`](release/docs/LANGUAGE)).
 
 ## Research agenda
@@ -152,6 +155,7 @@ the designs it studied.
 |---|---|---|---|
 | [0.1](https://github.com/residua-labs/Residua/releases/tag/rsd-0.1) | 2026-11-19 | `59d0956e…` | First public release: minimal self-bootstrapping closure |
 | [0.1.1](https://github.com/residua-labs/Residua/releases/tag/rsd-0.1.1) | 2026-11-19 | see the release page | Patch release: the performance record ships in the archive, attribution completed, internal identifiers removed |
+| [0.1.2](https://github.com/residua-labs/Residua/releases/tag/rsd-0.1.2) | 2026-11-19 | see the release page | Patch release: benchmark and differential test suites shipped |
 
 Full history: [CHANGELOG.md](CHANGELOG.md).
 
@@ -164,18 +168,20 @@ Full history: [CHANGELOG.md](CHANGELOG.md).
 | `semantics/`, `gates/`, `lean/` | Frozen formal semantics and the per-layer translation checks |
 | `release/` | Release manifest, provenance, notices, licences and documentation |
 | `perf/` | Performance record of every version |
+| `benchmarks/` | Benchmark programs, emitted modules, expected outputs and comparison harnesses |
+| `instruments/` | Host-side test instruments, including the differential test suite |
 
 ## Citing this work
 
 Please cite the release you used, with the digest of its source archive:
 
 ```bibtex
-@software{residua_0_1_1,
+@software{residua_0_1_2,
   title   = {Residua: Verifiable Computation and Proof, Identified by Content},
   author  = {{Residua Labs contributors}},
   year    = {2026},
-  version = {0.1.1},
-  url     = {https://github.com/residua-labs/Residua/releases/tag/rsd-0.1.1},
+  version = {0.1.2},
+  url     = {https://github.com/residua-labs/Residua/releases/tag/rsd-0.1.2},
   note    = {Source archive SHA-256 recorded on the release page}
 }
 ```

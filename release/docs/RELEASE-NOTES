@@ -1,18 +1,27 @@
-# RELEASE-NOTES — Residua 0.1.1
+# RELEASE-NOTES — Residua 0.1.2
 
 English | [中文](RELEASE-NOTES.zh-CN)
 
-Release 0.1.1 is the minimal self-bootstrap closure: verifiable-provenance
+Release 0.1.2 is the minimal self-bootstrap closure: verifiable-provenance
 compilation. Given a source and an artifact, anyone can rebuild from the
 committed wasm seed with a C compiler and no other toolchain, and check
 byte for byte that the artifact comes from the source — trusting neither
 the publisher nor a large binary toolchain.
 
+## Changes since 0.1.1
+
+- `benchmarks/` (186 files) and `instruments/lrc-host/` (101 files) now ship:
+  the performance/correctness corpus and the differential test suite that
+  reproduce the published record (`release/docs/TESTING`, `TESTING.zh-CN`)
+- provenance and notices cover the vendored suites (Koka and Lean 4
+  Apache-2.0, Benchmarks Game BSD-3-Clause, Bend Apache-2.0)
+- README repository layout gained `benchmarks/` and `instruments/` rows
+
 ## Changes since 0.1
 
 - `web/` removed from the ship set: the 52 application files stay
   repository-side; `release/docs/LANGUAGE` cites them by path and sha256
-  as repository-side evidence (the ship set is now 148 files)
+  as repository-side evidence (the ship count went from 201 to 148 in the 0.1.1 respin)
 - attribution completed: shipped-code provenance gained per-file verbatim
   upstream headers (Lean 4 ports), and `web/h5i` gained 6 repository-side
   provenance rows at upstream `9774f28a2a` (Apache-2.0)
@@ -44,12 +53,17 @@ the publisher nor a large binary toolchain.
   against (`release/docs/LANGUAGE` rows)
 - the performance data for 0.1 (`release/docs/PERF-RECORD.tsv`, form in
   `release/docs/PERF-RECORD`)
+- the benchmark suite that record was measured on (`benchmarks/`: the
+  residua programs, expected outputs, Rust/Koka references and the
+  vendored upstream suites)
+- the differential test suite the ported compiler passes are checked
+  with (`instruments/lrc-host/`; how to run it: `release/docs/TESTING`)
 - the stranger documents: INSTALL, QUICKSTART, VERIFY-RELEASE, OVERVIEW,
   LANGUAGE, STDLIB, RSD-COMMAND, SPECS, RESIDUES, PERF-RECORD — in
   English; README and the `release/docs/` texts OVERVIEW, ARCHITECTURE,
   TRUST, GLOSSARY, STABILITY, FAQ, RELATED-WORK, CONTRIBUTING-SECURITY,
-  RELEASE-NOTES (this file included) also ship in Chinese `.zh-CN`
-  mirrors
+  TESTING, RELEASE-NOTES (this file included) also ship in Chinese
+  `.zh-CN` mirrors
 
 ## Verification
 
@@ -57,7 +71,7 @@ the publisher nor a large binary toolchain.
 archive digest, then the full seed recipe on a clean Linux x86-64 — the recipe's rebuilt compiler images must compare
 byte-identical to the committed seeds (`seed_roundtrip=2/2`).
 
-## Stated limits of 0.1.1
+## Stated limits of 0.1.2
 
 Single-module programs (no `import`); no I/O execution layer; no proof
 checking (the R-CIC checker is not in this release); no UInt64; a 4 GiB
@@ -66,7 +80,7 @@ publish/query entry for results; no importable standard library. The
 bootstrap `.rsd` grammar refuses `theorem`, `axiom`, `class`, `abbrev`,
 `variable`, `opaque`, `by` and `import`.
 
-## Order after 0.1.1
+## Order after 0.1.2
 
 1. R-CIC kernel + q format + a publish/query entry — the first point
    a stranger can find, check and reuse another's result.

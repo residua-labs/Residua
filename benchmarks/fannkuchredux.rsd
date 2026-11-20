@@ -1,0 +1,118 @@
+-- fannkuch-redux: Computer Language Benchmarks Game, fannkuch-redux
+-- (benchmarksgame-team.pages.debian.net/benchmarksgame/description/fannkuchredux.html, fetched 2026-11-04).
+-- Same algorithm as the rules state and as the Rust entry #2 sequentially: visit the n! permutations of
+-- 1..n in the predefined order of the rotation-count scheme (`nextPerm` = `next_permutation` of that entry:
+-- for i = 1.., rotate the first i+1 elements left by one; if cnt[i] >= i set cnt[i] = 0 and go on, else
+-- increment cnt[i] and stop), flip the prefix of length perm[0] until perm[0] = 1, count the flips,
+-- checksum += flips for an even permutation index and -= flips for an odd one (the index parity is the
+-- Bool `even`, toggled per permutation: the stock `%` on Int is outside the emitter's fragment), and keep the maximum.
+-- Deviation forced by the language: perm and cnt are immutable lists, so a prefix reversal and a rotation
+-- build a new list (the Rust entry mutates an array of 16 in place).
+-- `fannkuch n` returns the checksum and the maximum flip count; the host prints
+-- "{checksum}\nPfannkuchen({n}) = {maxflips}".
+-- Source pin (the source table, 2026-11-06): Benchmarks Game Rust entry #2
+-- (benchmarksgame-team.pages.debian.net/benchmarksgame/program/fannkuchredux-rust-2.html), page sha256
+-- 50c2a15c9b74522ed82102a5e14fd7d6a7c6704fe82d809cc9ea26005d78f986, identical at salsa.debian.org/
+-- benchmarksgame-team/benchmarksgame commit 40296663ed350d5fe4a6ab5e367bab61cb77c219
+-- (public/program/fannkuchredux-rust-2.html) and to the 2026-11-04 the benchmark kit fetch; rules page
+-- (description/fannkuchredux.html) sha256 bd9265b28893996018f1a09d7376de11c8b93ba4238449c6af9e5bded768b07b.
+-- Rechecked against both: no drift beyond the departures already stated, plus this one, named:
+-- a fuel revision of the emitter removed the hand fuels (`countFlips`' flip-count bound of 64, `nextPermAux`'s
+-- i-range bound): the source is `partial def`, the emitter threads the step index (zero refuses
+-- [fuel], never truncates), so the the optimizer / fuel-truncation truncation at n=12 is gone; `work`'s
+-- iteration count is the algorithm's permutation count (n!), not a fuel, and stays.
+
+-- Official OCaml reference (suite provenance, fetched 2026-11-06): Benchmarks Game OCaml
+-- entry #3 (the fastest listed OCaml), salsa commit 40296663ed350d5fe4a6ab5e367bab61cb77c219, program page
+-- benchmarksgame-team.pages.debian.net/benchmarksgame/program/fannkuchredux-ocaml-3.html, code
+-- sha256 (extracted from the page) 00a445a4e8c0c1172aaf8d4cdf2466773eb1143eccfcf9ebaa70936e63b81158.
+-- NAMED DEPARTURE (rust-entry-2-algorithm): this port keeps the Rust entry #2 algorithm it was ported
+-- from (permutation rotations with counted flips); the OCaml entry enumerates permutations by the
+-- factorial number system and accumulates with alternating signs -- a different algorithm for the
+-- same benchmark, whose summed flips and maximum are the same numbers (value-checked equal at the
+-- published inputs).
+structure Result where
+  checksum : Int
+  maxflips : Int
+
+structure State where
+  perm : List Int
+  cnt : List Int
+  even : Bool
+  checksum : Int
+  maxflips : Int
+
+structure PC where
+  perm : List Int
+  cnt : List Int
+
+def takeN : Nat -> List Int -> List Int
+  | 0, _ => []
+  | _, [] => []
+  | k + 1, x :: xs => x :: takeN k xs
+
+def dropN : Nat -> List Int -> List Int
+  | 0, xs => xs
+  | _, [] => []
+  | k + 1, _ :: xs => dropN k xs
+
+def revOnto : List Int -> List Int -> List Int
+  | [], acc => acc
+  | x :: xs, acc => revOnto xs (x :: acc)
+
+def nth : Nat -> List Int -> Int
+  | _, [] => 0
+  | 0, x :: _ => x
+  | k + 1, _ :: xs => nth k xs
+
+def setNth : Nat -> Int -> List Int -> List Int
+  | _, _, [] => []
+  | 0, v, _ :: xs => v :: xs
+  | k + 1, v, x :: xs => x :: setNth k v xs
+
+def rotateLeft : List Int -> List Int
+  | [] => []
+  | x :: xs => xs ++ [x]
+
+-- rotate the first i+1 elements of p left by one
+def rotatePrefix (i : Nat) (p : List Int) : List Int := rotateLeft (takeN (i + 1) p) ++ dropN (i + 1) p
+
+-- reverse the first k elements of p
+def flipPrefix (k : Nat) (p : List Int) : List Int := revOnto (takeN k p) [] ++ dropN k p
+
+partial def countFlips : Int -> List Int -> Int
+  | acc, [] => acc
+  | acc, x :: xs => if x == 1 then acc else countFlips (acc + 1) (flipPrefix x.toNat (x :: xs))
+
+-- next_permutation: the i walk runs to the last counter (i < n by `cnt`'s length)
+partial def nextPermAux : Nat -> PC -> PC
+  | i, s =>
+    let p := rotatePrefix i s.perm
+    let ci := nth i s.cnt
+    if ci >= Int.ofNat i then nextPermAux (i + 1) { perm := p, cnt := setNth i 0 s.cnt }
+    else { perm := p, cnt := setNth i (ci + 1) s.cnt }
+
+def range1 : Nat -> List Int
+  | 0 => []
+  | k + 1 => range1 k ++ [Int.ofNat k + 1]
+
+def zeros : Nat -> List Int
+  | 0 => []
+  | k + 1 => 0 :: zeros k
+
+def fact : Nat -> Nat
+  | 0 => 1
+  | k + 1 => (k + 1) * fact k
+
+def work (n : Nat) : Nat -> State -> State
+  | 0, s => s
+  | f + 1, s =>
+    let flips := countFlips 0 s.perm
+    let cs := if s.even then s.checksum + flips else s.checksum - flips
+    let mf := if flips > s.maxflips then flips else s.maxflips
+    let nx := nextPermAux 1 { perm := s.perm, cnt := s.cnt }
+    work n f { perm := nx.perm, cnt := nx.cnt, even := !s.even, checksum := cs, maxflips := mf }
+
+def fannkuch (n : Nat) : Result :=
+  let s := work n (fact n) { perm := range1 n, cnt := zeros n, even := true, checksum := 0, maxflips := 0 }
+  { checksum := s.checksum, maxflips := s.maxflips }

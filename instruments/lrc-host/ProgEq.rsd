@@ -1,0 +1,21 @@
+-- micro program for the stage's equality at strings, lists of strings and lists of lists
+def b2i (b : Bool) : Int := if b then 1 else 0
+
+def nameOf (i : Int) : String := if i % 3 == 0 then "alpha" else if i % 3 == 1 then "beta" else "alph"
+
+def eqStr (i j : Int) : Int := b2i (nameOf i == nameOf j)
+
+def eqStrs (i j : Int) : Int :=
+  b2i ([nameOf i, "x"] == [nameOf j, "x"]) + 2 * b2i ([nameOf i] == [nameOf j, "x"]) + 4 * b2i ([nameOf i, "x"] == [nameOf j])
+
+def eqNest (i j : Int) : Int := b2i ([[i, j], [j]] == [[j, i], [j]])
+
+def eqGo : Nat → Int → Int → Int
+  | 0, _, acc => acc
+  | k + 1, i, acc => eqGo k (i + 1) (acc * 3 + eqStr i (i % 2) + eqStrs i (i + 3) + eqStrs i (i + 1) + eqNest i (i % 2))
+
+def eqMain (n : Int) : Int := eqGo n.toNat 0 1
+
+def eqAt0 : Int := eqMain 0
+def eqAt3 : Int := eqMain 3
+def eqAt7 : Int := eqMain 7

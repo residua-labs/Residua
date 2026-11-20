@@ -1,0 +1,12 @@
+-- LRC host oracle: the check of lib/lrc/ElimDead.rsd against Lean's IR/ElimDeadVars.lean (stock Lean only). closure_claim = 0.
+open Lean IR
+
+namespace Lrc.Host
+
+-- IR.lean:43, after insertResetReuse; and on Lean's own compiled declarations.
+def check_ElimDead (staged : List Staged) (lean : List Prog) : IO Nat := do
+  let a ← checkDeclPass "elimDead" (·.rr) (·.ed) Lrc.declElimDead staged
+  let b ← checkPure "elimDead.lean" IR.Decl.elimDead Lrc.declElimDead lean
+  return a + b
+
+end Lrc.Host

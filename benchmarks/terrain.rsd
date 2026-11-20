@@ -1,0 +1,254 @@
+-- terrain: the Bend bench/runtime terrain program (HigherOrderCO/Bend,
+-- bench/runtime/terrain/main.bend), ported to P1' Lean 4.14. Same algorithm: procedural terrain
+-- tile pipeline, 1-to-1 from Bend3's par_terrain — the suite's array write/read stress case.
+-- 2^SIZE independent 64x64 tiles fork as a balanced tree; each tile fills its own 4096-slot
+-- heightmap with bilinear value noise (8.8 fixed-point lattice hashes, one array write per
+-- cell), runs EPASS in-place thermal-relaxation sweeps (each cell reads itself and its 4
+-- clamped neighbours, Gauss-Seidel scan order, plus a pass-salted 1-bit roughening so the field
+-- never converges), then buckets every cell into a 64-bin height histogram (read + bump) and
+-- folds map and histogram into a position-weighted scalar; tile scalars sum up the fork tree.
+-- The erode sweep's 24-def chain is kept as written: four cells unroll per turn, every Array op
+-- riding inline in the next stage def's argument and only the last write's pair crossing back
+-- into the spin as the r column of the next turn. NO TUNING, as in the source.
+-- Departures (named): u32-exact — the source's U32 words are modeled exactly in checked Int
+-- arithmetic (wrap mod 2^32, xor/and bit-decomposed; values stay in [0, 2^32)); array-record —
+-- the source's two flat Array<U32> (heightmap, histogram) ride as List Int with drop-based read
+-- and take/drop write (the frozen language has no array primitive); the source's
+-- (Array<U32> & U32) read/write pairs ride as (List Int × Int) tuples, Array.get reading the
+-- pair's value slot and Array.swap writing back the old value. Reads past the list end answer 0
+-- (the source's dead reads are dropped unread).
+-- The source's small size (SIZE 4, EPASS 5) expects 4236200168 (verified against a Bend3 C run
+-- there); its main() runs (16, 5), out of reach here.
+-- Source pin (the source table, 2026-11-07): HigherOrderCO/Bend commit be236f324ed0338fe907fe50474468e4d3b94157
+-- (main), bench/runtime/terrain/main.bend, sha256
+-- 5d561e194aed9d34f83797db8b2c96afad5584dec6cb83fb2c791fce8caf669e
+-- (raw.githubusercontent.com/HigherOrderCO/Bend/be236f324ed0338fe907fe50474468e4d3b94157/bench/runtime/terrain/main.bend).
+
+def W : Int := 4294967296
+
+def w32 (x : Int) : Int := x % W
+
+def bitXorLoop : Nat → Int → Int → Int → Int → Int
+  | 0, _, _, acc, _ => acc
+  | k + 1, a, b, acc, sc => bitXorLoop k (a / 2) (b / 2) (acc + ((a % 2 + b % 2) % 2) * sc) (sc * 2)
+
+def xor32 (a b : Int) : Int := bitXorLoop 32 a b 0 1
+
+def bitAndLoop : Nat → Int → Int → Int → Int → Int
+  | 0, _, _, acc, _ => acc
+  | k + 1, a, b, acc, sc => bitAndLoop k (a / 2) (b / 2) (acc + (a % 2 * b % 2) * sc) (sc * 2)
+
+def and32 (a b : Int) : Int := bitAndLoop 32 a b 0 1
+
+def wAdd (a b : Int) : Int := w32 (a + b)
+def wSub (a b : Int) : Int := w32 (a - b + W)
+-- wMul is split at 16 bits so the intermediates stay under the checked-i64
+-- bound (a_lo * b, a_hi * b < 2^48); a*b mod 2^32 is unchanged
+-- (checkedArithmeticStuck at ~2^63 on the flat form, probe-verified)
+def wMul (a b : Int) : Int :=
+  w32 (w32 (w32 (a % 65536) * b) + w32 (w32 (w32 (a / 65536) * b) % 65536) * 65536)
+def wInc (a : Int) : Int := w32 (a + 1)
+
+def pw2 : Nat → Int
+  | 0 => 1
+  | k + 1 => 2 * pw2 k
+
+def wShlN (a : Int) (k : Nat) : Int := w32 (a * pw2 k)
+def wShrN (a : Int) (k : Nat) : Int := a / pw2 k
+
+def b2u (b : Bool) : Int := if b then 1 else 0
+
+-- word-array read (drop-based) and write (take/drop splice) — array-record
+def getAt : List Int → Int → Int
+  | [], _ => 0
+  | a, b => match (a.drop b.toNat).head? with
+    | some v => v
+    | none => 0
+
+def setAt (b : Int) (v : Int) : List Int → List Int
+  | [] => []
+  | a => (a.take b.toNat) ++ [v] ++ (a.drop (b.toNat + 1))
+
+-- Array.get / Array.swap: the (array, value) pair as (List Int × Int)
+def aget (a : List Int) (i : Int) : List Int × Int := (a, getAt a i)
+
+def aswap (a : List Int) (i v : Int) : List Int × Int := (setAt i v a, getAt a i)
+
+-- xorshift: x ^= x<<13; x ^= x>>17; x ^= x<<5
+def prng (x : Int) : Int :=
+  let b := xor32 x (wShlN x 13)
+  let d := xor32 b (wShrN b 17)
+  xor32 d (wShlN d 5)
+
+-- lattice corner hash -> 0..255
+def hsh (gx gz : Int) : Int := and32 (prng (xor32 (wMul gx 2654435761) (wMul gz 340573321))) 255
+
+-- value noise at 8.8 fixed-point (x, z): bilinear lerp of 4 corner hashes
+def ground (x z : Int) : Int :=
+  let gx := and32 (wShrN x 8) 63
+  let gz := and32 (wShrN z 8) 63
+  let fx := and32 x 255
+  let fz := and32 z 255
+  let gx1 := and32 (wInc gx) 63
+  let gz1 := and32 (wInc gz) 63
+  let h00 := hsh gx gz
+  let h10 := hsh gx1 gz
+  let h01 := hsh gx gz1
+  let h11 := hsh gx1 gz1
+  let t0 := wShrN (wAdd (wMul h00 (wSub 256 fx)) (wMul h10 fx)) 8
+  let t1 := wShrN (wAdd (wMul h01 (wSub 256 fx)) (wMul h11 fx)) 8
+  wShrN (wAdd (wMul t0 (wSub 256 fz)) (wMul t1 fz)) 8
+
+-- noise-fill one tile: one write per cell, sampled at 64 sub-lattice
+-- units per cell from the tile's world offset
+def fill : Nat → Int → Int → List Int × Int → List Int
+  | 0, _, _, r => r.1
+  | p + 1, ox, oz, r =>
+    let i := wSub 4096 ((p : Int) + 1)
+    let g := ground (wShlN (wAdd ox (and32 i 63)) 6) (wShlN (wAdd oz (wShrN i 6)) 6)
+    fill p ox oz (aswap r.1 i g)
+
+-- one relaxation cell: 5 reads + 1 write; neighbours clamp at the tile
+-- edge; the pass-salted bit keeps the field from ever converging. Four
+-- cells unroll per erode turn, staged exactly as the source's
+-- a1..a5 -> b0..b5 -> d0..d5 -> f0..f5 chain.
+
+def erodeF5 (i p hc hl hr hu : Int) (r : List Int × Int) : List Int × Int :=
+  let rough := and32 (prng (xor32 i (wMul p 2654435761))) 1
+  let nv := wAdd (wShrN (wAdd (wAdd (wAdd (wAdd (wMul hc 4) hl) hr) hu) r.2) 3) rough
+  aswap r.1 i nv
+
+def erodeF4 (i p zc hc hl hr : Int) (r : List Int × Int) : List Int × Int :=
+  erodeF5 i p hc hl hr r.2 (aget r.1 (wAdd i (wShlN (b2u (zc < 63)) 6)))
+
+def erodeF3 (i p zc hc hl : Int) (r : List Int × Int) : List Int × Int :=
+  erodeF4 i p zc hc hl r.2 (aget r.1 (wSub i (wShlN (b2u (zc > 0)) 6)))
+
+def erodeF2 (i p xc zc hc : Int) (r : List Int × Int) : List Int × Int :=
+  erodeF3 i p zc hc r.2 (aget r.1 (wAdd i (b2u (xc < 63))))
+
+def erodeF1 (i p : Int) (r : List Int × Int) : List Int × Int :=
+  let xc := and32 i 63
+  let zc := wShrN i 6
+  erodeF2 i p xc zc r.2 (aget r.1 (wSub i (b2u (xc > 0))))
+
+def erodeF0 (i p : Int) (r : List Int × Int) : List Int × Int :=
+  erodeF1 i p (aget r.1 i)
+
+def erodeD5 (i p hc hl hr hu : Int) (r : List Int × Int) : List Int × Int :=
+  let rough := and32 (prng (xor32 i (wMul p 2654435761))) 1
+  let nv := wAdd (wShrN (wAdd (wAdd (wAdd (wAdd (wMul hc 4) hl) hr) hu) r.2) 3) rough
+  erodeF0 (wInc i) p (aswap r.1 i nv)
+
+def erodeD4 (i p zc hc hl hr : Int) (r : List Int × Int) : List Int × Int :=
+  erodeD5 i p hc hl hr r.2 (aget r.1 (wAdd i (wShlN (b2u (zc < 63)) 6)))
+
+def erodeD3 (i p zc hc hl : Int) (r : List Int × Int) : List Int × Int :=
+  erodeD4 i p zc hc hl r.2 (aget r.1 (wSub i (wShlN (b2u (zc > 0)) 6)))
+
+def erodeD2 (i p xc zc hc : Int) (r : List Int × Int) : List Int × Int :=
+  erodeD3 i p zc hc r.2 (aget r.1 (wAdd i (b2u (xc < 63))))
+
+def erodeD1 (i p : Int) (r : List Int × Int) : List Int × Int :=
+  let xc := and32 i 63
+  let zc := wShrN i 6
+  erodeD2 i p xc zc r.2 (aget r.1 (wSub i (b2u (xc > 0))))
+
+def erodeD0 (i p : Int) (r : List Int × Int) : List Int × Int :=
+  erodeD1 i p (aget r.1 i)
+
+def erodeB5 (i p hc hl hr hu : Int) (r : List Int × Int) : List Int × Int :=
+  let rough := and32 (prng (xor32 i (wMul p 2654435761))) 1
+  let nv := wAdd (wShrN (wAdd (wAdd (wAdd (wAdd (wMul hc 4) hl) hr) hu) r.2) 3) rough
+  erodeD0 (wInc i) p (aswap r.1 i nv)
+
+def erodeB4 (i p zc hc hl hr : Int) (r : List Int × Int) : List Int × Int :=
+  erodeB5 i p hc hl hr r.2 (aget r.1 (wAdd i (wShlN (b2u (zc < 63)) 6)))
+
+def erodeB3 (i p zc hc hl : Int) (r : List Int × Int) : List Int × Int :=
+  erodeB4 i p zc hc hl r.2 (aget r.1 (wSub i (wShlN (b2u (zc > 0)) 6)))
+
+def erodeB2 (i p xc zc hc : Int) (r : List Int × Int) : List Int × Int :=
+  erodeB3 i p zc hc r.2 (aget r.1 (wAdd i (b2u (xc < 63))))
+
+def erodeB1 (i p : Int) (r : List Int × Int) : List Int × Int :=
+  let xc := and32 i 63
+  let zc := wShrN i 6
+  erodeB2 i p xc zc r.2 (aget r.1 (wSub i (b2u (xc > 0))))
+
+def erodeB0 (i p : Int) (r : List Int × Int) : List Int × Int :=
+  erodeB1 i p (aget r.1 i)
+
+def erodeA5 (i p hc hl hr hu : Int) (r : List Int × Int) : List Int × Int :=
+  let rough := and32 (prng (xor32 i (wMul p 2654435761))) 1
+  let nv := wAdd (wShrN (wAdd (wAdd (wAdd (wAdd (wMul hc 4) hl) hr) hu) r.2) 3) rough
+  erodeB0 (wInc i) p (aswap r.1 i nv)
+
+def erodeA4 (i p zc hc hl hr : Int) (r : List Int × Int) : List Int × Int :=
+  erodeA5 i p hc hl hr r.2 (aget r.1 (wAdd i (wShlN (b2u (zc < 63)) 6)))
+
+def erodeA3 (i p zc hc hl : Int) (r : List Int × Int) : List Int × Int :=
+  erodeA4 i p zc hc hl r.2 (aget r.1 (wSub i (wShlN (b2u (zc > 0)) 6)))
+
+def erodeA2 (i p xc zc hc : Int) (r : List Int × Int) : List Int × Int :=
+  erodeA3 i p zc hc r.2 (aget r.1 (wAdd i (b2u (xc < 63))))
+
+def erodeA1 (i p : Int) (r : List Int × Int) : List Int × Int :=
+  let xc := and32 i 63
+  let zc := wShrN i 6
+  erodeA2 i p xc zc r.2 (aget r.1 (wSub i (b2u (xc > 0))))
+
+def erodeGo (i p : Int) (h : List Int) : List Int × Int :=
+  erodeA1 i p (aget h i)
+
+-- one Gauss-Seidel sweep over the tile, ascending scan order, four
+-- cells per turn (j counts quads); the quad's final write pair rides
+-- into the next turn as the r column
+def erode : Nat → Int → List Int × Int → List Int
+  | 0, _, r => r.1
+  | q + 1, p, r =>
+    let i := wSub 4096 (wShlN ((q : Int) + 1) 2)
+    erode q p (erodeGo i p r.1)
+
+def smooth : Nat → List Int → List Int
+  | 0, h => h
+  | p + 1, h => smooth p (erode 1024 ((p : Int) + 1) (h, 0))
+
+-- histogram fold: mix every bucket count, position-weighted; the
+-- current read rides in as the (array, count) pair r, and each step
+-- issues the next read (the final step issues one masked dead read)
+def gfold : Nat → List Int × Int → Int → Int
+  | 0, _, acc => acc
+  | q + 1, r, acc =>
+    let i := wSub 63 (q : Int)
+    gfold q (aget r.1 (wInc i)) (xor32 (wMul acc 2654435761) (wMul r.2 (wAdd i 3)))
+
+-- bucket increment: the (array, count) read pair arrives as a
+-- parameter and the bumped bucket's write pair is handed back
+def histBump (b : Int) (r : List Int × Int) : List Int × Int :=
+  aswap r.1 b (wInc r.2)
+
+-- per cell: read the height, bump its histogram bucket, mix the height
+-- into the running position-weighted checksum; the current height read
+-- rides in as the pair r (the final step issues one masked dead read)
+def hist : Nat → List Int × Int → List Int × Int → Int → Int
+  | 0, _, rg, acc => gfold 64 (aget rg.1 0) acc
+  | q + 1, r, rg, acc =>
+    let i := wSub 4095 (q : Int)
+    let b := and32 (wShrN r.2 2) 63
+    hist q (aget r.1 (wInc i)) (histBump b (aget rg.1 b))
+      (wAdd (wMul acc 2654435761) (wMul r.2 (wInc i)))
+
+-- one tile: fill, EPASS relaxation sweeps, histogram + fold
+def tile (t : Int) (e : Nat) : Int :=
+  let h0 := fill 4096 (wShlN (and32 t 255) 6) (wShlN (wShrN t 8) 6) (List.replicate 4096 0, 0)
+  let h1 := smooth e h0
+  hist 4096 (aget h1 0) (List.replicate 64 0, 0) (wInc t)
+
+def batch : Nat → Int → Nat → Int
+  | 0, t, e => tile t e
+  | q + 1, t, e => wAdd (batch q t e) (batch q (wAdd t (pw2 q)) e)
+
+/-- Root: `terrain size epass` is batch(size, 0, epass); the source's
+documented small size (4, 5) expects 4236200168, its main() runs (16, 5). -/
+def terrain (size epass : Int) : Int := batch size.toNat 0 epass.toNat

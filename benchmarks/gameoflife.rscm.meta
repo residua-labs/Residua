@@ -1,0 +1,6 @@
+# the source table sidecar: the .rscm beside this file was emitted from the .rsd beside this file
+# by the current emitter (emitTyped, the current emitter lowered form) under stock Lean 4.14.0 on
+# the benchmark source revision 2 (closure_claim = 0). It names both hashes; edit neither file.
+rscm_file	benchmarks/gameoflife.rscm	rscm_sha256	acee9ef728b7cd1ebe17a3fe863141816af33aea747b21b9f5be63ede5d81ae3	rscm_bytes	4993
+rsd_file	benchmarks/gameoflife.rsd	rsd_sha256	9873408cac5c1a00873ac5cf754770c4c77b97daa282a72192968544ea60e0ba
+root	gameoflifeMain	entry	12	declared_arity	2	modules	30

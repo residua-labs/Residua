@@ -1,0 +1,36 @@
+-- nqueens as Koka's benchmark suite runs it: the row of this program in a table against Koka.
+-- Source: koka-lang/koka commit facb7932ce6871fdb063f762a304bd8238f35fba, test/bench/koka/nqueens.kk,
+-- sha256 a2c9f603aae2d9096616899795de3109bc71d68454120cf5b413894ad6bf41eb (fetched and compared 2026-11-16).
+-- That program computes in `int32`: its additions and subtractions wrap and are not checked.
+-- benchmarks/nqueens.rsd, the pinned port, computes in `Int`, which the chain checks at every operation: a
+-- different program in the loop that is timed (three overflow tests for each list element).
+-- This file is that port with the queens, the diagonals and the list elements in `UInt32`, the fixed-width type
+-- of Lean's meaning that the frontend has: an operation wraps modulo 2^32 and nothing is checked. The values
+-- are the pinned port's: a queen's column and a diagonal offset stay below 2^31 for every board that fits
+-- in memory, where a comparison of two residues modulo 2^32 is the comparison of the numbers (`q - diag` may
+-- wrap, and so does the same subtraction in Koka's int32).
+-- As in the pinned port, Koka's recursion on the queen number is structural recursion on a Nat count `k`
+-- whose queen is `k + 1`.
+def safe (queen diag : UInt32) : List UInt32 -> Bool
+  | [] => true
+  | q :: qs => queen != q && queen != q + diag && queen != q - diag && safe queen (diag + 1) qs
+
+def appendSafe : Nat -> List UInt32 -> List (List UInt32) -> List (List UInt32)
+  | 0, _, xss => xss
+  | k + 1, xs, xss =>
+    if safe (UInt32.ofNat k + 1) 1 xs then appendSafe k xs (((UInt32.ofNat k + 1) :: xs) :: xss)
+    else appendSafe k xs xss
+
+def extend (n : Nat) (acc : List (List UInt32)) : List (List UInt32) -> List (List UInt32)
+  | [] => acc
+  | xs :: rest => extend n (appendSafe n xs acc) rest
+
+def findSolutions (n : Nat) : Nat -> List (List UInt32)
+  | 0 => [[]]
+  | k + 1 => extend n [] (findSolutions n k)
+
+def len : List (List UInt32) -> Int
+  | [] => 0
+  | _ :: xs => 1 + len xs
+
+def queens (n : Nat) : Int := len (findSolutions n n)

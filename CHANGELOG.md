@@ -7,6 +7,23 @@ a published version (documents, attribution, packaging, shipped test suites; the
 unchanged) is numbered 0.1.1, 0.1.2, …. A published tag is never moved. Each release lists the SHA-256 of its source
 archive; the repository tree at the tag equals the archive.
 
+## [0.1.2] — 2026-11-19
+
+Patch release of 0.1.1: the test and benchmark suites ship; the bootstrap recipe's inputs are byte-identical to 0.1.
+
+- `benchmarks/` (186 files): the benchmark programs and their emitted `.rscm` modules, `expected/` outputs, the Rust
+  reference implementations, the Koka comparison harness, and `benchmarks/langs/` with the vendored Koka `test/bench`
+  and Lean `4.14` `test/bench` sources the ports derive from (Koka Apache-2.0, Lean 4 Apache-2.0, Benchmarks Game
+  BSD-3-Clause, Bend Apache-2.0).
+- `instruments/lrc-host/` (101 files): the differential test suite — `Diff.rsd`, the Sides/Mutants tables,
+  `Images.tsv`, `Peaks.tsv` and the pinned `img/` images.
+- `release/docs/TESTING` (+`.zh-CN`): how to run each suite and how the performance record was produced; the
+  `lean --run` runners are a test tool, not part of the bootstrap recipe.
+- The public documents now follow the publication register of the 0.1.1 documents; the release gate checks the
+  ship set mechanically against a table of internal identifiers.
+- Archive: `rsd-src.tar`, SHA-256 see the release page, 437 files.
+- Release: https://github.com/residua-labs/Residua/releases/tag/rsd-0.1.2
+
 ## [0.1.1] — 2026-11-19
 
 Patch release of 0.1: documents, attribution and packaging; the bootstrap recipe's inputs are byte-identical to 0.1.
@@ -22,7 +39,7 @@ Patch release of 0.1: documents, attribution and packaging; the bootstrap recipe
   mechanically, together with stale version strings and internal tool names.
 - Version scheme corrected: feature releases are 0.2, 0.3, … (0.11 would sort after 0.10); patch releases are
   0.1.1, 0.1.2, …. The published 0.1 archive is unchanged.
-- Archive: `rsd-src.tar`, SHA-256 see the release page, 148 files.
+- Archive: `rsd-src.tar`, SHA-256 `165690af75bebf7841cbd3f14459d66b7d295aa65f2676b935eee5ee3a9b030b`; the archive holds 148 files.
 - Release: https://github.com/residua-labs/Residua/releases/tag/rsd-0.1.1
 
 ## [0.1] — 2026-11-19

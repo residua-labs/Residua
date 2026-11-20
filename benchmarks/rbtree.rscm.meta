@@ -1,0 +1,6 @@
+# the source table sidecar: the .rscm beside this file was emitted from the .rsd beside this file
+# by the current emitter (emitTyped, the current emitter's lowered form) under stock Lean 4.14.0 on
+# the benchmark source at e1e122c (closure_claim = 0). It names both hashes; edit neither file.
+rscm_file	benchmarks/rbtree.rscm	rscm_sha256	3fabf4b1496f3ad8f10a56498d5c1b35e7e64b3426692ac298991e02e38621dc	rscm_bytes	43255
+rsd_file	benchmarks/rbtree.rsd	rsd_sha256	ceadb0756357e8219f897f5bffe394818d4a1d0fd62c53c1dbff3e727d620869
+root	rbtree	entry	14	declared_arity	2	modules	15

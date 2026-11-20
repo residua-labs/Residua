@@ -1,0 +1,29 @@
+-- micro program for a closed constructor term built again on one path (lib/lrc/Cse.rsd, "A closed
+-- constructor term built again"). The front end writes a string literal as a cell for each character.
+-- `sameTwice` passes one literal to two calls with the same arguments: the two literals are one cell and
+-- the two calls one call. `twoWords` builds two literals that differ in their last character only: once
+-- their ends are looked up, the cells of their first characters have the same constructor and scalars and
+-- differ in the field alone, and the cells of their last characters in the scalar alone; a rule that
+-- compared less would make them one word. `trees` builds a closed tree twice, with a number in a box and a
+-- literal as its fields, and once more with another number.
+inductive E where
+  | num (n : Int) : E
+  | name (s : String) : E
+  | two (a : E) (b : E) : E
+
+def weight (key : String) : E → Int
+  | E.num n => n
+  | E.name s => if s == key then 7 else 1
+  | E.two a b => weight key a * 10 + weight key b
+
+def sameTwice (e : E) : Int := weight "ab" e + weight "ab" e
+
+def twoWords (e : E) : Int := weight "ab" e * 1000 + weight "ac" e
+
+def trees : Int :=
+  weight "q" (E.two (E.num 3) (E.name "q")) + weight "q" (E.two (E.num 3) (E.name "q")) * 100
+    + weight "q" (E.two (E.num 4) (E.name "q")) * 10000
+
+def closedMain : List Int :=
+  let e := E.two (E.name "ab") (E.num 2)
+  [sameTwice e, twoWords e, trees]

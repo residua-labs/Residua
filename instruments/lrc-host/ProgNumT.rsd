@@ -1,0 +1,21 @@
+-- The program of the row numxtag of Images.tsv, whose image is not the front end's: a constructor with a Nat and a
+-- child. In the row's image `kidKind` takes the Nat's node where the source takes the child, so a match asks the
+-- node of a number for its tag. The wire's answer is 0, the tag the front end gives such a node, which is `leaf`'s:
+-- the row's value is 300 + 1. The stage may then not let that node be its number (lib/lrc/FromWire.rsd
+-- `Lay.box`): the number 300 has no tag; and the number is still read from the node that holds it.
+inductive T where
+  | leaf : T
+  | node (n : Nat) (k : T) : T
+
+-- the function the row's image changes: it reads one child and matches on it
+def kidKind (t : T) : Nat :=
+  match t with
+  | T.leaf => 7
+  | T.node n k =>
+    n + (match k with
+         | T.leaf => 1
+         | T.node _ _ => 2)
+
+def mk (n : Nat) : T := T.node n T.leaf
+
+def xTag : Nat := kidKind (mk 300)

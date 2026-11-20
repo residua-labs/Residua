@@ -1,0 +1,88 @@
+-- LRC host oracle: additional IR cases for Borrow and RC (stock Lean only). closure_claim = 0.
+namespace Lrc.Host
+
+open Lrc in
+-- f30 tailOwnParam xs acc: self tail-call passing a freshly constructed cell to parameter 2,
+-- which is otherwise only read by sproj in the base case (Borrow.lean:257 preserveTailCall)
+def cTailOwnParam : Lrc.Decl :=
+  fn 30 [pO 1, pO 2] tyTObj
+    (mkCase 1 tyTObj
+      [mkAltCtor nilI
+         (mkVDecl 3 tyI64 (mkSProj 2 0 2)
+         (mkVDecl 4 tyTObj (mkCtor leafI [])
+         (mkVDecl 5 tyTObj (mkCtor nodeI [4, 4])
+         (mkSSet 5 2 0 3 tyI64 (mkRet [5]))))),
+       mkAltCtor consI
+         (mkVDecl 6 tyTObj (mkProj 0 1)
+         (mkVDecl 7 tyTObj (mkProj 1 1)
+         (mkVDecl 8 tyTObj (mkCtor t3a [6])
+         (mkVDecl 9 tyTObj (mkFap 30 [7, 8]) (mkRet [9])))))])
+
+open Lrc in
+-- f31 jpOwnFromProj t u: projection of an owned call result jumped to a join point whose body
+-- only reads its parameter by sproj (Borrow.lean:248 isOwned x -> ownVar z, :281 ownParamsUsingArgs)
+def cJPOwnFromProj : Lrc.Decl :=
+  fn 31 [pO 1, pO 2] tyTObj
+    (mkJDecl 10 [pO 11]
+      (mkVDecl 12 tyI64 (mkSProj 2 0 11)
+      (mkVDecl 13 tyTObj (mkCtor leafI [])
+      (mkVDecl 14 tyTObj (mkCtor nodeI [13, 13])
+      (mkSSet 14 2 0 12 tyI64 (mkRet [14])))))
+      (mkCase 1 tyTObj
+        [mkAltCtor leafI (mkJmp 10 [2]),
+         mkAltCtor nodeI
+           (mkVDecl 3 tyTObj (mkFap 21 [1, 2])
+           (mkVDecl 4 tyTObj (mkProj 0 3) (mkJmp 10 [4])))]))
+
+open Lrc in
+-- f32 reuseParam x y: parameter y is packed into a reused constructor and nowhere else
+-- (Borrow.lean:245 Expr.reuse ownArgsIfParam)
+def cReuseParam : Lrc.Decl :=
+  fn 32 [pO 1, pO 2] tyTObj
+    (mkCase 1 tyTObj
+      [mkAltCtor t3a
+         (mkVDecl 3 tyTObj (mkProj 0 1)
+         (mkVDecl 4 tyTObj (mkCtor t3b [2]) (mkRet [4]))),
+       mkAltDefault (mkVDecl 5 tyTObj (mkCtor t3c []) (mkRet [5]))])
+
+open Lrc in
+-- f33 sameArgBorrowAndOwn x: x is passed to both the borrowed and the owned parameter of f21 in
+-- a single call and is dead after it (RC.lean:80 isFirstOcc, :86 isBorrowParamAux, :121)
+def cSameArgBorrowAndOwn : Lrc.Decl :=
+  fn 33 [pO 1] tyTObj
+    (mkVDecl 2 tyTObj (mkFap 21 [1, 1]) (mkRet [2]))
+
+open Lrc in
+-- f35 persistentConst: a zero-argument full application used twice (RC.lean:152 isPersistent)
+def cPersistentConst : Lrc.Decl :=
+  fn 35 [pO 1] tyTObj
+    (mkVDecl 2 tyTObj (mkFap 34 [])
+    (mkVDecl 3 tyTObj (mkCtor consI [2, 2]) (mkRet [3])))
+
+open Lrc in
+-- f36 forwardCaller x: calls f37 (declared after f36), which owns its parameter, requiring a
+-- second iteration of Borrow.whileModifing (Borrow.lean:293 whileModifing)
+def cForwardCaller : Lrc.Decl :=
+  fn 36 [pO 1] tyTObj
+    (mkVDecl 2 tyTObj (mkFap 37 [1]) (mkRet [2]))
+
+open Lrc in
+-- f37 forwardCallee x: packs parameter 1 into a constructor so parameter 1 becomes owned
+def cForwardCallee : Lrc.Decl :=
+  fn 37 [pO 1] tyTObj
+    (mkVDecl 2 tyTObj (mkCtor t3a [1]) (mkRet [2]))
+
+open Lrc in
+-- f38 boxedLit x: a small numeric literal bound at tyTObj and used twice (RC.lean:165 isScalarBoxedInTaggedPtr)
+def cBoxedLit : Lrc.Decl :=
+  fn 38 [pO 1] tyTObj
+    (mkVDecl 2 tyTObj (mkLit 42)
+    (mkVDecl 3 tyTObj (mkCtor consI [2, 2]) (mkRet [3])))
+
+def casesRC : List Prog :=
+  [{ name := "writtenRC", decls := [cTailOwnParam, cJPOwnFromProj, cReuseParam, cSameArgBorrowAndOwn,
+      cPersistentConst, cForwardCaller, cForwardCallee, cBoxedLit,
+      ext 21 [{ x := 1, borrow := true, ty := Lrc.tyTObj }, { x := 2, borrow := false, ty := Lrc.tyTObj }] Lrc.tyTObj,
+      ext 34 [] Lrc.tyTObj] }]
+
+end Lrc.Host

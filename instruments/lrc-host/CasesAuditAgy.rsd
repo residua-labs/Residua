@@ -1,0 +1,366 @@
+-- LRC host oracle: audit cases for ResetReuse, ExpandResetReuse, and ElimDeadBranches (stock Lean only). closure_claim = 0.
+namespace Lrc.Host
+
+def aaU4a : Lrc.CtorInfo := { cidx := 0, size := 1, ssize := 0, tid := 4 }
+def aaPair4 : Lrc.CtorInfo := { cidx := 1, size := 2, ssize := 0, tid := 4 }
+
+/-! ## Cases for lib/lrc/ResetReuse.rsd -/
+
+open Lrc in
+-- f100 aaRrMayReuseStrict: lib/lrc/ResetReuse.rsd rrMayReuse (ResetReuse.lean:32)
+def aaRrMayReuseStrict : Lrc.Decl :=
+  fn 100 [pO 1] tyTObj
+    (mkCase 1 tyTObj
+      [mkAltCtor nilI (mkRet [1]),
+       mkAltCtor consI
+         (mkVDecl 2 tyTObj (mkProj 0 1)
+         (mkVDecl 3 tyTObj (mkProj 1 1)
+         (mkVDecl 4 tyTObj (mkCtor consI [3, 2]) (mkRet [4]))))])
+
+open Lrc in
+-- f101 aaRrMayReuseRelaxed: lib/lrc/ResetReuse.rsd rrMayReuse (ResetReuse.lean:38)
+def aaRrMayReuseRelaxed : Lrc.Decl :=
+  fn 101 [pO 1] tyTObj
+    (mkCase 1 tyTObj
+      [mkAltCtor t3a
+         (mkVDecl 2 tyTObj (mkProj 0 1)
+         (mkVDecl 3 tyTObj (mkCtor aaU4a [2]) (mkRet [3]))),
+       mkAltDefault (mkRet [1])])
+
+open Lrc in
+-- f102 aaRrSUpdtTag: lib/lrc/ResetReuse.rsd rrS (ResetReuse.lean:50)
+def aaRrSUpdtTag : Lrc.Decl :=
+  fn 102 [pO 1] tyTObj
+    (mkCase 1 tyTObj
+      [mkAltCtor t3a
+         (mkVDecl 2 tyTObj (mkProj 0 1)
+         (mkVDecl 3 tyTObj (mkCtor t3b [2]) (mkRet [3]))),
+       mkAltDefault (mkRet [1])])
+
+open Lrc in
+-- f103 aaRrSJoinStop: lib/lrc/ResetReuse.rsd rrS (ResetReuse.lean:56)
+def aaRrSJoinStop : Lrc.Decl :=
+  fn 103 [pO 1] tyTObj
+    (mkCase 1 tyTObj
+      [mkAltCtor t3a
+         (mkVDecl 2 tyTObj (mkProj 0 1)
+         (mkJDecl 10 [pO 11]
+           (mkVDecl 12 tyTObj (mkCtor t3a [11]) (mkRet [12]))
+           (mkVDecl 3 tyTObj (mkCtor t3a [2]) (mkJmp 10 [3])))),
+       mkAltDefault (mkRet [1])])
+
+open Lrc in
+-- f104 aaRrDFinalizeDead: lib/lrc/ResetReuse.rsd rrDFinalize (ResetReuse.lean:116)
+def aaRrDFinalizeDead : Lrc.Decl :=
+  fn 104 [pO 1, pO 2] tyTObj
+    (mkCase 1 tyTObj
+      [mkAltCtor t3a
+         (mkVDecl 3 tyTObj (mkCtor t3b [2]) (mkRet [3])),
+       mkAltDefault (mkRet [2])])
+
+open Lrc in
+-- f105 aaRrIsCtorUsing: lib/lrc/ResetReuse.rsd rrIsCtorUsing (ResetReuse.lean:125)
+def aaRrIsCtorUsing : Lrc.Decl :=
+  fn 105 [pO 1] tyTObj
+    (mkCase 1 tyTObj
+      [mkAltCtor t3a
+         (mkVDecl 2 tyTObj (mkCtor consI [1, 1])
+         (mkVDecl 3 tyTObj (mkCtor t3a [2]) (mkRet [3]))),
+       mkAltCtor t3b
+         (mkVDecl 4 tyTObj (mkProj 0 1)
+         (mkVDecl 5 tyTObj (mkCtor t3a [4]) (mkRet [5]))),
+       mkAltDefault (mkRet [1])])
+
+open Lrc in
+-- f106 aaRrDMainCaseLiveJP: lib/lrc/ResetReuse.rsd rrDMain (ResetReuse.lean:140)
+def aaRrDMainCaseLiveJP : Lrc.Decl :=
+  fn 106 [pO 1, pS 2] tyTObj
+    (mkCase 1 tyTObj
+      [mkAltCtor nilI (mkRet [1]),
+       mkAltCtor consI
+         (mkVDecl 3 tyTObj (mkProj 0 1)
+         (mkJDecl 10 [pO 11]
+           (mkVDecl 12 tyTObj (mkProj 1 1)
+           (mkVDecl 13 tyTObj (mkCtor consI [11, 12]) (mkRet [13])))
+           (mkIfW 2
+             (mkJmp 10 [3])
+             (mkVDecl 4 tyTObj (mkCtor consI [3, 3]) (mkRet [4])))))])
+
+open Lrc in
+-- f107 aaRrCollectResetsOnce: lib/lrc/ResetReuse.rsd rrCollectResets (ResetReuse.lean:209)
+def aaRrCollectResetsOnce : Lrc.Decl :=
+  fn 107 [pO 1] tyTObj
+    (mkCase 1 tyTObj
+      [mkAltCtor t3a
+         (mkVDecl 2 tyTObj (mkProj 0 1)
+         (mkVDecl 3 tyTObj (mkCtor t3a [2]) (mkRet [3]))),
+       mkAltCtor t3b
+         (mkVDecl 4 tyTObj (mkProj 0 1)
+         (mkVDecl 5 tyTObj (mkCtor aaU4a [4]) (mkRet [5]))),
+       mkAltDefault (mkRet [1])])
+
+/-! ## Cases for lib/lrc/ExpandResetReuse.rsd -/
+
+open Lrc in
+-- f108 aaErCollectProj: lib/lrc/ExpandResetReuse.rsd erCollect (ExpandResetReuse.lean:23)
+def aaErCollectProj : Lrc.Decl :=
+  fn 108 [pO 1, pO 2] tyTObj
+    (mkCase 1 tyTObj
+      [mkAltCtor nilI (mkRet [2]),
+       mkAltCtor consI
+         (mkVDecl 3 tyTObj (mkProj 0 1)
+         (mkVDecl 4 tyTObj (mkCtor consI [3, 2]) (mkRet [4])))])
+
+open Lrc in
+-- f109 aaErConsumedBranchDec: lib/lrc/ExpandResetReuse.rsd erConsumed (ExpandResetReuse.lean:42)
+def aaErConsumedBranchDec : Lrc.Decl :=
+  fn 109 [pO 1, pS 2] tyTObj
+    (mkCase 1 tyTObj
+      [mkAltCtor t3a
+         (mkVDecl 3 tyTObj (mkProj 0 1)
+         (mkVDecl 4 tyTObj (mkCtor t3c [])
+         (mkIfW 2
+           (mkVDecl 5 tyTObj (mkCtor t3a [3]) (mkRet [5]))
+           (mkRet [4])))),
+       mkAltDefault (mkRet [1])])
+
+open Lrc in
+-- f110 aaErEraseSkipSProj: lib/lrc/ExpandResetReuse.rsd erEraseAux (ExpandResetReuse.lean:54)
+def aaErEraseSkipSProj : Lrc.Decl :=
+  fn 110 [pO 1] tyTObj
+    (mkCase 1 tyTObj
+      [mkAltCtor leafI (mkRet [1]),
+       mkAltCtor nodeI
+         (mkVDecl 2 tyTObj (mkProj 0 1)
+         (mkVDecl 3 tyTObj (mkProj 1 1)
+         (mkVDecl 4 tyI64 (mkSProj 2 0 1)
+         (mkVDecl 5 tyI64 (mkSProj 2 8 1)
+         (mkVDecl 6 tyTObj (mkCtor nodeI [3, 2])
+         (mkSSet 6 2 0 4 tyI64
+         (mkSSet 6 2 8 5 tyI64 (mkRet [6]))))))))])
+
+open Lrc in
+-- f111 aaErReuseToCtorDec: lib/lrc/ExpandResetReuse.rsd erReuseToCtor (ExpandResetReuse.lean:91)
+def aaErReuseToCtorDec : Lrc.Decl :=
+  fn 111 [pO 1, pS 2] tyTObj
+    (mkCase 1 tyTObj
+      [mkAltCtor nilI (mkRet [1]),
+       mkAltCtor consI
+         (mkVDecl 3 tyTObj (mkProj 0 1)
+         (mkVDecl 4 tyTObj (mkProj 1 1)
+         (mkVDecl 5 tyTObj (mkCtor nilI [])
+         (mkIfW 2
+           (mkVDecl 6 tyTObj (mkCtor consI [4, 3]) (mkRet [6]))
+           (mkVDecl 7 tyTObj (mkCtor t3a [5]) (mkRet [7]))))))])
+
+open Lrc in
+-- f112 aaErSlowPathIncs: lib/lrc/ExpandResetReuse.rsd erMkSlowPath (ExpandResetReuse.lean:125)
+def aaErSlowPathIncs : Lrc.Decl :=
+  fn 112 [pO 1] tyTObj
+    (mkCase 1 tyTObj
+      [mkAltCtor nilI (mkRet [1]),
+       mkAltCtor consI
+         (mkVDecl 2 tyTObj (mkProj 0 1)
+         (mkVDecl 3 tyTObj (mkProj 1 1)
+         (mkVDecl 4 tyTObj (mkCtor aaPair4 [3, 2]) (mkRet [4]))))])
+
+open Lrc in
+-- f113 aaErReleaseUnread: lib/lrc/ExpandResetReuse.rsd erReleaseGo (ExpandResetReuse.lean:136)
+def aaErReleaseUnread : Lrc.Decl :=
+  fn 113 [pO 1, pO 2] tyTObj
+    (mkCase 1 tyTObj
+      [mkAltCtor nilI (mkRet [2]),
+       mkAltCtor consI
+         (mkVDecl 3 tyTObj (mkProj 0 1)
+         (mkVDecl 4 tyTObj (mkCtor consI [2, 3]) (mkRet [4])))])
+
+open Lrc in
+-- f114 aaErSelfSSetOffset: lib/lrc/ExpandResetReuse.rsd erIsSelfSSet (ExpandResetReuse.lean:163)
+def aaErSelfSSetOffset : Lrc.Decl :=
+  fn 114 [pO 1] tyTObj
+    (mkCase 1 tyTObj
+      [mkAltCtor leafI (mkRet [1]),
+       mkAltCtor nodeI
+         (mkVDecl 2 tyTObj (mkProj 0 1)
+         (mkVDecl 3 tyTObj (mkProj 1 1)
+         (mkVDecl 4 tyI64 (mkSProj 2 0 1)
+         (mkVDecl 5 tyI64 (mkSProj 2 8 1)
+         (mkVDecl 6 tyTObj (mkCtor nodeI [2, 3])
+         (mkSSet 6 2 0 5 tyI64
+         (mkSSet 6 2 8 4 tyI64 (mkRet [6]))))))))])
+
+open Lrc in
+-- f115 aaErFastChain: lib/lrc/ExpandResetReuse.rsd erExpand (ExpandResetReuse.lean:237)
+def aaErFastChain : Lrc.Decl :=
+  fn 115 [pO 1, pO 2] tyTObj
+    (mkCase 1 tyTObj
+      [mkAltCtor nilI (mkRet [2]),
+       mkAltCtor consI
+         (mkVDecl 3 tyTObj (mkProj 0 1)
+         (mkVDecl 4 tyTObj (mkProj 1 1)
+         (mkCase 2 tyTObj
+           [mkAltCtor nilI
+              (mkVDecl 5 tyTObj (mkCtor consI [4, 3]) (mkRet [5])),
+            mkAltCtor consI
+              (mkVDecl 6 tyTObj (mkProj 0 2)
+              (mkVDecl 7 tyTObj (mkProj 1 2)
+              (mkVDecl 8 tyTObj (mkCtor consI [6, 3])
+              (mkVDecl 9 tyTObj (mkCtor consI [7, 8]) (mkRet [9])))))])))])
+
+/-! ## Cases for lib/lrc/ElimDeadBranches.rsd -/
+
+open Lrc in
+-- f116 aaEdbBeqChoice: lib/lrc/ElimDeadBranches.rsd edbBeq (ElimDeadBranches.lean:40)
+def aaEdbBeqChoice : Lrc.Decl :=
+  fn 116 [pO 1, pS 2] tyTObj
+    (mkIfW 2
+      (mkRet [1])
+      (mkVDecl 3 tyTObj (mkFap 117 [1, 2])
+      (mkCase 3 tyTObj
+        [mkAltCtor t3a (mkRet [3]),
+         mkAltCtor t3b (mkRet [3]),
+         mkAltCtor t3c (mkRet [3]),
+         mkAltCtor leafI (mkRet [1])])))
+
+open Lrc in
+-- f117 aaEdbCalleeMid: lib/lrc/ElimDeadBranches.rsd edbStepOne (ElimDeadBranches.lean:282)
+def aaEdbCalleeMid : Lrc.Decl :=
+  fn 117 [pO 1, pS 2] tyTObj
+    (mkIfW 2
+      (mkVDecl 3 tyTObj (mkCtor t3a [1])
+      (mkCase 3 tyTObj
+        [mkAltCtor t3a (mkRet [3]),
+         mkAltCtor t3c (mkRet [1])]))
+      (mkCase 1 tyTObj
+        [mkAltCtor leafI (mkVDecl 4 tyTObj (mkCtor t3b [1]) (mkRet [4])),
+         mkAltDefault (mkVDecl 5 tyTObj (mkFap 118 [1]) (mkRet [5]))]))
+
+open Lrc in
+-- f118 aaEdbCalleeLeaf: lib/lrc/ElimDeadBranches.rsd edbExpr (ElimDeadBranches.lean:199)
+def aaEdbCalleeLeaf : Lrc.Decl :=
+  fn 118 [pO 1] tyTObj
+    (mkVDecl 2 tyTObj (mkCtor t3c [])
+    (mkCase 2 tyTObj
+      [mkAltCtor t3c (mkRet [2]),
+       mkAltCtor t3a (mkRet [1])]))
+
+open Lrc in
+-- f119 aaEdbAddChoiceMerge: lib/lrc/ElimDeadBranches.rsd edbAddChoice (ElimDeadBranches.lean:52)
+def aaEdbAddChoiceMerge : Lrc.Decl :=
+  fn 119 [pO 1] tyTObj
+    (mkJDecl 10 [pO 11]
+      (mkVDecl 12 tyTObj (mkProj 0 11)
+      (mkCase 12 tyTObj
+        [mkAltCtor leafI (mkRet [12]),
+         mkAltCtor nilI (mkRet [12]),
+         mkAltCtor consI (mkRet [1]),
+         mkAltDefault (mkRet [11])]))
+      (mkCase 1 tyTObj
+        [mkAltCtor t3a
+           (mkVDecl 2 tyTObj (mkCtor leafI [])
+           (mkVDecl 3 tyTObj (mkCtor nodeI [2, 2]) (mkJmp 10 [3]))),
+         mkAltCtor t3b
+           (mkVDecl 4 tyTObj (mkCtor leafI []) (mkJmp 10 [4])),
+         mkAltCtor t3c
+           (mkVDecl 5 tyTObj (mkCtor nilI [])
+           (mkVDecl 6 tyTObj (mkCtor leafI [])
+           (mkVDecl 7 tyTObj (mkCtor nodeI [5, 6]) (mkJmp 10 [7]))))]))
+
+open Lrc in
+-- f120 aaEdbTruncDepth: lib/lrc/ElimDeadBranches.rsd edbTruncGo (ElimDeadBranches.lean:94)
+def aaEdbTruncDepth : Lrc.Decl :=
+  fn 120 [pO 1] tyTObj
+    (mkVDecl 2 tyTObj (mkCtor t3c [])
+    (mkVDecl 3 tyTObj (mkCtor t3a [2])
+    (mkVDecl 4 tyTObj (mkCtor t3a [3])
+    (mkVDecl 5 tyTObj (mkCtor t3a [4])
+    (mkVDecl 6 tyTObj (mkCtor t3a [5])
+    (mkVDecl 7 tyTObj (mkCtor t3a [6])
+    (mkVDecl 8 tyTObj (mkCtor t3a [7])
+    (mkVDecl 9 tyTObj (mkCtor t3a [8])
+    (mkVDecl 10 tyTObj (mkCtor t3a [9])
+    (mkCase 10 tyTObj
+      [mkAltCtor t3a (mkRet [10]),
+       mkAltCtor t3b (mkRet [1])]))))))))))
+
+open Lrc in
+-- f121 aaEdbTruncCaller: lib/lrc/ElimDeadBranches.rsd edbWiden (ElimDeadBranches.lean:121)
+def aaEdbTruncCaller : Lrc.Decl :=
+  fn 121 [pO 1] tyTObj
+    (mkVDecl 2 tyTObj (mkFap 120 [1])
+    (mkVDecl 3 tyTObj (mkProj 0 2)
+    (mkVDecl 4 tyTObj (mkProj 0 3)
+    (mkVDecl 5 tyTObj (mkProj 0 4)
+    (mkVDecl 6 tyTObj (mkProj 0 5)
+    (mkVDecl 7 tyTObj (mkProj 0 6)
+    (mkVDecl 8 tyTObj (mkProj 0 7)
+    (mkCase 8 tyTObj
+      [mkAltCtor t3a
+         (mkVDecl 9 tyTObj (mkProj 0 8)
+         (mkCase 9 tyTObj
+           [mkAltCtor t3a (mkRet [9]),
+            mkAltCtor t3c (mkRet [9]),
+            mkAltDefault (mkRet [1])])),
+       mkAltCtor t3b (mkRet [1])]))))))))
+
+open Lrc in
+-- f122 aaEdbFindArgIrr: lib/lrc/ElimDeadBranches.rsd edbFindArg (ElimDeadBranches.lean:177)
+def aaEdbFindArgIrr : Lrc.Decl :=
+  fn 122 [pO 1] tyTObj
+    (mkVDecl 2 tyTObj (mkCtor leafI [])
+    (mkVDecl 3 tyTObj (mkCtor consI [argIrr, 2])
+    (mkVDecl 4 tyTObj (mkProj 0 3)
+    (mkVDecl 5 tyTObj (mkProj 1 3)
+    (mkCase 4 tyTObj
+      [mkAltCtor leafI
+         (mkCase 5 tyTObj
+           [mkAltCtor leafI (mkRet [5]),
+            mkAltCtor nodeI (mkRet [1])]),
+       mkAltCtor nodeI (mkRet [4])])))))
+
+open Lrc in
+-- f123 aaEdbHasCtorChoice: lib/lrc/ElimDeadBranches.rsd edbHasCtor (ElimDeadBranches.lean:213)
+def aaEdbHasCtorChoice : Lrc.Decl :=
+  fn 123 [pO 1, pS 2] tyTObj
+    (mkJDecl 10 [pO 11]
+      (mkCase 11 tyTObj
+        [mkAltCtor t3a (mkRet [11]),
+         mkAltCtor t3b (mkRet [1]),
+         mkAltCtor t3c (mkRet [11])])
+      (mkIfW 2
+        (mkVDecl 3 tyTObj (mkCtor t3a [1]) (mkJmp 10 [3]))
+        (mkVDecl 4 tyTObj (mkCtor t3c []) (mkJmp 10 [4]))))
+
+open Lrc in
+-- f124 aaEdbResetNestedCase: lib/lrc/ElimDeadBranches.rsd edbInterp, join points nested under a case (ElimDeadBranches.lean:240)
+def aaEdbResetNestedCase : Lrc.Decl :=
+  fn 124 [pO 1, pS 2] tyTObj
+    (mkVDecl 3 tyTObj (mkCtor leafI [])
+    (mkJDecl 10 [pO 11]
+      (mkIfW 2
+        (mkJDecl 20 [pO 21]
+          (mkCase 11 tyTObj
+            [mkAltCtor t3a (mkRet [21]),
+             mkAltCtor t3b
+               (mkVDecl 22 tyTObj (mkProj 0 11)
+               (mkCase 22 tyTObj
+                 [mkAltCtor leafI (mkRet [22]),
+                  mkAltCtor nodeI (mkRet [1])])),
+             mkAltCtor t3c (mkRet [1])])
+          (mkJmp 20 [3]))
+        (mkRet [11]))
+      (mkCase 1 tyTObj
+        [mkAltCtor t3a (mkVDecl 4 tyTObj (mkCtor t3a [3]) (mkJmp 10 [4])),
+         mkAltCtor t3b (mkVDecl 5 tyTObj (mkCtor t3b [3]) (mkJmp 10 [5])),
+         mkAltCtor t3c (mkRet [1])])))
+
+def casesAuditAgy : List Prog :=
+  [{ name := "audit_agy", decls := [
+      aaRrMayReuseStrict, aaRrMayReuseRelaxed, aaRrSUpdtTag, aaRrSJoinStop,
+      aaRrDFinalizeDead, aaRrIsCtorUsing, aaRrDMainCaseLiveJP, aaRrCollectResetsOnce,
+      aaErCollectProj, aaErConsumedBranchDec, aaErEraseSkipSProj, aaErReuseToCtorDec,
+      aaErSlowPathIncs, aaErReleaseUnread, aaErSelfSSetOffset, aaErFastChain,
+      aaEdbBeqChoice, aaEdbCalleeMid, aaEdbCalleeLeaf, aaEdbAddChoiceMerge,
+      aaEdbTruncDepth, aaEdbTruncCaller, aaEdbFindArgIrr, aaEdbHasCtorChoice, aaEdbResetNestedCase] }]
+
+end Lrc.Host
