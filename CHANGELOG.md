@@ -7,7 +7,7 @@ a published version (documents, attribution, packaging, shipped test suites; the
 unchanged) is numbered 0.1.1, 0.1.2, …. A published tag is never moved. Each release lists the SHA-256 of its source
 archive; the repository tree at the tag equals the archive.
 
-## [0.1.2] — 2026-11-19
+## [0.1.2] — 2026-11-20
 
 Patch release of 0.1.1: the test and benchmark suites ship; the bootstrap recipe's inputs are byte-identical to 0.1.
 
@@ -24,7 +24,7 @@ Patch release of 0.1.1: the test and benchmark suites ship; the bootstrap recipe
 - Archive: `rsd-src.tar`, SHA-256 see the release page, 437 files.
 - Release: https://github.com/residua-labs/Residua/releases/tag/rsd-0.1.2
 
-## [0.1.1] — 2026-11-19
+## [0.1.1] — 2026-11-20
 
 Patch release of 0.1: documents, attribution and packaging; the bootstrap recipe's inputs are byte-identical to 0.1.
 

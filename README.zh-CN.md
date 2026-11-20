@@ -13,9 +13,16 @@ Residua 为研究项目，研究互不信任的各方之间如何复用计算结
 检查。0.1 版交付此设计中编译那部分：自举编译链，任何外部方都可从仓库中已提交的种子出发验证其来源。证明检查那部分
 （R-CIC 内核）是后续版本的内容。
 
-> **状态。** 研究版本 **0.1.2**（2026-11-19）：rsd 编译器的最小自举闭合，
+> **状态。** 研究版本 **0.1.2**（2026-11-20）：rsd 编译器的最小自举闭合，
 > 附测试与基准套件。
 > 目前还不是通用语言，见[限制](#限制)。
+
+## 更新
+
+- **0.1.2**（2026-11-20）：基准程序、Koka 对比工具和差分测试套件进入源码包，运行方法见 `release/docs/TESTING`。
+- **0.1.1**（2026-11-20）：性能记录（`perf/`）进入源码包；署名补全（`ACKNOWLEDGEMENTS.zh-CN.md`）；版本规则修正
+  （功能版本为 0.2、0.3……，修订版本为 0.1.x）。
+- 两个修订版本的自举配方输入都与 0.1 逐字节相同。完整记录：[CHANGELOG.zh-CN.md](CHANGELOG.zh-CN.md)。
 
 ## 动机
 
@@ -131,8 +138,8 @@ env -i PATH=/usr/bin:/bin bash --noprofile --norc
 | 版本 | 日期 | 源码包 SHA-256 | 说明 |
 |---|---|---|---|
 | [0.1](https://github.com/residua-labs/Residua/releases/tag/rsd-0.1) | 2026-11-19 | `59d0956e…` | 首个公开版本：最小自举闭合 |
-| [0.1.1](https://github.com/residua-labs/Residua/releases/tag/rsd-0.1.1) | 2026-11-19 | 见发布页 | 修订版：性能记录进入源码包，署名补全，内部标识符移除 |
-| [0.1.2](https://github.com/residua-labs/Residua/releases/tag/rsd-0.1.2) | 2026-11-19 | 见发布页 | 修订版：基准与对拍测试套件进入源码包 |
+| [0.1.1](https://github.com/residua-labs/Residua/releases/tag/rsd-0.1.1) | 2026-11-20 | `28a074e2…` | 修订版：性能记录进入源码包，署名补全，内部标识符移除 |
+| [0.1.2](https://github.com/residua-labs/Residua/releases/tag/rsd-0.1.2) | 2026-11-20 | `a3185221…` | 修订版：基准与对拍测试套件进入源码包 |
 
 完整记录：[CHANGELOG.zh-CN.md](CHANGELOG.zh-CN.md)。
 

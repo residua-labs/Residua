@@ -16,9 +16,17 @@ same term is compiled to native or WebAssembly code and is checked by a proof ke
 compilation half of this design, a self-bootstrapping compiler chain whose provenance any third party can verify from a
 committed seed. The proof-checking half (the R-CIC kernel) is the subject of later releases.
 
-> **Status.** Research release **0.1.2** (2026-11-19): the minimal self-bootstrapping closure of the rsd compiler,
+> **Status.** Research release **0.1.2** (2026-11-20): the minimal self-bootstrapping closure of the rsd compiler,
 > with its test and benchmark suites shipped.
 > Not yet a general-purpose language; see [Limitations](#limitations).
+
+## What's new
+
+- **0.1.2** (2026-11-20): the benchmark programs, the Koka comparison harness and the differential test suite ship in the
+  archive, with `release/docs/TESTING` on how to run them.
+- **0.1.1** (2026-11-20): the performance record (`perf/`) ships in the archive; attribution completed
+  (`ACKNOWLEDGEMENTS.md`); version scheme fixed (feature releases 0.2, 0.3, …; patch releases 0.1.x).
+- Both patch releases keep the bootstrap recipe's inputs byte-identical to 0.1. Full history: [CHANGELOG.md](CHANGELOG.md).
 
 ## Motivation
 
@@ -154,8 +162,8 @@ the designs it studied.
 | Version | Date | Archive SHA-256 | Notes |
 |---|---|---|---|
 | [0.1](https://github.com/residua-labs/Residua/releases/tag/rsd-0.1) | 2026-11-19 | `59d0956e…` | First public release: minimal self-bootstrapping closure |
-| [0.1.1](https://github.com/residua-labs/Residua/releases/tag/rsd-0.1.1) | 2026-11-19 | see the release page | Patch release: the performance record ships in the archive, attribution completed, internal identifiers removed |
-| [0.1.2](https://github.com/residua-labs/Residua/releases/tag/rsd-0.1.2) | 2026-11-19 | see the release page | Patch release: benchmark and differential test suites shipped |
+| [0.1.1](https://github.com/residua-labs/Residua/releases/tag/rsd-0.1.1) | 2026-11-20 | `28a074e2…` | Patch release: the performance record ships in the archive, attribution completed, internal identifiers removed |
+| [0.1.2](https://github.com/residua-labs/Residua/releases/tag/rsd-0.1.2) | 2026-11-20 | `a3185221…` | Patch release: benchmark and differential test suites shipped |
 
 Full history: [CHANGELOG.md](CHANGELOG.md).
 
