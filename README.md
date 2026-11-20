@@ -23,7 +23,7 @@ committed seed. The proof-checking half (the R-CIC kernel) is the subject of lat
 ## What's new
 
 - **0.1.2** (2026-11-20): the benchmark programs, the Koka comparison harness and the differential test suite ship in the
-  archive, with `release/docs/TESTING` on how to run them.
+  archive, with [`release/docs/TESTING`](release/docs/TESTING) on how to run them.
 - **0.1.1** (2026-11-20): the performance record (`perf/`) ships in the archive; attribution completed
   (`ACKNOWLEDGEMENTS.md`); version scheme fixed (feature releases 0.2, 0.3, …; patch releases 0.1.x).
 - Both patch releases keep the bootstrap recipe's inputs byte-identical to 0.1. Full history: [CHANGELOG.md](CHANGELOG.md).
@@ -68,7 +68,7 @@ trusting neither the publisher nor a large binary toolchain.
 | Formal semantics | Frozen specifications of each layer (scm, λRC, wasm0), pinned by content digest (`semantics/`, `gates/semalign/`, `lean/rsd-cert/`) |
 | Performance record | Measured against Koka and 6 other languages on fixed hardware ([`perf/`](perf/README.md)) |
 | Documentation | Installation, verification protocol, architecture, trust model, glossary, stability policy, FAQ (`release/docs/`, English and Chinese) |
-| Test and benchmark suites | `benchmarks/` (the benchmark programs and comparison harnesses) and `instruments/lrc-host/` (the differential test suite), with `release/docs/TESTING` |
+| Test and benchmark suites | `benchmarks/` (the benchmark programs and comparison harnesses) and `instruments/lrc-host/` (the differential test suite), with [`release/docs/TESTING`](release/docs/TESTING) |
 
 ### Evidence
 

@@ -19,7 +19,7 @@ Residua 为研究项目，研究互不信任的各方之间如何复用计算结
 
 ## 更新
 
-- **0.1.2**（2026-11-20）：基准程序、Koka 对比工具和差分测试套件进入源码包，运行方法见 `release/docs/TESTING`。
+- **0.1.2**（2026-11-20）：基准程序、Koka 对比工具和差分测试套件进入源码包，运行方法见 [`release/docs/TESTING.zh-CN`](release/docs/TESTING.zh-CN)。
 - **0.1.1**（2026-11-20）：性能记录（`perf/`）进入源码包；署名补全（`ACKNOWLEDGEMENTS.zh-CN.md`）；版本规则修正
   （功能版本为 0.2、0.3……，修订版本为 0.1.x）。
 - 两个修订版本的自举配方输入都与 0.1 逐字节相同。完整记录：[CHANGELOG.zh-CN.md](CHANGELOG.zh-CN.md)。
@@ -55,7 +55,7 @@ Residua 为研究项目，研究互不信任的各方之间如何复用计算结
 | 形式语义 | 各层（scm、λRC、wasm0）冻结的规范，以内容摘要钉住（`semantics/`、`gates/semalign/`、`lean/rsd-cert/`） |
 | 性能记录 | 在固定硬件上与 Koka 及另外 6 门语言对比（[`perf/`](perf/README.zh-CN.md)） |
 | 文档 | 安装、验证流程、架构、信任模型、术语表、稳定性策略、FAQ（`release/docs/`，中英文） |
-| 测试与基准套件 | `benchmarks/`（基准程序与对比框架）与 `instruments/lrc-host/`（对拍测试套件），用法见 `release/docs/TESTING` |
+| 测试与基准套件 | `benchmarks/`（基准程序与对比框架）与 `instruments/lrc-host/`（对拍测试套件），用法见 [`release/docs/TESTING.zh-CN`](release/docs/TESTING.zh-CN) |
 
 ### 证据
 
