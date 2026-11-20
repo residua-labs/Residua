@@ -35,5 +35,5 @@ template/	clean 3 internal-path/seat-name/contract-path hits listed in release/s
 trellis/	clean 124 internal-path/seat-name/contract-path hits listed in release/scan/leakage.tsv	path owned outside release/; rows are the fix input
 vbench/	clean 22 internal-path/seat-name/contract-path hits listed in release/scan/leakage.tsv	path owned outside release/; rows are the fix input
 web/	clean 20 internal-path/seat-name/contract-path hits listed in release/scan/leakage.tsv	path owned outside release/; rows are the fix input
-tool/ rsd front door	the `rsd build/test/run/cache/modules` command named by PUBLIC-RELEASE-0's Trellis closure	trellis/SEED-BUILD-RSD.wip.md lists "the actual rsd build/test front door" as remaining closure work; RSD-COMMAND doc is a skeleton until it lands
-release tarball	layout, ship-set membership (contracts/, reports/, scratch/, out/, vbench gitlink), two-host reproducibility	open.public_release items p1/p6; INSTALL and VERIFY-RELEASE stay skeletons until the cut exists
+tool/ rsd front door	the `rsd build/test/run/cache/modules` command named by the release goal's incremental-build item	its driver work-in-progress note lists "the actual rsd build/test front door" as remaining closure work; RSD-COMMAND doc is a skeleton until it lands
+release tarball	layout, ship-set membership (the contract tree, reports/, scratch/, out/, vbench gitlink), two-host reproducibility	public-release items on layout and membership; INSTALL and VERIFY-RELEASE stay skeletons until the cut exists

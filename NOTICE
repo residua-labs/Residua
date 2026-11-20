@@ -9,15 +9,7 @@ third-party projects. Full licence texts and usage classes are in
 release/NOTICES.md; origins and upstream pins are in
 release/PROVENANCE.tsv.
 
-https://github.com/AndrasKovacs/smalltt @ ea99b0f478e50dcb81ea19e40bfb4262339b22aa
-licence: MIT
-Copyright 2021 András Kovács
-
-https://github.com/AndrasKovacs/elaboration-zoo @ 9626d6c7a40efa753a757f435df3710efc805d2f
-licence: BSD-3-Clause
-Copyright András Kovács here (c) 2016
-
-https://github.com/leanprover/lean4 @ 410fab7284703f41660ca2454218dcca9b2ec896, 68218e876d2a38b1985b8590fff244a83c321783
+https://github.com/leanprover/lean4 @ 410fab7284703f41660ca2454218dcca9b2ec896
 licence: Apache-2.0
 Copyright (c) 2018 Microsoft Corporation. All rights reserved.
 Copyright (c) 2020 Microsoft Corporation. All rights reserved.
@@ -28,50 +20,8 @@ Copyright (c) 2024 Lean FRO, LLC. All rights reserved.
 Copyright (c) 2025 Lean FRO, LLC. All rights reserved.
 Portions authored by Leonardo de Moura.
 
-https://github.com/pandaman64/lean-regex @ 28454366bfc58adba6f80f1c19e196edeefa3c0e
-licence: Apache-2.0
-Copyright lean-regex contributors.
-
-https://github.com/cedar-policy/cedar-spec @ 86da7cb18be25e0fbcd5ce6e976970a2c1d24ff8
-licence: Apache-2.0
-Copyright Cedar Contributors
-
-https://github.com/eveil-labs/matching-logic-lean @ 4628a26bb2db117de1a11cbedcb620db9124cdb8
-licence: Apache-2.0
-Copyright the matching-logic-lean authors.
-No copyright line is present in the vendored sources (PORT-NOTICE.md).
-
-https://github.com/libuv/libuv @ 5152db2cbfeb5582e9c27c5ea1dba2cd9e10759b
-licence: ISC
-Copyright (c) 2004 by Internet Systems Consortium, Inc. ("ISC")
-Copyright (c) 1996-1999 by Internet Software Consortium.
-
-https://github.com/leanprover/lean4 (Std.Net.Addr representation, Lean 4.31) @ 68218e876d2a38b1985b8590fff244a83c321783
-licence: Apache-2.0
-Copyright (c) 2018 Microsoft Corporation. All rights reserved.
-Copyright (c) 2013, 2019, 2021 Microsoft Corporation. All rights reserved.
-Copyright (c) 2024 Amazon.com, Inc. or its affiliates. All Rights Reserved.
-
-https://github.com/CosmWasm/cw-plus @ cb3c89201527aba339d77b81e3044f773e715275
-licence: Apache-2.0
-Copyright (C) 2020 Confio OÜ
-
-https://github.com/koka-lang/koka @ facb7932ce6871fdb063f762a304bd8238f35fba
+https://github.com/koka-lang/koka @ unspecified
 licence: Apache-2.0
 Copyright 2012-2023, Microsoft Research, Daan Leijen.
 Ported programs: test/bench/{koka,ocaml} suite sources.
-
-https://salsa.debian.org/benchmarksgame-team/benchmarksgame @ 40296663ed350d5fe4a6ab5e367bab61cb77c219
-licence: BSD-3-Clause
-Copyright © 2004-2008 Brent Fulgham, 2005-2024 Isaac Gouy
-Ported programs: OCaml/Rust entries and expected-output files.
-
-https://github.com/bendlang/bend @ be236f324ed0338fe907fe50474468e4d3b94157
-licence: Apache-2.0
-Copyright 2026 HigherOrderCO
-Ported programs: bench/runtime/*.bend sources.
-
-https://github.com/Daniel1854/earley-lean @ 85c6d397cbe323e08dec7dcbe5ae3dc788e72b05
-licence: Apache-2.0
-Copyright (c) 2026 Daniel Soukup. All rights reserved.
 

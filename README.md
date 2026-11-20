@@ -16,15 +16,16 @@ same term is compiled to native or WebAssembly code and is checked by a proof ke
 compilation half of this design, a self-bootstrapping compiler chain whose provenance any third party can verify from a
 committed seed. The proof-checking half (the R-CIC kernel) is the subject of later releases.
 
-> **Status.** Research release **0.1** (2026-11-19): the minimal self-bootstrapping closure of the rsd compiler.
+> **Status.** Research release **0.1.1** (2026-11-19): the minimal self-bootstrapping closure of the rsd compiler.
 > Not yet a general-purpose language; see [Limitations](#limitations).
 
 ## Motivation
 
 1. **Maintenance dominates the cost of formal results.** In a formal development, re-checking after upstream changes,
    repair, coordination and review cost far more than the kernel check itself.
-2. **Producers are increasingly automated.** Most future results will come from automated agents, whose output cannot be
-   accepted on the producer's word. Only mechanical checking and content identity scale to that setting.
+2. **Producers are increasingly automated.** This project assumes that most future results will come from automated
+   agents, whose output cannot be accepted on the producer's word. On that premise, only mechanical checking and
+   content identity scale to the setting.
 3. **Semantics are siloed.** Results live in separate systems (Lean, Rocq, K, WebAssembly, the EVM) and do not carry
    across them.
 4. **Results are bound to toolchain versions.** In current proof assistants a compiled library is tied to the toolchain
@@ -54,9 +55,9 @@ trusting neither the publisher nor a large binary toolchain.
 | Component | Contents |
 |---|---|
 | Compiler chain | `rsd → rscm → wasm`: front end `rsdc` and back end `rsc`, with their complete sources (54 files, pinned by SHA-256) |
-| Seed | `bootstrap/seed/stage-14274/`: the two compilers as WebAssembly, the recipe, and every digest it checks |
+| Seed | `bootstrap/seed/stage-14274/`: the 2 compilers as WebAssembly, the recipe, and every digest it checks |
 | Formal semantics | Frozen specifications of each layer (scm, λRC, wasm0), pinned by content digest (`semantics/`, `gates/semalign/`, `lean/rsd-cert/`) |
-| Performance record | Measured against Koka and six other languages on fixed hardware ([`perf/`](perf/README.md)) |
+| Performance record | Measured against Koka and 6 other languages on fixed hardware ([`perf/`](perf/README.md)) |
 | Documentation | Installation, verification protocol, architecture, trust model, glossary, stability policy, FAQ (`release/docs/`, English and Chinese) |
 
 ### Evidence
@@ -64,15 +65,15 @@ trusting neither the publisher nor a large binary toolchain.
 - **Independent reproduction.** The seed recipe was reproduced from the documentation alone, by an independent agent with
   no prior knowledge of the project, on a fresh Linux virtual machine: both compilers were rebuilt byte-identical to the
   seed.
-- **Independent review.** The release was reviewed by two independent model families.
-- **Archive identity.** The repository tree at tag `rsd-0.1` is byte-identical to the published source archive.
+- **Independent review.** The release was reviewed by 2 independent model families.
+- **Archive identity.** The repository tree at tag `rsd-0.1.1` is byte-identical to the published source archive.
 
 ## Reproducing the bootstrap
 
 Requirements: Linux x86-64, GCC, GNU binutils, coreutils, Bash, curl and tar. No Lean, Node or OCaml.
 
 ```sh
-# 1. Download and verify the archive (from the rsd-0.1 release page)
+# 1. Download and verify the archive (from the rsd-0.1.1 release page)
 sha256sum -c rsd-src.tar.sha256
 mkdir rsd-src && tar -xf rsd-src.tar -C rsd-src && cd rsd-src
 
@@ -81,7 +82,7 @@ env -i PATH=/usr/bin:/bin bash --noprofile --norc
 #    then run the commands of bootstrap/seed/stage-14274/README.md
 ```
 
-The recipe fetches a pinned WABT release, translates the two seed executors to C, builds them, recompiles both compilers
+The recipe fetches a pinned WABT release, translates the 2 seed executors to C, builds them, recompiles both compilers
 from source, and exits 0 only if the rebuilt compilers are byte-identical to the committed seed.
 
 Further reading:
@@ -93,13 +94,17 @@ Further reading:
 
 ## Evaluation
 
-**Method.** GCP t2d-standard-4; two fresh virtual machines; median of five runs on a pinned core. A ratio is Residua's
-wall time divided by the reference's; below 1, Residua is faster. The programs are taken unmodified from Koka's benchmark
-suite (the suite of the Perceus paper [5]) and from Lean 4's benchmarks.
+<!-- generated-from-perf -->
+**Method.** GCP t2d-standard-4. Koka columns: two fresh virtual machines, each value the mean of the two machines'
+medians of 5 runs on a pinned core. Other-language columns: three fresh virtual machines, median of 5 on a
+pinned core. A ratio is Residua's wall time divided by the reference's; below 1, Residua is faster. The programs
+are taken unmodified from Koka's benchmark suite (the suite of the Perceus paper [5]) and from Lean 4's
+benchmarks.
 
-| Geometric mean, Residua 0.1 / … | Koka (native) | Koka (wasm) | C++ | OCaml | Haskell | Java | Lean 4.14 |
-|---|---:|---:|---:|---:|---:|---:|---:|
-| ratio | 0.973 | 1.047 | 0.822 | 0.586 | 0.281 | 0.451 | 0.570 |
+| Geometric mean, Residua 0.1 / … | Koka (native) | Koka (wasm) | C++ | OCaml | Haskell | Java | Swift | Lean 4.14 |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| ratio | 0.973 | 1.047 | 0.822 | 0.586 | 0.281 | 0.451 | 0.164 | 0.570 |
+<!-- end-generated-from-perf -->
 
 Self-bootstrap from the seed takes 1162 s (peak 3.6 GiB).
 
@@ -109,14 +114,14 @@ history of every version are in [`perf/`](perf/README.md).
 
 ## Limitations
 
-Release 0.1 is for reproducible, auditable compilation and for research on verified, bootstrappable compilers.
+Release 0.1.1 is for reproducible, auditable compilation and for research on verified, bootstrappable compilers.
 
 - Single-module programs only (no `import`).
 - No I/O execution layer.
 - No proof checking: the R-CIC kernel is not in this release, and shipped `theorem` texts are specifications, not checked claims.
 - No `UInt64`; a 4 GiB address space.
 - The content-identity (q) format is not final.
-- The 0.1 surface language is a strict bootstrap subset; `theorem`, `axiom`, `class`, `abbrev` and `by` are refused
+- The 0.1.1 surface language is a strict bootstrap subset; `theorem`, `axiom`, `class`, `abbrev` and `by` are refused
   ([`release/docs/LANGUAGE`](release/docs/LANGUAGE)).
 
 ## Research agenda
@@ -146,6 +151,7 @@ the designs it studied.
 | Version | Date | Archive SHA-256 | Notes |
 |---|---|---|---|
 | [0.1](https://github.com/residua-labs/Residua/releases/tag/rsd-0.1) | 2026-11-19 | `59d0956e…` | First public release: minimal self-bootstrapping closure |
+| [0.1.1](https://github.com/residua-labs/Residua/releases/tag/rsd-0.1.1) | 2026-11-19 | see the release page | Patch release: the performance record ships in the archive, attribution completed, internal identifiers removed |
 
 Full history: [CHANGELOG.md](CHANGELOG.md).
 
@@ -164,13 +170,13 @@ Full history: [CHANGELOG.md](CHANGELOG.md).
 Please cite the release you used, with the digest of its source archive:
 
 ```bibtex
-@software{residua_0_1,
+@software{residua_0_1_1,
   title   = {Residua: Verifiable Computation and Proof, Identified by Content},
   author  = {{Residua Labs contributors}},
   year    = {2026},
-  version = {0.1},
-  url     = {https://github.com/residua-labs/Residua/releases/tag/rsd-0.1},
-  note    = {Source archive SHA-256 59d0956e3bbaed0ddf176b9bc3ffa0e9fdb401acb1e021400f0e8b99ce110ef1}
+  version = {0.1.1},
+  url     = {https://github.com/residua-labs/Residua/releases/tag/rsd-0.1.1},
+  note    = {Source archive SHA-256 recorded on the release page}
 }
 ```
 
@@ -190,12 +196,12 @@ reporting, and we will correct it.
 
 1. K. Thompson. Reflections on trusting trust. *Communications of the ACM* 27(8), 1984.
 2. D. A. Wheeler. Countering trusting trust through diverse double-compiling. *ACSAC*, 2005.
-3. Bootstrappable Builds. https://bootstrappable.org
+3. Bootstrappable Builds project. "Bootstrappable builds". https://bootstrappable.org (accessed 2026-11).
 4. R. Kumar, M. O. Myreen, M. Norrish, S. Owens. CakeML: a verified implementation of ML. *POPL*, 2014.
 5. A. Reinking, N. Xie, L. de Moura, D. Leijen. Perceus: garbage free reference counting with reuse. *PLDI*, 2021.
 6. S. Ullrich, L. de Moura. Counting immutable beans: reference counting optimized for purely functional programming.
    *IFL*, 2019.
-7. M. Carneiro. Lean4Lean: verifying a typechecker for Lean, in Lean. arXiv:2403.14064, 2024.
+7. M. Carneiro. Lean4Lean: Verifying a Typechecker for Lean, in Lean. arXiv:2403.14064, 2024.
 8. G. C. Necula. Proof-carrying code. *POPL*, 1997.
 9. H. Barendregt, F. Wiedijk. The challenge of computer mathematics. *Philosophical Transactions of the Royal Society A*
    363, 2005.

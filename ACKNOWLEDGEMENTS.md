@@ -35,7 +35,7 @@ private vulnerability reporting on this repository. We will add the credit and c
 
 ## Designs and papers we studied
 - Lean Kernel Arena (leanprover/lean-kernel-arena) and nanoda, as kernel-checker references.
-- Perceus and FBIP (Koka papers); Lean 4's compiler (lambda-RC IR).
+- Perceus and FBIP (Koka papers); Lean `4's` compiler (lambda-RC IR).
 - h5i (h5i-dev/h5i, Apache-2.0): verified HTTP kernels; our web experiments modelled its request policy.
 - Ninja-go and ABFS (Google): two-phase content-addressed action caching.
 - Bazel, Buck2, Nix: action keys and input addressing. Salsa: incremental computation.

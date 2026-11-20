@@ -1,10 +1,10 @@
-# QUICKSTART — first run against the 0.1 release
+# QUICKSTART — first run against the 0.1.1 release
 
-Release 0.1 is the minimal self-bootstrap closure: the committed wasm
+Release 0.1.1 is the minimal self-bootstrap closure: the committed wasm
 seed, the `rsdc`/`rsc` source closure, the runtime and these documents.
-There is no `raisin` command, no modules and no execution layer in 0.1 —
+There is no dispatcher command, no modules and no execution layer in 0.1.1 —
 the first run is the seed recipe itself. Every claim names its source.
-This document will change in later versions (0.11+).
+This document will change in later versions (0.2+).
 
 ## 20 to 45 minutes: rebuild the compilers from the seed
 
@@ -20,11 +20,11 @@ env -i PATH=/usr/bin:/bin bash --noprofile --norc
 ```
 
 (The measured spread is 1154.8 s on the recorded perf host to 2043 s
-on a 4-vCPU Debian 12 guest — `release/docs/PERF-RECORD.tsv`.)
+on a `4-vCPU` Debian 12 guest — `release/docs/PERF-RECORD.tsv`.)
 
 The recipe fetches pinned WABT 1.0.42 and runtime sources (digests in
 `bootstrap/seed/stage-14274/WABT{,-RUNTIME}-SHA256SUMS`), translates the
-two seed executors to C, builds them, and runs all four compiler calls
+2 seed executors to C, builds them, and runs all 4 compiler calls
 in the CPU executables. It rebuilds both RSCM files and both Wasm
 files byte-identical to the committed seeds and exits 0 — the recipe's
 wall and peak are recorded per version in `release/docs/PERF-RECORD.tsv`.
@@ -46,20 +46,20 @@ The rebuilt executors are the compiler:
 `$out/rsdc/run rsdc <source.rsd> <out.rscm> 0 cons` compiles, and
 `$out/rsc/run rsc <file.rscm> <out.wasm> 14274 cons` lowers
 (`stage-14274/README.md`, the `rebuild_root` command lines). The
-inputs the recipe demonstrates are the two whole-module sources
+inputs the recipe demonstrates are the 2 whole-module sources
 `sources/{rsdc,rsc}.rsd` — "the exact RSD byte streams" of the
 seed cut, including generated runtime definitions
 (`stage-14274/README.md`); the grammar those sources are written in
 is `release/docs/LANGUAGE`, whose probe table refuses `import`,
 `theorem`, `axiom`, `class`, `abbrev`, `variable`, `opaque`, `by`
-(all err=1).
+(all `err=1`).
 
-## Not in 0.1
+## Not in 0.1.1
 
-Modules (`import`), the `raisin`/`raisinc` binaries and their
-example programs, the 9P execution layer's device servers,
+Modules (`import`), the dispatcher binaries and their
+example programs, the `9P` execution layer's device servers,
 theorem checking, the elaborator, the `.rsm`/`.rsj` surfaces, the RSX
-entry and the application suites are named 0.1x work
+entry and the application suites are deferred to a feature release
 (`release/MANIFEST.md`, `release/docs/OVERVIEW`).
 
 closure_claim = 0

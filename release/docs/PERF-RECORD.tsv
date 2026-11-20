@@ -1,14 +1,14 @@
-#	record	PERF-RECORD-0 form — described in release/docs/PERF-RECORD
+#	record	the record form described in release/docs/PERF-RECORD
 #	version	0.1
 #	compiler_head	4a639b7b0f5e1dcfd83a74c50cbdf996892e6178 (main); chain rows on seed f640f43dff836e1eb3704178d7a7eefe088e6973
 #	stage_word	14274
 #	default_layers	reg,facts,rc,borrow,drop,reuse,alloc,ctor
-#	seed_q	rsdc.wasm=97e549715d04682d90668bb861b891a4d376df43a556ee69a5251eb182ef5933 rsc.wasm=3425f3e9b1b27e63a7a14b9269ce2a44882b88fe502e514eee0374c6a2d7b82d (stage-14274, re-cut at H by SEED-RECUT-0, cut sha 3f879c7d9)
+#	seed_q	rsdc.wasm=97e549715d04682d90668bb861b891a4d376df43a556ee69a5251eb182ef5933 rsc.wasm=3425f3e9b1b27e63a7a14b9269ce2a44882b88fe502e514eee0374c6a2d7b82d (stage-14274, cut sha 3f879c7d9)
 #	date	2026-11-19
 #	machine	t2d-standard-4 GCP, AMD EPYC 7B13, kernel Linux 7.0.0-1017-gcp x86_64, thp always [madvise] never, nproc 4
 #	toolchain	cc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0; node v26.4.0; koka v3.2.9; wabt 1.0.42; emsdk 3.1.74
 #	rules	wall ms = mean of the two VMs medians-of-5 (each VM: median of 5 reps, pinned core 3); residua wall = host pages column (wall_h), koka wall = as built (wall_p); RSS KiB = residua host-pages run / koka as built; bytes = stripped exe (native) or .wasm; two VMs agree within 10 percent or the row is re-run
-#	vms	burst-t2d4-1.europe-west3-b.c.residua-prod.internal ; burst-t2d4-2.europe-west3-b.c.residua-prod.internal
+#	vms	vm1, vm2 (t2d-standard-4, europe-west3-b)
 version	section	row	route	size	metric	value	unit	status	note
 0.1	row	binarytrees-kk	native	21	value_check	equal:3c785b9fc4d90844	sha256-16	measured	
 0.1	row	binarytrees-kk	native	21	r_wall_ms	6174.404	ms	measured	

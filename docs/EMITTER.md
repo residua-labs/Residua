@@ -6,16 +6,16 @@ inside the chain's source domain. Pins: chain `17586d3d4c` (`IR.lean`, `SCM.lean
 `docs/BOOTSTRAP_SCM_SOURCE_WIRE.md`); consumer contract `26147cfc16`; owner's domain review `e74a63bf9b`;
 untyped emitter `lean/algorithms/ResiduaRCCLeanToScm.lean` (blob `254bd184`, sha256 `27e19c49…`) at
 `8820fe64d8`, not on main. Every number below was measured by the prototype unless marked READ or INFERRED.
-The prototype is a 440-line change to that emitter (sha256 `04775a89…`); it is the emitter's new identity and
+The prototype is a change to that emitter (delta 440) (sha256 `04775a89…`); it is the emitter's new identity and
 the old pin stays.
 
-## 1. The emitter and the printer as NF instances (four roles; everything else is transport)
+## 1. The emitter and the printer as NF instances (4 roles; everything else is transport)
 
 | Role | Emitter | Printer (`SCMPrograms` to `.rsn`) |
 |---|---|---|
 | q | source module closure content + emitter q + profile q (the BootTy table of §3, the fuel profile of §6) → the output program's identity, which is `SourceTask` (signature table + ordered bodies) | the `SCMPrograms` q |
 | a | accept, or a named refusal; the chain's source admission re-judges the output, so the emitter stays untrusted | `parse(print(a)) = a` through the front end |
-| σ | the canonical `SCMPrograms` plus its index table (module, table index, Lean declaration) | the one rendering |
+| σ | the canonical `SCMPrograms` plus its index table (module, table index, Lean declaration) | the rendering |
 | ρ | closed: §8 | closed: the printer's own |
 
 Transport, not roles: file writing, module file names, the order of a hash map's iteration, the driver's `run_cmd`,
@@ -76,8 +76,8 @@ later, because `lowerToSCM` of that `BootExpr` is the `SCMExpr` `rscmD` already 
 
 Specialisation: Lean is polymorphic and BootTy is monomorphic, so a call with a type argument or a function
 argument is compiled to one specialised module per distinct (callee, static arguments) pair. The untyped emitter
-already specialised function arguments; the typed emitter adds type arguments, so `List.find?` at two row types
-is two modules. A static argument that captures a `let`-bound variable is abstracted as an extra parameter; the
+already specialised function arguments; the typed emitter adds type arguments, so `List.find?` at a pair of row types
+becomes one module each. A static argument that captures a `let`-bound variable is abstracted as an extra parameter; the
 untyped emitter turns the let into a `let` head and refuses (`application of non-constant head letE`); the
 prototype binds the variable as a local instead and the refusal disappears (§9).
 
@@ -89,13 +89,13 @@ Stock `%` on `Int` is refused as `[typed_refused_int_mod]`; write `Int.fmod`.
 ## 5. Numbers and fuel
 
 * `Nat` and `Int` are `i64`. `add sub mul` are range-checked: where Lean computes a value outside
-  `[-2^63, 2^63-1]` the chain returns `none` (row `9223372036854775807 + 1` of the sample). Named residue
+  `[-2^63, 2^63-1]` the chain returns `none` (sample index `9223372036854775807 + 1`). Named residue
   `[typed_i64_overflow]`; a program claims agreement with Lean only inside the range.
 * Truncating `Nat` subtraction is not inherited as an operator: Lean's `a - b` is emitted as the composition
   `let d = a - b in if d < 0 then 0 else d` (42 sites in the checker closure).
-* Two fuels, never one. (1) Chain fuel: a `Nat` supplied with the entry (`evalSCM`), decremented at `call` only;
+* 2 fuels, never one. (1) Chain fuel: a `Nat` supplied with the entry (`evalSCM`), decremented at `call` only;
   the requirement is the call nesting depth, not the number of calls. Measured: list recursion by `call` needs
-  length + 21 (4154 for 4133 rows); tree recursion needs the tree height. It belongs in the manifest. (2) Program
+  length + 21 (4154 at length 4133); tree recursion needs the tree height. It belongs in the manifest. (2) Program
   fuel: a source parameter such as `exprFuel`; type `i64`, range `0 ≤ f ≤ 2^63-1`, decrement only under the guard
   `0 < f`; source `Nat.succ` patterns on it lower to `eqE f 0` and `f - 1` with no truncation case reachable.
 * Unreachable arms and fuel exhaustion are both `none` (SEM-1 is the chain's open row); programs that must tell
@@ -114,7 +114,7 @@ equality — handle equality is wrong when distinct handles hold equal nodes.
 
 Boundary: the emitter knows `Node`'s fields and the `intern`/`alloc`/`read`
 signatures, nothing else — the library's bodies are ordinary modules emitted
-like any program's; the switch only chooses between two known names.
+like any program's; the switch only chooses between 2 known names.
 
 Cost note: `intern` is O(|arena|) per construction (the find loop), and
 `alloc`'s `ar ++ [n]` is O(|arena|) under the chain's functional lists — the
@@ -190,7 +190,7 @@ calls the same q for intern and read.
 fuel-bounded structural walking of Lean terms (`bootTy`, pattern lowering);
 no `decide` on runtime types appears, and the arena lowering adds no new
 elaboration obligations — slot maps come from constructor telescopes. The
-two benchmark programs elaborate in minutes on stock Lean 4.14 (measured in
+2 benchmark programs elaborate in minutes on stock Lean 4.14 (measured in
 the report).
 
 History (superseded by this section): an interned arena exists and carries
@@ -221,7 +221,7 @@ their signature (first offender: `Expr` 102, `Level` 56, derivations `TyConvT` 1
 ## 7. Identity and order
 
 Table index and call index are significant for q; module names are not. The untyped emitter names
-specialisations `_s<k>` by queue order and sorts by name, so one new specialisation renumbers the others. The
+specialisations `_s<k>` by queue order and sorts by name, so a new specialisation renumbers the others. The
 typed emitter must name a specialisation by the content of (callee, static arguments) and order the table
 callee-first by Lean name. The driver must fail when the work queue is not empty after the job cap (the untyped
 `compileClosure` stops silently at 100000 jobs; none was hit: the queue drains at 210 modules).
@@ -237,18 +237,18 @@ A refusal never writes a stand-in.
 
 ## 9. What the prototype shows (rows are real; commands in the report)
 
-* `catalog_canon` (7 entries, 11 modules, 0 refusals): the printed file elaborates against the pinned `SCMExpr`
-  (2.3 s); two planted type mutants are rejected by Lean; 49/49 request rows give the expected values under the
-  value map "drop the constant `tag` field"; node counts against today's code on 36 small rows: 0.5 to 1.04,
+* `catalog_canon` (catalog 7, modules 11, no refusals): the printed file elaborates against the pinned `SCMExpr`
+  (2.3 s); 2 planted type mutants are rejected by Lean; request rows give the expected values (49/49) under the
+  value map "drop the constant `tag` field"; node counts against today's code on small inputs (36): 0.5 to 1.04,
   median 0.89.
-* Grammar examples P1 and P2 (1 and 8 modules): both elaborate; 6 of 6 and 6 of 6 rows agree with stock Lean, plus
+* Grammar examples P1 and P2 (1 and 8 modules): both elaborate; all rows agree in full with stock Lean, plus
   one P1 row that overflows i64, which the chain refuses (Lean computes a value). Today's emitter emits P1 (same
-  values on all 7 rows, the overflow row `null` there) and refuses P2.
+  values on every row, the overflow row `null` there) and refuses P2.
 * Certificate closure (route A, emitter blob `254bd184`, commit `8820fe64d8`): regenerates to 210 modules,
   byte-identical to the committed tree. At main `b0db4a6344` the same emitter completes 216 modules and refuses
   `Rcic.Declarative.sortPiConv?` (`unknown free variable`), so the checker on main has no complete emission.
-* Operators of the 210 modules: 21 heads, all with a form in §4; 995 sum-tag reads become `matchE`, 1164 record
-  constructions with a leading tag become `inj`.
+* Operators of the 210 modules: 21 heads, all with a form in §4; 995 sum-tag reads become `matchE`, record constructions with a leading tag — 1164 —
+  become `inj`.
 
 ## 10. Open, for cc
 
@@ -261,7 +261,7 @@ A refusal never writes a stand-in.
 ## RSCM type table, revision WIRE-SEQ-0: a sequence says what it was written as
 
 Type tags of the image stream (inline `54 leb(k)` references are unchanged): 0 i64, 1 bool, 2 str, 3 bytes,
-4 list(T), 5 pair(A,B), 6 sum, 7 record, 8 option(T), 9 residue(T), and, new, **10 seq(kind, width, T)**:
+list(T) 4, pair(A,B) 5, sum 6; the next tag `record` has the id 7, option(T) 8, residue(T) 9, and, new, **10 seq(kind, width, T)**:
 the bytes `10 kind width <T>`. `kind` is the source kind of the sequence, the code of `lib/ArrayWireNF.rsd`
 `basicKind`: 2 ByteArray, 4 Array (a List is still written as tag 4, kind 0 by convention). `width` is the
 element width in bits: 8, 16 or 32 for UInt8, UInt16 and UInt32 elements (a ByteArray is 8), 0 for every other
@@ -278,9 +278,9 @@ Written by rsdc/Compile.rsd `tyW` and instruments/rsdc-ml/rsdc.ml `tyW` (Array o
 ### WIRE-SEQ-0 revision 2: a fixed-width scalar says its width; who reads what
 
 New, in the same image revision: **tag 11 width**, the bytes `11 w`, a fixed-width scalar of `w` bits (8, 16, 32: the
-front end's UInt8, UInt16 and UInt32; UInt64 and USize stay `0`, a word). It stands wherever the type of such a
+front end's UInt8, UInt16 and UInt32; UInt64 and USize stay 0, a word). It stands wherever the type of such a
 value is written: a parameter, a result, a constructor field, a sequence element. It means exactly the word type
-`0` (i64): the readers read `11 w` as `0`, so identity, digests, sizes and `evalLF` are those of the word.
+0 (i64): the readers read `11 w` as 0, so identity, digests, sizes and `evalLF` are those of the word.
 Written by `tyW` of both front ends. The sequence rows above and this row are the whole revision; no operator.
 
 Metadata, unchecked: the `kind` byte of tag 10 and the `width` bytes of tags 10 and 11 are advisory. The readers
@@ -289,7 +289,7 @@ skip them without validating them (a `10 7 99 T` reads as `list(T)`, an `11 99` 
 
 Edited bytes: a new image differs from the old one of the same program only at type positions, in the signature
 type table and in the inline type payloads of bodies (let, equality, list-length nodes carry their types): each
-old `04` (or `00`) becomes `0a kk ww` (or `0b ww`); the size grows by exactly 2 bytes per sequence type and 1 per
+old 04 (or 00) becomes `0a kk ww` (or `0b ww`); the size grows by exactly 2 bytes per sequence type and 1 per
 fixed-width scalar type.
 
 Who reads which image (seed recipe, bootstrap/seed/stage-14274): the stage-14274 seed pair is the head's own

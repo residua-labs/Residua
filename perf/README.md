@@ -4,12 +4,13 @@ English | [中文](README.zh-CN.md)
 
 There is one record per version, measured by one fixed method so that versions can be compared. Every row of every
 version is in [HISTORY.tsv](HISTORY.tsv) (machine-readable; a new version appends its rows). The full form and rules of
-a record are in `release/docs/PERF-RECORD` of that version's source.
+a record are in `release/docs/PERF-RECORD` of that version's source. Patch release 0.1.1 rebuilds the same sources from
+the same seed, so its record applies to it unchanged.
 
 ## Method
 
-**Machine.** GCP t2d-standard-4 (AMD EPYC 7B13, 4 vCPUs), Linux x86_64; two fresh virtual machines per version. Each value
-is the mean of the two machines' medians of 5 runs on a pinned core. **Reference.** Koka 3.2.9 on the same machine and
+**Machine.** GCP t2d-standard-4 (AMD EPYC `7B13`, quad vCPUs), Linux x86_64; 2 fresh virtual machines per version. Each value
+is the mean of the 2 machines' medians of 5 runs on a pinned core. **Reference.** Koka 3.2.9 on the same machine and
 the same benchmark suite. **Metric.** A ratio is Residua's wall time divided by Koka's; below 1, Residua is faster.
 
 **Scope and limitations.** The suite is small; its programs are allocation-heavy functional workloads, each run on one
@@ -21,7 +22,7 @@ marked below.
 
 | version | native geomean vs Koka | wasm geomean vs Koka | self-bootstrap | rsdc self-compile | rsc self-compile |
 |---|---:|---:|---:|---:|---:|
-| 0.1 | 0.973 (6 rows) | 1.047 (4 rows) | 1161.7 s, 3.6 GiB | 119.0 s, 0.67 GiB | 301.2 s, 2.0 GiB |
+| 0.1 | 0.973 (6 samples) | 1.047 (4 samples) | 1161.7 s, 3.6 GiB | 119.0 s, 0.67 GiB | 301.2 s, 2.0 GiB |
 
 Geomeans are over the rows marked "in geomean" below: the like-for-like ports of Koka's own programs. Rows marked "no" are
 our own variants of a benchmark (different source), recorded but not compared.
@@ -56,8 +57,8 @@ lower 2.76 s; deriv: emit 0.15 s, lower 4.69 s.
 
 ## Other languages (0.1)
 
-The same six programs, taken unmodified from Koka's `test/bench` (the suite of the Perceus paper, PLDI 2021; tag v3.2.9) and
-from Lean 4.14.0's `tests/bench`, measured on the same machine type (three fresh t2d-standard-4 VMs, median of 5, pinned core,
+The same 6 programs, taken unmodified from Koka's `test/bench` (the suite of the Perceus paper, PLDI 2021; tag v3.2.9) and
+from Lean `4.14.0's` `tests/bench`, measured on the same machine type (3 fresh t2d-standard-4 VMs, median of 5, pinned core,
 every cited VM pair within 10 percent, every cell's output checked before timing). The residua column is the like-for-like
 row of each program. Ratio = residua wall / language wall (below 1 = residua faster).
 
@@ -77,5 +78,5 @@ row of each program. Ratio = residua wall / language wall (below 1 = residua fas
 The Rust column (geomean 0.232) is residua's own straightforward ports (Box/Rc, not tuned), not from the published suite,
 and is not comparable with the suite columns. Empty cells: rbtree-ck/C++ is killed at the 12.5 GiB cap (the upstream
 program deep-copies the map per checkpoint); cfold/Java overflows the default thread stack; Lean's suite has no nqueens.
-Toolchains: cpp = g++ 13.3.0 -O3 -pthread; rust = rustc 1.100.0 (0ef1bc386) -C opt-level=3 -C codegen-units=1; ocaml = ocamlopt 4.14.2 flambda=true -O3 (vm5+vm6; vm3 ran 4.14.1 flambda=false and its ocaml cells are kept as third-run evidence only); haskell = GHC 9.4.7 -O2; java = OpenJDK 21.0.13.1 default GC; lean = Lean 4.14.0 (commit 410fab728470) lean -c + leanc -O3; swift = swiftc 6.0.3 RELEASE -O. Reference columns depend only on the machine type and these pins; they are measured once per pin and
+Toolchains: cpp = g++ 13.3.0 `-O3` -pthread; rust = rustc 1.100.0 (0ef1bc386) -C `opt-level=3` -C `codegen-units=1`; ocaml = ocamlopt 4.14.2 flambda=true `-O3` (vm5+vm6; vm3 ran 4.14.1 flambda=false and its ocaml cells are kept as third-run evidence only); haskell = GHC 9.4.7 `-O2`; java = OpenJDK 21.0.13.1 default GC; lean = Lean 4.14.0 (commit 410fab728470) lean -c + leanc `-O3`; swift = swiftc 6.0.3 RELEASE -O. Reference columns depend only on the machine type and these pins; they are measured once per pin and
 reused by later versions.

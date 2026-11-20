@@ -15,16 +15,16 @@ S6	r2	semantics/Wasm0/Sem.rsd	8771db1e0	70023458875ad0ebc875d4420e89e2c54f700215
 S7	rsx->scm	semantics/Rsx/Lower.rsd	8771db1e0	f10bba2bb9791e1e8392b4270081c294edc19cf0a6f2c62e768cb1cd5b54a407	STATED	the adequacy statement of the reference lowering rsx to scm (hole 14); no proof claimed
 S7	lambda-RC->wasm0	semantics/Wasm0/Hop.rsd	8771db1e0	141d72a2d306f26b805603339bb4cc145721a752151f1390b07e6512d6870835	STATED	the hop statement lambda-RC to wasm0 (hole 15); no proof claimed
 S7	per-hop gate	gates/semalign/Check.rsd	8771db1e0	cea7f10fe33703af2828f2177498840bac80caf30ce1a6ac4daf3f7eeb2fa6ab	GATED	the rscm-vs-evalLF differential gate over gates/semalign/CORPUS.tsv; METHOD.md records the protocol, rerun at the tag
-S12	0.1	release/docs/LANGUAGE	release-head	5047c4448ce581e7ec1e46d80fe74dbad664951cb26115507708dbda1c5cc767	GATED	the fixed grammar: what the shipped rsdc front edge accepts and refuses; measured against the probe corpus (repository-side)
-W	v2	docs/EMITTER.md	release-head	8298d2a4df68698ab5120ca2d6c8e1479ae4648ae15cbf918db565f2fa4c0d80	STATED	the RSCM wire format (the scm layer's binary form, `.rscm`); its `52 53 43 4d` + version header is emitted in `rsdc/Compile.rsd` and read in `rsc/rsc.rsd`
-W	v2	lib/RscBase.rsd	release-head	a535a046b4cad1de06728c869d9e2c53125e1c97b5f70bae1f33372662a120b3	STATED	the calling convention and the wire op set the emitter writes and the loader reads (WIRE-SEQ-0 revision 2)
+S12	0.1.1	release/docs/LANGUAGE	release-head	d889cec169980be70ad69a749457ee41cc7732240867c55cb393ed91573d8885	GATED	the fixed grammar: what the shipped rsdc front edge accepts and refuses; measured against the probe corpus (repository-side)
+W	v2	docs/EMITTER.md	release-head	2f6e2c70e504424789a22d801edc2cc01bbcaafbcdc364c6366c0f62884638db	STATED	the RSCM wire format (the scm layer's binary form, `.rscm`); its `52 53 43 4d` + version header is emitted in `rsdc/Compile.rsd` and read in `rsc/rsc.rsd`
+W	v2	lib/RscBase.rsd	release-head	a535a046b4cad1de06728c869d9e2c53125e1c97b5f70bae1f33372662a120b3	STATED	the calling convention and the wire op set the emitter writes and the loader reads (revision 2)
 B	stage-14274	bootstrap/seed/stage-14274/README.md	release-head	063f3abe26d8ac1fea94a85c91bfc28b9e1cd09b8617807fa2554b9face3ea16	STATED	the seed format and the bootstrap recipe (clean-env rebuild, member verification, controls)
 B	stage-14274	bootstrap/seed/stage-14274/SOURCE-MEMBERS-SHA256SUMS	release-head	e81f2ce100a87e31b783fcdefcda8e95fee2fe58408e4f0b4f5156be0551f2d3	STATED	the 54-member source closure the seeds are cut from
 B	stage-14274	bootstrap/seed/stage-14274/ASSEMBLY.tsv	release-head	c341d91775e6d80170e391714036f3a750cf2bc55a6f0ee6270401d9377813a4	STATED	the member-to-bundle assembly link: per-section order, member digest, span digest and kind
 B	z1	bootstrap/seed/manifest.json	8771db1e0	b86761f0503e30bcdf0157f639b1c88a818926f143ca051a0f3a0f25a66732ff	STATED	the older pinned-z1 seed pair's identity manifest (alternate route)
-D	sha256	bootstrap/seed/stage-14274/SHA256SUMS	release-head	06d34be4f0a6d6b4f9854700ae8df8d13e7e5f5639902080e47f5fe4e954fc23	STATED	artifact identity for 0.1: sha256 of bytes (the seed pair's published digests; the archive and receipts are recorded in a repository-side manifest table); typed q (QFORMAT-0) is 0.1x and not claimed
+D	sha256	bootstrap/seed/stage-14274/SHA256SUMS	release-head	06d34be4f0a6d6b4f9854700ae8df8d13e7e5f5639902080e47f5fe4e954fc23	STATED	artifact identity for 0.1.1: sha256 of bytes (the seed pair's published digests; the archive and receipts are recorded in a repository-side manifest table); the typed q format is deferred to a feature release and not claimed
 
-Not in the 0.1 set (0.1x, own versions later): the rsx/R-CIC specs
+Not in the 0.1.1 set (deferred to feature releases with their own versions): the rsx/R-CIC specs
 (S1–S3), the syntax class (S10), modules (S16), Lean IR (S22).
 
 closure_claim = 0

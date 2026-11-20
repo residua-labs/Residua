@@ -6,13 +6,13 @@ evidence not shipped in 0.1).
 
 This is the 0.1 bootstrap surface: the forms the committed seed's front
 edge (`rsdc/Compile.rsd`) accepts. It **will change** in later versions
-(0.11, 0.12, ...): the repository-side design grammar is design-only
+(0.2, 0.3, ...): the repository-side design grammar is design-only
 and is not this language; `.rsl`, the new surface, RSX entry, the
 elaborator and theorem checking are not part of 0.1.
 
 ## Pinned inputs
 
-- head `ae7921b20fc544cd5cc656ff755c805080fc2db4`
+- head `07bc9c980e6a3ff051127818dfd33d8f15da3ea0`
 - `rsdc/Compile.rsd` sha256 `476a3b46c73976544bebd6946cc086a9ecd7fb5212c8764dc09874872c3ffffa`
 - `rsdc-ml` twin instrument source sha256 `8c38c9820e82db3ee2b727d22b36690e5e1c8bbe861a96e3ec19c1c660e0dfff` (instrument binary sha256 `d8f0ee40d3dfa12470047fa76374c755584f6a2273475be6ced814e32a08faad`; evidence not shipped in 0.1)
 - `bootstrap/sources.json` sha256 `d18201d45a0b5aaeb91a868f7c941d460701f3569a645b8f88f7c15594e2b1bd`
@@ -37,6 +37,8 @@ Concatenated bundle (1247797 bytes): `parse` err=0.
 
 Refuse corpus — the `form=rsdc-emit` rows of the pinned corpus table, run
 against the `rsdc-ml` twin check. Every existing row still refuses (54 checked).
+Rows citing `repository-side evidence` name files outside the source
+archive, pinned by path and sha256 at this head.
 Recorded gap rows are point-in-time: verdicts are `match` (29),
 `pos_drift` (22, same residue at a moved line — the file
 was edited after the gaps run), `residue_changed` (3,
@@ -48,60 +50,60 @@ Missing rows (untracked or removed sources, recorded for completeness):
 | file | recorded | observed | verdict |
 |---|---|---|---|
 | `lib/Proc.rsd` | rsdc_syntax@1:1 | rsdc_syntax@1:1 | match |
-| `web/stdhttp/Char.rsd` | rsdc_syntax@95:65 | rsdc_syntax@95:65 | match |
-| `web/stdhttp/Version.rsd` | rsdc_syntax@19:1 | rsdc_syntax@87:29 | pos_drift |
-| `web/stdhttp/ChunkedBuffer.rsd` | rsdc_syntax@19:1 | rsdc_syntax@41:1 | pos_drift |
-| `web/stdhttp/Encode.rsd` | rsdc_syntax@18:1 | rsdc_syntax@24:1 | pos_drift |
-| `web/stdhttp/Method.rsd` | rsdc_syntax@25:1 | rsdc_syntax@334:28 | pos_drift |
-| `web/stdhttp/Status.rsd` | rsdc_syntax@21:1 | rsdc_syntax@31:28 | pos_drift |
-| `web/stdhttp/LowerCase.rsd` | rsdc_syntax@18:1 | rsdc_syntax@16:1 | pos_drift |
-| `web/stdhttp/String.rsd` | rsdc_syntax@30:8 | rsdc_syntax@30:8 | match |
-| `web/stdhttp/IndexMultiMap.rsd` | rsdc_unclosed@26:36 | rsdc_unclosed@26:36 | match |
-| `web/stdhttp/HeaderName.rsd` | rsdc_syntax@20:1 | rsdc_syntax@28:26 | pos_drift |
-| `web/stdhttp/HeaderValue.rsd` | rsdc_syntax@20:1 | rsdc_syntax@34:27 | pos_drift |
-| `web/stdhttp/Headers.rsd` | rsdc_syntax@19:1 | rsdc_syntax@36:43 | pos_drift |
-| `web/stdhttp/UriEncoding.rsd` | rsdc_syntax@21:1 | rsdc_syntax@30:17 | pos_drift |
-| `web/stdhttp/IpAddress.rsd` | rsdc_syntax@27:29 | rsdc_syntax@27:29 | match |
-| `web/stdhttp/Parsec.rsd` | rsdc_syntax@28:27 | rsdc_syntax@28:27 | match |
-| `web/stdhttp/ByteArray.rsd` | rsdc_syntax@196:14 | rsdc_syntax@196:14 | match |
-| `web/stdhttp/UriBasic.rsd` | rsdc_syntax@28:1 | rsdc_syntax@42:22 | pos_drift |
-| `web/stdhttp/UriParser.rsd` | rsdc_syntax@27:1 | rsdc_syntax@32:1 | pos_drift |
-| `web/stdhttp/HeaderBasic.rsd` | rsdc_syntax@19:1 | rsdc_syntax@26:1 | pos_drift |
-| `web/stdhttp/BodyLength.rsd` | rsdc_syntax@18:1 | rsdc_syntax@41:1 | pos_drift |
-| `web/stdhttp/Chunk.rsd` | rsdc_syntax@30:29 | rsdc_syntax@30:29 | match |
-| `web/stdhttp/RequestHead.rsd` | rsdc_syntax@21:1 | rsdc_syntax@56:26 | pos_drift |
-| `web/stdhttp/ResponseHead.rsd` | rsdc_syntax@18:1 | rsdc_syntax@43:26 | pos_drift |
-| `web/stdhttp/H1Config.rsd` | rsdc_syntax@18:1 | rsdc_unbound@26:11 | residue_changed |
-| `web/stdhttp/H1Message.rsd` | rsdc_syntax@22:1 | rsdc_syntax@42:23 | pos_drift |
-| `web/stdhttp/H1Parser.rsd` | rsdc_syntax@24:1 | rsdc_syntax@24:1 | match |
-| `web/stdhttp/H1Error.rsd` | rsdc_syntax@18:1 | rsdc_syntax@87:27 | pos_drift |
-| `web/stdhttp/H1Event.rsd` | rsdc_syntax@18:1 | rsdc_syntax@23:24 | pos_drift |
-| `web/stdhttp/H1Reader.rsd` | rsdc_syntax@19:1 | rsdc_syntax@49:31 | pos_drift |
-| `web/stdhttp/H1Writer.rsd` | rsdc_syntax@19:1 | rsdc_syntax@73:25 | pos_drift |
-| `web/stdhttp/H1Machine.rsd` | rsdc_syntax@19:1 | rsdc_syntax@27:29 | pos_drift |
-| `web/Application.rsd` | rsdc_syntax@1:1 | rsdc_syntax@1:1 | match |
-| `web/HttpGrammar.rsd` | rsdc_syntax@23:9 | rsdc_syntax@23:9 | match |
-| `web/HttpMatcher.rsd` | rsdc_syntax@45:3 | rsdc_syntax@45:3 | match |
-| `web/h5i/H1Valid.rsd` | rsdc_syntax@53:10 | rsdc_syntax@53:10 | match |
-| `web/h5i/H1Decide.rsd` | rsdc_syntax@21:1 | rsdc_syntax@21:1 | match |
-| `web/h1/H1Rfc.rsd` | rsdc_syntax@32:52 | rsdc_syntax@32:52 | match |
-| `web/h1/H1Stream.rsd` | rsdc_syntax@29:20 | rsdc_syntax@29:20 | match |
-| `web/Http.rsd` | rsdc_syntax@72:3 | rsdc_syntax@72:3 | match |
-| `web/HttpCodec.rsd` | rsdc_syntax@41:3 | rsdc_syntax@41:3 | match |
-| `web/net/Admission.rsd` | rsdc_syntax@1:1 | rsdc_syntax@1:1 | match |
-| `web/net/Wire.rsd` | rsdc_syntax@29:3 | rsdc_syntax@29:3 | match |
-| `web/net/Completions.rsd` | rsdc_syntax@138:1 | rsdc_unbound@135:1 | residue_changed |
-| `web/net/CompletionWire.rsd` | rsdc_syntax@16:3 | rsdc_syntax@16:3 | match |
-| `web/server/Model.rsd` | rsdc_syntax@30:13 | rsdc_syntax@30:13 | match |
-| `web/server/Codec.rsd` | rsdc_syntax@29:26 | rsdc_syntax@29:26 | match |
-| `web/server/Proc.rsd` | rsdc_unclosed@41:71 | rsdc_unclosed@41:71 | match |
-| `web/net/Context.rsd` | rsdc_syntax@65:31 | rsdc_syntax@65:31 | match |
-| `web/net/Rows.rsd` | rsdc_syntax@13:8 | rsdc_syntax@13:8 | match |
-| `web/net/HostProbe.rsd` | rsdc_syntax@3:34 | rsdc_syntax@3:34 | match |
-| `web/server/Live.rsd` | rsdc_syntax@6:13 | rsdc_syntax@6:13 | match |
-| `web/load/Serve.rsd` | rsdc_syntax@5:13 | rsdc_syntax@5:13 | match |
+| `web/stdhttp/Char.rsd` — repository-side evidence, sha256 `50216848d4dddde36c7364c5d733bcec0c91cd57ad82c712934b7a3a13095ee5` | rsdc_syntax@95:65 | rsdc_syntax@95:65 | match |
+| `web/stdhttp/Version.rsd` — repository-side evidence, sha256 `8760f427017843e8bb789157f83763fdcba19f8265acb2d90ad53efcee642ef5` | rsdc_syntax@19:1 | rsdc_syntax@87:29 | pos_drift |
+| `web/stdhttp/ChunkedBuffer.rsd` — repository-side evidence, sha256 `505a48e2e04b9ec3ccc15173114f0f484616ac20eb690fdbc38d74e9e24ca225` | rsdc_syntax@19:1 | rsdc_syntax@41:1 | pos_drift |
+| `web/stdhttp/Encode.rsd` — repository-side evidence, sha256 `d1ea02446e77c38162ba9956dca24f731f3f873ff8dc1ff865d505fe57712cfd` | rsdc_syntax@18:1 | rsdc_syntax@24:1 | pos_drift |
+| `web/stdhttp/Method.rsd` — repository-side evidence, sha256 `66bd20d2a8d7ab2201767ace328086a7475830c80bf018762c61470d04ecd3b9` | rsdc_syntax@25:1 | rsdc_syntax@334:28 | pos_drift |
+| `web/stdhttp/Status.rsd` — repository-side evidence, sha256 `dc4c2b6c3c68869fd675092ede9424df8b5266c2dc7a1577338b172a99f2ad4f` | rsdc_syntax@21:1 | rsdc_syntax@31:28 | pos_drift |
+| `web/stdhttp/LowerCase.rsd` — repository-side evidence, sha256 `87fdd1d6d3e755e26bba409e20316195790bf3a09feca68ad7ab8add59e5e799` | rsdc_syntax@18:1 | rsdc_syntax@16:1 | pos_drift |
+| `web/stdhttp/String.rsd` — repository-side evidence, sha256 `106e1c43c435a2a970427578f4a88baf7fc29df9b541aea487ee6207b82f3291` | rsdc_syntax@30:8 | rsdc_syntax@30:8 | match |
+| `web/stdhttp/IndexMultiMap.rsd` — repository-side evidence, sha256 `e43c23e7edfaa64d57efb710478e01e464c4ecd3245d6a87c0ea169819337117` | rsdc_unclosed@26:36 | rsdc_unclosed@26:36 | match |
+| `web/stdhttp/HeaderName.rsd` — repository-side evidence, sha256 `93434d69309f7346aa1a53595e8873c4d472d00934031fcdd1a543bef983a647` | rsdc_syntax@20:1 | rsdc_syntax@28:26 | pos_drift |
+| `web/stdhttp/HeaderValue.rsd` — repository-side evidence, sha256 `3b6d1deb9841f8f2f9e8baf75997f7ae0d8fcc34f24c069dccc65afcd6ad4997` | rsdc_syntax@20:1 | rsdc_syntax@34:27 | pos_drift |
+| `web/stdhttp/Headers.rsd` — repository-side evidence, sha256 `813a59fcd5b64840c493e30fde865cd8fb77b1e90a58584d3e603479a443acaf` | rsdc_syntax@19:1 | rsdc_syntax@36:43 | pos_drift |
+| `web/stdhttp/UriEncoding.rsd` — repository-side evidence, sha256 `b1c3261bb1940b2dcedf61c146ce92e194f8ae2732a5aa76328c7272d4cb99f7` | rsdc_syntax@21:1 | rsdc_syntax@30:17 | pos_drift |
+| `web/stdhttp/IpAddress.rsd` — repository-side evidence, sha256 `d438f64bcf29a683a19317d4c2248e988aa4de09123f7c26e733b0e8fb27a3a3` | rsdc_syntax@27:29 | rsdc_syntax@27:29 | match |
+| `web/stdhttp/Parsec.rsd` — repository-side evidence, sha256 `51baa75361eda895a2ba493714f9ee5635d5b6b9bd7c0990e2eaad352792837d` | rsdc_syntax@28:27 | rsdc_syntax@28:27 | match |
+| `web/stdhttp/ByteArray.rsd` — repository-side evidence, sha256 `bfb12717955a0fa2ee5bfdb6cce8877cc80f2b7b62d7f6de826318a64691b8f1` | rsdc_syntax@196:14 | rsdc_syntax@196:14 | match |
+| `web/stdhttp/UriBasic.rsd` — repository-side evidence, sha256 `8d7cbdefd31bb9daa7a9fcc897980fbd3ecb1f811b40916288d3682a3289ed18` | rsdc_syntax@28:1 | rsdc_syntax@42:22 | pos_drift |
+| `web/stdhttp/UriParser.rsd` — repository-side evidence, sha256 `8bf942a77201ce44e9c39eb85a1aff5329769e8718fdeabbe5c3d906df713876` | rsdc_syntax@27:1 | rsdc_syntax@32:1 | pos_drift |
+| `web/stdhttp/HeaderBasic.rsd` — repository-side evidence, sha256 `5b69a4e9f08d3f962ea680eefdf7bd2ba0e9d7430de67fcc1261d3a71d6cce9e` | rsdc_syntax@19:1 | rsdc_syntax@26:1 | pos_drift |
+| `web/stdhttp/BodyLength.rsd` — repository-side evidence, sha256 `1ec4057a39ef14bc28cdd28013f3dc9a752bcc72f33a962e2c225d5a6beab345` | rsdc_syntax@18:1 | rsdc_syntax@41:1 | pos_drift |
+| `web/stdhttp/Chunk.rsd` — repository-side evidence, sha256 `6e37efaa526cea076be0b5aca734cbff0af15c0e184f292d024841bfa8db496d` | rsdc_syntax@30:29 | rsdc_syntax@30:29 | match |
+| `web/stdhttp/RequestHead.rsd` — repository-side evidence, sha256 `39ec52ac9a236afdf416beba2ee5e03dddbd95c97d34733dc4c5b032f7aba7c5` | rsdc_syntax@21:1 | rsdc_syntax@56:26 | pos_drift |
+| `web/stdhttp/ResponseHead.rsd` — repository-side evidence, sha256 `d3e24410d96f383bd018871819c9d0b4c7a6ba3553a5eeb26440f83ecb9e869d` | rsdc_syntax@18:1 | rsdc_syntax@43:26 | pos_drift |
+| `web/stdhttp/H1Config.rsd` — repository-side evidence, sha256 `ecd4b7e79e9377639d55b69f7e41deae09a0a3c31b484638b993d71d68581bf9` | rsdc_syntax@18:1 | rsdc_unbound@26:11 | residue_changed |
+| `web/stdhttp/H1Message.rsd` — repository-side evidence, sha256 `3de2f9c3be9e991205efb984045860281d5037f96be9b2bbb4bbb42c62f50835` | rsdc_syntax@22:1 | rsdc_syntax@42:23 | pos_drift |
+| `web/stdhttp/H1Parser.rsd` — repository-side evidence, sha256 `60d0b1c98ccf31c1cec80b2f88f55ca521234592c09ff80844954a1f2b0d7527` | rsdc_syntax@24:1 | rsdc_syntax@24:1 | match |
+| `web/stdhttp/H1Error.rsd` — repository-side evidence, sha256 `7525bb578f74f015ad7054b52540ecd1ce6a85aa078efee2fb0b391fed9b014d` | rsdc_syntax@18:1 | rsdc_syntax@87:27 | pos_drift |
+| `web/stdhttp/H1Event.rsd` — repository-side evidence, sha256 `9e1dbfa5b824df4a3211e9c04fbc78218f6b37ec33cf7b13c96bd0d5b1254384` | rsdc_syntax@18:1 | rsdc_syntax@23:24 | pos_drift |
+| `web/stdhttp/H1Reader.rsd` — repository-side evidence, sha256 `05efcb478a34872c43762560f940d5e4346fbd819aa99919d1b2a11baf7a8915` | rsdc_syntax@19:1 | rsdc_syntax@49:31 | pos_drift |
+| `web/stdhttp/H1Writer.rsd` — repository-side evidence, sha256 `3763cbd411882dad0d526e7bfebdbcb14f24a134b25d490598ddc0ce936f46b1` | rsdc_syntax@19:1 | rsdc_syntax@73:25 | pos_drift |
+| `web/stdhttp/H1Machine.rsd` — repository-side evidence, sha256 `caf0fdf436b828e68e2d236540871be3a0d28f258e65ded5a91b75353b289299` | rsdc_syntax@19:1 | rsdc_syntax@27:29 | pos_drift |
+| `web/Application.rsd` — repository-side evidence, sha256 `1a839bbf3ef97bb3fb6e49830fe0080ef468fe4f14905aa109d3b4a221589895` | rsdc_syntax@1:1 | rsdc_syntax@1:1 | match |
+| `web/HttpGrammar.rsd` — repository-side evidence, sha256 `175eed00b37881ec5b31bd549a2b7b8ea3171bd329e1c6707910f22955b7bacf` | rsdc_syntax@23:9 | rsdc_syntax@23:9 | match |
+| `web/HttpMatcher.rsd` — repository-side evidence, sha256 `326316ae0a315ff9b331e8edee88e5f4292cbf6e4c9f790f02c0d40531b4812d` | rsdc_syntax@45:3 | rsdc_syntax@45:3 | match |
+| `web/h5i/H1Valid.rsd` — repository-side evidence, sha256 `6c5cdb97b3e9076c1eca80c442858a1c920d8691216831506f05a102f67e1a91` | rsdc_syntax@53:10 | rsdc_syntax@53:10 | match |
+| `web/h5i/H1Decide.rsd` — repository-side evidence, sha256 `42cd1e438fb7bd5b06b7f8f5c3d8ca217f5243bcebdd31785a4d6b324113823b` | rsdc_syntax@21:1 | rsdc_syntax@21:1 | match |
+| `web/h1/H1Rfc.rsd` — repository-side evidence, sha256 `e690a0c06f74508e5553fb54a1c21eccb708ad5f7ecebb529513427b43a441ad` | rsdc_syntax@32:52 | rsdc_syntax@32:52 | match |
+| `web/h1/H1Stream.rsd` — repository-side evidence, sha256 `a9238ed655f492fff43bb5ff912a2ccf48e8cdf02aa5d91584008c9dce624a54` | rsdc_syntax@29:20 | rsdc_syntax@29:20 | match |
+| `web/Http.rsd` — repository-side evidence, sha256 `dce242e77538a3f59246e7028ddf715881393e168e85ccb0182eec20b062ecd5` | rsdc_syntax@72:3 | rsdc_syntax@72:3 | match |
+| `web/HttpCodec.rsd` — repository-side evidence, sha256 `8156064bd77fbcbc1ca2f6c347d539af2d66011fb9644f70bbfa743247606cc5` | rsdc_syntax@41:3 | rsdc_syntax@41:3 | match |
+| `web/net/Admission.rsd` — repository-side evidence, sha256 `712a2c75a11f1baab292ec78f7a71864d4082def3a2bd9e87bed997fc3744729` | rsdc_syntax@1:1 | rsdc_syntax@1:1 | match |
+| `web/net/Wire.rsd` — repository-side evidence, sha256 `383616b1cfdb7afd88591a111acae1ebdb8a0a6a75653bd87e3d35635be54c60` | rsdc_syntax@29:3 | rsdc_syntax@29:3 | match |
+| `web/net/Completions.rsd` — repository-side evidence, sha256 `41e57c71bbaff631b47e1ff3264ec4a046e6750cc13cb3d91259a3e24c00034b` | rsdc_syntax@138:1 | rsdc_unbound@135:1 | residue_changed |
+| `web/net/CompletionWire.rsd` — repository-side evidence, sha256 `5c928c633b8ee2ee1d99cbb739002dcd50e304ef3e202d54f7638c7c31de4784` | rsdc_syntax@16:3 | rsdc_syntax@16:3 | match |
+| `web/server/Model.rsd` — repository-side evidence, sha256 `6b9da9407d51b43b2486044edb2b8c91e417094868c2f4b5dec658e053539390` | rsdc_syntax@30:13 | rsdc_syntax@30:13 | match |
+| `web/server/Codec.rsd` — repository-side evidence, sha256 `9af41ab46993017ae7f627e0ad7de17315629fd575370e74c1c83d56353dbde8` | rsdc_syntax@29:26 | rsdc_syntax@29:26 | match |
+| `web/server/Proc.rsd` — repository-side evidence, sha256 `f48cc0e66260a45ad1ecf1815c795ebb86368c5c3fdb9463f7f703e32003ec91` | rsdc_unclosed@41:71 | rsdc_unclosed@41:71 | match |
+| `web/net/Context.rsd` — repository-side evidence, sha256 `97fc6905f6b355d2a07b6f862527327bd96820226fc9282f118470462b2cefe7` | rsdc_syntax@65:31 | rsdc_syntax@65:31 | match |
+| `web/net/Rows.rsd` — repository-side evidence, sha256 `38b481fa45f6d14e4816b6953057406e7a88a72947af62dbaa4590952809ef28` | rsdc_syntax@13:8 | rsdc_syntax@13:8 | match |
+| `web/net/HostProbe.rsd` — repository-side evidence, sha256 `b5124da3db1095fa0aae399b1356640b42700f9c1ce7bacb5f23a3a5547fc8cb` | rsdc_syntax@3:34 | rsdc_syntax@3:34 | match |
+| `web/server/Live.rsd` — repository-side evidence, sha256 `8bba95f57563b47e6c1cdc2b52b2c8fbfc39c9aab5720ae9a7151aa62fc33224` | rsdc_syntax@6:13 | rsdc_syntax@6:13 | match |
+| `web/load/Serve.rsd` — repository-side evidence, sha256 `e58c3e847cfca04529d7f468c93f081b21fce26bba32ca51cfd449670aa7644d` | rsdc_syntax@5:13 | rsdc_syntax@5:13 | match |
 | `out/web-devin-t/Serve.rsd` | rsdc_syntax@544:65 | — | missing |
-| `benchmarks/koka/KokaBase.rsd` | ? | rsdc_syntax@60:3 | residue_changed |
+| `benchmarks/koka/KokaBase.rsd` — repository-side evidence, sha256 `57ec51e1dc71b0c3555edfbc17510478d16ea4724fecb800dd51cd1a1f078106` | ? | rsdc_syntax@60:3 | residue_changed |
 
 ## Declaration probes
 

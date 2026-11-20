@@ -2,7 +2,7 @@
 
 [English](ACKNOWLEDGEMENTS.md) | 中文
 
-Residua 是一个研究项目，建立在许多其他工作之上。本文件按我们的记录，列出所有被我们移植过代码、被用作测试参照（oracle）的工具或数据，
+Residua 为研究项目，建立在许多其他工作之上。本文件按我们的记录，列出所有被我们移植过代码、被用作测试参照（oracle）的工具或数据，
 以及我们研究过其设计的项目。每个版本逐文件的记录，见该版本中的 `release/NOTICES.md` 和 `release/PROVENANCE.tsv`。下文提到的论文，
 其文献条目见 [README.zh-CN.md](README.zh-CN.md#参考文献) 的参考文献。
 
@@ -20,12 +20,12 @@ Residua 是一个研究项目，建立在许多其他工作之上。本文件按
 - lean-regex — pandaman64/lean-regex（Apache-2.0，证明已重新检查）。
 - matching-logic-lean — eveil-labs（Apache-2.0）。
 - CosmWasm cw-plus（Apache-2.0）：合约代码和测试参照。
-- libuv（ISC）：地址表示，用于一个应用目录。
+- libuv（ISC）：地址表示，用于应用目录。
 
 ## 用作测试参照的工具和数据（不作为代码发布）
 - Lean 4 内核和工具链、Lean4Lean（digama0/lean4lean）、Mathlib、Batteries、Aesop、quote4、ProofWidgets4、plausible、
   import-graph、LeanSearchClient、lean4-cli、LNSym。
-- WebAssembly Binary Toolkit（WABT，Apache-2.0）：种子配方下载一个钉住的版本，用来构建执行器。
+- WebAssembly Binary Toolkit（WABT，Apache-2.0）：种子配方下载钉住版本，用来构建执行器。
 - K 框架、KEVM、KWasm、kevm-plugin、proof-generation（Runtime Verification）；Metamath（metamath-exe 和数据库）。
 - HTTP：llhttp（经由 httptools）、h11、hyper、hyper-util、http-body-util、tokio、bytes、oha。
 - z3、verina、serde_json、schemars、anyhow。
@@ -34,7 +34,7 @@ Residua 是一个研究项目，建立在许多其他工作之上。本文件按
 - Lean Kernel Arena（leanprover/lean-kernel-arena）和 nanoda：作为内核检查器的参照。
 - Perceus 和 FBIP（Koka 的论文）；Lean 4 的编译器（lambda-RC IR）。
 - h5i（h5i-dev/h5i，Apache-2.0）：经验证的 HTTP 内核；我们的 web 实验以它的请求策略为模型。
-- Ninja-go 和 ABFS（Google）：两阶段的内容寻址动作缓存。
+- Ninja-go 和 ABFS（Google）：分阶段的内容寻址动作缓存。
 - Bazel、Buck2、Nix：动作键和输入寻址。Salsa：增量计算。
 - Datomic 和 DataScript（tonsky/datascript）；Prolly 树（Dolt/Noms）；Merkle Search Trees（Auvolat、Taïani，2019）；
   DBSP（Budiu 等，VLDB 2023）。

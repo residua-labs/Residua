@@ -1,10 +1,2 @@
 path	url	git_blob_expected
-release/licenses/koka-LICENSE	https://raw.githubusercontent.com/koka-lang/koka/facb7932ce6871fdb063f762a304bd8238f35fba/LICENSE	82b129365bd2166c0a9c999dbc9136eaa8b9fee9
-release/licenses/bend-LICENSE	https://raw.githubusercontent.com/bendlang/bend/be236f324ed0338fe907fe50474468e4d3b94157/LICENSE	a20d4b8ab3ed6c76c1215488bd2d865cee1e57c4
-release/licenses/cw-plus-LICENSE-APACHE	https://raw.githubusercontent.com/CosmWasm/cw-plus/cb3c89201527aba339d77b81e3044f773e715275/LICENSE-APACHE	d645695673349e3947e8e5ae42332d0ac3164cd7
-release/licenses/cw-plus-NOTICE	https://raw.githubusercontent.com/CosmWasm/cw-plus/cb3c89201527aba339d77b81e3044f773e715275/NOTICE	09d5a6ba719444a44f99be1848e1d5e8c52031ed
-release/licenses/cw20-base-NOTICE	https://raw.githubusercontent.com/CosmWasm/cw-plus/cb3c89201527aba339d77b81e3044f773e715275/contracts/cw20-base/NOTICE	84b1c2103a23f93afc65831f9786eb77cc5f383f
-release/licenses/cw20-escrow-NOTICE	https://raw.githubusercontent.com/CosmWasm/cw-plus/cb3c89201527aba339d77b81e3044f773e715275/contracts/cw20-escrow/NOTICE	8e53cb532801653e44932a7de01e0a3b756bc8e1
-release/licenses/cw20-base-Cargo.toml	https://raw.githubusercontent.com/CosmWasm/cw-plus/cb3c89201527aba339d77b81e3044f773e715275/contracts/cw20-base/Cargo.toml	070e6c918131ff3bd15e885b17de4bcc55dbf6c2
-release/licenses/cw20-escrow-Cargo.toml	https://raw.githubusercontent.com/CosmWasm/cw-plus/cb3c89201527aba339d77b81e3044f773e715275/contracts/cw20-escrow/Cargo.toml	1f5f93afa4359e58f8fac2fdeec719a2f140e58a
-release/licenses/benchmarksgame-LICENSE.md	https://salsa.debian.org/benchmarksgame-team/benchmarksgame/-/raw/40296663ed350d5fe4a6ab5e367bab61cb77c219/LICENSE.md	4040e702531699ae11fc64337a2b6f43ef33e93f
+release/licenses/lean4-LICENSE	https://raw.githubusercontent.com/leanprover/lean4/410fab7284703f41660ca2454218dcca9b2ec896/LICENSE	813da297567374691eaae7a88739dbbefd2afdfd

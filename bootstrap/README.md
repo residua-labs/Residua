@@ -1,7 +1,7 @@
 # Wasm seed bootstrap
 
 Use the [stage-14274 committed seed and CPU bootstrap](seed/stage-14274/README.md)
-to rebuild both compilers. That recipe is the supported 0.1 path: it runs
+to rebuild both compilers. That recipe is the supported 0.1 route: it runs
 on a clean Linux x86-64 with a C compiler and needs neither git nor any
 language toolchain beyond what this archive ships.
 
@@ -16,9 +16,9 @@ in the 0.1 archive, and the `node` toolchain they need is out of scope
 here. The stage-14274 recipe above is the bootstrap this release
 verifies.
 
-## The two C host bridges
+## The 2 C host bridges
 
-Two `Wasm2CHost.c` files ship in the archive, and they are not
+The pair of `Wasm2CHost.c` files ships in the archive, and they are not
 interchangeable. The recipe's `host=` variable and
 `EXECUTOR-SHA256SUMS` pin
 `reports/codex4-assign5-stage-word/Wasm2CHost.c`: the execution-layer

@@ -11,7 +11,7 @@ English | [中文](RELATED-WORK.zh-CN)
 - **Zig** — the committed wasm seed that rebuilds the compiler is Zig's
   approach.
 - **Bootstrappable builds** (stage0, GNU Mes, Guix full-source
-  bootstrap) — they reduce the binary seed to a few hundred bytes
+  bootstrap) — they reduce the binary seed to a few 100 bytes
   small enough to audit directly; Residua's seed is larger and its
   trust rests on the fixpoint and reproduction instead.
 - **Koka and Perceus** — reference counting with reuse; Koka is the

@@ -1,23 +1,23 @@
-# INSTALL — the 0.1 minimal bootstrap, from the source archive
+# INSTALL — the 0.1.1 minimal bootstrap, from the source archive
 
-This document covers reproducing release 0.1 — the committed wasm seed,
+This document covers reproducing release 0.1.1 — the committed wasm seed,
 the `rsdc`/`rsc` source closure, the runtime and these documents —
 with no Lean, elan, lake, Node or OCaml anywhere on PATH. Every claim
-names its source path. The steps will change in later versions (0.11+).
+names its source path. The steps will change in later versions (0.2+).
 
 ## What the release gives you
 
-- `rsd-src.tar` — the 0.1 source archive: `bootstrap/seed/` (the
+- `rsd-src.tar` — the 0.1.1 source archive: `bootstrap/seed/` (the
   stage-14274 seed pair, its whole-module sources and digest
-  manifests, plus the older pinned-Z1 pair and `manifest.json`),
+  manifests, plus the earlier pinned pair and `manifest.json`),
   `bootstrap/sources.json` and `bootstrap/README.md`, the 54 compiler
   source members, the C host bridges and `release/docs/`, `LICENSE`,
   `NOTICE`, `lean-toolchain`. Its path inventory is
   `release/BUILD-INPUTS.tsv` (shipped); its sha256 is the
   `release-source-archive` pin published with the release.
-- `bootstrap/seed/stage-14274/` — the 0.1 committed seed:
+- `bootstrap/seed/stage-14274/` — the 0.1.1 committed seed:
   `rsdc.wasm` (sha256 `97e549715d04…ef5933`), `rsc.wasm` (sha256
-  `3425f3e9b1b2…d7b82d`), the two whole-module `sources/*.rsd`, the
+  `3425f3e9b1b2…d7b82d`), the 2 whole-module `sources/*.rsd`, the
   digest manifests and `README.md` (`stage-14274/SHA256SUMS`).
 
 ## Host requirements
@@ -29,7 +29,7 @@ names its source path. The steps will change in later versions (0.11+).
   fetch unless `WABT-SHA256SUMS` payloads are cached.
 - Nothing else: the recipe refuses if `lean`, `elan`, `lake`, `node`
   or `ocaml` resolves on PATH (`stage-14274/README.md`, the
-  `command -v` guard). That refusal is the point — 0.1 is a seed,
+  `command -v` guard). That refusal is the point — 0.1.1 is a seed,
   not a toolchain install.
 
 ## Steps
@@ -46,9 +46,9 @@ env -i PATH=/usr/bin:/bin bash --noprofile --norc
 # then run the commands of bootstrap/seed/stage-14274/README.md
 ```
 
-Expected: exit 0, two zero-status emissions, two zero-status
-lowerings, four rebuilt hashes matching `REBUILT-SHA256SUMS`, and the
-two seed byte comparisons — the altered-Wasm control must compare
+Expected: exit 0, 2 zero-status emissions, 2 zero-status
+lowerings, 4 rebuilt hashes matching `REBUILT-SHA256SUMS`, and the
+2 seed byte comparisons — the altered-Wasm control must compare
 exit 1 (`stage-14274/README.md`). The recipe's wall and peak are
 recorded per version in `release/docs/PERF-RECORD.tsv`; first-run wall
 is dominated by the `-O0` first split.
@@ -60,10 +60,10 @@ is dominated by the `-O0` first split.
 14274 cons` (`stage-14274/README.md`, `rebuild_root`). The grammar the
 front end accepts is `release/docs/LANGUAGE`.
 
-## Not in 0.1
+## Not in 0.1.1
 
-`raisin`/`raisinc` binaries and example programs, modules
-(`import` refuses err=1), the 9P device servers, theorem checking and
+the internal dispatcher binaries and example programs, modules
+(`import` refuses `err=1`), the `9P` device servers, theorem checking and
 the application suites — see `release/docs/OVERVIEW` and
 `release/MANIFEST.md`.
 

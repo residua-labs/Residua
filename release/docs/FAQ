@@ -5,7 +5,7 @@ English | [中文](FAQ.zh-CN)
 - **Why a Lean subset?** It is the bootstrap surface: the compiler's
   own sources are written in it, and Lean's parser and kernel serve as
   oracles. It is not the final language design.
-- **Does Residua depend on Lean?** Building and running 0.1 needs no
+- **Does Residua depend on Lean?** Building and running 0.1.1 needs no
   Lean. Lean checks the formal semantics and is the reference for
   kernel rules and the parser.
 - **Why not just use Lean?** For compiling and proving in one tool

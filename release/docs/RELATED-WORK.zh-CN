@@ -9,7 +9,7 @@
   没有端到端的正确性证明。
 - **Zig** — 提交的、能重建编译器的 wasm 种子是 Zig 的做法。
 - **可自举构建**（stage0、GNU Mes、Guix 全源码引导）— 它们把
-  二进制种子缩减到可直接审计的几百字节；Residua 的种子更大，其
+  binary 种子缩减到可直接审计的小体量；Residua 的种子更大，其
   信任改为落在不动点与复现上。
 - **Koka 与 Perceus** — 带复用的引用计数；Koka 是性能记录中的
   参照（`release/docs/PERF-RECORD`）。

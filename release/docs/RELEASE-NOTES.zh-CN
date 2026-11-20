@@ -1,11 +1,30 @@
-# RELEASE-NOTES — Residua 0.1
+# RELEASE-NOTES — Residua 0.1.1
 
 [English](RELEASE-NOTES) | 中文
 
-0.1 版本是最小自举闭包：可验证来源的编译。给定一份源码和一份产物，
+0.1.1 版本是最小自举闭包：可验证来源的编译。给定源码与产物，
 任何人都可以从提交的 wasm 种子出发，只用 C 编译器、不需要别的工具链，
 逐字节重建并核验这份产物来自这份源码——既不必信任发布者，也不必
-信任庞大的二进制工具链。
+信任庞大的 binary 工具链。
+
+## 相对 0.1 的变更
+
+- `web/` 移出发货集：52 个应用文件留在仓库侧；
+  `release/docs/LANGUAGE` 以路径加 sha256 将其列为仓库侧证据
+  （发货文件现为 148 个）
+- 归属补全：发货代码的 provenance 增加逐文件逐字上游头部（Lean 4
+  移植），`web/h5i` 增加 6 条仓库侧 provenance 行（上游
+  `9774f28a2a`，Apache-2.0）
+- 新增 `ACKNOWLEDGEMENTS.md` 与 `ACKNOWLEDGEMENTS.zh-CN.md`，中英对照
+  README 同步加入致谢部分
+- `README.md` 与 `README.zh-CN.md` 按公开专业结构重写；`perf/`
+  性能记录随源码包发货，README 链接在 tag 树内可解析
+- 发货 notices 与 provenance 移除内部发布方标识；发布门新增机械检查
+  拒绝此类标识
+- 发布门新增检查：发货路径全部落在闭包类别内、发货 provenance
+  行自洽、发货文本中的上游/设计名必须有 provenance 行
+- 配方相关集与 0.1 逐字节相同（`bootstrap/seed/stage-14274/` 与配方
+  钉住的 C 宿主桥 `git diff --quiet`）
 
 ## 本归档内容
 
@@ -17,23 +36,22 @@
   （`release/docs/RSD-COMMAND`）
 - 逐层冻结的形式语义（scm、lambda-RC、wasm0），按内容地址钉住，
   以规范文本发货
-- 引导文法测定所用的语言一致化语料（`release/docs/LANGUAGE` 各行）
+- 引导文法测定所用的语言规范化语料（`release/docs/LANGUAGE` 各行）
 - 0.1 性能记录（`release/docs/PERF-RECORD.tsv`，形式见
   `release/docs/PERF-RECORD`）
 - 外来者文档：INSTALL、QUICKSTART、VERIFY-RELEASE、OVERVIEW、
   LANGUAGE、STDLIB、RSD-COMMAND、SPECS、RESIDUES、PERF-RECORD——
-  均为英文；README 与九个 `release/docs/` 文本（OVERVIEW、
+  均为英文；README 与下列 `release/docs/` 文本（OVERVIEW、
   ARCHITECTURE、TRUST、GLOSSARY、STABILITY、FAQ、RELATED-WORK、
   CONTRIBUTING-SECURITY、RELEASE-NOTES，含本文件）另有 `.zh-CN`
   中文版
 
 ## 核验
 
-`release/docs/VERIFY-RELEASE` 是规程：种子摘要、归档摘要，然后在一台
-干净的 Linux x86-64 上跑完整种子配方——配方重建出的编译器映像必须与
-已提交的种子逐字节一致（`seed_roundtrip=2/2`）。
+`release/docs/VERIFY-RELEASE` 是规程：种子摘要、归档摘要，然后在干净的 Linux x86-64 上跑完整种子配方——配方重建出的编译器映像必须与
+已提交的种子逐字节相同（`seed_roundtrip=2/2`）。
 
-## 0.1 的版本局限
+## 0.1.1 的版本局限
 
 单模块程序（不接受 `import`）；没有 I/O 执行层；没有证明检查
 （R-CIC 检查器不在本版本）；没有 UInt64；4 GiB 地址空间；q 内容
@@ -41,9 +59,9 @@
 引导 `.rsd` 文法拒绝 `theorem`、`axiom`、`class`、`abbrev`、
 `variable`、`opaque`、`by` 与 `import`。
 
-## 0.1 之后的顺序
+## 0.1.1 之后的顺序
 
-1. R-CIC 内核 + q 格式 + Jig 的发布/查询入口——陌生人第一次能找到、
+1. R-CIC 内核 + q 格式 + 发布/查询入口——陌生人首次能找到、
    检查并复用他人结果的点。
 2. 编程完备性：模块、真实程序、UInt64、执行层、64 位寻址、应用套件。
 3. 廉价的执行确认：wasm0 -> AIR -> zk。
