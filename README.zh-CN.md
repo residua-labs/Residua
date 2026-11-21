@@ -152,6 +152,18 @@ env -i PATH=/usr/bin:/bin bash --noprofile --norc
 | [0.1.2](https://github.com/residua-labs/Residua/releases/tag/rsd-0.1.2) | 2026-11-19 | 见发布页 | 补丁版本：基准与差分测试套件发货 |
 | [0.2](https://github.com/residua-labs/Residua/releases/tag/rsd-0.2) | 2026-11-20 | `151bfd4f…` | 功能版本：q 格式 v1、语法引擎、效果语义、macOS 自举宿主；[CHANGELOG](CHANGELOG.zh-CN.md) |
 
+### 变更摘要
+
+- **0.2**（2026-11-20，212 个文件，`151bfd4f…`）：带类型的内容地址（q 格式 v1）；按文法类闭合的语法引擎；执行边界语义
+  E0–E4；macOS arm64 自举宿主；文档移到 `docs/` 并改为 Markdown。种子成员不变。*遗漏*：0.1.1 和 0.1.2 发布过的基准与
+  差分测试套件、性能记录和致谢（`benchmarks/`、`instruments/lrc-host/`、`perf/`、`ACKNOWLEDGEMENTS.md`）没有进入
+  0.2 的源码包，将在 0.2.1 补回。
+- **0.1.2**（2026-11-19，437 个文件，`a3185221…`）：发布基准程序（含期望输出与参考实现，`benchmarks/`）、差分测试套件
+  （`instruments/lrc-host/`）和测试指南。
+- **0.1.1**（2026-11-19，148 个文件，`28a074e2…`）：发布性能记录（`perf/`）；补全署名（逐文件上游头注、
+  `ACKNOWLEDGEMENTS.md`）；确定版本规则（功能版本 0.x，补丁版本 0.x.y）。
+- **0.1**（2026-11-19，`59d0956e…`）：首次公开发布，由提交的 WebAssembly 种子自举的 rsd 编译器最小闭包。
+
 完整记录：[CHANGELOG.zh-CN.md](CHANGELOG.zh-CN.md)。
 
 ## 仓库结构
