@@ -18,6 +18,19 @@ Residua 是一个研究项目，研究互不信任的各方之间如何复用计
 > 闭合的语法引擎与执行边界语义。
 > 目前还不是通用语言，见[限制](#限制)。
 
+## 0.2 相对 0.1 的新增
+
+| 方面 | 0.1 | 0.2 |
+|---|---|---|
+| 内容标识 | 原始 SHA-256 摘要 | **带类型的 q 格式 v1**：类别写在被哈希的字节里，不同类别不会撞地址（[`docs/QFORMAT.md`](docs/QFORMAT.md)，[说明](release/notes/qformat-1.zh-CN.md)） |
+| 表面语法 | 为自举子集手写的一个解析器 | **语法引擎**：一个解析器作用于文法数据，对机械检查过的参照判定器按文法类闭合；表面 profile 以数据形式放在 `rsdc/profiles/`（[说明](release/notes/syntax-engine.zh-CN.md)） |
+| 执行边界 | 未定义 | **E0–E4 语义**：线格式、准入与封存判定、一致性分类器、录制的传输会话，以 Lean 4.14 陈述写在 `semantics/Effect/`（[说明](release/notes/effect-sem.zh-CN.md)） |
+| 自举宿主 | Linux x86-64 | **Linux x86-64 与 macOS arm64**（Apple clang，`PATH=/usr/bin:/bin`，不需要 Lean），已在两台 Darwin 机器上逐字节复现 |
+| 文档 | `release/docs/` | `docs/`，Markdown，中文为 `.zh-CN.md` |
+| 种子 | stage-14274 | 不变：53 个种子成员保持 0.1 的字节；配方的 5 处已声明增量见 [CHANGELOG](CHANGELOG.zh-CN.md) |
+
+0.2 源码包 `rsd-src.tar`：212 个文件，SHA-256 `151bfd4f6a910e9c4232e84b6cf6cfd7618a1009e5c32d41acd995b9b0d5b8fb`。
+
 ## 动机
 
 1. **形式化结果的成本主要在维护。** 在形式化开发中，上游变化后的重新检查、修复、协调和审查，成本远高于内核检查本身。
@@ -68,7 +81,7 @@ Residua 是一个研究项目，研究互不信任的各方之间如何复用计
 
 ```sh
 # 1. 从 rsd-0.2 发布页下载并核对源码包
-sha256sum -c rsd-src.tar.sha256
+sha256sum -c rsd-src.tar.sha256    # macOS：shasum -a 256 -c rsd-src.tar.sha256
 mkdir rsd-src && tar -xf rsd-src.tar -C rsd-src && cd rsd-src
 
 # 2. 在干净环境中从种子重建两个编译器（20–45 分钟）
@@ -137,7 +150,7 @@ env -i PATH=/usr/bin:/bin bash --noprofile --norc
 | [0.1](https://github.com/residua-labs/Residua/releases/tag/rsd-0.1) | 2026-11-19 | `59d0956e…` | 首个公开版本：最小自举闭合 |
 | [0.1.1](https://github.com/residua-labs/Residua/releases/tag/rsd-0.1.1) | 2026-11-19 | 见发布页 | 补丁版本：性能记录随源码包发货，署名补全，移除内部标识符 |
 | [0.1.2](https://github.com/residua-labs/Residua/releases/tag/rsd-0.1.2) | 2026-11-19 | 见发布页 | 补丁版本：基准与差分测试套件发货 |
-| [0.2](https://github.com/residua-labs/Residua/releases/tag/rsd-0.2) | 2026-11-20 | 见发布页 | 功能版本：q 格式 v1、语法引擎、效果语义；[CHANGELOG](CHANGELOG.zh-CN.md) |
+| [0.2](https://github.com/residua-labs/Residua/releases/tag/rsd-0.2) | 2026-11-20 | `151bfd4f…` | 功能版本：q 格式 v1、语法引擎、效果语义、macOS 自举宿主；[CHANGELOG](CHANGELOG.zh-CN.md) |
 
 完整记录：[CHANGELOG.zh-CN.md](CHANGELOG.zh-CN.md)。
 

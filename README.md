@@ -22,6 +22,19 @@ later releases.
 > content identity, the closed syntax engine and execution-boundary semantics.
 > Not yet a general-purpose language; see [Limitations](#limitations).
 
+## What's new in 0.2 (compared with 0.1)
+
+| Area | 0.1 | 0.2 |
+|---|---|---|
+| Content identity | raw SHA-256 digests | **typed q format v1**: the kind is inside the hashed bytes, so cross-kind collisions cannot occur ([`docs/QFORMAT.md`](docs/QFORMAT.md), [note](release/notes/qformat-1.md)) |
+| Surface syntax | one hand-written parser for the bootstrap subset | **syntax engine**: one parser over grammar data, closed over its grammar class against a mechanically checked reference decider; surface profiles ship as data in `rsdc/profiles/` ([note](release/notes/syntax-engine.md)) |
+| Execution boundary | not specified | **E0–E4 semantics**: wire format, admission and seal judgments, conformance classifier, recorded transport sessions, as Lean 4.14 statements in `semantics/Effect/` ([note](release/notes/effect-sem.md)) |
+| Bootstrap hosts | Linux x86-64 | **Linux x86-64 and macOS arm64** (Apple clang, `PATH=/usr/bin:/bin`, no Lean), reproduced byte-identical on two Darwin hosts |
+| Documents | `release/docs/` | `docs/`, Markdown, Chinese as `.zh-CN.md` |
+| Seed | stage-14274 | unchanged: the 53 seed members keep their 0.1 bytes; five declared 0.2 increments to the recipe are listed in the [CHANGELOG](CHANGELOG.md) |
+
+Archive `rsd-src.tar` 0.2: 212 files, SHA-256 `151bfd4f6a910e9c4232e84b6cf6cfd7618a1009e5c32d41acd995b9b0d5b8fb`.
+
 ## Motivation
 
 1. **Maintenance dominates the cost of formal results.** In a formal development, re-checking after upstream changes,
@@ -81,7 +94,7 @@ Requirements: Linux x86-64 (GCC, GNU binutils, coreutils, Bash, curl, tar) or ma
 
 ```sh
 # 1. Download and verify the archive (from the rsd-0.2 release page)
-sha256sum -c rsd-src.tar.sha256
+sha256sum -c rsd-src.tar.sha256    # macOS: shasum -a 256 -c rsd-src.tar.sha256
 mkdir rsd-src && tar -xf rsd-src.tar -C rsd-src && cd rsd-src
 
 # 2. Rebuild both compilers from the seed in a clean environment (20-45 minutes)
@@ -159,7 +172,7 @@ the designs it studied.
 | [0.1](https://github.com/residua-labs/Residua/releases/tag/rsd-0.1) | 2026-11-19 | `59d0956e…` | First public release: minimal self-bootstrapping closure |
 | [0.1.1](https://github.com/residua-labs/Residua/releases/tag/rsd-0.1.1) | 2026-11-19 | see the release page | Patch release: the performance record ships in the archive, attribution completed, internal identifiers removed |
 | [0.1.2](https://github.com/residua-labs/Residua/releases/tag/rsd-0.1.2) | 2026-11-19 | see the release page | Patch release: benchmark and differential test suites shipped |
-| [0.2](https://github.com/residua-labs/Residua/releases/tag/rsd-0.2) | 2026-11-20 | see the release page | Feature release: q format v1, syntax engine, effect semantics; [CHANGELOG](CHANGELOG.md) |
+| [0.2](https://github.com/residua-labs/Residua/releases/tag/rsd-0.2) | 2026-11-20 | `151bfd4f…` | Feature release: q format v1, syntax engine, effect semantics, macOS bootstrap host; [CHANGELOG](CHANGELOG.md) |
 
 Full history: [CHANGELOG.md](CHANGELOG.md).
 
