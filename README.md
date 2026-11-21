@@ -174,6 +174,20 @@ the designs it studied.
 | [0.1.2](https://github.com/residua-labs/Residua/releases/tag/rsd-0.1.2) | 2026-11-19 | see the release page | Patch release: benchmark and differential test suites shipped |
 | [0.2](https://github.com/residua-labs/Residua/releases/tag/rsd-0.2) | 2026-11-20 | `151bfd4f…` | Feature release: q format v1, syntax engine, effect semantics, macOS bootstrap host; [CHANGELOG](CHANGELOG.md) |
 
+### Changelog summary
+
+- **0.2** (2026-11-20, 212 files, `151bfd4f…`): typed content address (q format v1); syntax engine closed over its grammar
+  class; execution-boundary semantics E0–E4; macOS arm64 bootstrap host; documents moved to `docs/` as Markdown. Seed
+  members unchanged. *Omission:* the benchmark and differential test suites, the performance record and the
+  acknowledgements that 0.1.1 and 0.1.2 shipped (`benchmarks/`, `instruments/lrc-host/`, `perf/`, `ACKNOWLEDGEMENTS.md`)
+  are missing from the 0.2 archive; they return in 0.2.1.
+- **0.1.2** (2026-11-19, 437 files, `a3185221…`): the benchmark programs with expected outputs and reference
+  implementations (`benchmarks/`), the differential test suite (`instruments/lrc-host/`) and the testing guide shipped.
+- **0.1.1** (2026-11-19, 148 files, `28a074e2…`): the performance record (`perf/`) shipped; attribution completed
+  (per-file upstream headers, `ACKNOWLEDGEMENTS.md`); the version scheme (feature 0.x, patch 0.x.y) fixed.
+- **0.1** (2026-11-19, `59d0956e…`): first public release, the minimal self-bootstrapping closure of the rsd compiler
+  from a committed WebAssembly seed.
+
 Full history: [CHANGELOG.md](CHANGELOG.md).
 
 ## Repository layout
