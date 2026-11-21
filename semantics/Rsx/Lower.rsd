@@ -374,8 +374,20 @@ theorem lower_adequacyStatementWeak (E : ResolvedEnv) {S : SigTable} {t : BootTy
     (progs : Programs S S) : adequacyStatementWeak (Rsx.lower E (S := S) (t := t)) progs :=
   adequacyStatement_vacuous _ progs
 
+/-- structural erasure finishes: `erase` returns a term at some fuel.
+    `whnfFuel` (Core.rsd, frozen) is call-by-name, so `norm` can discard a relevant
+    argument; `erase` traverses it. A transparent `loop := loop` in that argument has a
+    `norm` and no finite erasure (`lowerF_not_adequate_divArg`). MetaCoq's erasure
+    correctness (Sozeau et al., POPL 2020, §4) assumes the source is defined, which
+    here is this premise. -/
+def Erasable (E : ResolvedEnv) (n : Nat) (e : Expr Nat) : Prop :=
+  ∃ (F : Nat) (l : LExpr), erase E n F [] e = some l
+
+theorem erasable_lit (E : ResolvedEnv) (n k : Nat) : Erasable E n (.lit k) :=
+  ⟨1, .lit k, rfl⟩
+
 /-- adequacy of `Rsx.Lower.lowerF` at one closed term (the body of
-    `Rsx.adequacyStatement` at `e`). -/
+    `Rsx.Lower.adequacyClosed` at `e`). -/
 def Good {S : SigTable} (progs : Programs S S) (E : ResolvedEnv) (n : Nat)
     (e : Expr Nat) : Prop :=
   ∀ (lf fv : Nat) (T v : Expr Nat) (t : BootTy) (w : Val),
@@ -384,6 +396,22 @@ def Good {S : SigTable} (progs : Programs S S) (E : ResolvedEnv) (n : Nat)
     norm E lf e = some v → scmValOf E fv v = some w →
     relevantSpine E n fv v = true → irrelevant E n [] v = false → valFits fv t w = true →
     (inferT E n [] v).isSome = true →
+    Erasable E n e →
+    ∃ F₀, ∀ F, F₀ ≤ F →
+      ∃ lf', Residua.Bootstrap.Semantics.eval lawsA progs lf' [] (lowerF E n F (S := S) t e)
+        = some w
+
+/-- hole-14 statement for the reference family, with the erasability premise.
+    `Rsx.adequacyStatement` (Adequacy.rsd) is the previous form; the reference
+    lowering refutes it (`lowerF_not_adequate_divArg`). -/
+def adequacyClosed {S : SigTable} (progs : Programs S S) : Prop :=
+  ∀ (E : ResolvedEnv) (n lf fv : Nat) (e T v : Expr Nat) (t : BootTy) (w : Val),
+    BodiesTyped E n →
+    inferT E n [] e = some T → DataTy E T →
+    norm E lf e = some v → scmValOf E fv v = some w →
+    relevantSpine E n fv v = true → irrelevant E n [] v = false → valFits fv t w = true →
+    (inferT E n [] v).isSome = true →
+    Erasable E n e →
     ∃ F₀, ∀ F, F₀ ≤ F →
       ∃ lf', Residua.Bootstrap.Semantics.eval lawsA progs lf' [] (lowerF E n F (S := S) t e)
         = some w
@@ -410,14 +438,13 @@ def AdeqLetE {S : SigTable} (progs : Programs S S) : Prop :=
 def AdeqLit {S : SigTable} (progs : Programs S S) : Prop :=
   ∀ E n k, Good progs E n (.lit k)
 
-/-- the eight per-construct statements together give the hole-14 statement
-    `Rsx.adequacyStatement` for the reference family `Rsx.Lower.lowerF` (case split on
-    the term). -/
+/-- the eight per-construct statements together give `adequacyClosed` for the
+    reference family `Rsx.Lower.lowerF` (case split on the term). -/
 theorem adequacy_of_constructs {S : SigTable} (progs : Programs S S)
     (hb : AdeqBvar progs) (hs : AdeqSort progs) (hc : AdeqConst progs)
     (ha : AdeqApp progs) (hl : AdeqLam progs) (hp : AdeqPi progs)
     (hz : AdeqLetE progs) (hn : AdeqLit progs) :
-    adequacyStatement (fun E n F t e => lowerF E n F (S := S) t e) progs := by
+    adequacyClosed (S := S) progs := by
   intro E n lf fv e T v t w
   cases e with
   | bvar i => exact hb E n i lf fv T v t w
@@ -506,24 +533,39 @@ theorem scmValOf_lam (E : ResolvedEnv) (fv : Nat) (A b : Expr Nat) :
     scmValOf E fv (.lam A b) = none := by
   cases fv <;> rfl
 
+/- A constant that is not a constructor is not data. `scmValOf` returns
+   `none` for an axiom, an opaque, an inductive, a recursor, or a missing
+   member. -/
+theorem scmValOf_const_not_ctor (E : ResolvedEnv) (fv c : Nat) (ls : List Level)
+    (hnot : ∀ m, E.members c = some m → ¬ m.mclass = .constructorM) :
+    scmValOf E fv (.const c ls) = none := by
+  cases fv with
+  | zero => rfl
+  | succ _ =>
+    cases hm : E.members c with
+    | none => simp [scmValOf, appsSpine, hm]
+    | some m =>
+      have hne := hnot m hm
+      simp [scmValOf, appsSpine, hm, hne]
+
 theorem adeqBvar {S : SigTable} (progs : Programs S S) : AdeqBvar progs := by
-  intro E n i lf fv T v t w _ _ _ hn hs _ _ _ _
+  intro E n i lf fv T v t w _ _ _ hn hs _ _ _ _ _
   rw [norm_bvar_val hn, scmValOf_bvar] at hs
   exact Option.noConfusion hs
 
 theorem adeqSort {S : SigTable} (progs : Programs S S) : AdeqSort progs := by
-  intro E n l lf fv T v t w _ _ _ hn hs _ _ _ _
+  intro E n l lf fv T v t w _ _ _ hn hs _ _ _ _ _
   rw [norm_sort_val hn, scmValOf_sort] at hs
   exact Option.noConfusion hs
 
 theorem adeqPi {S : SigTable} (progs : Programs S S) : AdeqPi progs := by
-  intro E n A B lf fv T v t w _ _ _ hn hs _ _ _ _
+  intro E n A B lf fv T v t w _ _ _ hn hs _ _ _ _ _
   obtain ⟨A', B', hv⟩ := norm_pi_val hn
   rw [hv, scmValOf_pi] at hs
   exact Option.noConfusion hs
 
 theorem adeqLam {S : SigTable} (progs : Programs S S) : AdeqLam progs := by
-  intro E n A b lf fv T v t w _ _ _ hn hs _ _ _ _
+  intro E n A b lf fv T v t w _ _ _ hn hs _ _ _ _ _
   obtain ⟨A', b', hv⟩ := norm_lam_val hn
   rw [hv, scmValOf_lam] at hs
   exact Option.noConfusion hs
@@ -541,7 +583,7 @@ theorem eval_litI {S : SigTable} (progs : Programs S S) (x : Int)
   simp [Residua.Bootstrap.Semantics.eval, hx]
 
 theorem adeqLit {S : SigTable} (progs : Programs S S) : AdeqLit progs := by
-  intro E n k lf fv T v t w _ _ _ hn hs _ _ hf _
+  intro E n k lf fv T v t w _ _ _ hn hs _ _ hf _ _
   rw [norm_lit_val hn] at hs
   cases fv with
   | zero => exact Option.noConfusion hs
@@ -565,7 +607,7 @@ theorem lit0_good {S : SigTable} (progs : Programs S S) :
     ∃ F₀, ∀ F, F₀ ≤ F → ∃ lf', Residua.Bootstrap.Semantics.eval lawsA progs lf' []
       (lowerF adqEnv 0 F (S := S) .i64 (.lit 0)) = some (.int 0) :=
   adeqLit progs adqEnv 0 0 2 1 _ (.lit 0) .i64 (.int 0) adqBodiesTyped adqLit0Infer adqLit0Data adqLit0Norm
-    adqLit0Val adqLit0Rel adqLit0Root adqLit0Fits adqLit0VInfer
+    adqLit0Val adqLit0Rel adqLit0Root adqLit0Fits adqLit0VInfer (erasable_lit _ _ _)
 
 /-! ### Fuel monotonicity of the erase and run stages
 
@@ -640,6 +682,404 @@ theorem eraseWith_mono (irr : LCtx → Expr Nat → Bool) (gi : Nat → Option N
 theorem erase_mono (E : ResolvedEnv) (n F F' : Nat) (Γ : LCtx) (e : Expr Nat) (l : LExpr)
     (hF : F ≤ F') (h : erase E n F Γ e = some l) : erase E n F' Γ e = some l :=
   eraseWith_mono (irrelevant E n) noGlobals E F F' Γ e l hF h
+
+/- A transparent constant erases as its body, one fuel earlier, in the empty
+   context. Letouzey TYPES 2002 unfolds δ before the informative test of the
+   body; Sozeau et al. POPL 2020 §4 erase a constant as the erasure of its body.
+   `noGlobals` sends the constant nowhere, so this is not a `glob`. -/
+theorem erase_const_delta (E : ResolvedEnv) (n F r : Nat) (ls : List Level) (b : Expr Nat)
+    (hirr : irrelevant E n [] (.const r ls) = false)
+    (hb : transparentBody E r ls = some b) :
+    erase E n (F + 1) [] (.const r ls) = erase E n F [] b := by
+  simp only [erase, eraseWith, hirr, Bool.false_eq_true, if_false, noGlobals, hb]
+
+/- A relevant application erases as the application of the two erasures,
+   one fuel earlier. Letouzey TYPES 2002 keeps an informative application.
+   The AdeqApp relevant branch rewrites with this. Not AdeqApp. -/
+theorem erase_app_keep (E : ResolvedEnv) (n F : Nat) (Γ : LCtx) (g a : Expr Nat)
+    (h : irrelevant E n Γ (.app g a) = false) :
+    erase E n (F + 1) Γ (.app g a) =
+      match erase E n F Γ g, erase E n F Γ a with
+      | some g', some a' => some (.app g' a')
+      | _, _ => none := by
+  simp only [erase, eraseWith, h, Bool.false_eq_true, if_false]
+
+/- A relevant lambda erases as the lambda of its body, domain dropped,
+   one fuel earlier, under the assumption. Not AdeqLam: that one is
+   already proved, because a lambda is not data. -/
+theorem erase_lam_keep (E : ResolvedEnv) (n F : Nat) (Γ : LCtx) (A b : Expr Nat)
+    (h : irrelevant E n Γ (.lam A b) = false) :
+    erase E n (F + 1) Γ (.lam A b) =
+      (erase E n F (.assumption A :: Γ) b).map .lam := by
+  simp only [erase, eraseWith, h, Bool.false_eq_true, if_false]
+
+/- A relevant let erases as the let of the two erasures, one fuel earlier.
+   The body is erased under the let binding. The AdeqLetE relevant branch
+   rewrites with this. Not AdeqLetE. -/
+theorem erase_let_keep (E : ResolvedEnv) (n F : Nat) (Γ : LCtx)
+    (A v b : Expr Nat) (h : irrelevant E n Γ (.letE A v b) = false) :
+    erase E n (F + 1) Γ (.letE A v b) =
+      match erase E n F Γ v, erase E n F (.letBinding A v :: Γ) b with
+      | some v', some b' => some (.letE v' b')
+      | _, _ => none := by
+  simp only [erase, eraseWith, h, Bool.false_eq_true, if_false]
+
+/- `whnfFuel` unfolds the same δ, and `foldApps body []` is the body. -/
+theorem whnf_const_delta (E : ResolvedEnv) (k r : Nat) (ls : List Level) (b : Expr Nat)
+    (hb : transparentBody E r ls = some b) :
+    whnfFuel E (k + 1) (.const r ls) = whnfFuel E k b := by
+  simp only [whnfFuel, appsSpine, foldApps, hb]
+
+/- If the body normalizes at fuel `k + 1`, the constant normalizes to that
+   value at fuel `k + 2`. `whnf_const_delta` makes the two heads the same
+   `whnf`, and `norm_mono` moves the body's value up one fuel, where both
+   `norm`s normalize the same subterms. The unconditional equality, with no
+   success hypothesis on the body, is the false one named below.
+   Not AdeqConstDelta. -/
+theorem norm_const_delta_of_body (E : ResolvedEnv) (k r : Nat) (ls : List Level)
+    (body v : Expr Nat) (ht : transparentBody E r ls = some body)
+    (hn : norm E (k + 1) body = some v) :
+    norm E (k + 2) (.const r ls) = some v := by
+  cases hw : whnfFuel E k body with
+  | none =>
+    unfold norm at hn
+    rw [hw] at hn
+    exact Option.noConfusion hn
+  | some w =>
+    have hc : whnfFuel E (k + 1) (.const r ls) = some w := by
+      rw [whnf_const_delta E k r ls body ht]
+      exact hw
+    have hb1 : whnfFuel E (k + 1) body = some w :=
+      whnfFuel_mono E k body w hw
+    have heq : norm E (k + 2) (.const r ls) = norm E (k + 2) body := by
+      conv =>
+        lhs
+        unfold norm
+        rw [hc]
+      conv =>
+        rhs
+        unfold norm
+        rw [hb1]
+    rw [heq]
+    exact norm_mono E (k + 1) body v hn
+
+/- A literal body has no subterm for `norm` to revisit, so the fuel shift is
+   only the one `whnf_const_delta` performs. One fuel makes `whnfFuel` return
+   the literal. The general equality `norm` of the constant at `k + 2` equals
+   `norm` of an arbitrary body at `k + 1` is false: the constant normalizes
+   subterms at fuel `k + 1` and the body at fuel `k`. -/
+theorem norm_const_delta_lit (E : ResolvedEnv) (k r n : Nat) (ls : List Level)
+    (hb : transparentBody E r ls = some (.lit n)) :
+    norm E (k + 3) (.const r ls) = some (.lit n) := by
+  have hw : whnfFuel E (k + 1) (.lit n) = some (.lit n) := by
+    simp only [whnfFuel, appsSpine]
+  unfold norm
+  rw [whnf_const_delta E (k + 1) r ls (.lit n) hb, hw]
+
+/- Any successful `norm` of that constant is the literal. Fuels 0, 1 and 2
+   return `none` (`whnfFuel` of the literal needs one fuel, and `norm` spends
+   one more). -/
+theorem norm_const_lit_val (E : ResolvedEnv) (lf r n : Nat) (ls : List Level)
+    {v : Expr Nat} (hb : transparentBody E r ls = some (.lit n))
+    (hn : norm E lf (.const r ls) = some v) : v = .lit n := by
+  cases lf with
+  | zero => exact Option.noConfusion hn
+  | succ lf =>
+    cases lf with
+    | zero =>
+      unfold norm at hn
+      rw [whnfFuel_fuel0] at hn
+      exact Option.noConfusion hn
+    | succ lf =>
+      cases lf with
+      | zero =>
+        have hw := whnf_const_delta E 0 r ls (.lit n) hb
+        unfold norm at hn
+        rw [whnfFuel_fuel0] at hw
+        rw [hw] at hn
+        exact Option.noConfusion hn
+      | succ j =>
+        rw [norm_const_delta_lit E j r n ls hb] at hn
+        exact (Option.some.inj hn).symm
+
+/- A sort body is the same canonical head. `scmValOf` of a sort is `none`,
+   so this case of δ is vacuous once `norm` returns the sort. -/
+theorem norm_const_delta_sort (E : ResolvedEnv) (k r : Nat) (ls : List Level) (u : Level)
+    (hb : transparentBody E r ls = some (.sort u)) :
+    norm E (k + 3) (.const r ls) = some (.sort u) := by
+  have hw : whnfFuel E (k + 1) (.sort u) = some (.sort u) := by
+    simp only [whnfFuel, appsSpine]
+  unfold norm
+  rw [whnf_const_delta E (k + 1) r ls (.sort u) hb, hw]
+
+theorem norm_const_sort_val (E : ResolvedEnv) (lf r : Nat) (ls : List Level) (u : Level)
+    {v : Expr Nat} (hb : transparentBody E r ls = some (.sort u))
+    (hn : norm E lf (.const r ls) = some v) : v = .sort u := by
+  cases lf with
+  | zero => exact Option.noConfusion hn
+  | succ lf =>
+    cases lf with
+    | zero =>
+      unfold norm at hn
+      rw [whnfFuel_fuel0] at hn
+      exact Option.noConfusion hn
+    | succ lf =>
+      cases lf with
+      | zero =>
+        have hw := whnf_const_delta E 0 r ls (.sort u) hb
+        unfold norm at hn
+        rw [whnfFuel_fuel0] at hw
+        rw [hw] at hn
+        exact Option.noConfusion hn
+      | succ j =>
+        rw [norm_const_delta_sort E j r ls u hb] at hn
+        exact (Option.some.inj hn).symm
+
+/- A bound variable is a canonical head. `scmValOf` of it is `none`. -/
+theorem norm_const_delta_bvar (E : ResolvedEnv) (k r i : Nat) (ls : List Level)
+    (hb : transparentBody E r ls = some (.bvar i)) :
+    norm E (k + 3) (.const r ls) = some (.bvar i) := by
+  have hw : whnfFuel E (k + 1) (.bvar i) = some (.bvar i) := by
+    simp only [whnfFuel, appsSpine]
+  unfold norm
+  rw [whnf_const_delta E (k + 1) r ls (.bvar i) hb, hw]
+
+theorem norm_const_bvar_val (E : ResolvedEnv) (lf r i : Nat) (ls : List Level)
+    {v : Expr Nat} (hb : transparentBody E r ls = some (.bvar i))
+    (hn : norm E lf (.const r ls) = some v) : v = .bvar i := by
+  cases lf with
+  | zero => exact Option.noConfusion hn
+  | succ lf =>
+    cases lf with
+    | zero =>
+      unfold norm at hn
+      rw [whnfFuel_fuel0] at hn
+      exact Option.noConfusion hn
+    | succ lf =>
+      cases lf with
+      | zero =>
+        have hw := whnf_const_delta E 0 r ls (.bvar i) hb
+        unfold norm at hn
+        rw [whnfFuel_fuel0] at hw
+        rw [hw] at hn
+        exact Option.noConfusion hn
+      | succ j =>
+        rw [norm_const_delta_bvar E j r i ls hb] at hn
+        exact (Option.some.inj hn).symm
+
+/- A Π body is not rewritten away by `whnfFuel`. A successful `norm` of the
+   constant is a Π; its subterms are normalized one fuel later than `norm`
+   of the body, so the two `norm`s are not equal. -/
+theorem norm_const_pi_val (E : ResolvedEnv) (lf r : Nat) (ls : List Level)
+    (A B : Expr Nat) {v : Expr Nat}
+    (hb : transparentBody E r ls = some (.pi A B))
+    (hn : norm E lf (.const r ls) = some v) : ∃ A' B', v = .pi A' B' := by
+  cases lf with
+  | zero => exact Option.noConfusion hn
+  | succ lf =>
+    cases lf with
+    | zero =>
+      unfold norm at hn
+      rw [whnfFuel_fuel0] at hn
+      exact Option.noConfusion hn
+    | succ lf =>
+      cases lf with
+      | zero =>
+        have hw := whnf_const_delta E 0 r ls (.pi A B) hb
+        unfold norm at hn
+        rw [whnfFuel_fuel0] at hw
+        rw [hw] at hn
+        exact Option.noConfusion hn
+      | succ j =>
+        have hw : whnfFuel E (j + 1) (.pi A B) = some (.pi A B) := by
+          simp only [whnfFuel, appsSpine]
+        have h2 : norm E (j + 3) (.const r ls) =
+            (match norm E (j + 2) A, norm E (j + 2) B with
+             | some A', some B' => some (.pi A' B')
+             | _, _ => none) := by
+          unfold norm
+          rw [whnf_const_delta E (j + 1) r ls (.pi A B) hb, hw]
+          rfl
+        rw [h2] at hn
+        split at hn
+        · exact ⟨_, _, (Option.some.inj hn).symm⟩
+        · exact Option.noConfusion hn
+
+/- A λ body is the same shape as a Π body. -/
+theorem norm_const_lam_val (E : ResolvedEnv) (lf r : Nat) (ls : List Level)
+    (A b : Expr Nat) {v : Expr Nat}
+    (hb : transparentBody E r ls = some (.lam A b))
+    (hn : norm E lf (.const r ls) = some v) : ∃ A' b', v = .lam A' b' := by
+  cases lf with
+  | zero => exact Option.noConfusion hn
+  | succ lf =>
+    cases lf with
+    | zero =>
+      unfold norm at hn
+      rw [whnfFuel_fuel0] at hn
+      exact Option.noConfusion hn
+    | succ lf =>
+      cases lf with
+      | zero =>
+        have hw := whnf_const_delta E 0 r ls (.lam A b) hb
+        unfold norm at hn
+        rw [whnfFuel_fuel0] at hw
+        rw [hw] at hn
+        exact Option.noConfusion hn
+      | succ j =>
+        have hw : whnfFuel E (j + 1) (.lam A b) = some (.lam A b) := by
+          simp only [whnfFuel, appsSpine]
+        have h2 : norm E (j + 3) (.const r ls) =
+            (match norm E (j + 2) A, norm E (j + 2) b with
+             | some A', some b' => some (.lam A' b')
+             | _, _ => none) := by
+          unfold norm
+          rw [whnf_const_delta E (j + 1) r ls (.lam A b) hb, hw]
+          rfl
+        rw [h2] at hn
+        split at hn
+        · exact ⟨_, _, (Option.some.inj hn).symm⟩
+        · exact Option.noConfusion hn
+
+/- A constructor head has no transparent body, so `norm` does not open it.
+   The fuel shift is only the one `whnf_const_delta` performs. -/
+theorem norm_const_delta_ctor (E : ResolvedEnv) (k r c : Nat) (ls lsc : List Level)
+    (hb : transparentBody E r ls = some (.const c lsc))
+    (hnone : transparentBody E c lsc = none) :
+    norm E (k + 3) (.const r ls) = some (.const c lsc) := by
+  have hw : whnfFuel E (k + 1) (.const c lsc) = some (.const c lsc) := by
+    change (match transparentBody E c lsc with
+      | some body => whnfFuel E k (foldApps body [])
+      | none => some (.const c lsc)) = some (.const c lsc)
+    rw [hnone]
+  unfold norm
+  rw [whnf_const_delta E (k + 1) r ls (.const c lsc) hb, hw]
+
+theorem norm_const_ctor_val (E : ResolvedEnv) (lf r c : Nat) (ls lsc : List Level)
+    {v : Expr Nat}
+    (hb : transparentBody E r ls = some (.const c lsc))
+    (hnone : transparentBody E c lsc = none)
+    (hn : norm E lf (.const r ls) = some v) : v = .const c lsc := by
+  cases lf with
+  | zero => exact Option.noConfusion hn
+  | succ lf =>
+    cases lf with
+    | zero =>
+      unfold norm at hn
+      rw [whnfFuel_fuel0] at hn
+      exact Option.noConfusion hn
+    | succ lf =>
+      cases lf with
+      | zero =>
+        have hw := whnf_const_delta E 0 r ls (.const c lsc) hb
+        unfold norm at hn
+        rw [whnfFuel_fuel0] at hw
+        rw [hw] at hn
+        exact Option.noConfusion hn
+      | succ j =>
+        rw [norm_const_delta_ctor E j r c ls lsc hb hnone] at hn
+        exact (Option.some.inj hn).symm
+
+/- A constructor applied to one literal. The head is rigid, so `whnfFuel`
+   returns the application, and `norm` normalizes the literal argument.
+   Not AdeqConstDelta. -/
+theorem norm_const_delta_app_lit (E : ResolvedEnv) (k r c nlit : Nat) (ls lsc : List Level)
+    (hb : transparentBody E r ls = some (.app (.const c lsc) (.lit nlit)))
+    (hnone : transparentBody E c lsc = none) :
+    norm E (k + 3) (.const r ls) = some (.app (.const c lsc) (.lit nlit)) := by
+  have hwb : whnfFuel E (k + 1) (.app (.const c lsc) (.lit nlit)) =
+      some (.app (.const c lsc) (.lit nlit)) := by
+    simp only [whnfFuel, appsSpine, hnone]
+  have hlit : norm E (k + 2) (.lit nlit) = some (.lit nlit) := by
+    have hwlit : whnfFuel E (k + 1) (.lit nlit) = some (.lit nlit) := by
+      simp only [whnfFuel, appsSpine]
+    unfold norm
+    rw [hwlit]
+  unfold norm
+  rw [whnf_const_delta E (k + 1) r ls (.app (.const c lsc) (.lit nlit)) hb, hwb]
+  have hsp : appsSpine (.app (.const c lsc) (.lit nlit)) =
+      (.const c lsc, [.lit nlit]) := by
+    simp only [appsSpine, List.nil_append]
+  simp only [hsp]
+  have hm : [.lit nlit].mapM (norm E (k + 2)) = some [.lit nlit] := by
+    rw [List.mapM_cons, hlit, List.mapM_nil]
+    rfl
+  simp only [hm, foldApps]
+
+theorem norm_const_app_lit_val (E : ResolvedEnv) (lf r c nlit : Nat) (ls lsc : List Level)
+    {v : Expr Nat}
+    (hb : transparentBody E r ls = some (.app (.const c lsc) (.lit nlit)))
+    (hnone : transparentBody E c lsc = none)
+    (hn : norm E lf (.const r ls) = some v) :
+    v = .app (.const c lsc) (.lit nlit) := by
+  cases lf with
+  | zero => exact Option.noConfusion hn
+  | succ lf =>
+    cases lf with
+    | zero =>
+      unfold norm at hn
+      rw [whnfFuel_fuel0] at hn
+      exact Option.noConfusion hn
+    | succ lf =>
+      cases lf with
+      | zero =>
+        have hw := whnf_const_delta E 0 r ls (.app (.const c lsc) (.lit nlit)) hb
+        unfold norm at hn
+        rw [whnfFuel_fuel0] at hw
+        rw [hw] at hn
+        exact Option.noConfusion hn
+      | succ j =>
+        rw [norm_const_delta_app_lit E j r c nlit ls lsc hb hnone] at hn
+        exact (Option.some.inj hn).symm
+
+/- One more transparent constant in front of a literal. Each δ spends one
+   fuel in `whnfFuel`, and `norm` spends one more, so the literal appears
+   at fuel `k + 4`. -/
+theorem norm_const_delta_lit_via (E : ResolvedEnv) (k r m nlit : Nat) (ls lsm : List Level)
+    (hb : transparentBody E r ls = some (.const m lsm))
+    (hm : transparentBody E m lsm = some (.lit nlit)) :
+    norm E (k + 4) (.const r ls) = some (.lit nlit) := by
+  have hl : whnfFuel E (k + 1) (.lit nlit) = some (.lit nlit) := by
+    simp only [whnfFuel, appsSpine]
+  have hw : whnfFuel E (k + 2) (.const m lsm) = some (.lit nlit) := by
+    rw [whnf_const_delta E (k + 1) m lsm (.lit nlit) hm, hl]
+  unfold norm
+  rw [whnf_const_delta E (k + 2) r ls (.const m lsm) hb, hw]
+
+theorem norm_const_lit_via_val (E : ResolvedEnv) (lf r m nlit : Nat) (ls lsm : List Level)
+    {v : Expr Nat}
+    (hb : transparentBody E r ls = some (.const m lsm))
+    (hm : transparentBody E m lsm = some (.lit nlit))
+    (hn : norm E lf (.const r ls) = some v) : v = .lit nlit := by
+  cases lf with
+  | zero => exact Option.noConfusion hn
+  | succ lf =>
+    cases lf with
+    | zero =>
+      unfold norm at hn
+      rw [whnfFuel_fuel0] at hn
+      exact Option.noConfusion hn
+    | succ lf =>
+      cases lf with
+      | zero =>
+        have hw := whnf_const_delta E 0 r ls (.const m lsm) hb
+        unfold norm at hn
+        rw [whnfFuel_fuel0] at hw
+        rw [hw] at hn
+        exact Option.noConfusion hn
+      | succ lf =>
+        cases lf with
+        | zero =>
+          have hw := whnf_const_delta E 1 r ls (.const m lsm) hb
+          have hw2 := whnf_const_delta E 0 m lsm (.lit nlit) hm
+          unfold norm at hn
+          rw [whnfFuel_fuel0] at hw2
+          rw [hw2] at hw
+          rw [hw] at hn
+          exact Option.noConfusion hn
+        | succ j =>
+          rw [norm_const_delta_lit_via E j r m nlit ls lsm hb hm] at hn
+          exact (Option.some.inj hn).symm
 
 theorem runWith_mono (bind : DVal → List DVal → List DVal) (code : List Code) :
     ∀ (F F' : Nat) (env : List DVal) (d : DExpr) (v : DVal), F ≤ F' →
@@ -811,6 +1251,36 @@ theorem emitWith_evalStable (fields : List DVal → List DVal) {S : SigTable} {G
     · rw [dif_neg hr] at h
       exact absurd h (eval_refuse_ne progs lf env w)
 
+/- Eval of the constant at fuel `F + 1` is eval of the body at fuel `F`, when the
+   constant is relevant. Erasure agrees by `erase_const_delta`; `run` and `emit`
+   keep a value at the larger fuel. -/
+theorem lowerF_const_delta_eval {S : SigTable} (progs : Programs S S) (E : ResolvedEnv)
+    (n F r lf : Nat) (ls : List Level) (b : Expr Nat) (t : BootTy) (w : Val)
+    (hirr : irrelevant E n [] (.const r ls) = false)
+    (hb : transparentBody E r ls = some b)
+    (h : Residua.Bootstrap.Semantics.eval lawsA progs lf [] (lowerF E n F (S := S) t b)
+      = some w) :
+    Residua.Bootstrap.Semantics.eval lawsA progs lf []
+      (lowerF E n (F + 1) (S := S) t (.const r ls)) = some w := by
+  unfold lowerF pipeline at h ⊢
+  cases he : erase E n F [] b with
+  | none =>
+    simp only [he] at h
+    exact absurd h (eval_refuse_ne progs lf [] w)
+  | some l =>
+    simp only [he] at h
+    have he' := (erase_const_delta E n F r ls b hirr hb).trans he
+    simp only [he']
+    cases hr : run (defunc l).2 F [] (defunc l).1 with
+    | none =>
+      simp only [hr] at h
+      exact absurd h (eval_refuse_ne progs lf [] w)
+    | some v =>
+      simp only [hr] at h
+      have hr' := run_mono (defunc l).2 F (F + 1) [] (defunc l).1 v (Nat.le_succ F) hr
+      simp only [hr']
+      exact emitWith_evalStable relevantArgs progs lf [] F (F + 1) t v w (Nat.le_succ F) h
+
 theorem lowerF_evalStable {S : SigTable} (progs : Programs S S) (E : ResolvedEnv)
     (n F F' : Nat) (t : BootTy) (e : Expr Nat) (lf : Nat) (w : Val) (hF : F ≤ F')
     (h : Residua.Bootstrap.Semantics.eval lawsA progs lf [] (lowerF E n F (S := S) t e)
@@ -855,11 +1325,116 @@ theorem good_of_exists {S : SigTable} (progs : Programs S S) (E : ResolvedEnv) (
       norm E lf e = some v → scmValOf E fv v = some w →
       relevantSpine E n fv v = true → irrelevant E n [] v = false → valFits fv t w = true →
       (inferT E n [] v).isSome = true →
+      Erasable E n e →
       ∃ F lf', Residua.Bootstrap.Semantics.eval lawsA progs lf' [] (lowerF E n F (S := S) t e)
         = some w) :
     Good progs E n e := by
-  intro lf fv T v t w h0 h1 h2 h3 h4 h5 h7 h6 h8
-  exact lowerF_eventual_of_exists progs E n t e w (h lf fv T v t w h0 h1 h2 h3 h4 h5 h7 h6 h8)
+  intro lf fv T v t w h0 h1 h2 h3 h4 h5 h7 h6 h8 h9
+  exact lowerF_eventual_of_exists progs E n t e w (h lf fv T v t w h0 h1 h2 h3 h4 h5 h7 h6 h8 h9)
+
+/- A transparent constant whose body is a literal denotes that literal.
+   This is the literal slice of `AdeqConstDelta`, not the whole statement:
+   `Good`'s irrelevance premise is about the value, and the value is the
+   literal, so relevance of the constant is a separate hypothesis. -/
+theorem good_const_delta_lit {S : SigTable} (progs : Programs S S)
+    (E : ResolvedEnv) (n r k : Nat) (ls : List Level)
+    (hb : transparentBody E r ls = some (.lit k))
+    (hirr : irrelevant E n [] (.const r ls) = false) :
+    Good progs E n (.const r ls) := by
+  refine good_of_exists progs E n (.const r ls) ?_
+  intro lf fv T v t w _ _ _ hn hs _ _ hf _ _
+  have hv := norm_const_lit_val E lf r k ls hb hn
+  subst hv
+  cases fv with
+  | zero => exact Option.noConfusion hs
+  | succ m =>
+    have hs2 : scmValOf E (m + 1) (.lit k) = some (.int (Int.ofNat k)) := rfl
+    rw [hs2] at hs
+    cases hs
+    cases t
+    case i64 =>
+      have hk : inI64Range (Int.ofNat k) = true := hf
+      have hbody : Residua.Bootstrap.Semantics.eval lawsA progs 1 []
+          (lowerF E n (0 + 1) (S := S) .i64 (.lit k)) = some (.int (Int.ofNat k)) := by
+        rw [lowerF_lit, if_pos hk]
+        exact eval_litI progs (Int.ofNat k) hk
+      exact ⟨2, 1, lowerF_const_delta_eval progs E n 1 r 1 ls (.lit k) .i64
+        (.int (Int.ofNat k)) hirr hb hbody⟩
+    all_goals cases hf
+
+/- The same literal, behind one more transparent constant. Each constant
+   needs its own relevance hypothesis. This is not `AdeqConstDelta`. -/
+theorem good_const_delta_lit_via {S : SigTable} (progs : Programs S S)
+    (E : ResolvedEnv) (n r m k : Nat) (ls lsm : List Level)
+    (hb : transparentBody E r ls = some (.const m lsm))
+    (hm : transparentBody E m lsm = some (.lit k))
+    (hirr : irrelevant E n [] (.const r ls) = false)
+    (hirrm : irrelevant E n [] (.const m lsm) = false) :
+    Good progs E n (.const r ls) := by
+  refine good_of_exists progs E n (.const r ls) ?_
+  intro lf fv T v t w _ _ _ hn hs _ _ hf _ _
+  have hv := norm_const_lit_via_val E lf r m k ls lsm hb hm hn
+  subst hv
+  cases fv with
+  | zero => exact Option.noConfusion hs
+  | succ q =>
+    have hs2 : scmValOf E (q + 1) (.lit k) = some (.int (Int.ofNat k)) := rfl
+    rw [hs2] at hs
+    cases hs
+    cases t
+    case i64 =>
+      have hk : inI64Range (Int.ofNat k) = true := hf
+      have hlit : Residua.Bootstrap.Semantics.eval lawsA progs 1 []
+          (lowerF E n (0 + 1) (S := S) .i64 (.lit k)) = some (.int (Int.ofNat k)) := by
+        rw [lowerF_lit, if_pos hk]
+        exact eval_litI progs (Int.ofNat k) hk
+      have hmid := lowerF_const_delta_eval progs E n 1 m 1 lsm (.lit k) .i64
+        (.int (Int.ofNat k)) hirrm hm hlit
+      exact ⟨3, 1, lowerF_const_delta_eval progs E n 2 r 1 ls (.const m lsm) .i64
+        (.int (Int.ofNat k)) hirr hb hmid⟩
+    all_goals cases hf
+
+/- A transparent constant whose body is a sort has no scm value.
+   `AdeqConstDelta` still quantifies over every body. -/
+theorem good_const_delta_sort {S : SigTable} (progs : Programs S S)
+    (E : ResolvedEnv) (n r : Nat) (ls : List Level) (u : Level)
+    (hb : transparentBody E r ls = some (.sort u)) :
+    Good progs E n (.const r ls) := by
+  refine good_of_exists progs E n (.const r ls) ?_
+  intro lf fv T v t w _ _ _ hn hs _ _ _ _ _
+  rw [norm_const_sort_val E lf r ls u hb hn, scmValOf_sort] at hs
+  exact Option.noConfusion hs
+
+/- A transparent constant whose body is a bound variable, a Π, or a λ has
+   no scm value. None of these is `AdeqConstDelta`. -/
+theorem good_const_delta_bvar {S : SigTable} (progs : Programs S S)
+    (E : ResolvedEnv) (n r i : Nat) (ls : List Level)
+    (hb : transparentBody E r ls = some (.bvar i)) :
+    Good progs E n (.const r ls) := by
+  refine good_of_exists progs E n (.const r ls) ?_
+  intro lf fv T v t w _ _ _ hn hs _ _ _ _ _
+  rw [norm_const_bvar_val E lf r i ls hb hn, scmValOf_bvar] at hs
+  exact Option.noConfusion hs
+
+theorem good_const_delta_pi {S : SigTable} (progs : Programs S S)
+    (E : ResolvedEnv) (n r : Nat) (ls : List Level) (A B : Expr Nat)
+    (hb : transparentBody E r ls = some (.pi A B)) :
+    Good progs E n (.const r ls) := by
+  refine good_of_exists progs E n (.const r ls) ?_
+  intro lf fv T v t w _ _ _ hn hs _ _ _ _ _
+  obtain ⟨A', B', hv⟩ := norm_const_pi_val E lf r ls A B hb hn
+  rw [hv, scmValOf_pi] at hs
+  exact Option.noConfusion hs
+
+theorem good_const_delta_lam {S : SigTable} (progs : Programs S S)
+    (E : ResolvedEnv) (n r : Nat) (ls : List Level) (A b : Expr Nat)
+    (hb : transparentBody E r ls = some (.lam A b)) :
+    Good progs E n (.const r ls) := by
+  refine good_of_exists progs E n (.const r ls) ?_
+  intro lf fv T v t w _ _ _ hn hs _ _ _ _ _
+  obtain ⟨A', b', hv⟩ := norm_const_lam_val E lf r ls A b hb hn
+  rw [hv, scmValOf_lam] at hs
+  exact Option.noConfusion hs
 
 /-! ### The const case, split: heads proved, δ stated
 
@@ -913,7 +1488,7 @@ theorem list_get?_some {α : Type} : ∀ (ts : List α) (r : Nat) (x : α),
     constructor, erased to `ctor r`, run to `ctor r []`, emitted as summand `r` with no
     fields; evalLF gives `.inj r (.list [])` at scm fuel 1, from lowering fuel 1 on. -/
 theorem adeqConstHead {S : SigTable} (progs : Programs S S) : AdeqConstHead progs := by
-  intro E n r ls hb lf fv T v t w _ _ _ hn hs _ hroot hf _
+  intro E n r ls hb lf fv T v t w _ _ _ hn hs _ hroot hf _ _
   have hv := norm_const_head hb hn
   subst hv
   cases fv with
@@ -961,6 +1536,1485 @@ theorem adeqConstHead {S : SigTable} (progs : Programs S S) : AdeqConstHead prog
           · exact Bool.noConfusion hf'
         | _ => cases hf
       · simp [hc] at hs'
+
+/- A transparent constant whose body is a constructor head denotes that
+   constructor. Relevance of the constant is a hypothesis: `Good`'s
+   irrelevance premise is about the value. This is not `AdeqConstDelta`. -/
+theorem good_const_delta_ctor {S : SigTable} (progs : Programs S S)
+    (E : ResolvedEnv) (n r c : Nat) (ls lsc : List Level)
+    (hb : transparentBody E r ls = some (.const c lsc))
+    (hnone : transparentBody E c lsc = none)
+    (hirr : irrelevant E n [] (.const r ls) = false) :
+    Good progs E n (.const r ls) := by
+  refine good_of_exists progs E n (.const r ls) ?_
+  intro lf fv T v t w _ _ _ hn hs _ hval hf _ _
+  have hv := norm_const_ctor_val E lf r c ls lsc hb hnone hn
+  subst hv
+  cases fv with
+  | zero => exact Option.noConfusion hs
+  | succ m =>
+    have hs' : (match E.members c with
+        | some mm => if mm.mclass = .constructorM then some (Val.inj c (.list [])) else none
+        | none => none) = some w := hs
+    cases hm : E.members c with
+    | none => rw [hm] at hs'; exact Option.noConfusion hs'
+    | some mm =>
+      rw [hm] at hs'
+      by_cases hcm : mm.mclass = .constructorM
+      · simp [hcm] at hs'
+        subst hs'
+        cases t with
+        | sum ts =>
+          have hf' : (match ts.get? c with
+              | some (.list τ) => ([] : List Val).all (valFits m τ)
+              | _ => false) = true := hf
+          split at hf'
+          · rename_i τ hg
+            obtain ⟨hlt, hget⟩ := list_get?_some ts c _ hg
+            have hctor : isCtor E c = true := by simp [isCtor, hm, hcm]
+            have hbody : Residua.Bootstrap.Semantics.eval lawsA progs 1 []
+                (lowerF E n 1 (S := S) (.sum ts) (.const c lsc)) =
+                some (.inj c (.list [])) := by
+              have he : erase E n 1 [] (.const c lsc) = some (.ctor c) := by
+                simp only [erase, eraseWith, hval, Bool.false_eq_true, if_false, noGlobals,
+                  hnone, hctor, if_true]
+              have hlow : lowerF E n 1 (S := S) (.sum ts) (.const c lsc) =
+                  emit 1 (.sum ts) (.ctor c []) := by
+                unfold lowerF pipeline
+                rw [he]
+                rfl
+              rw [hlow]
+              simp only [emit, emitWith]
+              rw [dif_pos hlt]
+              split
+              · rename_i τ' hτ'
+                simp only [Residua.Bootstrap.Semantics.eval]
+                rw [eval_cast_eq progs _ [] hτ'.symm]
+                simp [Residua.Bootstrap.Semantics.eval, relevantArgs, listOf]
+              · rename_i hne
+                exact absurd hget (hne τ)
+            exact ⟨2, 1, lowerF_const_delta_eval progs E n 1 r 1 ls (.const c lsc)
+              (.sum ts) (.inj c (.list [])) hirr hb hbody⟩
+          · exact Bool.noConfusion hf'
+        | _ => cases hf
+      · simp [hcm] at hs'
+
+/- Emit a constructor whose one field is a literal, at lowering fuel 2
+   (the field emitter needs one fuel) and scm fuel 1. -/
+theorem eval_emit_ctor_lit {S : SigTable} (progs : Programs S S) (nlit r : Nat)
+    (ts : List BootTy) (hg : ts.get? r = some (.list .i64))
+    (hk : inI64Range (Int.ofNat nlit) = true) :
+    Residua.Bootstrap.Semantics.eval lawsA progs 1 []
+      (emit (S := S) (G := []) 2 (.sum ts) (.ctor r [.lit nlit])) =
+      some (.inj r (.list [.int (Int.ofNat nlit)])) := by
+  obtain ⟨hlt, hget⟩ := list_get?_some ts r _ hg
+  simp only [emit, emitWith]
+  rw [dif_pos hlt]
+  split
+  · rename_i τ' hτ'
+    have hτi : τ' = .i64 :=
+      BootTy.list.inj (hτ'.symm.trans hget)
+    subst hτi
+    simp only [Residua.Bootstrap.Semantics.eval]
+    rw [eval_cast_eq progs _ [] hτ'.symm]
+    simp only [Residua.Bootstrap.Semantics.eval, relevantArgs, listOf, emitWith]
+    rw [if_pos hk]
+    simp [Residua.Bootstrap.Semantics.eval, hk]
+    have hk' : inI64Range (↑nlit) = true := hk
+    rw [if_pos hk']
+    rfl
+  · rename_i hne
+    exact absurd hget (hne .i64)
+
+/- A transparent constant whose body is a constructor applied to one literal.
+   The head stays a constructor (`hnone`). Relevance of the outer constant is
+   what `lowerF_const_delta_eval` reads; relevance of the head is what erasure
+   of that head reads. The value's relevance is `Good`'s own premise.
+   Not AdeqConstDelta. -/
+theorem good_const_delta_app_lit {S : SigTable} (progs : Programs S S)
+    (E : ResolvedEnv) (n r c nlit : Nat) (ls lsc : List Level)
+    (hb : transparentBody E r ls = some (.app (.const c lsc) (.lit nlit)))
+    (hnone : transparentBody E c lsc = none)
+    (hirr : irrelevant E n [] (.const r ls) = false)
+    (hirrC : irrelevant E n [] (.const c lsc) = false) :
+    Good progs E n (.const r ls) := by
+  refine good_of_exists progs E n (.const r ls) ?_
+  intro lf fv T v t w _ _ _ hn hs _ hval hf _ _
+  have hv := norm_const_app_lit_val E lf r c nlit ls lsc hb hnone hn
+  subst hv
+  cases fv with
+  | zero => exact Option.noConfusion hs
+  | succ m =>
+    cases m with
+    | zero =>
+      have hs0 : scmValOf E 1 (.app (.const c lsc) (.lit nlit)) = none := by
+        simp only [scmValOf, appsSpine, List.nil_append, List.mapM_cons, List.mapM_nil,
+          Option.bind, Option.pure_def]
+        split
+        · rename_i mm hm
+          by_cases hc : mm.mclass = .constructorM
+          · simp [hm, hc, scmValOf]
+          · simp [hm, hc]
+        · rename_i hm
+          simp [hm]
+      rw [hs0] at hs
+      exact Option.noConfusion hs
+    | succ q =>
+      have hlitv : scmValOf E (q + 1) (.lit nlit) = some (.int (Int.ofNat nlit)) := rfl
+      have hs' : (match E.members c with
+          | some mm =>
+              if mm.mclass = .constructorM then
+                some (.inj c (.list [.int (Int.ofNat nlit)]))
+              else none
+          | none => none) = some w := by
+        simpa [scmValOf, appsSpine, List.nil_append, List.mapM_cons, List.mapM_nil,
+          hlitv, Option.bind, Option.pure_def] using hs
+      cases hm : E.members c with
+      | none =>
+        rw [hm] at hs'
+        exact Option.noConfusion hs'
+      | some mm =>
+        rw [hm] at hs'
+        by_cases hcm : mm.mclass = .constructorM
+        · simp [hcm] at hs'
+          subst hs'
+          cases t with
+          | sum ts =>
+            have hf' : (match ts.get? c with
+                | some (.list τ) => ([.int (Int.ofNat nlit)] : List Val).all (valFits (q + 1) τ)
+                | _ => false) = true := hf
+            split at hf'
+            · rename_i τ hg
+              cases τ with
+              | i64 =>
+                have hk : inI64Range (Int.ofNat nlit) = true := by
+                  simp only [valFits, List.all_cons, List.all_nil, Bool.and_true] at hf'
+                  exact hf'
+                have hctor : isCtor E c = true := by simp [isCtor, hm, hcm]
+                have he : erase E n 2 [] (.app (.const c lsc) (.lit nlit)) =
+                    some (.app (.ctor c) (.lit nlit)) := by
+                  simp only [erase, eraseWith, hval, hirrC, Bool.false_eq_true, if_false,
+                    noGlobals, hnone, hctor, if_true]
+                have hlow : lowerF E n 2 (S := S) (.sum ts) (.app (.const c lsc) (.lit nlit)) =
+                    emit 2 (.sum ts) (.ctor c [.lit nlit]) := by
+                  unfold lowerF pipeline
+                  rw [he]
+                  rfl
+                have hbody : Residua.Bootstrap.Semantics.eval lawsA progs 1 []
+                    (lowerF E n 2 (S := S) (.sum ts) (.app (.const c lsc) (.lit nlit))) =
+                    some (.inj c (.list [.int (Int.ofNat nlit)])) := by
+                  rw [hlow]
+                  exact eval_emit_ctor_lit progs nlit c ts hg hk
+                exact ⟨3, 1, lowerF_const_delta_eval progs E n 2 r 1 ls
+                  (.app (.const c lsc) (.lit nlit)) (.sum ts)
+                  (.inj c (.list [.int (Int.ofNat nlit)])) hirr hb hbody⟩
+              | bool | str | bytes | list _ | pair _ _ | sum _ | record _ | option _ | residue _ =>
+                simp only [valFits, List.all_cons, List.all_nil] at hf'
+                exact Bool.noConfusion hf'
+            · exact Bool.noConfusion hf'
+          | _ => cases hf
+        · simp [hcm] at hs'
+
+/- The application itself, not a constant in front of it. The head is rigid,
+   so `whnfFuel` returns the application and `norm` normalizes the literal.
+   Not AdeqApp. -/
+theorem norm_app_ctor_lit (E : ResolvedEnv) (k c nlit : Nat) (lsc : List Level)
+    (hnone : transparentBody E c lsc = none) :
+    norm E (k + 3) (.app (.const c lsc) (.lit nlit)) =
+      some (.app (.const c lsc) (.lit nlit)) := by
+  have hwb : whnfFuel E (k + 2) (.app (.const c lsc) (.lit nlit)) =
+      some (.app (.const c lsc) (.lit nlit)) := by
+    simp only [whnfFuel, appsSpine, hnone]
+  have hlit : norm E (k + 2) (.lit nlit) = some (.lit nlit) := by
+    have hwlit : whnfFuel E (k + 1) (.lit nlit) = some (.lit nlit) := by
+      simp only [whnfFuel, appsSpine]
+    unfold norm
+    rw [hwlit]
+  unfold norm
+  rw [hwb]
+  have hsp : appsSpine (.app (.const c lsc) (.lit nlit)) =
+      (.const c lsc, [.lit nlit]) := by
+    simp only [appsSpine, List.nil_append]
+  simp only [hsp]
+  have hm : [.lit nlit].mapM (norm E (k + 2)) = some [.lit nlit] := by
+    rw [List.mapM_cons, hlit, List.mapM_nil]
+    rfl
+  simp only [hm, foldApps]
+
+theorem norm_app_ctor_lit_val (E : ResolvedEnv) (lf c nlit : Nat) (lsc : List Level)
+    {v : Expr Nat}
+    (hnone : transparentBody E c lsc = none)
+    (hn : norm E lf (.app (.const c lsc) (.lit nlit)) = some v) :
+    v = .app (.const c lsc) (.lit nlit) := by
+  cases lf with
+  | zero => exact Option.noConfusion hn
+  | succ lf =>
+    cases lf with
+    | zero =>
+      unfold norm at hn
+      rw [whnfFuel_fuel0] at hn
+      exact Option.noConfusion hn
+    | succ lf =>
+      cases lf with
+      | zero =>
+        have hwb : whnfFuel E 1 (.app (.const c lsc) (.lit nlit)) =
+            some (.app (.const c lsc) (.lit nlit)) := by
+          simp only [whnfFuel, appsSpine, hnone]
+        have hlit0 : norm E 1 (.lit nlit) = none := by
+          unfold norm
+          rw [whnfFuel_fuel0]
+        unfold norm at hn
+        rw [hwb] at hn
+        have hsp : appsSpine (.app (.const c lsc) (.lit nlit)) =
+            (.const c lsc, [.lit nlit]) := by
+          simp only [appsSpine, List.nil_append]
+        simp only [hsp] at hn
+        rw [List.mapM_cons, hlit0] at hn
+        exact Option.noConfusion hn
+      | succ j =>
+        rw [norm_app_ctor_lit E j c nlit lsc hnone] at hn
+        exact (Option.some.inj hn).symm
+
+/- `Good` of a constructor applied to one literal. Relevance of the head is
+   what erasure of that head reads. The value's relevance is `Good`'s premise.
+   Not AdeqApp. -/
+theorem good_app_ctor_lit {S : SigTable} (progs : Programs S S)
+    (E : ResolvedEnv) (n c nlit : Nat) (lsc : List Level)
+    (hnone : transparentBody E c lsc = none)
+    (hirrC : irrelevant E n [] (.const c lsc) = false) :
+    Good progs E n (.app (.const c lsc) (.lit nlit)) := by
+  refine good_of_exists progs E n (.app (.const c lsc) (.lit nlit)) ?_
+  intro lf fv T v t w _ _ _ hn hs _ hval hf _ _
+  have hv := norm_app_ctor_lit_val E lf c nlit lsc hnone hn
+  subst hv
+  cases fv with
+  | zero => exact Option.noConfusion hs
+  | succ m =>
+    cases m with
+    | zero =>
+      have hs0 : scmValOf E 1 (.app (.const c lsc) (.lit nlit)) = none := by
+        simp only [scmValOf, appsSpine, List.nil_append, List.mapM_cons, List.mapM_nil,
+          Option.bind, Option.pure_def]
+        split
+        · rename_i mm hm
+          by_cases hc : mm.mclass = .constructorM
+          · simp [hm, hc, scmValOf]
+          · simp [hm, hc]
+        · rename_i hm
+          simp [hm]
+      rw [hs0] at hs
+      exact Option.noConfusion hs
+    | succ q =>
+      have hlitv : scmValOf E (q + 1) (.lit nlit) = some (.int (Int.ofNat nlit)) := rfl
+      have hs' : (match E.members c with
+          | some mm =>
+              if mm.mclass = .constructorM then
+                some (.inj c (.list [.int (Int.ofNat nlit)]))
+              else none
+          | none => none) = some w := by
+        simpa [scmValOf, appsSpine, List.nil_append, List.mapM_cons, List.mapM_nil,
+          hlitv, Option.bind, Option.pure_def] using hs
+      cases hm : E.members c with
+      | none =>
+        rw [hm] at hs'
+        exact Option.noConfusion hs'
+      | some mm =>
+        rw [hm] at hs'
+        by_cases hcm : mm.mclass = .constructorM
+        · simp [hcm] at hs'
+          subst hs'
+          cases t with
+          | sum ts =>
+            have hf' : (match ts.get? c with
+                | some (.list τ) => ([.int (Int.ofNat nlit)] : List Val).all (valFits (q + 1) τ)
+                | _ => false) = true := hf
+            split at hf'
+            · rename_i τ hg
+              cases τ with
+              | i64 =>
+                have hk : inI64Range (Int.ofNat nlit) = true := by
+                  simp only [valFits, List.all_cons, List.all_nil, Bool.and_true] at hf'
+                  exact hf'
+                have hctor : isCtor E c = true := by simp [isCtor, hm, hcm]
+                have he : erase E n 2 [] (.app (.const c lsc) (.lit nlit)) =
+                    some (.app (.ctor c) (.lit nlit)) := by
+                  simp only [erase, eraseWith, hval, hirrC, Bool.false_eq_true, if_false,
+                    noGlobals, hnone, hctor, if_true]
+                have hlow : lowerF E n 2 (S := S) (.sum ts) (.app (.const c lsc) (.lit nlit)) =
+                    emit 2 (.sum ts) (.ctor c [.lit nlit]) := by
+                  unfold lowerF pipeline
+                  rw [he]
+                  rfl
+                have hbody : Residua.Bootstrap.Semantics.eval lawsA progs 1 []
+                    (lowerF E n 2 (S := S) (.sum ts) (.app (.const c lsc) (.lit nlit))) =
+                    some (.inj c (.list [.int (Int.ofNat nlit)])) := by
+                  rw [hlow]
+                  exact eval_emit_ctor_lit progs nlit c ts hg hk
+                exact ⟨2, 1, hbody⟩
+              | bool | str | bytes | list _ | pair _ _ | sum _ | record _ | option _ | residue _ =>
+                simp only [valFits, List.all_cons, List.all_nil] at hf'
+                exact Bool.noConfusion hf'
+            · exact Bool.noConfusion hf'
+          | _ => cases hf
+        · simp [hcm] at hs'
+
+/- A let whose body is a closed literal ζ-reduces to that literal.
+   `instantiate` on a literal is the literal, so the bound value and the
+   type do not appear in the normal form. Not AdeqLetE. -/
+theorem norm_let_lit (E : ResolvedEnv) (k : Nat) (A : Expr Nat) (kv nlit : Nat) :
+    norm E (k + 3) (.letE A (.lit kv) (.lit nlit)) = some (.lit nlit) := by
+  have hzeta : whnfFuel E (k + 2) (.letE A (.lit kv) (.lit nlit)) =
+      whnfFuel E (k + 1) (.lit nlit) := by
+    simp only [whnfFuel, appsSpine, foldApps, instantiate0, instantiate]
+  have hlit : whnfFuel E (k + 1) (.lit nlit) = some (.lit nlit) := by
+    simp only [whnfFuel, appsSpine]
+  unfold norm
+  rw [hzeta, hlit]
+
+/- Fuels 0, 1 and 2 return `none`: `whnfFuel` of the let at fuel 1 is
+   `whnfFuel` of the literal at fuel 0. -/
+theorem norm_let_lit_val (E : ResolvedEnv) (lf : Nat) (A : Expr Nat) (kv nlit : Nat)
+    {v : Expr Nat}
+    (hn : norm E lf (.letE A (.lit kv) (.lit nlit)) = some v) :
+    v = .lit nlit := by
+  cases lf with
+  | zero => exact Option.noConfusion hn
+  | succ lf =>
+    cases lf with
+    | zero =>
+      unfold norm at hn
+      rw [whnfFuel_fuel0] at hn
+      exact Option.noConfusion hn
+    | succ lf =>
+      cases lf with
+      | zero =>
+        have hzeta : whnfFuel E 1 (.letE A (.lit kv) (.lit nlit)) =
+            whnfFuel E 0 (.lit nlit) := by
+          simp only [whnfFuel, appsSpine, foldApps, instantiate0, instantiate]
+        unfold norm at hn
+        rw [hzeta, whnfFuel_fuel0] at hn
+        exact Option.noConfusion hn
+      | succ j =>
+        rw [norm_let_lit E j A kv nlit] at hn
+        exact (Option.some.inj hn).symm
+
+/- `Good` of that let. Erasure reads relevance of the let, not of the
+   literal value, so that hypothesis is extra. The witness is lowering
+   fuel 2 and scm fuel 1. Not AdeqLetE. -/
+theorem good_let_lit {S : SigTable} (progs : Programs S S)
+    (E : ResolvedEnv) (n kv nlit : Nat) (A : Expr Nat)
+    (hirr : irrelevant E n [] (.letE A (.lit kv) (.lit nlit)) = false) :
+    Good progs E n (.letE A (.lit kv) (.lit nlit)) := by
+  refine good_of_exists progs E n (.letE A (.lit kv) (.lit nlit)) ?_
+  intro lf fv T v t w _ _ _ hn hs _ _ hf _ _
+  have hv := norm_let_lit_val E lf A kv nlit hn
+  subst hv
+  cases fv with
+  | zero => exact Option.noConfusion hs
+  | succ m =>
+    have hs2 : scmValOf E (m + 1) (.lit nlit) = some (.int (Int.ofNat nlit)) := rfl
+    rw [hs2] at hs
+    cases hs
+    cases t
+    case i64 =>
+      have hk : inI64Range (Int.ofNat nlit) = true := hf
+      have he : erase E n 2 [] (.letE A (.lit kv) (.lit nlit)) =
+          some (.letE (.lit kv) (.lit nlit)) := by
+        simp only [erase, eraseWith, hirr, Bool.false_eq_true, if_false]
+      have hlow : lowerF E n 2 (S := S) .i64 (.letE A (.lit kv) (.lit nlit)) =
+          emit 2 .i64 (.lit nlit) := by
+        unfold lowerF pipeline
+        rw [he]
+        rfl
+      have hbody : Residua.Bootstrap.Semantics.eval lawsA progs 1 []
+          (lowerF E n 2 (S := S) .i64 (.letE A (.lit kv) (.lit nlit))) =
+          some (.int (Int.ofNat nlit)) := by
+        rw [hlow]
+        simp only [emit, emitWith]
+        rw [if_pos hk]
+        exact eval_litI progs (Int.ofNat nlit) hk
+      exact ⟨2, 1, hbody⟩
+    all_goals cases hf
+
+/- A let that binds a literal and whose body is `bvar 0`. ζ substitutes
+   that literal. Not AdeqLetE. -/
+theorem norm_let_bvar (E : ResolvedEnv) (k : Nat) (A : Expr Nat) (kv : Nat) :
+    norm E (k + 3) (.letE A (.lit kv) (.bvar 0)) = some (.lit kv) := by
+  have hzeta : whnfFuel E (k + 2) (.letE A (.lit kv) (.bvar 0)) =
+      whnfFuel E (k + 1) (instantiate0 (.lit kv) (.bvar 0)) := by
+    simp only [whnfFuel, appsSpine, foldApps]
+  have hsub : (instantiate0 (.lit kv) (.bvar 0) : Expr Nat) = .lit kv := rfl
+  have hlit : whnfFuel E (k + 1) (.lit kv) = some (.lit kv) := by
+    simp only [whnfFuel, appsSpine]
+  unfold norm
+  rw [hzeta, hsub, hlit]
+
+/- Fuels 0, 1 and 2 return `none`. -/
+theorem norm_let_bvar_val (E : ResolvedEnv) (lf : Nat) (A : Expr Nat) (kv : Nat)
+    {v : Expr Nat}
+    (hn : norm E lf (.letE A (.lit kv) (.bvar 0)) = some v) :
+    v = .lit kv := by
+  cases lf with
+  | zero => exact Option.noConfusion hn
+  | succ lf =>
+    cases lf with
+    | zero =>
+      unfold norm at hn
+      rw [whnfFuel_fuel0] at hn
+      exact Option.noConfusion hn
+    | succ lf =>
+      cases lf with
+      | zero =>
+        have hzeta : whnfFuel E 1 (.letE A (.lit kv) (.bvar 0)) =
+            whnfFuel E 0 (instantiate0 (.lit kv) (.bvar 0)) := by
+          simp only [whnfFuel, appsSpine, foldApps]
+        unfold norm at hn
+        rw [hzeta, whnfFuel_fuel0] at hn
+        exact Option.noConfusion hn
+      | succ j =>
+        rw [norm_let_bvar E j A kv] at hn
+        exact (Option.some.inj hn).symm
+
+/- `Good` of that let. Erasure of the body reads relevance of `bvar 0`
+   under the let binding, so that hypothesis is extra. Not AdeqLetE. -/
+theorem good_let_bvar {S : SigTable} (progs : Programs S S)
+    (E : ResolvedEnv) (n kv : Nat) (A : Expr Nat)
+    (hirr : irrelevant E n [] (.letE A (.lit kv) (.bvar 0)) = false)
+    (hirrB : irrelevant E n [.letBinding A (.lit kv)] (.bvar 0) = false) :
+    Good progs E n (.letE A (.lit kv) (.bvar 0)) := by
+  refine good_of_exists progs E n (.letE A (.lit kv) (.bvar 0)) ?_
+  intro lf fv T v t w _ _ _ hn hs _ _ hf _ _
+  have hv := norm_let_bvar_val E lf A kv hn
+  subst hv
+  cases fv with
+  | zero => exact Option.noConfusion hs
+  | succ m =>
+    have hs2 : scmValOf E (m + 1) (.lit kv) = some (.int (Int.ofNat kv)) := rfl
+    rw [hs2] at hs
+    cases hs
+    cases t
+    case i64 =>
+      have hk : inI64Range (Int.ofNat kv) = true := hf
+      have he : erase E n 2 [] (.letE A (.lit kv) (.bvar 0)) =
+          some (.letE (.lit kv) (.bvar 0)) := by
+        simp only [erase, eraseWith, hirr, hirrB, Bool.false_eq_true, if_false]
+      have hlow : lowerF E n 2 (S := S) .i64 (.letE A (.lit kv) (.bvar 0)) =
+          emit 2 .i64 (.lit kv) := by
+        unfold lowerF pipeline
+        rw [he]
+        rfl
+      have hbody : Residua.Bootstrap.Semantics.eval lawsA progs 1 []
+          (lowerF E n 2 (S := S) .i64 (.letE A (.lit kv) (.bvar 0))) =
+          some (.int (Int.ofNat kv)) := by
+        rw [hlow]
+        simp only [emit, emitWith]
+        rw [if_pos hk]
+        exact eval_litI progs (Int.ofNat kv) hk
+      exact ⟨2, 1, hbody⟩
+    all_goals cases hf
+
+/- β of a λ whose body is the bound index, applied to one literal.
+   `instantiate` of `bvar 0` is the argument. Not AdeqApp. -/
+theorem norm_beta_lit (E : ResolvedEnv) (k : Nat) (A : Expr Nat) (kv : Nat) :
+    norm E (k + 3) (.app (.lam A (.bvar 0)) (.lit kv)) = some (.lit kv) := by
+  have hzeta : whnfFuel E (k + 2) (.app (.lam A (.bvar 0)) (.lit kv)) =
+      whnfFuel E (k + 1) (instantiate0 (.lit kv) (.bvar 0)) := by
+    simp only [whnfFuel, appsSpine, foldApps, List.nil_append]
+  have hsub : (instantiate0 (.lit kv) (.bvar 0) : Expr Nat) = .lit kv := rfl
+  have hlit : whnfFuel E (k + 1) (.lit kv) = some (.lit kv) := by
+    simp only [whnfFuel, appsSpine]
+  unfold norm
+  rw [hzeta, hsub, hlit]
+
+/- Fuels 0, 1 and 2 return `none`. -/
+theorem norm_beta_lit_val (E : ResolvedEnv) (lf : Nat) (A : Expr Nat) (kv : Nat)
+    {v : Expr Nat}
+    (hn : norm E lf (.app (.lam A (.bvar 0)) (.lit kv)) = some v) :
+    v = .lit kv := by
+  cases lf with
+  | zero => exact Option.noConfusion hn
+  | succ lf =>
+    cases lf with
+    | zero =>
+      unfold norm at hn
+      rw [whnfFuel_fuel0] at hn
+      exact Option.noConfusion hn
+    | succ lf =>
+      cases lf with
+      | zero =>
+        have hzeta : whnfFuel E 1 (.app (.lam A (.bvar 0)) (.lit kv)) =
+            whnfFuel E 0 (instantiate0 (.lit kv) (.bvar 0)) := by
+          simp only [whnfFuel, appsSpine, foldApps, List.nil_append]
+        unfold norm at hn
+        rw [hzeta, whnfFuel_fuel0] at hn
+        exact Option.noConfusion hn
+      | succ j =>
+        rw [norm_beta_lit E j A kv] at hn
+        exact (Option.some.inj hn).symm
+
+/- `Good` of that application. Erasure of the λ reads relevance of the λ,
+   and erasure of its body reads relevance of `bvar 0` under the assumption.
+   The witness is lowering fuel 3: the λ body is erased one fuel under the
+   application. Not AdeqApp. -/
+theorem good_beta_lit {S : SigTable} (progs : Programs S S)
+    (E : ResolvedEnv) (n kv : Nat) (A : Expr Nat)
+    (hirr : irrelevant E n [] (.app (.lam A (.bvar 0)) (.lit kv)) = false)
+    (hirrL : irrelevant E n [] (.lam A (.bvar 0)) = false)
+    (hirrB : irrelevant E n [.assumption A] (.bvar 0) = false) :
+    Good progs E n (.app (.lam A (.bvar 0)) (.lit kv)) := by
+  refine good_of_exists progs E n (.app (.lam A (.bvar 0)) (.lit kv)) ?_
+  intro lf fv T v t w _ _ _ hn hs _ _ hf _ _
+  have hv := norm_beta_lit_val E lf A kv hn
+  subst hv
+  cases fv with
+  | zero => exact Option.noConfusion hs
+  | succ m =>
+    have hs2 : scmValOf E (m + 1) (.lit kv) = some (.int (Int.ofNat kv)) := rfl
+    rw [hs2] at hs
+    cases hs
+    cases t
+    case i64 =>
+      have hk : inI64Range (Int.ofNat kv) = true := hf
+      have he : erase E n 3 [] (.app (.lam A (.bvar 0)) (.lit kv)) =
+          some (.app (.lam (.bvar 0)) (.lit kv)) := by
+        simp only [erase, eraseWith, hirr, hirrL, hirrB, Bool.false_eq_true, if_false,
+          Option.map]
+      have hlow : lowerF E n 3 (S := S) .i64 (.app (.lam A (.bvar 0)) (.lit kv)) =
+          emit 3 .i64 (.lit kv) := by
+        unfold lowerF pipeline
+        rw [he]
+        rfl
+      have hbody : Residua.Bootstrap.Semantics.eval lawsA progs 1 []
+          (lowerF E n 3 (S := S) .i64 (.app (.lam A (.bvar 0)) (.lit kv))) =
+          some (.int (Int.ofNat kv)) := by
+        rw [hlow]
+        simp only [emit, emitWith]
+        rw [if_pos hk]
+        exact eval_litI progs (Int.ofNat kv) hk
+      exact ⟨3, 1, hbody⟩
+    all_goals cases hf
+
+/- A data type is an inductive constant applied to arguments, so it is not
+   an arity. `irrelevant` of a term the checker types at such a `T` is then
+   only whether the type of `T` is `Prop` as written. AdeqApp, AdeqLetE and
+   AdeqConstDelta read this before erasure decides `□`. Not those lemmas. -/
+theorem isArity_false_of_dataTy (E : ResolvedEnv) {T : Expr Nat}
+    (h : DataTy E T) : isArity T = false := by
+  obtain ⟨r, ls, args, m, hs, _, _⟩ := h
+  cases T with
+  | sort _ =>
+      simp only [appsSpine] at hs
+      exact Expr.noConfusion (congrArg Prod.fst hs)
+  | pi _ _ =>
+      simp only [appsSpine] at hs
+      exact Expr.noConfusion (congrArg Prod.fst hs)
+  | bvar _ => rfl
+  | const _ _ => rfl
+  | app _ _ => rfl
+  | lam _ _ => rfl
+  | letE _ _ _ => rfl
+  | lit _ => rfl
+
+theorem irrelevant_data (E : ResolvedEnv) (n : Nat) (e T : Expr Nat)
+    (hi : inferT E n [] e = some T) (hD : DataTy E T) :
+    irrelevant E n [] e =
+      match inferT E n [] T with
+      | some U => isPropSort U
+      | none => false := by
+  have ha : isArity T = false := isArity_false_of_dataTy E hD
+  simp only [irrelevant, hi, ha, Bool.false_or]
+
+/- A non-literal the checker marks irrelevant erases to `□` at the next
+   fuel. Sort and pi erase to `□` anyway. A literal ignores the test, so
+   it is excluded. AdeqApp, AdeqLetE and AdeqConstDelta meet this before
+   the relevant branch. Not those lemmas. -/
+theorem erase_box_of_irrelevant (E : ResolvedEnv) (n F : Nat) (Γ : LCtx)
+    (e : Expr Nat) (h : irrelevant E n Γ e = true) (hl : ∀ k, e ≠ .lit k) :
+    erase E n (F + 1) Γ e = some .box := by
+  cases e with
+  | lit k => exact False.elim (hl k rfl)
+  | sort _ => rfl
+  | pi _ _ => rfl
+  | bvar _ => simp only [erase, eraseWith, h, if_true]
+  | const _ _ => simp only [erase, eraseWith, h, if_true]
+  | app _ _ => simp only [erase, eraseWith, h, if_true]
+  | lam _ _ => simp only [erase, eraseWith, h, if_true]
+  | letE _ _ _ => simp only [erase, eraseWith, h, if_true]
+
+/- `□` runs to `box` and emits `refuse` at every positive fuel. -/
+theorem lowerF_of_erase_box {S : SigTable} (E : ResolvedEnv) (n F : Nat)
+    (t : BootTy) (e : Expr Nat)
+    (he : erase E n (F + 1) [] e = some .box) :
+    lowerF E n (F + 1) (S := S) t e = refuse := by
+  unfold lowerF pipeline
+  rw [he]
+  cases t <;> rfl
+
+/- Every lowering fuel of an irrelevant non-literal is `refuse`.
+   Fuel 0 erases to nothing, which the pipeline also refuses. -/
+theorem lowerF_irrelevant_refuses {S : SigTable} (E : ResolvedEnv) (n : Nat)
+    (t : BootTy) (e : Expr Nat) (h : irrelevant E n [] e = true)
+    (hl : ∀ k, e ≠ .lit k) (F : Nat) :
+    lowerF E n F (S := S) t e = refuse := by
+  cases F with
+  | zero => rfl
+  | succ F =>
+    exact lowerF_of_erase_box E n F t e (erase_box_of_irrelevant E n F [] e h hl)
+
+/- Eval of that lowering is never `some w`. The conclusion of `Good` is
+   false on this branch, so the three open lemmas hold here only when the
+   other premises do not. Not those lemmas. -/
+theorem eval_irrelevant_ne {S : SigTable} (progs : Programs S S)
+    (E : ResolvedEnv) (n : Nat) (t : BootTy) (e : Expr Nat) (w : Val)
+    (h : irrelevant E n [] e = true) (hl : ∀ k, e ≠ .lit k) (F lf : Nat) :
+    Residua.Bootstrap.Semantics.eval lawsA progs lf []
+      (lowerF E n F (S := S) t e) ≠ some w := by
+  intro hE
+  rw [lowerF_irrelevant_refuses E n t e h hl F] at hE
+  exact eval_refuse_ne progs lf [] w hE
+
+/- `irrelevant_data` on the three answers of `inferT` for the data type.
+   `false` is the relevant branch (`lowerF_const_delta_eval` and the
+   app and let transports read it). `true` is the refuse branch
+   (`eval_irrelevant_ne`). Not AdeqConstDelta, AdeqApp or AdeqLetE. -/
+theorem irrelevant_data_ff (E : ResolvedEnv) (n : Nat) (e T U : Expr Nat)
+    (hi : inferT E n [] e = some T) (hD : DataTy E T)
+    (hU : inferT E n [] T = some U) (hp : isPropSort U = false) :
+    irrelevant E n [] e = false := by
+  rw [irrelevant_data E n e T hi hD, hU]
+  exact hp
+
+theorem irrelevant_data_none (E : ResolvedEnv) (n : Nat) (e T : Expr Nat)
+    (hi : inferT E n [] e = some T) (hD : DataTy E T)
+    (hU : inferT E n [] T = none) :
+    irrelevant E n [] e = false := by
+  rw [irrelevant_data E n e T hi hD, hU]
+
+theorem irrelevant_data_tt (E : ResolvedEnv) (n : Nat) (e T U : Expr Nat)
+    (hi : inferT E n [] e = some T) (hD : DataTy E T)
+    (hU : inferT E n [] T = some U) (hp : isPropSort U = true) :
+    irrelevant E n [] e = true := by
+  rw [irrelevant_data E n e T hi hD, hU]
+  exact hp
+
+theorem const_ne_lit (r k : Nat) (ls : List Level) :
+    (.const r ls : Expr Nat) ≠ .lit k := by
+  intro h
+  cases h
+
+theorem app_ne_lit (f a : Expr Nat) (k : Nat) :
+    (.app f a : Expr Nat) ≠ .lit k := by
+  intro h
+  cases h
+
+theorem letE_ne_lit (A v b : Expr Nat) (k : Nat) :
+    (.letE A v b : Expr Nat) ≠ .lit k := by
+  intro h
+  cases h
+
+theorem list_get?_append_last {α : Type} : ∀ (xs : List α) (y : α),
+    (xs ++ [y]).get? xs.length = some y
+  | [], _ => rfl
+  | _ :: xs, y => list_get?_append_last xs y
+
+/- `run` on `apply`, as the joint match. Same equation as the passive
+   simulation (`unfold run; rfl`). The AdeqApp β arm rewrites with it. -/
+theorem run_apply_eq (code : List Code) (F : Nat) (env : List DVal) (g a : DExpr) :
+    run code (F + 1) env (.apply g a) =
+      match run code F env g, run code F env a with
+      | some (.clo l caps), some av =>
+          match code.get? l with
+          | some c => run code F (bindArg av caps) c.body
+          | none => none
+      | some (.ctor r args), some av => some (.ctor r (args ++ [av]))
+      | some (.rigid r args), some av => some (.rigid r (args ++ [av]))
+      | some .box, some _ => some .box
+      | _, _ => none := by
+  unfold run
+  rfl
+
+/- `run` on `let`, as the value match. The AdeqLetE ζ arm rewrites with it. -/
+theorem run_let_eq (code : List Code) (F : Nat) (env : List DVal) (v b : DExpr) :
+    run code (F + 1) env (.letE v b) =
+      match run code F env v with
+      | some vv => run code F (vv :: env) b
+      | none => none := by
+  unfold run
+  rfl
+
+theorem run_let_some (code : List Code) (F : Nat) (env : List DVal) (v b : DExpr)
+    (vv : DVal) (h : run code F env v = some vv) :
+    run code (F + 1) env (.letE v b) = run code F (vv :: env) b := by
+  rw [run_let_eq, h]
+
+/- A closure that captured nothing is that closure at every positive fuel.
+   `mapM` of the empty capture list is `some []`. -/
+theorem run_clo_nil (code : List Code) (F l : Nat) (env : List DVal) :
+    run code (F + 1) env (.clo l []) = some (.clo l []) := by
+  have h : run code (F + 1) env (.clo l []) =
+      (([] : List Nat).mapM (fun i => env.get? i)).map (DVal.clo l) := by
+    unfold run
+    rfl
+  rw [h, List.mapM_nil, Option.pure_def]
+  rfl
+
+/- Reynolds 1972 §8, empty capture: `apply (clo ℓ []) arg` runs the body in
+   the one-element environment `[av]`. `convWith` appends that body after the
+   inner code, so the label is `code.length`. Not AdeqApp. -/
+theorem run_apply_clo_nil (code : List Code) (F l : Nat) (env : List DVal)
+    (arg body : DExpr) (av dv : DVal)
+    (hc : code.get? l = some ⟨0, body⟩)
+    (ha : run code (F + 1) env arg = some av)
+    (hb : run code (F + 1) [av] body = some dv) :
+    run code (F + 2) env (.apply (.clo l []) arg) = some dv := by
+  rw [run_apply_eq, run_clo_nil, ha]
+  change (match code.get? l with
+      | some c => run code (F + 1) (bindArg av []) c.body
+      | none => none) = some dv
+  rw [hc]
+  exact hb
+
+theorem run_apply_closed (code : List Code) (F : Nat) (env : List DVal)
+    (arg body : DExpr) (av dv : DVal)
+    (ha : run (code ++ [⟨0, body⟩]) (F + 1) env arg = some av)
+    (hb : run (code ++ [⟨0, body⟩]) (F + 1) [av] body = some dv) :
+    run (code ++ [⟨0, body⟩]) (F + 2) env
+      (.apply (.clo code.length []) arg) = some dv :=
+  run_apply_clo_nil (code ++ [⟨0, body⟩]) F code.length env arg body av dv
+    (list_get?_append_last code ⟨0, body⟩) ha hb
+
+/- Slot 0 of a cons environment is the head, at every positive fuel.
+   Reynolds 1972 §8 reads the argument from that slot. -/
+theorem run_var0 (code : List Code) (F : Nat) (env : List DVal) (a : DVal) :
+    run code (F + 1) (a :: env) (.var 0) = some a := by
+  unfold run
+  rfl
+
+/- ζ of the bound index: the let returns the value it bound.
+   `run_let_some` steps to slot 0. Not AdeqLetE. -/
+theorem run_let_id (code : List Code) (F : Nat) (env : List DVal)
+    (v : DExpr) (av : DVal) (h : run code (F + 1) env v = some av) :
+    run code (F + 2) env (.letE v (.var 0)) = some av := by
+  rw [run_let_some code (F + 1) env v (.var 0) av h]
+  exact run_var0 code F env av
+
+/- β of a closure that captured nothing and whose body is slot 0.
+   The label is 0. Reynolds 1972 §8, the identity. Not AdeqApp. -/
+theorem run_apply_id (code : List Code) (F : Nat) (env : List DVal)
+    (arg : DExpr) (av : DVal)
+    (hc : code.get? 0 = some ⟨0, .var 0⟩)
+    (ha : run code (F + 1) env arg = some av) :
+    run code (F + 2) env (.apply (.clo 0 []) arg) = some av := by
+  exact run_apply_clo_nil code F 0 env arg (.var 0) av av hc ha
+    (run_var0 code F [] av)
+
+/- β of a closure whose body is a literal. The argument is evaluated and
+   then discarded: `run` on `.lit` does not read the environment.
+   Reynolds 1972 §8. Not AdeqApp. -/
+theorem run_apply_lit_body (code : List Code) (F l k : Nat) (env : List DVal)
+    (arg : DExpr) (av : DVal)
+    (hc : code.get? l = some ⟨0, .lit k⟩)
+    (ha : run code (F + 1) env arg = some av) :
+    run code (F + 2) env (.apply (.clo l []) arg) = some (.lit k) := by
+  have hb : run code (F + 1) [av] (.lit k) = some (.lit k) := by
+    unfold run
+    rfl
+  exact run_apply_clo_nil code F l env arg (.lit k) av (.lit k) hc ha hb
+
+/- A let whose body is the bound index defunctionalizes as that let.
+   The body's renaming sends slot 0 to slot 0, and it allocates no code.
+   Danvy–Nielsen PPDP 2001. Not AdeqLetE. -/
+theorem defunc_let_bvar0 (lv : LExpr) :
+    defunc (.letE lv (.bvar 0)) =
+      (DExpr.letE (defunc lv).1 (.var 0), (defunc lv).2) := rfl
+
+/- An application of the identity λ defunctionalizes as apply of a
+   closure at label 0 with an empty capture. The argument is converted
+   against the one code entry that closure points at. Not AdeqApp. -/
+theorem defunc_app_lam_bvar0 (la : LExpr) :
+    defunc (.app (.lam (.bvar 0)) la) =
+      (let q := convWith capRen id [{ ncap := 0, body := .var 0 }] la
+       (DExpr.apply (DExpr.clo 0 []) q.1, q.2)) := rfl
+
+/- ζ of `bvar 0` is the bound term, one whnf fuel earlier.
+   `instantiate0` of that index is the term. Not AdeqLetE. -/
+theorem whnf_let_id (E : ResolvedEnv) (k : Nat) (A v : Expr Nat) :
+    whnfFuel E (k + 1) (.letE A v (.bvar 0)) = whnfFuel E k v := by
+  have hzeta : whnfFuel E (k + 1) (.letE A v (.bvar 0)) =
+      whnfFuel E k (instantiate0 v (.bvar 0)) := by
+    simp only [whnfFuel, appsSpine, foldApps]
+  have hsub : (instantiate0 v (.bvar 0) : Expr Nat) = v := rfl
+  rw [hzeta, hsub]
+
+/- β of the identity λ is the argument, one whnf fuel earlier.
+   `[] ++ [arg]` is the cons the lam arm matches. Not AdeqApp. -/
+theorem whnf_beta_id (E : ResolvedEnv) (k : Nat) (A arg : Expr Nat) :
+    whnfFuel E (k + 1) (.app (.lam A (.bvar 0)) arg) = whnfFuel E k arg := by
+  have hbeta : whnfFuel E (k + 1) (.app (.lam A (.bvar 0)) arg) =
+      whnfFuel E k (instantiate0 arg (.bvar 0)) := by
+    simp only [whnfFuel, appsSpine, foldApps, List.nil_append]
+  have hsub : (instantiate0 arg (.bvar 0) : Expr Nat) = arg := rfl
+  rw [hbeta, hsub]
+
+/- One β step, for an arbitrary body. `foldApps` of the empty tail is the
+   instantiation. Not AdeqApp. -/
+theorem whnf_beta (E : ResolvedEnv) (k : Nat) (A body arg : Expr Nat) :
+    whnfFuel E (k + 1) (.app (.lam A body) arg) =
+      whnfFuel E k (instantiate0 arg body) := by
+  simp only [whnfFuel, appsSpine, foldApps, List.nil_append]
+
+/- One ζ step, for an arbitrary body. Not AdeqLetE. -/
+theorem whnf_zeta (E : ResolvedEnv) (k : Nat) (A v body : Expr Nat) :
+    whnfFuel E (k + 1) (.letE A v body) =
+      whnfFuel E k (instantiate0 v body) := by
+  simp only [whnfFuel, appsSpine, foldApps]
+
+/- Heads `whnfFuel` does not step. Fuel 0 is `none`. -/
+theorem whnf_zero_none {E : ResolvedEnv} {e v : Expr Nat}
+    (h : whnfFuel E 0 e = some v) : False := by
+  simp only [whnfFuel] at h
+  cases h
+
+theorem whnf_sort_self (E : ResolvedEnv) (k : Nat) (l : Level) :
+    whnfFuel E (k + 1) (.sort l) = some (.sort l) := rfl
+
+theorem whnf_lam_self (E : ResolvedEnv) (k : Nat) (A b : Expr Nat) :
+    whnfFuel E (k + 1) (.lam A b) = some (.lam A b) := rfl
+
+theorem whnf_pi_self (E : ResolvedEnv) (k : Nat) (A B : Expr Nat) :
+    whnfFuel E (k + 1) (.pi A B) = some (.pi A B) := rfl
+
+theorem whnf_bvar_self (E : ResolvedEnv) (k i : Nat) :
+    whnfFuel E (k + 1) (.bvar i) = some (.bvar i) := rfl
+
+theorem whnf_lit_self (E : ResolvedEnv) (k t : Nat) :
+    whnfFuel E (k + 1) (.lit t) = some (.lit t) := rfl
+
+/- A rigid constant is its own weak head, at every positive fuel. -/
+theorem whnf_rigid_const {E : ResolvedEnv} (k r : Nat) (ls : List Level)
+    (hn : transparentBody E r ls = none) :
+    whnfFuel E (k + 1) (.const r ls) = some (.const r ls) := by
+  simp only [whnfFuel, appsSpine, hn]
+
+/- A successful norm of the bound term is a norm of the identity let,
+   one fuel later. Same shift as `norm_const_delta_of_body`. Not AdeqLetE. -/
+theorem norm_let_id (E : ResolvedEnv) (k : Nat) (A v val : Expr Nat)
+    (hn : norm E (k + 1) v = some val) :
+    norm E (k + 2) (.letE A v (.bvar 0)) = some val := by
+  cases hw : whnfFuel E k v with
+  | none =>
+    unfold norm at hn
+    rw [hw] at hn
+    exact Option.noConfusion hn
+  | some w =>
+    have hc : whnfFuel E (k + 1) (.letE A v (.bvar 0)) = some w := by
+      rw [whnf_let_id E k A v]
+      exact hw
+    have hb1 : whnfFuel E (k + 1) v = some w :=
+      whnfFuel_mono E k v w hw
+    have heq : norm E (k + 2) (.letE A v (.bvar 0)) = norm E (k + 2) v := by
+      conv =>
+        lhs
+        unfold norm
+        rw [hc]
+      conv =>
+        rhs
+        unfold norm
+        rw [hb1]
+    rw [heq]
+    exact norm_mono E (k + 1) v val hn
+
+/- A successful norm of the argument is a norm of the identity β,
+   one fuel later. Not AdeqApp. -/
+theorem norm_beta_id (E : ResolvedEnv) (k : Nat) (A arg val : Expr Nat)
+    (hn : norm E (k + 1) arg = some val) :
+    norm E (k + 2) (.app (.lam A (.bvar 0)) arg) = some val := by
+  cases hw : whnfFuel E k arg with
+  | none =>
+    unfold norm at hn
+    rw [hw] at hn
+    exact Option.noConfusion hn
+  | some w =>
+    have hc : whnfFuel E (k + 1) (.app (.lam A (.bvar 0)) arg) = some w := by
+      rw [whnf_beta_id E k A arg]
+      exact hw
+    have hb1 : whnfFuel E (k + 1) arg = some w :=
+      whnfFuel_mono E k arg w hw
+    have heq : norm E (k + 2) (.app (.lam A (.bvar 0)) arg) = norm E (k + 2) arg := by
+      conv =>
+        lhs
+        unfold norm
+        rw [hc]
+      conv =>
+        rhs
+        unfold norm
+        rw [hb1]
+    rw [heq]
+    exact norm_mono E (k + 1) arg val hn
+
+/- Eval of a relevant let at fuel `F + 1` is eval of the emitted value of
+   the two erasures' defunctionalized let, run at fuel `F`.
+   `erase_let_keep` is the erasure step. Not AdeqLetE. -/
+theorem lowerF_let_eval {S : SigTable} (progs : Programs S S)
+    (E : ResolvedEnv) (n F lf : Nat) (A v b : Expr Nat) (t : BootTy) (w : Val)
+    (hirr : irrelevant E n [] (.letE A v b) = false)
+    (lv lb : LExpr)
+    (hv : erase E n F [] v = some lv)
+    (hb : erase E n F (.letBinding A v :: []) b = some lb)
+    (dv : DVal)
+    (hr : run (defunc (.letE lv lb)).2 F [] (defunc (.letE lv lb)).1 = some dv)
+    (he : Residua.Bootstrap.Semantics.eval lawsA progs lf []
+        (emit (S := S) (G := []) F t dv) = some w) :
+    Residua.Bootstrap.Semantics.eval lawsA progs lf []
+      (lowerF E n (F + 1) (S := S) t (.letE A v b)) = some w := by
+  unfold lowerF pipeline
+  have hee : erase E n (F + 1) [] (.letE A v b) = some (.letE lv lb) := by
+    simp only [erase_let_keep E n F [] A v b hirr, hv, hb]
+  simp only [hee]
+  have hr' := run_mono (defunc (.letE lv lb)).2 F (F + 1) []
+      (defunc (.letE lv lb)).1 dv (Nat.le_succ F) hr
+  simp only [hr']
+  exact emitWith_evalStable relevantArgs progs lf [] F (F + 1) t dv w
+    (Nat.le_succ F) he
+
+/- Eval of a relevant application at fuel `F + 1` is eval of the emitted
+   value of the two erasures' defunctionalized application, run at fuel `F`.
+   `erase_app_keep` is the erasure step. Not AdeqApp. -/
+theorem lowerF_app_eval {S : SigTable} (progs : Programs S S)
+    (E : ResolvedEnv) (n F lf : Nat) (g a : Expr Nat) (t : BootTy) (w : Val)
+    (hirr : irrelevant E n [] (.app g a) = false)
+    (lg la : LExpr)
+    (hg : erase E n F [] g = some lg)
+    (ha : erase E n F [] a = some la)
+    (dv : DVal)
+    (hr : run (defunc (.app lg la)).2 F [] (defunc (.app lg la)).1 = some dv)
+    (he : Residua.Bootstrap.Semantics.eval lawsA progs lf []
+        (emit (S := S) (G := []) F t dv) = some w) :
+    Residua.Bootstrap.Semantics.eval lawsA progs lf []
+      (lowerF E n (F + 1) (S := S) t (.app g a)) = some w := by
+  unfold lowerF pipeline
+  have hee : erase E n (F + 1) [] (.app g a) = some (.app lg la) := by
+    simp only [erase_app_keep E n F [] g a hirr, hg, ha]
+  simp only [hee]
+  have hr' := run_mono (defunc (.app lg la)).2 F (F + 1) []
+      (defunc (.app lg la)).1 dv (Nat.le_succ F) hr
+  simp only [hr']
+  exact emitWith_evalStable relevantArgs progs lf [] F (F + 1) t dv w
+    (Nat.le_succ F) he
+
+/- A successful norm of the identity let is a norm of the bound term
+   at the same fuel. Not AdeqLetE. -/
+theorem norm_let_id_eq (E : ResolvedEnv) (k : Nat) (A v val : Expr Nat)
+    (hn : norm E (k + 2) (.letE A v (.bvar 0)) = some val) :
+    norm E (k + 2) v = some val := by
+  cases hw : whnfFuel E (k + 1) (.letE A v (.bvar 0)) with
+  | none =>
+    unfold norm at hn
+    rw [hw] at hn
+    exact Option.noConfusion hn
+  | some w =>
+    have hvw : whnfFuel E k v = some w := by
+      rw [← whnf_let_id E k A v]
+      exact hw
+    have hv1 : whnfFuel E (k + 1) v = some w :=
+      whnfFuel_mono E k v w hvw
+    have heq : norm E (k + 2) (.letE A v (.bvar 0)) = norm E (k + 2) v := by
+      conv =>
+        lhs
+        unfold norm
+        rw [hw]
+      conv =>
+        rhs
+        unfold norm
+        rw [hv1]
+    rw [← heq]
+    exact hn
+
+/- A successful norm of the identity application is a norm of the
+   argument at the same fuel. Not AdeqApp. -/
+theorem norm_beta_id_eq (E : ResolvedEnv) (k : Nat) (A arg val : Expr Nat)
+    (hn : norm E (k + 2) (.app (.lam A (.bvar 0)) arg) = some val) :
+    norm E (k + 2) arg = some val := by
+  cases hw : whnfFuel E (k + 1) (.app (.lam A (.bvar 0)) arg) with
+  | none =>
+    unfold norm at hn
+    rw [hw] at hn
+    exact Option.noConfusion hn
+  | some w =>
+    have hvw : whnfFuel E k arg = some w := by
+      rw [← whnf_beta_id E k A arg]
+      exact hw
+    have hv1 : whnfFuel E (k + 1) arg = some w :=
+      whnfFuel_mono E k arg w hvw
+    have heq : norm E (k + 2) (.app (.lam A (.bvar 0)) arg) =
+        norm E (k + 2) arg := by
+      conv =>
+        lhs
+        unfold norm
+        rw [hw]
+      conv =>
+        rhs
+        unfold norm
+        rw [hv1]
+    rw [← heq]
+    exact hn
+
+/- `foldApps` rebuilds the spine `appsSpine` peeled. The head's own
+   arguments stay in front of the new ones. -/
+theorem appsSpine_foldApps (f : Expr Nat) :
+    ∀ xs, appsSpine (foldApps f xs) = ((appsSpine f).1, (appsSpine f).2 ++ xs)
+  | [] => by
+      simp only [foldApps, List.append_nil]
+  | x :: xs => by
+      rw [foldApps, appsSpine_foldApps (.app f x) xs]
+      have happ : appsSpine (.app f x) =
+          ((appsSpine f).1, (appsSpine f).2 ++ [x]) := by
+        simp only [appsSpine]
+      rw [happ]
+      have ha : ((appsSpine f).2 ++ [x]) ++ xs =
+          (appsSpine f).2 ++ (x :: xs) := by
+        rw [List.append_assoc]
+        rfl
+      exact congrArg (fun ys => ((appsSpine f).1, ys)) ha
+
+/- One β step on a spine whose head is a λ. The first argument is
+   substituted; the rest of the spine stays. `whnf_beta` is the
+   one-argument case (`args = []`). Not AdeqApp. -/
+theorem whnf_beta_spine (E : ResolvedEnv) (k : Nat) (A b a : Expr Nat)
+    (args : List (Expr Nat)) :
+    whnfFuel E (k + 1) (foldApps (.lam A b) (a :: args)) =
+      whnfFuel E k (foldApps (instantiate0 a b) args) := by
+  have hsp : appsSpine (foldApps (.lam A b) (a :: args)) =
+      (.lam A b, a :: args) := by
+    rw [appsSpine_foldApps]
+    simp only [appsSpine, List.nil_append]
+  conv =>
+    lhs
+    unfold whnfFuel
+    rw [hsp]
+
+/- A successful norm of the β-reduct is a norm of the λ-spine, one fuel
+   later. The two `norm`s share the head `whnf_beta_spine` produces, and
+   `norm_mono` lifts the reduct. Not AdeqApp. -/
+theorem norm_beta_spine (E : ResolvedEnv) (k : Nat) (A b a : Expr Nat)
+    (args : List (Expr Nat)) (v : Expr Nat)
+    (hn : norm E (k + 1) (foldApps (instantiate0 a b) args) = some v) :
+    norm E (k + 2) (foldApps (.lam A b) (a :: args)) = some v := by
+  cases hw : whnfFuel E k (foldApps (instantiate0 a b) args) with
+  | none =>
+    unfold norm at hn
+    rw [hw] at hn
+    exact Option.noConfusion hn
+  | some w =>
+    have hc : whnfFuel E (k + 1) (foldApps (.lam A b) (a :: args)) = some w := by
+      rw [whnf_beta_spine E k A b a args]
+      exact hw
+    have hb1 : whnfFuel E (k + 1) (foldApps (instantiate0 a b) args) = some w :=
+      whnfFuel_mono E k (foldApps (instantiate0 a b) args) w hw
+    have heq : norm E (k + 2) (foldApps (.lam A b) (a :: args)) =
+        norm E (k + 2) (foldApps (instantiate0 a b) args) := by
+      conv =>
+        lhs
+        unfold norm
+        rw [hc]
+      conv =>
+        rhs
+        unfold norm
+        rw [hb1]
+    rw [heq]
+    exact norm_mono E (k + 1) (foldApps (instantiate0 a b) args) v hn
+
+/- The same fuel, read backwards: a successful norm of the λ-spine is a
+   norm of the β-reduct. Not AdeqApp. -/
+theorem norm_beta_spine_eq (E : ResolvedEnv) (k : Nat) (A b a : Expr Nat)
+    (args : List (Expr Nat)) (v : Expr Nat)
+    (hn : norm E (k + 2) (foldApps (.lam A b) (a :: args)) = some v) :
+    norm E (k + 2) (foldApps (instantiate0 a b) args) = some v := by
+  cases hw : whnfFuel E (k + 1) (foldApps (.lam A b) (a :: args)) with
+  | none =>
+    unfold norm at hn
+    rw [hw] at hn
+    exact Option.noConfusion hn
+  | some w =>
+    have hvw : whnfFuel E k (foldApps (instantiate0 a b) args) = some w := by
+      rw [← whnf_beta_spine E k A b a args]
+      exact hw
+    have hv1 : whnfFuel E (k + 1) (foldApps (instantiate0 a b) args) = some w :=
+      whnfFuel_mono E k (foldApps (instantiate0 a b) args) w hvw
+    have heq : norm E (k + 2) (foldApps (.lam A b) (a :: args)) =
+        norm E (k + 2) (foldApps (instantiate0 a b) args) := by
+      conv =>
+        lhs
+        unfold norm
+        rw [hw]
+      conv =>
+        rhs
+        unfold norm
+        rw [hv1]
+    rw [← heq]
+    exact hn
+
+/- One ζ step on a spine whose head is a let. `whnf_zeta` is the empty
+   spine. Not AdeqLetE. -/
+theorem whnf_zeta_spine (E : ResolvedEnv) (k : Nat) (A v b : Expr Nat)
+    (args : List (Expr Nat)) :
+    whnfFuel E (k + 1) (foldApps (.letE A v b) args) =
+      whnfFuel E k (foldApps (instantiate0 v b) args) := by
+  have hsp : appsSpine (foldApps (.letE A v b) args) = (.letE A v b, args) := by
+    rw [appsSpine_foldApps]
+    simp only [appsSpine, List.nil_append]
+  conv =>
+    lhs
+    unfold whnfFuel
+    rw [hsp]
+
+/- A successful norm of the ζ-reduct is a norm of the let-spine, one fuel
+   later. Not AdeqLetE. -/
+theorem norm_zeta_spine (E : ResolvedEnv) (k : Nat) (A v0 b : Expr Nat)
+    (args : List (Expr Nat)) (v : Expr Nat)
+    (hn : norm E (k + 1) (foldApps (instantiate0 v0 b) args) = some v) :
+    norm E (k + 2) (foldApps (.letE A v0 b) args) = some v := by
+  cases hw : whnfFuel E k (foldApps (instantiate0 v0 b) args) with
+  | none =>
+    unfold norm at hn
+    rw [hw] at hn
+    exact Option.noConfusion hn
+  | some w =>
+    have hc : whnfFuel E (k + 1) (foldApps (.letE A v0 b) args) = some w := by
+      rw [whnf_zeta_spine E k A v0 b args]
+      exact hw
+    have hb1 : whnfFuel E (k + 1) (foldApps (instantiate0 v0 b) args) = some w :=
+      whnfFuel_mono E k (foldApps (instantiate0 v0 b) args) w hw
+    have heq : norm E (k + 2) (foldApps (.letE A v0 b) args) =
+        norm E (k + 2) (foldApps (instantiate0 v0 b) args) := by
+      conv =>
+        lhs
+        unfold norm
+        rw [hc]
+      conv =>
+        rhs
+        unfold norm
+        rw [hb1]
+    rw [heq]
+    exact norm_mono E (k + 1) (foldApps (instantiate0 v0 b) args) v hn
+
+/- The same fuel, read backwards. Not AdeqLetE. -/
+theorem norm_zeta_spine_eq (E : ResolvedEnv) (k : Nat) (A v0 b : Expr Nat)
+    (args : List (Expr Nat)) (v : Expr Nat)
+    (hn : norm E (k + 2) (foldApps (.letE A v0 b) args) = some v) :
+    norm E (k + 2) (foldApps (instantiate0 v0 b) args) = some v := by
+  cases hw : whnfFuel E (k + 1) (foldApps (.letE A v0 b) args) with
+  | none =>
+    unfold norm at hn
+    rw [hw] at hn
+    exact Option.noConfusion hn
+  | some w =>
+    have hvw : whnfFuel E k (foldApps (instantiate0 v0 b) args) = some w := by
+      rw [← whnf_zeta_spine E k A v0 b args]
+      exact hw
+    have hv1 : whnfFuel E (k + 1) (foldApps (instantiate0 v0 b) args) = some w :=
+      whnfFuel_mono E k (foldApps (instantiate0 v0 b) args) w hvw
+    have heq : norm E (k + 2) (foldApps (.letE A v0 b) args) =
+        norm E (k + 2) (foldApps (instantiate0 v0 b) args) := by
+      conv =>
+        lhs
+        unfold norm
+        rw [hw]
+      conv =>
+        rhs
+        unfold norm
+        rw [hv1]
+    rw [← heq]
+    exact hn
+
+/- One δ step on a spine whose head is a transparent constant.
+   `whnf_const_delta` is the empty spine. Not AdeqConstDelta. -/
+theorem whnf_delta_spine (E : ResolvedEnv) (k r : Nat) (ls : List Level)
+    (body : Expr Nat) (args : List (Expr Nat))
+    (hb : transparentBody E r ls = some body) :
+    whnfFuel E (k + 1) (foldApps (.const r ls) args) =
+      whnfFuel E k (foldApps body args) := by
+  have hsp : appsSpine (foldApps (.const r ls) args) = (.const r ls, args) := by
+    rw [appsSpine_foldApps]
+    simp only [appsSpine, List.nil_append]
+  conv =>
+    lhs
+    unfold whnfFuel
+    rw [hsp]
+  simp only [hb]
+
+/- A successful norm of the δ-reduct is a norm of the constant spine, one
+   fuel later. `norm_const_delta_of_body` is the empty spine. Not
+   AdeqConstDelta. -/
+theorem norm_delta_spine (E : ResolvedEnv) (k r : Nat) (ls : List Level)
+    (body : Expr Nat) (args : List (Expr Nat)) (v : Expr Nat)
+    (ht : transparentBody E r ls = some body)
+    (hn : norm E (k + 1) (foldApps body args) = some v) :
+    norm E (k + 2) (foldApps (.const r ls) args) = some v := by
+  cases hw : whnfFuel E k (foldApps body args) with
+  | none =>
+    unfold norm at hn
+    rw [hw] at hn
+    exact Option.noConfusion hn
+  | some w =>
+    have hc : whnfFuel E (k + 1) (foldApps (.const r ls) args) = some w := by
+      rw [whnf_delta_spine E k r ls body args ht]
+      exact hw
+    have hb1 : whnfFuel E (k + 1) (foldApps body args) = some w :=
+      whnfFuel_mono E k (foldApps body args) w hw
+    have heq : norm E (k + 2) (foldApps (.const r ls) args) =
+        norm E (k + 2) (foldApps body args) := by
+      conv =>
+        lhs
+        unfold norm
+        rw [hc]
+      conv =>
+        rhs
+        unfold norm
+        rw [hb1]
+    rw [heq]
+    exact norm_mono E (k + 1) (foldApps body args) v hn
+
+/- The same fuel, read backwards. Not AdeqConstDelta. -/
+theorem norm_delta_spine_eq (E : ResolvedEnv) (k r : Nat) (ls : List Level)
+    (body : Expr Nat) (args : List (Expr Nat)) (v : Expr Nat)
+    (ht : transparentBody E r ls = some body)
+    (hn : norm E (k + 2) (foldApps (.const r ls) args) = some v) :
+    norm E (k + 2) (foldApps body args) = some v := by
+  cases hw : whnfFuel E (k + 1) (foldApps (.const r ls) args) with
+  | none =>
+    unfold norm at hn
+    rw [hw] at hn
+    exact Option.noConfusion hn
+  | some w =>
+    have hvw : whnfFuel E k (foldApps body args) = some w := by
+      rw [← whnf_delta_spine E k r ls body args ht]
+      exact hw
+    have hv1 : whnfFuel E (k + 1) (foldApps body args) = some w :=
+      whnfFuel_mono E k (foldApps body args) w hvw
+    have heq : norm E (k + 2) (foldApps (.const r ls) args) =
+        norm E (k + 2) (foldApps body args) := by
+      conv =>
+        lhs
+        unfold norm
+        rw [hw]
+      conv =>
+        rhs
+        unfold norm
+        rw [hv1]
+    rw [← heq]
+    exact hn
+
+/- One δ, for an arbitrary body, once that body evaluates to the same
+   scm value. `norm_delta_spine_eq` at the empty spine reads the body's
+   normal form off the constant, and `lowerF_const_delta_eval` moves the
+   evaluation across erasure. Relevance of the constant is a hypothesis:
+   `Good` does not supply it. The body hypothesis is the eval, not
+   `Good` of the body. Not AdeqConstDelta. -/
+theorem good_const_delta_of_eval {S : SigTable} (progs : Programs S S)
+    (E : ResolvedEnv) (n r : Nat) (ls : List Level) (b : Expr Nat)
+    (hb : transparentBody E r ls = some b)
+    (hirr : irrelevant E n [] (.const r ls) = false)
+    (hbody : ∀ (lf fv : Nat) (v : Expr Nat) (t : BootTy) (w : Val),
+      norm E lf b = some v →
+      scmValOf E fv v = some w →
+      relevantSpine E n fv v = true →
+      irrelevant E n [] v = false →
+      valFits fv t w = true →
+      (inferT E n [] v).isSome = true →
+      ∃ F lf',
+        Residua.Bootstrap.Semantics.eval lawsA progs lf' []
+          (lowerF E n F (S := S) t b) = some w) :
+    Good progs E n (.const r ls) := by
+  refine good_of_exists progs E n (.const r ls) ?_
+  intro lf fv T v t w _ _ _ hn hs hrel hirrv hf hvinf _
+  cases lf with
+  | zero =>
+      rw [norm_fuel0] at hn
+      exact Option.noConfusion hn
+  | succ lf1 =>
+      cases lf1 with
+      | zero =>
+          unfold norm at hn
+          rw [whnfFuel_fuel0] at hn
+          exact Option.noConfusion hn
+      | succ k =>
+          have hn' : norm E (k + 2) (foldApps (.const r ls) []) = some v := hn
+          have hbn : norm E (k + 2) (foldApps b []) = some v :=
+            norm_delta_spine_eq E k r ls b [] v hb hn'
+          have hbb : norm E (k + 2) b = some v := hbn
+          obtain ⟨F, lfe, he⟩ :=
+            hbody (k + 2) fv v t w hbb hs hrel hirrv hf hvinf
+          exact ⟨F + 1, lfe,
+            lowerF_const_delta_eval progs E n F r lfe ls b t w hirr hb he⟩
+
+/- Eval of an identity let at fuel `F + 3` is eval of the emitted value
+   of the bound term's erasure, run at fuel `F + 1`. The body erases to
+   slot 0. `erase_mono` lifts that erasure one fuel, and `run_let_id`
+   returns the bound value. Not AdeqLetE. -/
+theorem lowerF_let_id_eval {S : SigTable} (progs : Programs S S)
+    (E : ResolvedEnv) (n F lf : Nat) (A v : Expr Nat) (t : BootTy) (w : Val)
+    (hirr : irrelevant E n [] (.letE A v (.bvar 0)) = false)
+    (hirrB : irrelevant E n (.letBinding A v :: []) (.bvar 0) = false)
+    (lv : LExpr)
+    (hv : erase E n (F + 1) [] v = some lv)
+    (dv : DVal)
+    (hr : run (defunc lv).2 (F + 1) [] (defunc lv).1 = some dv)
+    (he : Residua.Bootstrap.Semantics.eval lawsA progs lf []
+        (emit (S := S) (G := []) (F + 1) t dv) = some w) :
+    Residua.Bootstrap.Semantics.eval lawsA progs lf []
+      (lowerF E n (F + 3) (S := S) t (.letE A v (.bvar 0))) = some w := by
+  have hv2 : erase E n (F + 2) [] v = some lv :=
+    erase_mono E n (F + 1) (F + 2) [] v lv (Nat.le_succ (F + 1)) hv
+  have hb : erase E n (F + 2) (.letBinding A v :: []) (.bvar 0) = some (.bvar 0) := by
+    simp only [erase, eraseWith, hirrB, Bool.false_eq_true, if_false]
+  have he2 : Residua.Bootstrap.Semantics.eval lawsA progs lf []
+      (emit (S := S) (G := []) (F + 2) t dv) = some w :=
+    emitWith_evalStable relevantArgs progs lf [] (F + 1) (F + 2) t dv w
+      (Nat.le_succ (F + 1)) he
+  have hrlet : run (defunc (.letE lv (.bvar 0))).2 (F + 2) []
+      (defunc (.letE lv (.bvar 0))).1 = some dv := by
+    rw [defunc_let_bvar0]
+    exact run_let_id (defunc lv).2 F [] (defunc lv).1 dv hr
+  exact lowerF_let_eval progs E n (F + 2) lf A v (.bvar 0) t w hirr lv (.bvar 0)
+    hv2 hb dv hrlet he2
+
+/- Level equality is an equivalence. `eval` here is the level interpreter,
+   not bootstrap `eval`. -/
+theorem eqN_refl (l : Level) : eqN l l := fun _ => rfl
+
+theorem eqN_symm {l₁ l₂ : Level} (h : eqN l₁ l₂) : eqN l₂ l₁ :=
+  fun ρ => (h ρ).symm
+
+theorem eqN_trans {l₁ l₂ l₃ : Level} (h₁ : eqN l₁ l₂) (h₂ : eqN l₂ l₃) : eqN l₁ l₃ :=
+  fun ρ => (h₁ ρ).trans (h₂ ρ)
+
+theorem eqN_succ {l₁ l₂ : Level} (h : eqN l₁ l₂) : eqN (.succ l₁) (.succ l₂) := by
+  intro ρ
+  simp only [Rsx.eval, h ρ]
+
+/- `Sort (succ l)` is not extensionally `Sort 0`. -/
+theorem eqN_succ_ne_zero (l : Level) (h : eqN (.succ l) .zero) : False := by
+  have hρ : Rsx.eval (fun _ => some 0) (.succ l) =
+      Rsx.eval (fun _ => some 0) .zero := h (fun _ => some 0)
+  simp only [Rsx.eval] at hρ
+  cases hv : Rsx.eval (fun _ => some 0) l with
+  | none =>
+      rw [hv] at hρ
+      simp only [Option.map] at hρ
+      cases hρ
+  | some n =>
+      rw [hv] at hρ
+      simp only [Option.map] at hρ
+      injection hρ with hn
+      exact Nat.succ_ne_zero n hn
+
+/- `foldApps f (xs ++ [y])` is an application, never a sort. -/
+theorem foldApps_append_ne_sort (f : Expr Nat) (xs : List (Expr Nat)) (y : Expr Nat)
+    (l : Level) : foldApps f (xs ++ [y]) ≠ .sort l := by
+  induction xs generalizing f with
+  | nil =>
+      simp only [List.nil_append, foldApps]
+      intro h
+      cases h
+  | cons x xs ih =>
+      simp only [List.cons_append, foldApps]
+      exact ih (.app f x)
+
+/- A derived iota left-hand side is `recCall`, a nonempty application spine. -/
+theorem iotaLhs_ne_sort {E : ResolvedEnv} (w : IotaWitness E) (l : Level) :
+    iotaLhsOf w ≠ .sort l := by
+  unfold iotaLhsOf recCall
+  exact foldApps_append_ne_sort (.const w.recRef w.ls) w.preMajor (ctorMajor w) l
+
+/- The same spine is never a constant. -/
+theorem foldApps_append_ne_const (f : Expr Nat) (xs : List (Expr Nat)) (y : Expr Nat)
+    (r : Nat) (ls : List Level) : foldApps f (xs ++ [y]) ≠ .const r ls := by
+  induction xs generalizing f with
+  | nil =>
+      simp only [List.nil_append, foldApps]
+      intro h
+      cases h
+  | cons x xs ih =>
+      simp only [List.cons_append, foldApps]
+      exact ih (.app f x)
+
+theorem iotaLhs_ne_const {E : ResolvedEnv} (w : IotaWitness E) (r : Nat) (ls : List Level) :
+    iotaLhsOf w ≠ .const r ls := by
+  unfold iotaLhsOf recCall
+  exact foldApps_append_ne_const (.const w.recRef w.ls) w.preMajor (ctorMajor w) r ls
+
+/- A derived iota is an application spine, so it is not a constant. -/
+theorem derivedIota_ne_const {E : ResolvedEnv} {r : Nat} {ls : List Level} {rhs : Expr Nat}
+    (h : DerivedIota E (.const r ls) rhs) : False :=
+  (DerivedIota.rec (motive := fun lhs _ _ => lhs = .const r ls → False)
+    (fun w => iotaLhs_ne_const w r ls) h) rfl
+
+/- A sort is typed at `Sort (succ l)` up to `TyConvT`. The chain is the
+   `HasTyT.conv` spine; no `ConvT` inversion. Not AdeqConstDelta, AdeqApp,
+   or AdeqLetE. -/
+/- Same fact when the subject is already a sort. The constructor level is
+   the index, so the sort arm is a term. -/
+def hasTyT_sort_principal_at {E : ResolvedEnv} {n : Nat}
+    {Γ : LCtx} {l : Level} {T : Expr Nat}
+    (h : HasTyT E n Γ (.sort l) T) :
+    Σ' (l' : Level) (_ : eqN l' (.succ l)), TyConvT E n Γ (.sort l') T :=
+  match h with
+  | .sort _ _ => ⟨.succ l, ⟨eqN_refl _, TyConvT.refl _ _⟩⟩
+  | .conv Γ _ A B u hsub hc =>
+      match hasTyT_sort_principal_at hsub with
+      | ⟨l', ⟨heq, ht⟩⟩ =>
+          ⟨l', ⟨heq, TyConvT.trans Γ (.sort l') A B ht (TyConvT.of Γ A B u hc)⟩⟩
+termination_by sizeOf h
+
+def hasTyT_sort_principal {E : ResolvedEnv} {n : Nat}
+    {Γ : LCtx} {e T : Expr Nat} {l : Level}
+    (h : HasTyT E n Γ e T) (he : e = .sort l) :
+    Σ' (l' : Level) (_ : eqN l' (.succ l)), TyConvT E n Γ (.sort l') T := by
+  subst he
+  exact hasTyT_sort_principal_at h
+
+/- A constant is typed at its instantiated declared type up to `TyConvT`.
+   Not AdeqConstDelta, AdeqApp, or AdeqLetE. -/
+def hasTyT_const_principal_at {E : ResolvedEnv} {n : Nat}
+    {Γ : LCtx} {r : Nat} {ls : List Level} {T : Expr Nat}
+    (h : HasTyT E n Γ (.const r ls) T) :
+    Σ' (m : CheckedMember) (_ : E.members r = some m)
+        (_ : ls.length = m.arity) (_ : levelsBounded n ls = true),
+      TyConvT E n Γ (instantiateLevels ls m.mtype) T :=
+  match h with
+  | .const _ _ _ m hres hlen hwf =>
+      ⟨m, ⟨hres, ⟨hlen, ⟨hwf, TyConvT.refl _ _⟩⟩⟩⟩
+  | .conv Γ _ A B u hsub hc =>
+      match hasTyT_const_principal_at hsub with
+      | ⟨m, ⟨hres, ⟨hlen, ⟨hwf, ht⟩⟩⟩⟩ =>
+          ⟨m, ⟨hres, ⟨hlen, ⟨hwf,
+            TyConvT.trans Γ (instantiateLevels ls m.mtype) A B ht
+              (TyConvT.of Γ A B u hc)⟩⟩⟩⟩
+termination_by sizeOf h
+
+def hasTyT_const_principal {E : ResolvedEnv} {n : Nat}
+    {Γ : LCtx} {e T : Expr Nat} {r : Nat} {ls : List Level}
+    (h : HasTyT E n Γ e T) (he : e = .const r ls) :
+    Σ' (m : CheckedMember) (_ : E.members r = some m)
+        (_ : ls.length = m.arity) (_ : levelsBounded n ls = true),
+      TyConvT E n Γ (instantiateLevels ls m.mtype) T := by
+  subst he
+  exact hasTyT_const_principal_at h
+
+/- A transparent constant whose body is a non-constructor head has no scm
+   value. This is not `AdeqConstDelta`. -/
+theorem good_const_delta_rigid {S : SigTable} (progs : Programs S S)
+    (E : ResolvedEnv) (n r c : Nat) (ls lsc : List Level)
+    (hb : transparentBody E r ls = some (.const c lsc))
+    (hnone : transparentBody E c lsc = none)
+    (hnot : ∀ m, E.members c = some m → ¬ m.mclass = .constructorM) :
+    Good progs E n (.const r ls) := by
+  refine good_of_exists progs E n (.const r ls) ?_
+  intro lf fv T v t w _ _ _ hn hs _ _ _ _ _
+  have hv := norm_const_ctor_val E lf r c ls lsc hb hnone hn
+  rw [hv, scmValOf_const_not_ctor E fv c lsc hnot] at hs
+  exact Option.noConfusion hs
 
 /-- a lowering keeps every value evalLF gets from it when its fuel grows. -/
 def FuelStable {S : SigTable} (low : Lowering S) (progs : Programs S S) : Prop :=
@@ -1231,6 +3285,1502 @@ def cBad : Expr Nat := .const 15 []
 
 def cBadTy : HasTyT badEnv 0 [] cBad (instantiateLevels [] cTrue) :=
   .const [] 15 [] ⟨.definitionM, 0, cTrue, some cZero⟩ rfl rfl rfl
+
+/- Member 1 of badEnv is zero, declared at N. -/
+theorem badEnv_zero : badEnv.members 1 = some ⟨.constructorM, 0, cN, none⟩ := rfl
+
+/- HasTyT of zero at True is a TyConvT from N to True.
+   Not the negation, and not AdeqConstDelta. -/
+def tyConvT_cN_cTrue_of_cZero
+    (h : HasTyT badEnv 0 [] cZero cTrue) :
+    TyConvT badEnv 0 [] cN cTrue := by
+  match hasTyT_const_principal h rfl with
+  | ⟨m, ⟨hres, ⟨_, ⟨_, ht⟩⟩⟩⟩ =>
+      have hm : m = ⟨.constructorM, 0, cN, none⟩ := by
+        rw [badEnv_zero] at hres
+        injection hres with hm
+        exact hm.symm
+      subst hm
+      exact ht
+
+/- One TyConvT step. The ends are equal, or a ConvT at a sort reaches a
+   middle that still type-converts to the right end. No ConvT inversion.
+   Not the negation of TyConvT from cN to cTrue, and not AdeqConstDelta,
+   AdeqApp, or AdeqLetE. -/
+def tyConvT_step {E : ResolvedEnv} {n : Nat} {Γ : LCtx} {A B : Expr Nat}
+    (h : TyConvT E n Γ A B) :
+    PSum (A = B)
+      (Σ' (C : Expr Nat) (u : Level) (_ : ConvT E n Γ A C (.sort u)),
+        TyConvT E n Γ C B) :=
+  match h with
+  | .refl _ _ => PSum.inl rfl
+  | .of _ _ _ u hc =>
+      PSum.inr ⟨B, ⟨u, ⟨hc, TyConvT.refl _ _⟩⟩⟩
+  | .trans _ _ mid _ h1 h2 =>
+      match tyConvT_step h1 with
+      | PSum.inl heq =>
+          Eq.ndrec (motive := fun X =>
+              PSum (X = B)
+                (Σ' (C : Expr Nat) (u : Level) (_ : ConvT E n Γ X C (.sort u)),
+                  TyConvT E n Γ C B))
+            (tyConvT_step h2) (Eq.symm heq)
+      | PSum.inr ⟨C, ⟨u, ⟨hc, ht⟩⟩⟩ =>
+          PSum.inr ⟨C, ⟨u, ⟨hc, TyConvT.trans Γ C mid B ht h2⟩⟩⟩
+termination_by sizeOf h
+
+/- TyConvT reads the same backwards. The one-step arm is ConvT.symm.
+   No ConvT inversion. -/
+def tyConvT_symm {E : ResolvedEnv} {n : Nat} {Γ : LCtx} {A B : Expr Nat}
+    (h : TyConvT E n Γ A B) : TyConvT E n Γ B A :=
+  match h with
+  | .refl _ _ => TyConvT.refl _ _
+  | .of _ _ _ u hc =>
+      TyConvT.of Γ B A u (ConvT.symm Γ A B (.sort u) hc)
+  | .trans _ _ mid _ h1 h2 =>
+      TyConvT.trans Γ B mid A (tyConvT_symm h2) (tyConvT_symm h1)
+termination_by sizeOf h
+
+/- Two type conversions into one end compose. -/
+def tyConvT_of_to_same {E : ResolvedEnv} {n : Nat} {Γ : LCtx}
+    {A B C : Expr Nat}
+    (hA : TyConvT E n Γ A C) (hB : TyConvT E n Γ B C) :
+    TyConvT E n Γ A B :=
+  TyConvT.trans Γ A C B hA (tyConvT_symm hB)
+
+/- N and True are different constants. -/
+theorem cN_ne_cTrue : cN ≠ cTrue := by
+  intro h
+  unfold cN cTrue at h
+  injection h with hr hls
+  cases hr
+
+/- TyConvT from N to True is a ConvT from N at a sort, followed by a
+   TyConvT to True. The equality arm is empty. Not the negation. -/
+def tyConvT_cN_cTrue_step
+    (h : TyConvT badEnv 0 [] cN cTrue) :
+    Σ' (C : Expr Nat) (u : Level) (_ : ConvT badEnv 0 [] cN C (.sort u)),
+      TyConvT badEnv 0 [] C cTrue :=
+  match tyConvT_step h with
+  | PSum.inl heq => absurd heq cN_ne_cTrue
+  | PSum.inr s => s
+
+/- Member 0 of badEnv is N, an inductive, not a transparent definition. -/
+theorem badEnv_N :
+    badEnv.members 0 = some ⟨.inductiveM, 0, .sort (.succ .zero), none⟩ := rfl
+
+theorem badEnv_not_transparent_zero (m : CheckedMember)
+    (hres : badEnv.members 0 = some m) (htr : transparent m.mclass = true) : False := by
+  have hm : m = ⟨.inductiveM, 0, .sort (.succ .zero), none⟩ := by
+    rw [badEnv_N] at hres
+    injection hres with hm
+    exact hm.symm
+  subst hm
+  cases htr
+
+/- One ConvT step whose left end is N. Beta, zeta, eta, congruence,
+   literal, sort, and delta are not in the view: N is not those
+   left-hand sides, and member 0 is not transparent. Iota is an
+   application spine. The symm, trans, proof-irrelevance, and tyConv
+   arms are exposed, not discharged. Not the negation of TyConvT from
+   N to True, and not AdeqConstDelta, AdeqApp, or AdeqLetE. -/
+inductive ConvCN : Expr Nat → Expr Nat → Type where
+  | refl (T : Expr Nat) : ConvCN cN T
+  | symm (b T : Expr Nat) (h : ConvT badEnv 0 [] b cN T) : ConvCN b T
+  | trans (m b T : Expr Nat)
+      (h1 : ConvT badEnv 0 [] cN m T) (h2 : ConvT badEnv 0 [] m b T) : ConvCN b T
+  | consts (ls' : List Level) (T : Expr Nat) (h : eqNList [] ls') :
+      ConvCN (.const 0 ls') T
+  | irr (b T P : Expr Nat)
+      (hP : HasTyT badEnv 0 [] P (.sort .zero))
+      (hp : HasTyT badEnv 0 [] cN P)
+      (hq : HasTyT badEnv 0 [] b P) : ConvCN b T
+  | ty (b A T : Expr Nat) (u : Level)
+      (h : ConvT badEnv 0 [] cN b A)
+      (hA : ConvT badEnv 0 [] A T (.sort u)) : ConvCN b T
+
+def convT_cN_view {b T : Expr Nat} (h : ConvT badEnv 0 [] cN b T) : ConvCN b T :=
+  match h with
+  | .refl _ _ _ _ => ConvCN.refl T
+  | .symm _ x _ _ hinner => ConvCN.symm x T hinner
+  | .trans _ _ m _ _ h1 h2 => ConvCN.trans m b T h1 h2
+  | .delta _ _ _ m _ hres _ htr _ _ _ =>
+      False.elim (badEnv_not_transparent_zero m hres htr)
+  | .iota _ _ _ _ hdi _ _ => False.elim (derivedIota_ne_const hdi)
+  | .consts _ _ _ ls' m _ _ _ _ heq =>
+      ConvCN.consts ls' (instantiateLevels [] m.mtype) heq
+  | .irr _ P _ _ hP hp hq => ConvCN.irr b P P hP hp hq
+  | .tyConv _ _ _ A _ u hsub hA => ConvCN.ty b A T u hsub hA
+
+/- TyConvT from N to True starts with one of those ConvT shapes. -/
+def tyConvT_cN_cTrue_view (h : TyConvT badEnv 0 [] cN cTrue) :
+    Σ' (C : Expr Nat) (u : Level) (_ : ConvCN C (.sort u)),
+      TyConvT badEnv 0 [] C cTrue :=
+  match tyConvT_cN_cTrue_step h with
+  | ⟨C, ⟨u, ⟨hc, ht⟩⟩⟩ => ⟨C, ⟨u, ⟨convT_cN_view hc, ht⟩⟩⟩
+
+/- `eqNList [] ls` is the nil clause, so the level list is empty. -/
+theorem eqNList_nil_left {ls : List Level} (h : eqNList [] ls) : ls = [] :=
+  match ls, h with
+  | [], _ => rfl
+  | _ :: _, h => nomatch h
+
+theorem const0_nil_eq {ls : List Level} (h : eqNList [] ls) :
+    (.const 0 ls : Expr Nat) = cN := by
+  cases eqNList_nil_left h
+  rfl
+
+theorem const0_ne_cTrue (ls : List Level) : (.const 0 ls : Expr Nat) ≠ cTrue := by
+  intro h
+  unfold cTrue at h
+  injection h with hr
+  cases hr
+
+theorem const4_ne_cN (ls : List Level) : (.const 4 ls : Expr Nat) ≠ cN := by
+  intro h
+  unfold cN at h
+  injection h with hr
+  cases hr
+
+/- Member 4 of badEnv is True, an inductive, not a transparent definition. -/
+theorem badEnv_True :
+    badEnv.members 4 = some ⟨.inductiveM, 0, .sort .zero, none⟩ := rfl
+
+theorem badEnv_not_transparent_four (m : CheckedMember)
+    (hres : badEnv.members 4 = some m) (htr : transparent m.mclass = true) : False := by
+  have hm : m = ⟨.inductiveM, 0, .sort .zero, none⟩ := by
+    rw [badEnv_True] at hres
+    injection hres with hm
+    exact hm.symm
+  subst hm
+  cases htr
+
+/- One ConvT step from N, with type change stripped. The right end is
+   the index. Symmetry, transitivity, and proof irrelevance stay.
+   Recursing through tyConv forgets the type annotation. Not the
+   negation of TyConvT from N to True. -/
+inductive ConvCNty : Expr Nat → Type where
+  | refl : ConvCNty cN
+  | symm (b T : Expr Nat) (h : ConvT badEnv 0 [] b cN T) : ConvCNty b
+  | trans (m b T : Expr Nat)
+      (h1 : ConvT badEnv 0 [] cN m T) (h2 : ConvT badEnv 0 [] m b T) : ConvCNty b
+  | consts (ls' : List Level) (h : eqNList [] ls') : ConvCNty (.const 0 ls')
+  | irr (b P : Expr Nat)
+      (hP : HasTyT badEnv 0 [] P (.sort .zero))
+      (hp : HasTyT badEnv 0 [] cN P)
+      (hq : HasTyT badEnv 0 [] b P) : ConvCNty b
+
+def convT_cN_core {b T : Expr Nat} (h : ConvT badEnv 0 [] cN b T) : ConvCNty b :=
+  match h with
+  | .refl _ _ _ _ => ConvCNty.refl
+  | .symm _ x _ _ hinner => ConvCNty.symm x T hinner
+  | .trans _ _ m _ _ h1 h2 => ConvCNty.trans m b T h1 h2
+  | .delta _ _ _ m _ hres _ htr _ _ _ =>
+      False.elim (badEnv_not_transparent_zero m hres htr)
+  | .iota _ _ _ _ hdi _ _ => False.elim (derivedIota_ne_const hdi)
+  | .consts _ _ _ ls' _ _ _ _ _ heq => ConvCNty.consts ls' heq
+  | .irr _ P _ _ hP hp hq => ConvCNty.irr b P hP hp hq
+  | .tyConv _ _ _ _ _ _ hsub _ => convT_cN_core hsub
+termination_by sizeOf h
+
+/- Both constants typed at one `P` send their declared types to `P`,
+   so `Sort 1` and `Sort 0` are type-convertible. Not `¬ TyConvT`. -/
+def tyConvT_sort1_sort0_of_common (P : Expr Nat)
+    (hp : HasTyT badEnv 0 [] cN P)
+    (hq : HasTyT badEnv 0 [] cTrue P) :
+    TyConvT badEnv 0 [] (.sort (.succ .zero)) (.sort .zero) := by
+  match hasTyT_const_principal hp rfl with
+  | ⟨mN, ⟨hresN, ⟨_, ⟨_, htN⟩⟩⟩⟩ =>
+    match hasTyT_const_principal hq rfl with
+    | ⟨mT, ⟨hresT, ⟨_, ⟨_, htT⟩⟩⟩⟩ =>
+      have hmN : mN = ⟨.inductiveM, 0, .sort (.succ .zero), none⟩ := by
+        rw [badEnv_N] at hresN
+        injection hresN with hm
+        exact hm.symm
+      have hmT : mT = ⟨.inductiveM, 0, .sort .zero, none⟩ := by
+        rw [badEnv_True] at hresT
+        injection hresT with hm
+        exact hm.symm
+      subst hmN
+      subst hmT
+      exact tyConvT_of_to_same htN htT
+
+/- What remains of a conversion between N and True after a reflexive
+   left half and type change are consumed. `trans` keeps a left half
+   that is not reflexivity. `transR` keeps the swapped derivation.
+   `sortGap` is the `Sort 1` / `Sort 0` type conversion that proof
+   irrelevance produces. Not `¬ TyConvT`, and not AdeqConstDelta,
+   AdeqApp, or AdeqLetE. -/
+inductive ConvNT : Type where
+  | trans (m T : Expr Nat)
+      (h1 : ConvT badEnv 0 [] cN m T) (h2 : ConvT badEnv 0 [] m cTrue T) : ConvNT
+  | transR (m T : Expr Nat)
+      (h1 : ConvT badEnv 0 [] cTrue m T) (h2 : ConvT badEnv 0 [] m cN T) : ConvNT
+  | sortGap (h : TyConvT badEnv 0 [] (.sort (.succ .zero)) (.sort .zero)) : ConvNT
+
+/- Delta toward N from a constant equal to True. The only body
+   `instantiateLevels` sends to `cN` is `const 0 []`, so the head is
+   member 4, which is not transparent. -/
+theorem convStuckR_delta_false (r : Nat) (ls : List Level) (m : CheckedMember)
+    (hres : badEnv.members r = some m) (htr : transparent m.mclass = true)
+    (ha : (.const r ls : Expr Nat) = cTrue) : False := by
+  unfold cTrue at ha
+  injection ha with hr
+  subst hr
+  exact badEnv_not_transparent_four m hres htr
+
+theorem instLevels_bvar_ne_cN (ls : List Level) (i : Nat)
+    (h : instantiateLevels ls (.bvar i) = cN) : False := by
+  unfold instantiateLevels cN at h
+  cases h
+
+theorem instLevels_sort_ne_cN (ls : List Level) (l : Level)
+    (h : instantiateLevels ls (.sort l) = cN) : False := by
+  unfold instantiateLevels cN at h
+  cases h
+
+theorem instLevels_app_ne_cN (ls : List Level) (f x : Expr Nat)
+    (h : instantiateLevels ls (.app f x) = cN) : False := by
+  unfold instantiateLevels cN at h
+  cases h
+
+theorem instLevels_lam_ne_cN (ls : List Level) (a b : Expr Nat)
+    (h : instantiateLevels ls (.lam a b) = cN) : False := by
+  unfold instantiateLevels cN at h
+  cases h
+
+theorem instLevels_pi_ne_cN (ls : List Level) (a b : Expr Nat)
+    (h : instantiateLevels ls (.pi a b) = cN) : False := by
+  unfold instantiateLevels cN at h
+  cases h
+
+theorem instLevels_letE_ne_cN (ls : List Level) (a v b : Expr Nat)
+    (h : instantiateLevels ls (.letE a v b) = cN) : False := by
+  unfold instantiateLevels cN at h
+  cases h
+
+theorem instLevels_lit_ne_cN (ls : List Level) (t : Nat)
+    (h : instantiateLevels ls (.lit t) = cN) : False := by
+  unfold instantiateLevels cN at h
+  cases h
+
+theorem instLevels_const_succ_ne_cN (ls : List Level) (n : Nat) (ms : List Level)
+    (h : instantiateLevels ls (.const (n + 1) ms) = cN) : False := by
+  unfold instantiateLevels cN at h
+  injection h with hr
+  cases hr
+
+theorem instLevels_const_zero_cons_ne_cN (ls : List Level) (l : Level) (ms : List Level)
+    (h : instantiateLevels ls (.const 0 (l :: ms)) = cN) : False := by
+  unfold instantiateLevels cN at h
+  injection h with hr hms
+  cases hms
+
+theorem app_ne_cN (f x : Expr Nat) (h : .app f x = cN) : False := by
+  unfold cN at h
+  cases h
+
+theorem app_ne_cTrue (f x : Expr Nat) (h : .app f x = cTrue) : False := by
+  unfold cTrue at h
+  cases h
+
+theorem letE_ne_cN (A v b : Expr Nat) (h : .letE A v b = cN) : False := by
+  unfold cN at h
+  cases h
+
+theorem letE_ne_cTrue (A v b : Expr Nat) (h : .letE A v b = cTrue) : False := by
+  unfold cTrue at h
+  cases h
+
+theorem bvar_ne_cN (i : Nat) (h : (.bvar i : Expr Nat) = cN) : False := by
+  unfold cN at h
+  cases h
+
+theorem bvar_ne_cTrue (i : Nat) (h : (.bvar i : Expr Nat) = cTrue) : False := by
+  unfold cTrue at h
+  cases h
+
+theorem lit_ne_cN (t : Nat) (h : (.lit t : Expr Nat) = cN) : False := by
+  unfold cN at h
+  cases h
+
+theorem lit_ne_cTrue (t : Nat) (h : (.lit t : Expr Nat) = cTrue) : False := by
+  unfold cTrue at h
+  cases h
+
+theorem lam_ne_cN (A b : Expr Nat) (h : .lam A b = cN) : False := by
+  unfold cN at h
+  cases h
+
+theorem lam_ne_cTrue (A b : Expr Nat) (h : .lam A b = cTrue) : False := by
+  unfold cTrue at h
+  cases h
+
+theorem pi_ne_cN (A B : Expr Nat) (h : .pi A B = cN) : False := by
+  unfold cN at h
+  cases h
+
+theorem pi_ne_cTrue (A B : Expr Nat) (h : .pi A B = cTrue) : False := by
+  unfold cTrue at h
+  cases h
+
+theorem sort_ne_cN (l : Level) (h : (.sort l : Expr Nat) = cN) : False := by
+  unfold cN at h
+  cases h
+
+theorem sort_ne_cTrue (l : Level) (h : (.sort l : Expr Nat) = cTrue) : False := by
+  unfold cTrue at h
+  cases h
+
+theorem convStuck_delta_false (r : Nat) (ls : List Level) (m : CheckedMember)
+    (hres : badEnv.members r = some m) (htr : transparent m.mclass = true)
+    (ha : (.const r ls : Expr Nat) = cN) : False := by
+  unfold cN at ha
+  injection ha with hr
+  subst hr
+  exact badEnv_not_transparent_zero m hres htr
+
+theorem consts_cN_ne_cTrue (r : Nat) (ls ls' : List Level)
+    (ha : (.const r ls : Expr Nat) = cN) (hb : (.const r ls' : Expr Nat) = cTrue) : False := by
+  unfold cN at ha
+  injection ha with hr
+  subst hr
+  exact const0_ne_cTrue ls' hb
+
+theorem consts_cTrue_ne_cN (r : Nat) (ls ls' : List Level)
+    (ha : (.const r ls : Expr Nat) = cTrue) (hb : (.const r ls' : Expr Nat) = cN) : False := by
+  unfold cTrue at ha
+  injection ha with hr
+  subst hr
+  exact const4_ne_cN ls' hb
+
+/- Both ends stay variables, so `instantiateLevels` unifies. The
+   equalities say which end is N and which is True. Symmetry swaps
+   those equalities and recurses on the raw subderivation. Not
+   `¬ TyConvT`. -/
+mutual
+def convStuck {a b T : Expr Nat}
+    (h : ConvT badEnv 0 [] a b T) (ha : a = cN) (hb : b = cTrue) : ConvNT :=
+  match h with
+  | .refl _ _ _ _ => False.elim (cN_ne_cTrue (Eq.trans (Eq.symm ha) hb))
+  | .symm _ _ _ _ hinner => convStuckAtTrue hinner hb ha
+  | .trans _ _ m _ _ h1 h2 =>
+      ConvNT.trans m T
+        (Eq.ndrec (motive := fun X => ConvT badEnv 0 [] X m T) h1 ha)
+        (Eq.ndrec (motive := fun X => ConvT badEnv 0 [] m X T) h2 hb)
+  | .tyConv _ _ _ _ _ _ hsub _ => convStuck hsub ha hb
+  | .beta _ A body arg _ _ _ _ _ => False.elim (app_ne_cN (.lam A body) arg ha)
+  | .zeta _ A value body _ _ _ _ _ => False.elim (letE_ne_cN A value body ha)
+  | .zetaLocal _ i _ _ _ _ _ => False.elim (bvar_ne_cN i ha)
+  | .delta _ r ls m _ hres _ htr _ _ _ =>
+      False.elim (convStuck_delta_false r ls m hres htr ha)
+  | .iota _ _ _ _ hdi _ _ =>
+      False.elim (derivedIota_ne_const
+        (Eq.ndrec (motive := fun X => DerivedIota badEnv X b) hdi ha))
+  | .lit _ t _ _ _ _ => False.elim (lit_ne_cN t ha)
+  | .app _ f _ x _ _ _ _ _ => False.elim (app_ne_cN f x ha)
+  | .lam _ A _ body _ _ _ _ _ => False.elim (lam_ne_cN A body ha)
+  | .pi _ A _ B _ _ _ _ _ => False.elim (pi_ne_cN A B ha)
+  | .letE _ A _ v _ body _ _ _ _ _ _ => False.elim (letE_ne_cN A v body ha)
+  | .sorts _ l _ _ => False.elim (sort_ne_cN l ha)
+  | .consts _ r ls ls' _ _ _ _ _ _ => False.elim (consts_cN_ne_cTrue r ls ls' ha hb)
+  | .eta _ f A _ _ =>
+      False.elim (lam_ne_cN A (.app (lift 0 1 f) (.bvar 0)) ha)
+  | .irr _ P _ _ _ hp hq =>
+      ConvNT.sortGap (tyConvT_sort1_sort0_of_common P
+        (Eq.ndrec (motive := fun X => HasTyT badEnv 0 [] X P) hp ha)
+        (Eq.ndrec (motive := fun X => HasTyT badEnv 0 [] X P) hq hb))
+termination_by sizeOf h
+
+def convStuckAtTrue {a b T : Expr Nat}
+    (h : ConvT badEnv 0 [] a b T) (ha : a = cTrue) (hb : b = cN) : ConvNT :=
+  match h with
+  | .refl _ _ _ _ => False.elim (cN_ne_cTrue (Eq.trans (Eq.symm hb) ha))
+  | .symm _ _ _ _ hinner => convStuck hinner hb ha
+  | .trans _ _ m _ _ h1 h2 =>
+      ConvNT.transR m T
+        (Eq.ndrec (motive := fun X => ConvT badEnv 0 [] X m T) h1 ha)
+        (Eq.ndrec (motive := fun X => ConvT badEnv 0 [] m X T) h2 hb)
+  | .tyConv _ _ _ _ _ _ hsub _ => convStuckAtTrue hsub ha hb
+  | .beta _ A body arg _ _ _ _ _ => False.elim (app_ne_cTrue (.lam A body) arg ha)
+  | .zeta _ A value body _ _ _ _ _ => False.elim (letE_ne_cTrue A value body ha)
+  | .zetaLocal _ i _ _ _ _ _ => False.elim (bvar_ne_cTrue i ha)
+  | .delta _ r ls m _ hres _ htr _ _ _ =>
+      False.elim (convStuckR_delta_false r ls m hres htr ha)
+  | .iota _ _ _ _ hdi _ _ =>
+      False.elim (derivedIota_ne_const
+        (Eq.ndrec (motive := fun X => DerivedIota badEnv X b) hdi ha))
+  | .lit _ t _ _ _ _ => False.elim (lit_ne_cTrue t ha)
+  | .app _ f _ x _ _ _ _ _ => False.elim (app_ne_cTrue f x ha)
+  | .lam _ A _ body _ _ _ _ _ => False.elim (lam_ne_cTrue A body ha)
+  | .pi _ A _ B _ _ _ _ _ => False.elim (pi_ne_cTrue A B ha)
+  | .letE _ A _ v _ body _ _ _ _ _ _ => False.elim (letE_ne_cTrue A v body ha)
+  | .sorts _ l _ _ => False.elim (sort_ne_cTrue l ha)
+  | .consts _ r ls ls' _ _ _ _ _ _ => False.elim (consts_cTrue_ne_cN r ls ls' ha hb)
+  | .eta _ f A _ _ =>
+      False.elim (lam_ne_cTrue A (.app (lift 0 1 f) (.bvar 0)) ha)
+  | .irr _ P _ _ _ hp hq =>
+      ConvNT.sortGap (tyConvT_sort1_sort0_of_common P
+        (Eq.ndrec (motive := fun X => HasTyT badEnv 0 [] X P) hq hb)
+        (Eq.ndrec (motive := fun X => HasTyT badEnv 0 [] X P) hp ha))
+termination_by sizeOf h
+end
+
+def convStuckR {a T : Expr Nat}
+    (h : ConvT badEnv 0 [] a cN T) (ha : a = cTrue) : ConvNT :=
+  convStuckAtTrue h ha rfl
+
+def convT_cN_cTrue_stuck {T : Expr Nat}
+    (h : ConvT badEnv 0 [] cN cTrue T) : ConvNT :=
+  convStuck h rfl rfl
+
+/- TyConvT from N to True is either one stuck ConvT, or a split whose
+   two halves are not equalities. Reflexive halves are dropped by
+   `tyConvT_step`. Not the negation. -/
+inductive TyStuck : Type where
+  | conv (h : ConvNT) : TyStuck
+  | trans (mid : Expr Nat)
+      (h1 : TyConvT badEnv 0 [] cN mid)
+      (h2 : TyConvT badEnv 0 [] mid cTrue) : TyStuck
+
+def tyConvT_cN_stuck {a b : Expr Nat}
+    (h : TyConvT badEnv 0 [] a b) (ha : a = cN) (hb : b = cTrue) : TyStuck :=
+  match h with
+  | .refl _ _ => False.elim (cN_ne_cTrue (Eq.trans (Eq.symm ha) hb))
+  | .of _ _ _ u hc =>
+      TyStuck.conv (convStuck hc ha hb)
+  | .trans _ _ mid _ h1 h2 =>
+      match tyConvT_step h1 with
+      | PSum.inl heq => tyConvT_cN_stuck h2 (Eq.trans (Eq.symm heq) ha) hb
+      | PSum.inr _ =>
+          match tyConvT_step h2 with
+          | PSum.inl heq => tyConvT_cN_stuck h1 ha (Eq.trans heq hb)
+          | PSum.inr _ =>
+              TyStuck.trans mid
+                (Eq.ndrec (motive := fun X => TyConvT badEnv 0 [] X mid) h1 ha)
+                (Eq.ndrec (motive := fun X => TyConvT badEnv 0 [] mid X) h2 hb)
+termination_by sizeOf h
+
+def tyConvT_cN_cTrue_stuck (h : TyConvT badEnv 0 [] cN cTrue) : TyStuck :=
+  tyConvT_cN_stuck h rfl rfl
+
+/- The empty context stores no let value. -/
+theorem lookupValue_nil (i : Nat) : lookupValue ([] : LCtx) i = none := rfl
+
+/- `badEnv` above member 15 is `ctlEnv`, and `ctlEnv` stops at 14.
+   `16 + n` does not reduce in either match, so the proof splits.
+   Not `¬ TyConvT`, and not AdeqConstDelta, AdeqApp, or AdeqLetE. -/
+theorem badEnv_members_ge16 (n : Nat) : badEnv.members (16 + n) = none := by
+  have hm : badEnv.members (16 + n) =
+      (match (16 + n) with
+        | 15 => some ⟨.definitionM, 0, cTrue, some cZero⟩
+        | r => ctlEnv.members r) := rfl
+  rw [hm]
+  split
+  · next h =>
+      exact absurd (h ▸ Nat.le_add_right 16 n) (Nat.not_le_of_gt (by decide))
+  · have hc : ctlEnv.members (16 + n) =
+        (match (16 + n) with
+          | 0 => some ⟨.inductiveM, 0, .sort (.succ .zero), none⟩
+          | 1 => some ⟨.constructorM, 0, cN, none⟩
+          | 2 => some ⟨.constructorM, 0, .pi cN cN, none⟩
+          | 4 => some ⟨.inductiveM, 0, .sort .zero, none⟩
+          | 5 => some ⟨.constructorM, 0, cTrue, none⟩
+          | 6 => some ⟨.inductiveM, 0, .sort (.succ .zero), none⟩
+          | 7 => some ⟨.constructorM, 0, .const 6 [], none⟩
+          | 8 => some ⟨.constructorM, 0, .const 6 [], none⟩
+          | 9 => some ⟨.inductiveM, 0, .sort (.succ .zero), none⟩
+          | 10 => some ⟨.constructorM, 0, .pi cN (.pi cN (.const 9 [])), none⟩
+          | 11 => some ⟨.definitionM, 0, cN, some (.app cSucc (.app cSucc cZero))⟩
+          | 12 => some ⟨.definitionM, 0, .pi cN cN,
+              some (.lam cN (.app cSucc (.app cSucc (.bvar 0))))⟩
+          | 13 => some ⟨.axiomM, 0, cN, none⟩
+          | 14 => some ⟨.theoremM, 0, cTrue, some cIntro⟩
+          | _ => none) := rfl
+    rw [hc]
+    split <;> first
+      | rfl
+      | next h =>
+          exact absurd (h ▸ Nat.le_add_right 16 n) (Nat.not_le_of_gt (by decide))
+
+/- No member of badEnv is a recursor, so derived ι does not apply.
+   Not `¬ TyConvT`, and not AdeqConstDelta, AdeqApp, or AdeqLetE. -/
+theorem badEnv_no_recursor (r : Nat) (m : CheckedMember)
+    (hm : badEnv.members r = some m) (hk : m.mclass = .recursorM) : False := by
+  match r with
+  | 0 =>
+      have hr : badEnv.members 0 =
+          some ⟨.inductiveM, 0, .sort (.succ .zero), none⟩ := rfl
+      rw [hr] at hm
+      injection hm with he
+      subst he
+      cases hk
+  | 1 =>
+      have hr : badEnv.members 1 = some ⟨.constructorM, 0, cN, none⟩ := rfl
+      rw [hr] at hm
+      injection hm with he
+      subst he
+      cases hk
+  | 2 =>
+      have hr : badEnv.members 2 = some ⟨.constructorM, 0, .pi cN cN, none⟩ := rfl
+      rw [hr] at hm
+      injection hm with he
+      subst he
+      cases hk
+  | 3 =>
+      have hr : badEnv.members 3 = none := rfl
+      rw [hr] at hm
+      cases hm
+  | 4 =>
+      have hr : badEnv.members 4 = some ⟨.inductiveM, 0, .sort .zero, none⟩ := rfl
+      rw [hr] at hm
+      injection hm with he
+      subst he
+      cases hk
+  | 5 =>
+      have hr : badEnv.members 5 = some ⟨.constructorM, 0, cTrue, none⟩ := rfl
+      rw [hr] at hm
+      injection hm with he
+      subst he
+      cases hk
+  | 6 =>
+      have hr : badEnv.members 6 =
+          some ⟨.inductiveM, 0, .sort (.succ .zero), none⟩ := rfl
+      rw [hr] at hm
+      injection hm with he
+      subst he
+      cases hk
+  | 7 =>
+      have hr : badEnv.members 7 =
+          some ⟨.constructorM, 0, .const 6 [], none⟩ := rfl
+      rw [hr] at hm
+      injection hm with he
+      subst he
+      cases hk
+  | 8 =>
+      have hr : badEnv.members 8 =
+          some ⟨.constructorM, 0, .const 6 [], none⟩ := rfl
+      rw [hr] at hm
+      injection hm with he
+      subst he
+      cases hk
+  | 9 =>
+      have hr : badEnv.members 9 =
+          some ⟨.inductiveM, 0, .sort (.succ .zero), none⟩ := rfl
+      rw [hr] at hm
+      injection hm with he
+      subst he
+      cases hk
+  | 10 =>
+      have hr : badEnv.members 10 =
+          some ⟨.constructorM, 0, .pi cN (.pi cN (.const 9 [])), none⟩ := rfl
+      rw [hr] at hm
+      injection hm with he
+      subst he
+      cases hk
+  | 11 =>
+      have hr : badEnv.members 11 =
+          some ⟨.definitionM, 0, cN, some (.app cSucc (.app cSucc cZero))⟩ := rfl
+      rw [hr] at hm
+      injection hm with he
+      subst he
+      cases hk
+  | 12 =>
+      have hr : badEnv.members 12 =
+          some ⟨.definitionM, 0, .pi cN cN,
+            some (.lam cN (.app cSucc (.app cSucc (.bvar 0))))⟩ := rfl
+      rw [hr] at hm
+      injection hm with he
+      subst he
+      cases hk
+  | 13 =>
+      have hr : badEnv.members 13 = some ⟨.axiomM, 0, cN, none⟩ := rfl
+      rw [hr] at hm
+      injection hm with he
+      subst he
+      cases hk
+  | 14 =>
+      have hr : badEnv.members 14 = some ⟨.theoremM, 0, cTrue, some cIntro⟩ := rfl
+      rw [hr] at hm
+      injection hm with he
+      subst he
+      cases hk
+  | 15 =>
+      have hr : badEnv.members 15 =
+          some ⟨.definitionM, 0, cTrue, some cZero⟩ := rfl
+      rw [hr] at hm
+      injection hm with he
+      subst he
+      cases hk
+  | n + 16 =>
+      rw [Nat.add_comm] at hm
+      rw [badEnv_members_ge16 n] at hm
+      cases hm
+
+theorem derivedIota_badEnv_false {lhs rhs : Expr Nat}
+    (h : DerivedIota badEnv lhs rhs) : False := by
+  cases h with
+  | of w => exact badEnv_no_recursor w.recRef w.recMember w.hrec w.hrecK
+
+/- The three transparent bodies, after any level substitution. None is a
+   sort. Members 11, 12, and 15 are the only transparent ones. -/
+theorem badEnv_tb_11 (ls : List Level) :
+    transparentBody badEnv 11 ls = some (.app cSucc (.app cSucc cZero)) := rfl
+
+theorem badEnv_tb_12 (ls : List Level) :
+    transparentBody badEnv 12 ls =
+      some (.lam cN (.app cSucc (.app cSucc (.bvar 0)))) := rfl
+
+theorem badEnv_tb_15 (ls : List Level) :
+    transparentBody badEnv 15 ls = some cZero := rfl
+
+theorem badEnv_tb_none_0 (ls : List Level) : transparentBody badEnv 0 ls = none := rfl
+theorem badEnv_tb_none_1 (ls : List Level) : transparentBody badEnv 1 ls = none := rfl
+theorem badEnv_tb_none_2 (ls : List Level) : transparentBody badEnv 2 ls = none := rfl
+theorem badEnv_tb_none_3 (ls : List Level) : transparentBody badEnv 3 ls = none := rfl
+theorem badEnv_tb_none_4 (ls : List Level) : transparentBody badEnv 4 ls = none := rfl
+theorem badEnv_tb_none_5 (ls : List Level) : transparentBody badEnv 5 ls = none := rfl
+theorem badEnv_tb_none_6 (ls : List Level) : transparentBody badEnv 6 ls = none := rfl
+theorem badEnv_tb_none_7 (ls : List Level) : transparentBody badEnv 7 ls = none := rfl
+theorem badEnv_tb_none_8 (ls : List Level) : transparentBody badEnv 8 ls = none := rfl
+theorem badEnv_tb_none_9 (ls : List Level) : transparentBody badEnv 9 ls = none := rfl
+theorem badEnv_tb_none_10 (ls : List Level) : transparentBody badEnv 10 ls = none := rfl
+theorem badEnv_tb_none_13 (ls : List Level) : transparentBody badEnv 13 ls = none := rfl
+theorem badEnv_tb_none_14 (ls : List Level) : transparentBody badEnv 14 ls = none := rfl
+
+theorem badEnv_tb_none_tail (n : Nat) (ls : List Level) :
+    transparentBody badEnv (n + 16) ls = none := by
+  rw [Nat.add_comm]
+  unfold transparentBody
+  rw [badEnv_members_ge16 n]
+
+/- `succ (succ zero)` is stuck: `succ` is a constructor. -/
+theorem whnf_two_stuck (k : Nat) :
+    whnfFuel badEnv (k + 1) (.app cSucc (.app cSucc cZero)) =
+      some (.app cSucc (.app cSucc cZero)) := rfl
+
+theorem whnf_addTwo_body (k : Nat) :
+    whnfFuel badEnv (k + 1) (.lam cN (.app cSucc (.app cSucc (.bvar 0)))) =
+      some (.lam cN (.app cSucc (.app cSucc (.bvar 0)))) := rfl
+
+theorem whnf_cZero_self (k : Nat) : whnfFuel badEnv (k + 1) cZero = some cZero := rfl
+
+/- No constant of badEnv weak-heads to a sort. A rigid head is itself.
+   The three transparent bodies are an application of `succ`, a λ, and
+   `zero`. Not `¬ TyConvT`. -/
+theorem whnf_badEnv_const_not_sort (r : Nat) (ls : List Level) (l : Level) (k : Nat) :
+    whnfFuel badEnv k (.const r ls) ≠ some (.sort l) := by
+  induction k generalizing r ls with
+  | zero =>
+      intro h
+      exact whnf_zero_none h
+  | succ k ih =>
+      intro h
+      match r with
+      | 11 =>
+          rw [whnf_const_delta badEnv k 11 ls _ (badEnv_tb_11 ls)] at h
+          cases k with
+          | zero => exact whnf_zero_none h
+          | succ k =>
+              rw [whnf_two_stuck k] at h
+              injection h with he
+              cases he
+      | 12 =>
+          rw [whnf_const_delta badEnv k 12 ls _ (badEnv_tb_12 ls)] at h
+          cases k with
+          | zero => exact whnf_zero_none h
+          | succ k =>
+              rw [whnf_addTwo_body k] at h
+              injection h with he
+              cases he
+      | 15 =>
+          rw [whnf_const_delta badEnv k 15 ls _ (badEnv_tb_15 ls)] at h
+          exact ih 1 [] h
+      | 0 =>
+          rw [whnf_rigid_const k 0 ls (badEnv_tb_none_0 ls)] at h
+          injection h with he
+          cases he
+      | 1 =>
+          rw [whnf_rigid_const k 1 ls (badEnv_tb_none_1 ls)] at h
+          injection h with he
+          cases he
+      | 2 =>
+          rw [whnf_rigid_const k 2 ls (badEnv_tb_none_2 ls)] at h
+          injection h with he
+          cases he
+      | 3 =>
+          rw [whnf_rigid_const k 3 ls (badEnv_tb_none_3 ls)] at h
+          injection h with he
+          cases he
+      | 4 =>
+          rw [whnf_rigid_const k 4 ls (badEnv_tb_none_4 ls)] at h
+          injection h with he
+          cases he
+      | 5 =>
+          rw [whnf_rigid_const k 5 ls (badEnv_tb_none_5 ls)] at h
+          injection h with he
+          cases he
+      | 6 =>
+          rw [whnf_rigid_const k 6 ls (badEnv_tb_none_6 ls)] at h
+          injection h with he
+          cases he
+      | 7 =>
+          rw [whnf_rigid_const k 7 ls (badEnv_tb_none_7 ls)] at h
+          injection h with he
+          cases he
+      | 8 =>
+          rw [whnf_rigid_const k 8 ls (badEnv_tb_none_8 ls)] at h
+          injection h with he
+          cases he
+      | 9 =>
+          rw [whnf_rigid_const k 9 ls (badEnv_tb_none_9 ls)] at h
+          injection h with he
+          cases he
+      | 10 =>
+          rw [whnf_rigid_const k 10 ls (badEnv_tb_none_10 ls)] at h
+          injection h with he
+          cases he
+      | 13 =>
+          rw [whnf_rigid_const k 13 ls (badEnv_tb_none_13 ls)] at h
+          injection h with he
+          cases he
+      | 14 =>
+          rw [whnf_rigid_const k 14 ls (badEnv_tb_none_14 ls)] at h
+          injection h with he
+          cases he
+      | n + 16 =>
+          rw [whnf_rigid_const k (n + 16) ls (badEnv_tb_none_tail n ls)] at h
+          injection h with he
+          cases he
+
+theorem whnf_natExpand_zero (k : Nat) :
+    whnfFuel badEnv (k + 1) (natExpand 0) = some (natExpand 0) := rfl
+
+theorem whnf_natExpand_succ (t k : Nat) :
+    whnfFuel badEnv (k + 1) (natExpand (t + 1)) = some (natExpand (t + 1)) := rfl
+
+theorem whnf_natExpand_not_sort (t : Nat) (l : Level) (k : Nat) :
+    whnfFuel badEnv k (natExpand t) ≠ some (.sort l) := by
+  cases k with
+  | zero =>
+      intro h
+      exact whnf_zero_none h
+  | succ k =>
+      cases t with
+      | zero =>
+          intro h
+          rw [whnf_natExpand_zero k] at h
+          injection h with he
+          cases he
+      | succ t =>
+          intro h
+          rw [whnf_natExpand_succ t k] at h
+          injection h with he
+          cases he
+
+/- A weak-head sort. Fuel is existential, so one successful step is enough.
+   Not `¬ TyConvT`, and not AdeqConstDelta, AdeqApp, or AdeqLetE. -/
+def IsSort (e : Expr Nat) (l : Level) : Prop :=
+  ∃ k, whnfFuel badEnv k e = some (.sort l)
+
+theorem isSort_sort (l : Level) : IsSort (.sort l) l :=
+  ⟨1, whnf_sort_self badEnv 0 l⟩
+
+theorem not_isSort_lam (A b : Expr Nat) (l : Level) (h : IsSort (.lam A b) l) : False := by
+  obtain ⟨k, hk⟩ := h
+  cases k with
+  | zero => exact whnf_zero_none hk
+  | succ k =>
+      rw [whnf_lam_self badEnv k A b] at hk
+      injection hk with he
+      cases he
+
+theorem not_isSort_pi (A B : Expr Nat) (l : Level) (h : IsSort (.pi A B) l) : False := by
+  obtain ⟨k, hk⟩ := h
+  cases k with
+  | zero => exact whnf_zero_none hk
+  | succ k =>
+      rw [whnf_pi_self badEnv k A B] at hk
+      injection hk with he
+      cases he
+
+theorem not_isSort_bvar (i : Nat) (l : Level) (h : IsSort (.bvar i) l) : False := by
+  obtain ⟨k, hk⟩ := h
+  cases k with
+  | zero => exact whnf_zero_none hk
+  | succ k =>
+      rw [whnf_bvar_self badEnv k i] at hk
+      injection hk with he
+      cases he
+
+theorem not_isSort_lit (t : Nat) (l : Level) (h : IsSort (.lit t) l) : False := by
+  obtain ⟨k, hk⟩ := h
+  cases k with
+  | zero => exact whnf_zero_none hk
+  | succ k =>
+      rw [whnf_lit_self badEnv k t] at hk
+      injection hk with he
+      cases he
+
+theorem not_isSort_const (r : Nat) (ls : List Level) (l : Level)
+    (h : IsSort (.const r ls) l) : False := by
+  obtain ⟨k, hk⟩ := h
+  exact whnf_badEnv_const_not_sort r ls l k hk
+
+/- The level `whnfFuel` returns for a sort is that sort's level. -/
+theorem isSort_sort_eq (l l' : Level) (h : IsSort (.sort l) l') : eqN l l' := by
+  obtain ⟨k, hk⟩ := h
+  cases k with
+  | zero => exact False.elim (whnf_zero_none hk)
+  | succ k =>
+      rw [whnf_sort_self badEnv k l] at hk
+      injection hk with he
+      cases he
+      exact eqN_refl l
+
+/- One β step moves a sort witness onto the instantiated body. -/
+theorem isSort_beta (A body arg : Expr Nat) (l : Level)
+    (h : IsSort (.app (.lam A body) arg) l) : IsSort (instantiate0 arg body) l := by
+  obtain ⟨k, hk⟩ := h
+  cases k with
+  | zero => exact False.elim (whnf_zero_none hk)
+  | succ k =>
+      rw [whnf_beta badEnv k A body arg] at hk
+      exact ⟨k, hk⟩
+
+theorem isSort_of_beta (A body arg : Expr Nat) (l : Level)
+    (h : IsSort (instantiate0 arg body) l) : IsSort (.app (.lam A body) arg) l := by
+  obtain ⟨k, hk⟩ := h
+  refine ⟨k + 1, ?_⟩
+  rw [whnf_beta badEnv k A body arg]
+  exact hk
+
+/- One ζ step moves a sort witness onto the instantiated body. -/
+theorem isSort_zeta (A v body : Expr Nat) (l : Level)
+    (h : IsSort (.letE A v body) l) : IsSort (instantiate0 v body) l := by
+  obtain ⟨k, hk⟩ := h
+  cases k with
+  | zero => exact False.elim (whnf_zero_none hk)
+  | succ k =>
+      rw [whnf_zeta badEnv k A v body] at hk
+      exact ⟨k, hk⟩
+
+theorem isSort_of_zeta (A v body : Expr Nat) (l : Level)
+    (h : IsSort (instantiate0 v body) l) : IsSort (.letE A v body) l := by
+  obtain ⟨k, hk⟩ := h
+  refine ⟨k + 1, ?_⟩
+  rw [whnf_zeta badEnv k A v body]
+  exact hk
+
+/- Substituting under a lifted term does nothing: the lift pushed every
+   index past `j`. No `omega`. Not `¬ TyConvT`. -/
+theorem instantiate_lift_cancel (j : Nat) (s e : Expr Nat) :
+    instantiate j s (lift j 1 e) = e := by
+  induction e generalizing j s with
+  | bvar i =>
+      by_cases hle : j ≤ i
+      · have hlift : lift j 1 (Expr.bvar (R := Nat) i) =
+            (Expr.bvar (R := Nat) (i + 1)) := by
+          simp only [lift, if_pos hle]
+        rw [hlift]
+        have hne : i + 1 ≠ j := by
+          intro heq
+          exact Nat.not_succ_le_self i (Nat.le_trans (Nat.le_of_eq heq) hle)
+        have hlt : j < i + 1 := Nat.lt_succ_of_le hle
+        have hinst : instantiate j s (Expr.bvar (R := Nat) (i + 1)) =
+            (Expr.bvar (R := Nat) ((i + 1) - 1)) := by
+          simp only [instantiate, if_neg hne, if_pos hlt]
+        rw [hinst, Nat.add_sub_cancel i 1]
+      · have hlift : lift j 1 (Expr.bvar (R := Nat) i) =
+            (Expr.bvar (R := Nat) i) := by
+          simp only [lift, if_neg hle]
+        rw [hlift]
+        have hne : i ≠ j := by
+          intro heq
+          exact hle (Nat.le_of_eq heq.symm)
+        have hnlt : ¬ j < i := fun hlt => hle (Nat.le_of_lt hlt)
+        simp only [instantiate, if_neg hne, if_neg hnlt]
+  | sort _ => rfl
+  | const _ _ => rfl
+  | lit _ => rfl
+  | app f x ihf ihx =>
+      simp only [lift, instantiate]
+      rw [ihf j s, ihx j s]
+  | lam a b iha ihb =>
+      simp only [lift, instantiate]
+      rw [iha j s, ihb (j + 1) (lift 0 1 s)]
+  | pi a b iha ihb =>
+      simp only [lift, instantiate]
+      rw [iha j s, ihb (j + 1) (lift 0 1 s)]
+  | letE a v b iha ihv ihb =>
+      simp only [lift, instantiate]
+      rw [iha j s, ihv j s, ihb (j + 1) (lift 0 1 s)]
+
+/- One `whnfFuel` step on `badEnv`. `none` means the head is already
+   weak-head (a sort, a rigid constant, a lambda with no argument, …).
+   Not `¬ TyConvT`. -/
+def spineStep (e : Expr Nat) : Option (Expr Nat) :=
+  match appsSpine e with
+  | (.lam _ b, arg :: args) => some (foldApps (instantiate0 arg b) args)
+  | (.letE _ v b, args) => some (foldApps (instantiate0 v b) args)
+  | (.const r ls, args) =>
+      match transparentBody badEnv r ls with
+      | some body => some (foldApps body args)
+      | none => none
+  | _ => none
+
+theorem whnf_succ (k : Nat) (e : Expr Nat) :
+    whnfFuel badEnv (k + 1) e =
+      (spineStep e).elim (some e) (whnfFuel badEnv k) := by
+  match h : appsSpine e with
+  | (.lam _ b, arg :: args) =>
+      simp only [whnfFuel, spineStep, h, Option.elim]
+  | (.lam _ b, []) =>
+      simp only [whnfFuel, spineStep, h, Option.elim]
+  | (.letE _ v b, args) =>
+      simp only [whnfFuel, spineStep, h, Option.elim]
+  | (.const r ls, args) =>
+      simp only [whnfFuel, spineStep, h, Option.elim]
+      split <;> rfl
+  | (.bvar _, _) =>
+      simp only [whnfFuel, spineStep, h, Option.elim]
+  | (.sort _, _) =>
+      simp only [whnfFuel, spineStep, h, Option.elim]
+  | (.pi _ _, _) =>
+      simp only [whnfFuel, spineStep, h, Option.elim]
+  | (.lit _, _) =>
+      simp only [whnfFuel, spineStep, h, Option.elim]
+  | (.app _ _, _) =>
+      simp only [whnfFuel, spineStep, h, Option.elim]
+
+/- A sort witness is either the sort itself or one step closer to it.
+   Not `¬ TyConvT`, and not AdeqConstDelta, AdeqApp, or AdeqLetE. -/
+theorem isSort_progress (e : Expr Nat) (l : Level) (h : IsSort e l) :
+    e = .sort l ∨ ∃ e', spineStep e = some e' ∧ IsSort e' l := by
+  obtain ⟨k, hk⟩ := h
+  cases k with
+  | zero => exact False.elim (whnf_zero_none hk)
+  | succ k =>
+      rw [whnf_succ k e] at hk
+      cases hs : spineStep e with
+      | none =>
+          simp only [hs, Option.elim] at hk
+          injection hk with he
+          exact Or.inl he
+      | some e' =>
+          simp only [hs, Option.elim] at hk
+          exact Or.inr ⟨e', rfl, ⟨k, hk⟩⟩
+
+/- A conversion whose left end is already a syntactic sort. `refl` and
+   `sorts` keep a sort on the right. `symm`, `trans`, and `irr` do not:
+   symmetry of β sends a sort to an application. Not level preservation,
+   not `¬ TyConvT badEnv 0 [] cN cTrue`, and not AdeqConstDelta, AdeqApp,
+   or AdeqLetE. -/
+inductive ConvFromSort (l : Level) : Expr Nat → Type where
+  | refl : ConvFromSort l (.sort l)
+  | symm (a T : Expr Nat) (h : ConvT badEnv 0 [] a (.sort l) T) :
+      ConvFromSort l a
+  | trans (m b T : Expr Nat)
+      (h1 : ConvT badEnv 0 [] (.sort l) m T)
+      (h2 : ConvT badEnv 0 [] m b T) : ConvFromSort l b
+  | sorts (l₂ : Level) (h : eqN l l₂) : ConvFromSort l (.sort l₂)
+  | irr (b P : Expr Nat)
+      (hP : HasTyT badEnv 0 [] P (.sort .zero))
+      (hp : HasTyT badEnv 0 [] (.sort l) P)
+      (hq : HasTyT badEnv 0 [] b P) : ConvFromSort l b
+
+def convFromSort {b T : Expr Nat} {l : Level}
+    (h : ConvT badEnv 0 [] (.sort l) b T) : ConvFromSort l b :=
+  match h with
+  | .refl _ _ _ _ => ConvFromSort.refl
+  | .symm _ a _ _ hinner => ConvFromSort.symm a T hinner
+  | .trans _ _ m _ _ h1 h2 => ConvFromSort.trans m b T h1 h2
+  | .tyConv _ _ _ _ _ _ hsub _ => convFromSort hsub
+  | .iota _ _ _ _ hdi _ _ => False.elim (derivedIota_badEnv_false hdi)
+  | .sorts _ _ l₂ heq => ConvFromSort.sorts l₂ heq
+  | .irr _ P _ _ hP hp hq => ConvFromSort.irr b P hP hp hq
+termination_by sizeOf h
+
+/- `Sort l₁ = Sort l₂` is `eqN`. Injection on the sort constructor,
+   then reflexivity. Not `¬ TyConvT`. -/
+theorem eqN_of_sort_eq {l₁ l₂ : Level}
+    (h : (.sort l₁ : Expr Nat) = .sort l₂) : eqN l₁ l₂ :=
+  match h with
+  | rfl => eqN_refl l₁
+
+/- What remains of a conversion between two syntactic sorts after
+   `refl`, `sorts`, symmetry, and `tyConv` are consumed. `trans` keeps
+   a middle that is not a sort. `irr` keeps the common proposition.
+   `swap` is symmetry of a stuck derivation. The end equalities stay
+   hypotheses: rewriting them under the subderivation is what the
+   matcher does not do. Not `¬ TyConvT`, and not AdeqConstDelta,
+   AdeqApp, or AdeqLetE. -/
+inductive ConvSortStuck : Level → Level → Type where
+  | trans {l₁ l₂ : Level} {a b : Expr Nat} (m T : Expr Nat)
+      (h1 : ConvT badEnv 0 [] a m T) (h2 : ConvT badEnv 0 [] m b T)
+      (ha : a = .sort l₁) (hb : b = .sort l₂) : ConvSortStuck l₁ l₂
+  | irr {l₁ l₂ : Level} {p q : Expr Nat} (P : Expr Nat)
+      (hP : HasTyT badEnv 0 [] P (.sort .zero))
+      (hp : HasTyT badEnv 0 [] p P) (hq : HasTyT badEnv 0 [] q P)
+      (hp_eq : p = .sort l₁) (hq_eq : q = .sort l₂) : ConvSortStuck l₁ l₂
+  | swap {l₁ l₂ : Level} (s : ConvSortStuck l₂ l₁) : ConvSortStuck l₁ l₂
+  | after {l₁ l₂ : Level} (l' : Level) (heq : eqN l₁ l')
+      (s : ConvSortStuck l' l₂) : ConvSortStuck l₁ l₂
+  | before {l₁ l₂ : Level} (l' : Level) (heq : eqN l' l₂)
+      (s : ConvSortStuck l₁ l') : ConvSortStuck l₁ l₂
+
+/- The left half of a `ConvT` from a sort to an unknown middle.
+   `refl` and `sorts` make the middle a sort. `other` does not refine
+   it, so the right half still starts at that middle. Not `¬ TyConvT`. -/
+inductive ConvLeft (l₁ : Level) : Expr Nat → Type where
+  | refl : ConvLeft l₁ (.sort l₁)
+  | sorts (l' : Level) (heq : eqN l₁ l') : ConvLeft l₁ (.sort l')
+  | other (mid : Expr Nat) : ConvLeft l₁ mid
+
+/- A nested `trans` whose left half is `refl` or `sorts` is consumed.
+   `symm` and `irr` do not make the right end a sort. Not `¬ TyConvT`. -/
+def convLeftAt {l₁ : Level} {mid T : Expr Nat}
+    (h1 : ConvT badEnv 0 [] (.sort l₁) mid T) : ConvLeft l₁ mid :=
+  match h1 with
+  | .refl _ _ _ _ => ConvLeft.refl
+  | .symm _ a _ _ _ => ConvLeft.other a
+  | .trans _ _ m _ _ hA hB =>
+      match convLeftAt hA with
+      | .refl => convLeftAt hB
+      | .sorts l' heq =>
+          match convLeftAt hB with
+          | .refl => ConvLeft.sorts l' heq
+          | .sorts l'' heq2 => ConvLeft.sorts l'' (eqN_trans heq heq2)
+          | .other _ => ConvLeft.other mid
+      | .other _ => ConvLeft.other mid
+  | .tyConv _ _ _ _ _ _ hsub _ => convLeftAt hsub
+  | .iota _ _ _ _ hdi _ _ => False.elim (derivedIota_badEnv_false hdi)
+  | .sorts _ _ l' heq => ConvLeft.sorts l' heq
+  | .irr _ _ _ b _ _ _ => ConvLeft.other b
+termination_by sizeOf h1
+
+def convLeft {l₁ : Level} {a mid T : Expr Nat}
+    (h1 : ConvT badEnv 0 [] a mid T) (ha : a = .sort l₁) : ConvLeft l₁ mid :=
+  convLeftAt (Eq.ndrec (motive := fun X => ConvT badEnv 0 [] X mid T) h1 ha)
+
+/- What remains of a type conversion between two syntactic sorts.
+   `step` is one stuck `ConvT`. `trans` is a split whose left half is
+   not a reflexive or `sorts` prefix. `after` carries `eqN` across a
+   `sorts` step whose continuation is stuck. Not `¬ TyConvT`. -/
+inductive TySortStuck : Level → Level → Type where
+  | step {l₁ l₂ : Level} (s : ConvSortStuck l₁ l₂) : TySortStuck l₁ l₂
+  | trans {l₁ l₂ : Level} {mid : Expr Nat}
+      (h1 : TyConvT badEnv 0 [] (.sort l₁) mid)
+      (h2 : TyConvT badEnv 0 [] mid (.sort l₂)) : TySortStuck l₁ l₂
+  | after {l₁ l₂ : Level} (l' : Level) (heq : eqN l₁ l')
+      (s : TySortStuck l' l₂) : TySortStuck l₁ l₂
+
+/- The left half of a `TyConvT` between a sort and an unknown middle.
+   `refl` and `sorts` make the middle a sort. `other` does not refine
+   it, so the two halves still share that middle. Not `¬ TyConvT`. -/
+inductive TyLeft (l₁ : Level) : Expr Nat → Type where
+  | refl : TyLeft l₁ (.sort l₁)
+  | sorts (l' : Level) (heq : eqN l₁ l') : TyLeft l₁ (.sort l')
+  | other (mid : Expr Nat) : TyLeft l₁ mid
+
+/- A nested `trans` whose left half is `refl` or `sorts` is consumed.
+   The `of` arm uses `convLeftAt`, so a sort prefix under `ConvT.trans`
+   is consumed there too. Not `¬ TyConvT`. -/
+def tyLeft {l₁ : Level} {mid : Expr Nat}
+    (h1 : TyConvT badEnv 0 [] (.sort l₁) mid) : TyLeft l₁ mid :=
+  match h1 with
+  | .refl _ _ => TyLeft.refl
+  | .of _ _ _ _ hc =>
+      match convLeftAt hc with
+      | .refl => TyLeft.refl
+      | .sorts l' heq => TyLeft.sorts l' heq
+      | .other a => TyLeft.other a
+  | .trans _ _ m _ hA hB =>
+      match tyLeft hA with
+      | .refl => tyLeft hB
+      | .sorts l' heq =>
+          match tyLeft hB with
+          | .refl => TyLeft.sorts l' heq
+          | .sorts l'' heq2 => TyLeft.sorts l'' (eqN_trans heq heq2)
+          | .other _ => TyLeft.other mid
+      | .other _ => TyLeft.other mid
+termination_by sizeOf h1
+
+/- `succ` on levels is injective for `eqN`. The evaluator adds one, and
+   `Nat.succ` is injective. Not `¬ TyConvT`, and not AdeqConstDelta,
+   AdeqApp, or AdeqLetE. -/
+theorem eqN_succ_inj {l₁ l₂ : Level} (h : eqN (.succ l₁) (.succ l₂)) : eqN l₁ l₂ := by
+  intro ρ
+  have hρ : Rsx.eval ρ (.succ l₁) = Rsx.eval ρ (.succ l₂) := h ρ
+  simp only [Rsx.eval] at hρ
+  cases h₁ : Rsx.eval ρ l₁ with
+  | none =>
+      cases h₂ : Rsx.eval ρ l₂ with
+      | none => rfl
+      | some n =>
+          rw [h₁, h₂] at hρ
+          simp only [Option.map] at hρ
+          cases hρ
+  | some n =>
+      cases h₂ : Rsx.eval ρ l₂ with
+      | none =>
+          rw [h₁, h₂] at hρ
+          simp only [Option.map] at hρ
+          cases hρ
+      | some m =>
+          rw [h₁, h₂] at hρ
+          simp only [Option.map] at hρ
+          injection hρ with hnm
+          injection hnm with hn
+          subst hn
+          rfl
+
+/- `instantiate index arg body` is a sort only when the body is that sort,
+   or the body is the substituted variable and the argument is that sort.
+   An application, lambda, product, let, literal, or constant stays that
+   constructor. Not `¬ TyConvT`. -/
+theorem instantiate_eq_sort (index : Nat) (arg body : Expr Nat) (l : Level)
+    (h : instantiate index arg body = .sort l) :
+    body = .sort l ∨ (body = .bvar index ∧ arg = .sort l) := by
+  cases body with
+  | sort l' =>
+      simp only [instantiate] at h
+      cases h
+      exact Or.inl rfl
+  | bvar i =>
+      simp only [instantiate] at h
+      by_cases heq : i = index
+      · simp only [heq, if_pos rfl] at h
+        exact Or.inr ⟨by subst heq; rfl, h⟩
+      · simp only [if_neg heq] at h
+        by_cases hlt : index < i
+        · simp only [if_pos hlt] at h
+          cases h
+        · simp only [if_neg hlt] at h
+          cases h
+  | const _ _ =>
+      simp only [instantiate] at h
+      cases h
+  | app _ _ =>
+      simp only [instantiate] at h
+      cases h
+  | lam _ _ =>
+      simp only [instantiate] at h
+      cases h
+  | pi _ _ =>
+      simp only [instantiate] at h
+      cases h
+  | letE _ _ _ =>
+      simp only [instantiate] at h
+      cases h
+  | lit _ =>
+      simp only [instantiate] at h
+      cases h
+
+theorem instantiate0_eq_sort (arg body : Expr Nat) (l : Level)
+    (h : instantiate0 arg body = .sort l) :
+    body = .sort l ∨ (body = .bvar 0 ∧ arg = .sort l) :=
+  instantiate_eq_sort 0 arg body l h
+
+/- A `badEnv` transparent body, after level substitution, is never a sort.
+   The only transparent members are 11, 12, and 15, and each body is an
+   application, a lambda, or `zero`. Not `¬ TyConvT`. -/
+theorem transparentBody_badEnv_ne_sort (r : Nat) (ls : List Level) (l : Level) :
+    transparentBody badEnv r ls ≠ some (.sort l) := by
+  intro h
+  match r with
+  | 0 =>
+      rw [badEnv_tb_none_0] at h
+      cases h
+  | 1 =>
+      rw [badEnv_tb_none_1] at h
+      cases h
+  | 2 =>
+      rw [badEnv_tb_none_2] at h
+      cases h
+  | 3 =>
+      rw [badEnv_tb_none_3] at h
+      cases h
+  | 4 =>
+      rw [badEnv_tb_none_4] at h
+      cases h
+  | 5 =>
+      rw [badEnv_tb_none_5] at h
+      cases h
+  | 6 =>
+      rw [badEnv_tb_none_6] at h
+      cases h
+  | 7 =>
+      rw [badEnv_tb_none_7] at h
+      cases h
+  | 8 =>
+      rw [badEnv_tb_none_8] at h
+      cases h
+  | 9 =>
+      rw [badEnv_tb_none_9] at h
+      cases h
+  | 10 =>
+      rw [badEnv_tb_none_10] at h
+      cases h
+  | 11 =>
+      rw [badEnv_tb_11] at h
+      injection h with he
+      cases he
+  | 12 =>
+      rw [badEnv_tb_12] at h
+      injection h with he
+      cases he
+  | 13 =>
+      rw [badEnv_tb_none_13] at h
+      cases h
+  | 14 =>
+      rw [badEnv_tb_none_14] at h
+      cases h
+  | 15 =>
+      rw [badEnv_tb_15] at h
+      injection h with he
+      cases he
+  | n + 16 =>
+      rw [badEnv_tb_none_tail n] at h
+      cases h
+
+theorem badEnv_delta_rhs_ne_sort (r : Nat) (ls : List Level) (m : CheckedMember)
+    (b : Expr Nat) (l : Level)
+    (hres : badEnv.members r = some m) (hbody : m.body = some b)
+    (htr : transparent m.mclass = true)
+    (h : instantiateLevels ls b = .sort l) : False := by
+  apply transparentBody_badEnv_ne_sort r ls l
+  unfold transparentBody
+  rw [hres]
+  dsimp
+  rw [htr, hbody]
+  dsimp
+  change some (instantiateLevels ls b) = some (.sort l)
+  rw [h]
+
+/- The empty context stores no let value, so `zetaLocal` has no witness. -/
+theorem lookup_nil_no_value (i : Nat) {v : Expr Nat}
+    (h : lookupValue ([] : LCtx) i = some v) : False := by
+  rw [lookupValue_nil] at h
+  cases h
+
+/- A literal expands to `succ^n zero`, never a sort. -/
+theorem lit_expand_ne_sort (t : Nat) (exp : Expr Nat) (l : Level)
+    (h : LiteralExpansion t exp) (hs : exp = .sort l) : False := by
+  cases h
+  exact natExpand_ne_sort t l hs
+
+/- A conversion whose right end is a syntactic sort. The equality is a
+   hypothesis, so `beta` and `zeta` stay in the match: their contractum
+   is a sort only when `instantiate0_eq_sort` says so, and that `Or` is
+   not eliminated here. Delta, literal expansion, and `zetaLocal` in the
+   empty context are impossible. A rigid non-sort right head contradicts
+   the equality. Not `¬ TyConvT`, and not AdeqConstDelta, AdeqApp, or
+   AdeqLetE. -/
+inductive ConvToSort (l : Level) : Expr Nat → Type where
+  | refl : ConvToSort l (.sort l)
+  | symm (a b T : Expr Nat) (h : ConvT badEnv 0 [] a b T) (ha : a = .sort l) :
+      ConvToSort l b
+  | trans (m c a T : Expr Nat) (h1 : ConvT badEnv 0 [] a m T)
+      (h2 : ConvT badEnv 0 [] m c T) (hc : c = .sort l) : ConvToSort l a
+  | sorts (l₁ : Level) (h : eqN l₁ l) : ConvToSort l (.sort l₁)
+  | beta (A body arg : Expr Nat) (hr : instantiate0 arg body = .sort l) :
+      ConvToSort l (.app (.lam A body) arg)
+  | zeta (A value body : Expr Nat) (hr : instantiate0 value body = .sort l) :
+      ConvToSort l (.letE A value body)
+  | eta (f A B : Expr Nat) (h : HasTyT badEnv 0 [] f (.pi A B)) (hf : f = .sort l) :
+      ConvToSort l (.lam A (.app (lift 0 1 f) (.bvar 0)))
+  | irr (p q P : Expr Nat) (hP : HasTyT badEnv 0 [] P (.sort .zero))
+      (hp : HasTyT badEnv 0 [] p P) (hq : HasTyT badEnv 0 [] q P)
+      (hq_eq : q = .sort l) : ConvToSort l p
+
+def convToSort {a b T : Expr Nat} {l : Level}
+    (h : ConvT badEnv 0 [] a b T) (hs : b = .sort l) : ConvToSort l a :=
+  match h with
+  | .refl _ _ _ _ =>
+      Eq.ndrec (motive := fun X => ConvToSort l X)
+        (ConvToSort.refl (l := l)) (Eq.symm hs)
+  | .symm _ x y _ hinner => ConvToSort.symm x y T hinner hs
+  | .trans _ x m c _ h1 h2 =>
+      let other := ConvToSort.trans m c x T h1 h2 hs
+      match convToSort h2 hs with
+      | .refl => convToSort h1 rfl
+      | _ => other
+  | .tyConv _ _ _ _ _ _ hsub _ => convToSort hsub hs
+  | .beta _ A body arg _ _ _ _ _ => ConvToSort.beta A body arg hs
+  | .zeta _ A value body _ _ _ _ _ => ConvToSort.zeta A value body hs
+  | .zetaLocal _ i _ _ hval _ _ => False.elim (lookup_nil_no_value i hval)
+  | .delta _ r ls m body hres hbody htr _ _ _ =>
+      False.elim (badEnv_delta_rhs_ne_sort r ls m body l hres hbody htr hs)
+  | .iota _ _ _ _ hdi _ _ => False.elim (derivedIota_badEnv_false hdi)
+  | .lit _ t exp _ hexp _ => False.elim (lit_expand_ne_sort t exp l hexp hs)
+  | .app _ _ _ _ _ _ _ _ _ => nomatch hs
+  | .lam _ _ _ _ _ _ _ _ _ => nomatch hs
+  | .pi _ _ _ _ _ _ _ _ _ => nomatch hs
+  | .letE _ _ _ _ _ _ _ _ _ _ _ _ => nomatch hs
+  | .sorts _ l₁ _ heq =>
+      ConvToSort.sorts l₁ (eqN_trans heq (eqN_of_sort_eq hs))
+  | .consts _ _ _ _ _ _ _ _ _ _ => nomatch hs
+  | .eta _ f A B h => ConvToSort.eta f A B h hs
+  | .irr _ P p q hP hp hq => ConvToSort.irr p q P hP hp hq hs
+termination_by sizeOf h
+
+/- What the right end's inversion says about the left end.
+   `refl` and `sorts` make that end a sort. `other` does not.
+   Not `¬ TyConvT`. -/
+inductive ConvRight (l₂ : Level) : Expr Nat → Type where
+  | refl : ConvRight l₂ (.sort l₂)
+  | sorts (l' : Level) (heq : eqN l' l₂) : ConvRight l₂ (.sort l')
+  | other (mid : Expr Nat) : ConvRight l₂ mid
+
+/- Read a top-level `symm` with `convLeft`. Beta, zeta, eta, and irr
+   stay `other`: those left heads are an application, a let, a lambda,
+   or an unexamined proof. Not `¬ TyConvT`. -/
+def convRightOf {l₂ : Level} {m : Expr Nat}
+    (v : ConvToSort l₂ m) : ConvRight l₂ m :=
+  match v with
+  | .refl => ConvRight.refl
+  | .sorts l' heq => ConvRight.sorts l' heq
+  | .symm _ b _ hinner hx =>
+      match convLeft hinner hx with
+      | .refl => ConvRight.refl
+      | .sorts l' heq => ConvRight.sorts l' (eqN_symm heq)
+      | .other _ => ConvRight.other b
+  | .trans _ _ a _ _ _ _ => ConvRight.other a
+  | .beta A body arg _ => ConvRight.other (.app (.lam A body) arg)
+  | .zeta A value body _ => ConvRight.other (.letE A value body)
+  | .eta f A _ _ _ => ConvRight.other (.lam A (.app (lift 0 1 f) (.bvar 0)))
+  | .irr p _ _ _ _ _ _ => ConvRight.other p
+
+def convRight {m b T : Expr Nat} {l₂ : Level}
+    (h2 : ConvT badEnv 0 [] m b T) (hb : b = .sort l₂) : ConvRight l₂ m :=
+  convRightOf (convToSort h2 hb)
+
+/- Both ends are sorts by separate equalities. A `trans` whose left
+   half is `refl` or `sorts` is consumed. If the left half is `other`,
+   the right half is read by `convRight`: a sort middle recurses on
+   the left piece. Beta, zeta, eta, and irr on the right stay
+   `ConvSortStuck.trans`. Not `¬ TyConvT`, and not AdeqConstDelta,
+   AdeqApp, or AdeqLetE. -/
+def convBothSort {a b T : Expr Nat} {l₁ l₂ : Level}
+    (h : ConvT badEnv 0 [] a b T) (ha : a = .sort l₁) (hb : b = .sort l₂) :
+    PSum (eqN l₁ l₂) (ConvSortStuck l₁ l₂) :=
+  match h with
+  | .refl _ _ _ _ =>
+      PSum.inl (eqN_of_sort_eq (Eq.trans (Eq.symm ha) hb))
+  | .symm _ _ _ _ hinner =>
+      match convBothSort hinner hb ha with
+      | PSum.inl heq => PSum.inl (eqN_symm heq)
+      | PSum.inr s => PSum.inr (ConvSortStuck.swap s)
+  | .trans _ _ m _ _ h1 h2 =>
+      match convLeft h1 ha with
+      | .refl => convBothSort h2 rfl hb
+      | .sorts l' heq =>
+          match convBothSort h2 rfl hb with
+          | PSum.inl heq2 => PSum.inl (eqN_trans heq heq2)
+          | PSum.inr s => PSum.inr (ConvSortStuck.after l' heq s)
+      | .other _ =>
+          let stuck := PSum.inr (ConvSortStuck.trans m T h1 h2 ha hb)
+          match convRight h2 hb with
+          | .refl => convBothSort h1 ha rfl
+          | .sorts l' heq =>
+              match convBothSort h1 ha rfl with
+              | PSum.inl heq1 => PSum.inl (eqN_trans heq1 heq)
+              | PSum.inr s => PSum.inr (ConvSortStuck.before l' heq s)
+          | .other _ => stuck
+  | .tyConv _ _ _ _ _ _ hsub _ => convBothSort hsub ha hb
+  | .beta _ _ _ _ _ _ _ _ _ => nomatch ha
+  | .zeta _ _ _ _ _ _ _ _ _ => nomatch ha
+  | .zetaLocal _ _ _ _ _ _ _ => nomatch ha
+  | .delta _ _ _ _ _ _ _ _ _ _ _ => nomatch ha
+  | .iota _ _ _ _ hdi _ _ => False.elim (derivedIota_badEnv_false hdi)
+  | .lit _ _ _ _ _ _ => nomatch ha
+  | .app _ _ _ _ _ _ _ _ _ => nomatch ha
+  | .lam _ _ _ _ _ _ _ _ _ => nomatch ha
+  | .pi _ _ _ _ _ _ _ _ _ => nomatch ha
+  | .letE _ _ _ _ _ _ _ _ _ _ _ _ => nomatch ha
+  | .sorts _ _ _ heq =>
+      PSum.inl (eqN_trans (eqN_symm (eqN_of_sort_eq ha))
+        (eqN_trans heq (eqN_of_sort_eq hb)))
+  | .consts _ _ _ _ _ _ _ _ _ _ => nomatch ha
+  | .eta _ _ _ _ _ => nomatch ha
+  | .irr _ P _ _ hP hp hq =>
+      PSum.inr (ConvSortStuck.irr P hP hp hq ha hb)
+termination_by sizeOf h
+
+/- The right half of a sort-to-sort `trans`, packaged as one `ConvT`.
+   Not `¬ TyConvT`. -/
+def convTransRight {l₁ l₂ : Level} {a b m T : Expr Nat}
+    (h1 : ConvT badEnv 0 [] a m T) (h2 : ConvT badEnv 0 [] m b T)
+    (ha : a = .sort l₁) (hb : b = .sort l₂) :
+    PSum (eqN l₁ l₂) (ConvSortStuck l₁ l₂) :=
+  convBothSort (ConvT.trans [] a m b T h1 h2) ha hb
+
+/- `TyConvT` between two sorts. A reflexive left half is dropped. A
+   `sorts` left half composes `eqN`. Anything else is `TySortStuck`.
+   Not `¬ TyConvT badEnv 0 [] cN cTrue`. -/
+def tyBothSort {l₁ l₂ : Level}
+    (h : TyConvT badEnv 0 [] (.sort l₁) (.sort l₂)) :
+    PSum (eqN l₁ l₂) (TySortStuck l₁ l₂) :=
+  match h with
+  | .refl _ _ => PSum.inl (eqN_refl l₁)
+  | .of _ _ _ _ hc =>
+      match convBothSort hc rfl rfl with
+      | PSum.inl heq => PSum.inl heq
+      | PSum.inr s => PSum.inr (TySortStuck.step s)
+  | .trans _ _ _ _ h1 h2 =>
+      match tyLeft h1 with
+      | .refl => tyBothSort h2
+      | .sorts l' heq =>
+          match tyBothSort h2 with
+          | PSum.inl heq2 => PSum.inl (eqN_trans heq heq2)
+          | PSum.inr s => PSum.inr (TySortStuck.after l' heq s)
+      | .other _ => PSum.inr (TySortStuck.trans h1 h2)
+termination_by sizeOf h
+
+/- `Sort 1` and `Sort 0` are not `eqN`. A derivation of that `TyConvT`
+   is therefore a stuck `trans` or `irr`, not a level equality. Not
+   `¬ TyConvT`, and not AdeqConstDelta, AdeqApp, or AdeqLetE. -/
+def sortGap_stuck
+    (h : TyConvT badEnv 0 [] (.sort (.succ .zero)) (.sort .zero)) :
+    TySortStuck (.succ .zero) .zero :=
+  match tyBothSort h with
+  | PSum.inl heq => False.elim (eqN_succ_ne_zero .zero heq)
+  | PSum.inr s => s
+
+/- Proof irrelevance of two syntactic sorts. Their principal universes
+   are `Sort (succ l₁)` and `Sort (succ l₂)`. Those are `eqN`, and then
+   `succ` is injective, or the type conversion between them is stuck.
+   Not `¬ TyConvT`. -/
+inductive ConvIrrStuck : Level → Level → Type where
+  | principal {l₁ l₂ : Level} (l₁' l₂' : Level)
+      (heq1 : eqN l₁' (.succ l₁)) (heq2 : eqN l₂' (.succ l₂))
+      (s : TySortStuck l₁' l₂') : ConvIrrStuck l₁ l₂
+
+def convIrrPrincipal {l₁ l₂ : Level} {p q P : Expr Nat}
+    (hp : HasTyT badEnv 0 [] p P) (hq : HasTyT badEnv 0 [] q P)
+    (hp_eq : p = .sort l₁) (hq_eq : q = .sort l₂) :
+    PSum (eqN l₁ l₂) (ConvIrrStuck l₁ l₂) :=
+  match hasTyT_sort_principal hp hp_eq with
+  | ⟨l₁', ⟨heq1, ht1⟩⟩ =>
+      match hasTyT_sort_principal hq hq_eq with
+      | ⟨l₂', ⟨heq2, ht2⟩⟩ =>
+          match tyBothSort (tyConvT_of_to_same ht1 ht2) with
+          | PSum.inl heq =>
+              PSum.inl (eqN_succ_inj
+                (eqN_trans (eqN_symm heq1) (eqN_trans heq heq2)))
+          | PSum.inr s =>
+              PSum.inr (ConvIrrStuck.principal l₁' l₂' heq1 heq2 s)
+
+/- `Sort 1` and `Sort 0` are not `eqN`, so proof irrelevance of those
+   two sorts is a stuck conversion of their principal universes.
+   Not `¬ TyConvT`. -/
+def convIrrSuccZero {p q P : Expr Nat}
+    (hp : HasTyT badEnv 0 [] p P) (hq : HasTyT badEnv 0 [] q P)
+    (hp_eq : p = .sort (.succ .zero)) (hq_eq : q = .sort .zero) :
+    ConvIrrStuck (.succ .zero) .zero :=
+  match convIrrPrincipal hp hq hp_eq hq_eq with
+  | PSum.inl heq => False.elim (eqN_succ_ne_zero .zero heq)
+  | PSum.inr s => s
 
 theorem cBadData : DataTy badEnv (instantiateLevels [] cTrue) :=
   ⟨4, [], [], ⟨.inductiveM, 0, .sort .zero, none⟩, rfl, rfl, rfl⟩
@@ -1526,6 +5076,311 @@ theorem convValue_witness_excluded : (inferT lvlEnv 0 [] wMkK).isSome = false :=
 #guard (obs lvlEnv wMkC).isSome && !(agrees (fun t e => Rsx.lower lvlEnv (t := t) e) lvlEnv tyW2 wMkC)
   && (inferT lvlEnv 0 [] wMkC).isSome && !(inferT lvlEnv 0 [] wMkK).isSome
 
+/-! ### Counterexample to `Rsx.adequacyStatement`: a discarded relevant loop
+
+`whnfFuel` reduces `app (λ_. lit 0) loop` without entering `loop`; `erase` unfolds the
+transparent `loop := loop` at every fuel and returns `none`. The value side is `.int 0`.
+Cited shape: call-by-name head reduction versus structural erasure (Letouzey, TYPES 2002,
+traverses every subterm; Lean's compiled code evaluates a relevant argument). -/
+
+def loopEnv : ResolvedEnv where
+  members := fun r =>
+    match r with
+    | 0 => some ⟨.inductiveM, 0, .sort (.succ .zero), none⟩
+    | 1 => some ⟨.constructorM, 0, .const 0 [], none⟩
+    | 3 => some ⟨.definitionM, 0, .const 0 [], some (.const 3 [])⟩
+    | _ => none
+
+def loopC : Expr Nat := .const 3 []
+def bomb : Expr Nat := .app (.lam (.const 0 []) (.lit 0)) loopC
+
+set_option maxHeartbeats 4000000 in
+theorem loop_irr : irrelevant loopEnv 0 [] loopC = false := by decide
+
+theorem loop_body : transparentBody loopEnv 3 [] = some loopC := rfl
+
+/-- `loop := loop` has no finite erasure: each fuel unfolds it once. -/
+theorem erase_loop_none : ∀ F, erase loopEnv 0 F [] loopC = none
+  | 0 => rfl
+  | F + 1 => by
+      simp only [erase, eraseWith, loopC, loop_irr, Bool.false_eq_true, if_false,
+        noGlobals, loop_body]
+      exact erase_loop_none F
+
+set_option maxHeartbeats 4000000 in
+theorem bomb_irr : irrelevant loopEnv 0 [] bomb = false := by decide
+
+theorem erase_bomb_none : ∀ F, erase loopEnv 0 F [] bomb = none
+  | 0 => rfl
+  | F + 1 => by
+      have hirr :
+          irrelevant loopEnv 0 [] (.app (.lam (.const 0 []) (.lit 0)) loopC) = false := by
+        simpa [bomb] using bomb_irr
+      have hloop :
+          eraseWith (irrelevant loopEnv 0) noGlobals loopEnv F [] loopC = none := by
+        simpa [erase] using erase_loop_none F
+      simp only [erase, eraseWith, bomb, hirr, Bool.false_eq_true, if_false]
+      rw [hloop]
+      -- the app match does not reduce while its first scrutinee is a free
+      -- `eraseWith` (Lean's joint matcher). `none` on the argument kills both arms.
+      cases eraseWith (irrelevant loopEnv 0) noGlobals loopEnv F []
+          (.lam (.const 0 []) (.lit 0)) <;> rfl
+
+theorem lowerF_bomb {S : SigTable} (F : Nat) (t : BootTy) :
+    lowerF loopEnv 0 F (S := S) t bomb = refuse := by
+  unfold lowerF pipeline
+  rw [erase_bomb_none F]
+
+theorem bomb_norm : norm loopEnv 3 bomb = some (.lit 0) := rfl
+theorem bomb_val : scmValOf loopEnv 1 (.lit 0) = some (.int 0) := rfl
+theorem bomb_rel : relevantSpine loopEnv 0 1 (.lit 0) = true := rfl
+set_option maxHeartbeats 4000000 in
+theorem bomb_root : irrelevant loopEnv 0 [] (.lit 0) = false := by decide
+set_option maxHeartbeats 4000000 in
+theorem bomb_fits : valFits 1 .i64 (.int 0) = true := by decide
+set_option maxHeartbeats 4000000 in
+theorem bomb_infer : inferT loopEnv 0 [] bomb = some (.const 0 []) := by decide
+set_option maxHeartbeats 4000000 in
+theorem bomb_vinfer : (inferT loopEnv 0 [] (.lit 0)).isSome = true := by decide
+theorem bomb_data : DataTy loopEnv (.const 0 []) :=
+  ⟨0, [], [], ⟨.inductiveM, 0, .sort (.succ .zero), none⟩, rfl, rfl, rfl⟩
+
+theorem loopBodiesTyped : BodiesTyped loopEnv 0 := by
+  intro r m b ls hm _ hb hlen hwf
+  match r, hm with
+  | 0, hm => cases hm; cases hb
+  | 1, hm => cases hm; cases hb
+  | 2, hm => exact Option.noConfusion hm
+  | 3, hm =>
+      cases hm
+      cases hb
+      cases ls with
+      | nil =>
+          exact ⟨.const [] 3 [] ⟨.definitionM, 0, .const 0 [], some (.const 3 [])⟩ rfl rfl hwf⟩
+      | cons _ _ => exact Nat.noConfusion hlen
+  | n + 4, hm => exact Option.noConfusion hm
+
+/- β of `λ_. c ·`, `c` a rigid constructor, applied to one literal.
+   The body mentions only the bound index, so `instantiate0` is that
+   application. Letouzey TYPES 2002 keeps a relevant λ; Reynolds 1972 §8
+   runs its body in the one-element environment. Not AdeqApp. -/
+theorem defunc_lam_ctor_bvar (c : Nat) (la : LExpr) :
+    defunc (.app (.lam (.app (.ctor c) (.bvar 0))) la) =
+      (let q := convWith capRen id [{ ncap := 0, body := .apply (.ctor c) (.var 0) }] la
+       (.apply (.clo 0 []) q.1, q.2)) := rfl
+
+theorem run_lit_any (code : List Code) (F k : Nat) (env : List DVal) :
+    run code (F + 1) env (.lit k) = some (.lit k) := by
+  unfold run
+  rfl
+
+theorem run_ctor_any (code : List Code) (F r : Nat) (env : List DVal) :
+    run code (F + 1) env (.ctor r) = some (.ctor r []) := by
+  unfold run
+  rfl
+
+theorem run_beta_ctor_body (code : List Code) (F c nlit : Nat) :
+    run code (F + 2) [.lit nlit] (.apply (.ctor c) (.var 0)) =
+      some (.ctor c [.lit nlit]) := by
+  rw [run_apply_eq code (F + 1) [.lit nlit] (.ctor c) (.var 0)]
+  rw [run_ctor_any code F c [.lit nlit], run_var0 code F [] (.lit nlit)]
+  rfl
+
+theorem run_beta_ctor_lit (F c nlit : Nat) :
+    run [{ ncap := 0, body := .apply (.ctor c) (.var 0) }] (F + 3) []
+      (.apply (.clo 0 []) (.lit nlit)) = some (.ctor c [.lit nlit]) := by
+  refine run_apply_clo_nil
+      [{ ncap := 0, body := .apply (.ctor c) (.var 0) }]
+      (F + 1) 0 [] (.lit nlit) (.apply (.ctor c) (.var 0))
+      (.lit nlit) (.ctor c [.lit nlit]) rfl ?_ ?_
+  · exact run_lit_any _ (F + 1) nlit []
+  · exact run_beta_ctor_body _ F c nlit
+
+theorem norm_beta_ctor_lit (E : ResolvedEnv) (k c nlit : Nat) (lsc : List Level)
+    (A : Expr Nat) (hnone : transparentBody E c lsc = none) :
+    norm E (k + 3) (.app (.lam A (.app (.const c lsc) (.bvar 0))) (.lit nlit)) =
+      some (.app (.const c lsc) (.lit nlit)) := by
+  have hsub : (instantiate0 (.lit nlit) (.app (.const c lsc) (.bvar 0)) : Expr Nat) =
+      .app (.const c lsc) (.lit nlit) := rfl
+  have hbeta : whnfFuel E (k + 2)
+      (.app (.lam A (.app (.const c lsc) (.bvar 0))) (.lit nlit)) =
+      whnfFuel E (k + 1) (instantiate0 (.lit nlit) (.app (.const c lsc) (.bvar 0))) := by
+    simp only [whnfFuel, appsSpine, foldApps, List.nil_append]
+  have hstuck : whnfFuel E (k + 1) (.app (.const c lsc) (.lit nlit)) =
+      some (.app (.const c lsc) (.lit nlit)) := by
+    simp only [whnfFuel, appsSpine, List.nil_append, hnone]
+  have hlit : norm E (k + 2) (.lit nlit) = some (.lit nlit) := by
+    have hwlit : whnfFuel E (k + 1) (.lit nlit) = some (.lit nlit) := by
+      simp only [whnfFuel, appsSpine]
+    unfold norm
+    rw [hwlit]
+  unfold norm
+  rw [hbeta, hsub, hstuck]
+  have hsp : appsSpine (.app (.const c lsc) (.lit nlit)) =
+      (.const c lsc, [.lit nlit]) := by
+    simp only [appsSpine, List.nil_append]
+  simp only [hsp]
+  have hm : [.lit nlit].mapM (norm E (k + 2)) = some [.lit nlit] := by
+    rw [List.mapM_cons, hlit, List.mapM_nil]
+    rfl
+  simp only [hm, foldApps]
+
+theorem norm_beta_ctor_lit_val (E : ResolvedEnv) (lf c nlit : Nat) (lsc : List Level)
+    (A : Expr Nat) {v : Expr Nat}
+    (hnone : transparentBody E c lsc = none)
+    (hn : norm E lf (.app (.lam A (.app (.const c lsc) (.bvar 0))) (.lit nlit)) = some v) :
+    v = .app (.const c lsc) (.lit nlit) := by
+  cases lf with
+  | zero => exact Option.noConfusion hn
+  | succ lf =>
+    cases lf with
+    | zero =>
+      unfold norm at hn
+      rw [whnfFuel_fuel0] at hn
+      exact Option.noConfusion hn
+    | succ lf =>
+      cases lf with
+      | zero =>
+        have hbeta : whnfFuel E 1
+            (.app (.lam A (.app (.const c lsc) (.bvar 0))) (.lit nlit)) =
+            whnfFuel E 0 (instantiate0 (.lit nlit) (.app (.const c lsc) (.bvar 0))) := by
+          simp only [whnfFuel, appsSpine, foldApps, List.nil_append]
+        unfold norm at hn
+        rw [hbeta, whnfFuel_fuel0] at hn
+        exact Option.noConfusion hn
+      | succ j =>
+        rw [norm_beta_ctor_lit E j c nlit lsc A hnone] at hn
+        exact (Option.some.inj hn).symm
+
+theorem good_beta_ctor_lit {S : SigTable} (progs : Programs S S)
+    (E : ResolvedEnv) (n c nlit : Nat) (lsc : List Level) (A : Expr Nat)
+    (hnone : transparentBody E c lsc = none)
+    (hirr : irrelevant E n []
+      (.app (.lam A (.app (.const c lsc) (.bvar 0))) (.lit nlit)) = false)
+    (hirrL : irrelevant E n [] (.lam A (.app (.const c lsc) (.bvar 0))) = false)
+    (hirrA : irrelevant E n (.assumption A :: [])
+      (.app (.const c lsc) (.bvar 0)) = false)
+    (hirrC : irrelevant E n (.assumption A :: []) (.const c lsc) = false)
+    (hirrB : irrelevant E n (.assumption A :: []) (.bvar 0) = false) :
+    Good progs E n (.app (.lam A (.app (.const c lsc) (.bvar 0))) (.lit nlit)) := by
+  refine good_of_exists progs E n
+      (.app (.lam A (.app (.const c lsc) (.bvar 0))) (.lit nlit)) ?_
+  intro lf fv T v t w _ _ _ hn hs _ _ hf _ _
+  have hv := norm_beta_ctor_lit_val E lf c nlit lsc A hnone hn
+  subst hv
+  cases fv with
+  | zero => exact Option.noConfusion hs
+  | succ m =>
+    cases m with
+    | zero =>
+      have hs0 : scmValOf E 1 (.app (.const c lsc) (.lit nlit)) = none := by
+        simp only [scmValOf, appsSpine, List.nil_append, List.mapM_cons, List.mapM_nil,
+          Option.bind, Option.pure_def]
+        split
+        · rename_i mm hm
+          by_cases hc : mm.mclass = .constructorM
+          · simp [hm, hc, scmValOf]
+          · simp [hm, hc]
+        · rename_i hm
+          simp [hm]
+      rw [hs0] at hs
+      exact Option.noConfusion hs
+    | succ q =>
+      have hlitv : scmValOf E (q + 1) (.lit nlit) = some (.int (Int.ofNat nlit)) := rfl
+      have hs' : (match E.members c with
+          | some mm =>
+              if mm.mclass = .constructorM then
+                some (.inj c (.list [.int (Int.ofNat nlit)]))
+              else none
+          | none => none) = some w := by
+        simpa [scmValOf, appsSpine, List.nil_append, List.mapM_cons, List.mapM_nil,
+          hlitv, Option.bind, Option.pure_def] using hs
+      cases hm : E.members c with
+      | none =>
+        rw [hm] at hs'
+        exact Option.noConfusion hs'
+      | some mm =>
+        rw [hm] at hs'
+        by_cases hcm : mm.mclass = .constructorM
+        · simp [hcm] at hs'
+          subst hs'
+          cases t with
+          | sum ts =>
+            have hf' : (match ts.get? c with
+                | some (.list τ) =>
+                    ([.int (Int.ofNat nlit)] : List Val).all (valFits (q + 1) τ)
+                | _ => false) = true := hf
+            split at hf'
+            · rename_i τ hg
+              cases τ with
+              | i64 =>
+                have hk : inI64Range (Int.ofNat nlit) = true := by
+                  simp only [valFits, List.all_cons, List.all_nil, Bool.and_true] at hf'
+                  exact hf'
+                have hctor : isCtor E c = true := by simp [isCtor, hm, hcm]
+                have hB : erase E n 1 (.assumption A :: []) (.bvar 0) = some (.bvar 0) := by
+                  simp only [erase, eraseWith, hirrB, Bool.false_eq_true, if_false]
+                have hC : erase E n 1 (.assumption A :: []) (.const c lsc) =
+                    some (.ctor c) := by
+                  simp only [erase, eraseWith, hirrC, Bool.false_eq_true, if_false,
+                    noGlobals, hnone, hctor, if_true]
+                have hBody : erase E n 2 (.assumption A :: [])
+                    (.app (.const c lsc) (.bvar 0)) =
+                    some (.app (.ctor c) (.bvar 0)) := by
+                  rw [erase_app_keep E n 1 (.assumption A :: [])
+                    (.const c lsc) (.bvar 0) hirrA]
+                  simp only [hC, hB]
+                have hLam : erase E n 3 [] (.lam A (.app (.const c lsc) (.bvar 0))) =
+                    some (.lam (.app (.ctor c) (.bvar 0))) := by
+                  rw [erase_lam_keep E n 2 [] A (.app (.const c lsc) (.bvar 0)) hirrL]
+                  simp only [hBody, Option.map]
+                have hLit : erase E n 3 [] (.lit nlit) = some (.lit nlit) := rfl
+                have he : erase E n 4 []
+                    (.app (.lam A (.app (.const c lsc) (.bvar 0))) (.lit nlit)) =
+                    some (.app (.lam (.app (.ctor c) (.bvar 0))) (.lit nlit)) := by
+                  rw [erase_app_keep E n 3 []
+                    (.lam A (.app (.const c lsc) (.bvar 0))) (.lit nlit) hirr]
+                  simp only [hLam, hLit]
+                have hlow : lowerF E n 4 (S := S) (.sum ts)
+                    (.app (.lam A (.app (.const c lsc) (.bvar 0))) (.lit nlit)) =
+                    emit 4 (.sum ts) (.ctor c [.lit nlit]) := by
+                  unfold lowerF pipeline
+                  rw [he]
+                  rfl
+                have hE2 := eval_emit_ctor_lit progs nlit c ts hg hk
+                have hbody : Residua.Bootstrap.Semantics.eval lawsA progs 1 []
+                    (lowerF E n 4 (S := S) (.sum ts)
+                      (.app (.lam A (.app (.const c lsc) (.bvar 0))) (.lit nlit))) =
+                    some (.inj c (.list [.int (Int.ofNat nlit)])) := by
+                  rw [hlow]
+                  exact emitWith_evalStable relevantArgs progs 1 [] 2 4 (.sum ts)
+                    (.ctor c [.lit nlit])
+                    (.inj c (.list [.int (Int.ofNat nlit)]))
+                    (Nat.le_add_right 2 2) hE2
+                exact ⟨4, 1, hbody⟩
+              | bool | str | bytes | list _ | pair _ _ | sum _ | record _ | option _ | residue _ =>
+                simp only [valFits, List.all_cons, List.all_nil] at hf'
+                exact Bool.noConfusion hf'
+            · exact Bool.noConfusion hf'
+          | _ => cases hf
+        · simp [hcm] at hs'
+
+theorem lowerF_not_adequate_divArg {S : SigTable} (progs : Programs S S) :
+    ¬ adequacyStatement (fun E n F t e => lowerF E n F (S := S) t e) progs := by
+  intro h
+  obtain ⟨F₀, hF⟩ := h loopEnv 0 3 1 bomb (.const 0 []) (.lit 0) .i64 (.int 0)
+    loopBodiesTyped bomb_infer bomb_data bomb_norm bomb_val bomb_rel bomb_root bomb_fits bomb_vinfer
+  obtain ⟨lf, he⟩ := hF F₀ (Nat.le_refl _)
+  have he' : Residua.Bootstrap.Semantics.eval lawsA progs lf []
+      (lowerF loopEnv 0 F₀ (S := S) .i64 bomb) = some (.int 0) := he
+  rw [lowerF_bomb] at he'
+  exact eval_refuse_ne progs lf [] _ he'
+
+-- fuel 4, not `defaultFuel`: `Rsx.lower` is fuel 10000, and each step of `loop`
+-- re-enters `inferT`. `lowerF_bomb` already covers every fuel, including that one.
+#guard optValEq (obs loopEnv bomb) (some (.int 0)) &&
+  (runLowered (lowerF loopEnv 0 4 (t := .i64) bomb)).isNone
+
 end Lower
 end Rsx
 
@@ -1545,6 +5400,9 @@ end Rsx
 #print axioms Rsx.Lower.adeqLam
 #print axioms Rsx.Lower.adeqLit
 #print axioms Rsx.Lower.erase_mono
+#print axioms Rsx.Lower.erase_app_keep
+#print axioms Rsx.Lower.erase_lam_keep
+#print axioms Rsx.Lower.erase_let_keep
 #print axioms Rsx.Lower.run_mono
 #print axioms Rsx.Lower.emitWith_evalStable
 #print axioms Rsx.Lower.lowerF_evalStable
@@ -1555,6 +5413,190 @@ end Rsx
 #print axioms Rsx.Lower.lowerF_cIntro
 #print axioms Rsx.Lower.lowerF_not_adequate_noRoot
 #print axioms Rsx.Lower.adeqConst_of_split
+#print axioms Rsx.Lower.norm_const_delta_of_body
+#print axioms Rsx.Lower.norm_const_delta_app_lit
+#print axioms Rsx.Lower.norm_const_app_lit_val
+#print axioms Rsx.Lower.eval_emit_ctor_lit
+#print axioms Rsx.Lower.good_const_delta_app_lit
+#print axioms Rsx.Lower.norm_app_ctor_lit
+#print axioms Rsx.Lower.norm_app_ctor_lit_val
+#print axioms Rsx.Lower.good_app_ctor_lit
+#print axioms Rsx.Lower.norm_let_lit
+#print axioms Rsx.Lower.norm_let_lit_val
+#print axioms Rsx.Lower.good_let_lit
+#print axioms Rsx.Lower.norm_let_bvar
+#print axioms Rsx.Lower.norm_let_bvar_val
+#print axioms Rsx.Lower.good_let_bvar
+#print axioms Rsx.Lower.norm_beta_lit
+#print axioms Rsx.Lower.norm_beta_lit_val
+#print axioms Rsx.Lower.good_beta_lit
+#print axioms Rsx.Lower.defunc_lam_ctor_bvar
+#print axioms Rsx.Lower.run_lit_any
+#print axioms Rsx.Lower.run_ctor_any
+#print axioms Rsx.Lower.run_beta_ctor_body
+#print axioms Rsx.Lower.run_beta_ctor_lit
+#print axioms Rsx.Lower.norm_beta_ctor_lit
+#print axioms Rsx.Lower.norm_beta_ctor_lit_val
+#print axioms Rsx.Lower.good_beta_ctor_lit
+#print axioms Rsx.Lower.isArity_false_of_dataTy
+#print axioms Rsx.Lower.irrelevant_data
+#print axioms Rsx.Lower.erase_box_of_irrelevant
+#print axioms Rsx.Lower.lowerF_of_erase_box
+#print axioms Rsx.Lower.lowerF_irrelevant_refuses
+#print axioms Rsx.Lower.eval_irrelevant_ne
+#print axioms Rsx.Lower.irrelevant_data_ff
+#print axioms Rsx.Lower.irrelevant_data_none
+#print axioms Rsx.Lower.irrelevant_data_tt
+#print axioms Rsx.Lower.const_ne_lit
+#print axioms Rsx.Lower.app_ne_lit
+#print axioms Rsx.Lower.letE_ne_lit
+#print axioms Rsx.Lower.list_get?_append_last
+#print axioms Rsx.Lower.run_apply_eq
+#print axioms Rsx.Lower.run_let_eq
+#print axioms Rsx.Lower.run_let_some
+#print axioms Rsx.Lower.run_clo_nil
+#print axioms Rsx.Lower.run_apply_clo_nil
+#print axioms Rsx.Lower.run_apply_closed
+#print axioms Rsx.Lower.run_var0
+#print axioms Rsx.Lower.run_let_id
+#print axioms Rsx.Lower.run_apply_id
+#print axioms Rsx.Lower.defunc_let_bvar0
+#print axioms Rsx.Lower.defunc_app_lam_bvar0
+#print axioms Rsx.Lower.whnf_let_id
+#print axioms Rsx.Lower.whnf_beta_id
+#print axioms Rsx.Lower.whnf_beta
+#print axioms Rsx.Lower.whnf_zeta
+#print axioms Rsx.Lower.whnf_zero_none
+#print axioms Rsx.Lower.whnf_sort_self
+#print axioms Rsx.Lower.whnf_lam_self
+#print axioms Rsx.Lower.whnf_pi_self
+#print axioms Rsx.Lower.whnf_bvar_self
+#print axioms Rsx.Lower.whnf_lit_self
+#print axioms Rsx.Lower.whnf_rigid_const
+#print axioms Rsx.Lower.norm_let_id
+#print axioms Rsx.Lower.norm_beta_id
+#print axioms Rsx.Lower.lowerF_let_eval
+#print axioms Rsx.Lower.lowerF_app_eval
+#print axioms Rsx.Lower.norm_let_id_eq
+#print axioms Rsx.Lower.norm_beta_id_eq
+#print axioms Rsx.Lower.lowerF_let_id_eval
+#print axioms Rsx.Lower.eqN_refl
+#print axioms Rsx.Lower.eqN_symm
+#print axioms Rsx.Lower.eqN_trans
+#print axioms Rsx.Lower.eqN_succ
+#print axioms Rsx.Lower.eqN_succ_ne_zero
+#print axioms Rsx.Lower.foldApps_append_ne_sort
+#print axioms Rsx.Lower.iotaLhs_ne_sort
+#print axioms Rsx.Lower.hasTyT_sort_principal_at
+#print axioms Rsx.Lower.hasTyT_sort_principal
+#print axioms Rsx.Lower.hasTyT_const_principal_at
+#print axioms Rsx.Lower.hasTyT_const_principal
+#print axioms Rsx.Lower.badEnv_zero
+#print axioms Rsx.Lower.tyConvT_cN_cTrue_of_cZero
+#print axioms Rsx.Lower.tyConvT_step
+#print axioms Rsx.Lower.tyConvT_symm
+#print axioms Rsx.Lower.tyConvT_of_to_same
+#print axioms Rsx.Lower.cN_ne_cTrue
+#print axioms Rsx.Lower.tyConvT_cN_cTrue_step
+#print axioms Rsx.Lower.foldApps_append_ne_const
+#print axioms Rsx.Lower.iotaLhs_ne_const
+#print axioms Rsx.Lower.derivedIota_ne_const
+#print axioms Rsx.Lower.badEnv_N
+#print axioms Rsx.Lower.badEnv_not_transparent_zero
+#print axioms Rsx.Lower.convT_cN_view
+#print axioms Rsx.Lower.tyConvT_cN_cTrue_view
+#print axioms Rsx.Lower.eqNList_nil_left
+#print axioms Rsx.Lower.const0_nil_eq
+#print axioms Rsx.Lower.const0_ne_cTrue
+#print axioms Rsx.Lower.const4_ne_cN
+#print axioms Rsx.Lower.badEnv_True
+#print axioms Rsx.Lower.badEnv_not_transparent_four
+#print axioms Rsx.Lower.convT_cN_core
+#print axioms Rsx.Lower.convStuck
+#print axioms Rsx.Lower.instLevels_bvar_ne_cN
+#print axioms Rsx.Lower.instLevels_sort_ne_cN
+#print axioms Rsx.Lower.instLevels_app_ne_cN
+#print axioms Rsx.Lower.instLevels_lam_ne_cN
+#print axioms Rsx.Lower.instLevels_pi_ne_cN
+#print axioms Rsx.Lower.instLevels_letE_ne_cN
+#print axioms Rsx.Lower.instLevels_lit_ne_cN
+#print axioms Rsx.Lower.instLevels_const_succ_ne_cN
+#print axioms Rsx.Lower.instLevels_const_zero_cons_ne_cN
+#print axioms Rsx.Lower.convStuckR_delta_false
+#print axioms Rsx.Lower.convStuck_delta_false
+#print axioms Rsx.Lower.consts_cN_ne_cTrue
+#print axioms Rsx.Lower.consts_cTrue_ne_cN
+#print axioms Rsx.Lower.app_ne_cN
+#print axioms Rsx.Lower.app_ne_cTrue
+#print axioms Rsx.Lower.tyConvT_sort1_sort0_of_common
+#print axioms Rsx.Lower.convStuckAtTrue
+#print axioms Rsx.Lower.convStuckR
+#print axioms Rsx.Lower.convT_cN_cTrue_stuck
+#print axioms Rsx.Lower.tyConvT_cN_stuck
+#print axioms Rsx.Lower.tyConvT_cN_cTrue_stuck
+#print axioms Rsx.Lower.lookupValue_nil
+#print axioms Rsx.Lower.badEnv_members_ge16
+#print axioms Rsx.Lower.badEnv_no_recursor
+#print axioms Rsx.Lower.derivedIota_badEnv_false
+#print axioms Rsx.Lower.badEnv_tb_11
+#print axioms Rsx.Lower.badEnv_tb_12
+#print axioms Rsx.Lower.badEnv_tb_15
+#print axioms Rsx.Lower.badEnv_tb_none_0
+#print axioms Rsx.Lower.badEnv_tb_none_1
+#print axioms Rsx.Lower.badEnv_tb_none_2
+#print axioms Rsx.Lower.badEnv_tb_none_3
+#print axioms Rsx.Lower.badEnv_tb_none_4
+#print axioms Rsx.Lower.badEnv_tb_none_5
+#print axioms Rsx.Lower.badEnv_tb_none_6
+#print axioms Rsx.Lower.badEnv_tb_none_7
+#print axioms Rsx.Lower.badEnv_tb_none_8
+#print axioms Rsx.Lower.badEnv_tb_none_9
+#print axioms Rsx.Lower.badEnv_tb_none_10
+#print axioms Rsx.Lower.badEnv_tb_none_13
+#print axioms Rsx.Lower.badEnv_tb_none_14
+#print axioms Rsx.Lower.badEnv_tb_none_tail
+#print axioms Rsx.Lower.whnf_two_stuck
+#print axioms Rsx.Lower.whnf_addTwo_body
+#print axioms Rsx.Lower.whnf_cZero_self
+#print axioms Rsx.Lower.whnf_badEnv_const_not_sort
+#print axioms Rsx.Lower.whnf_natExpand_zero
+#print axioms Rsx.Lower.whnf_natExpand_succ
+#print axioms Rsx.Lower.whnf_natExpand_not_sort
+#print axioms Rsx.Lower.isSort_sort
+#print axioms Rsx.Lower.not_isSort_lam
+#print axioms Rsx.Lower.not_isSort_pi
+#print axioms Rsx.Lower.not_isSort_bvar
+#print axioms Rsx.Lower.not_isSort_lit
+#print axioms Rsx.Lower.not_isSort_const
+#print axioms Rsx.Lower.isSort_sort_eq
+#print axioms Rsx.Lower.isSort_beta
+#print axioms Rsx.Lower.isSort_of_beta
+#print axioms Rsx.Lower.isSort_zeta
+#print axioms Rsx.Lower.isSort_of_zeta
+#print axioms Rsx.Lower.instantiate_lift_cancel
+#print axioms Rsx.Lower.whnf_succ
+#print axioms Rsx.Lower.isSort_progress
+#print axioms Rsx.Lower.convFromSort
+#print axioms Rsx.Lower.eqN_of_sort_eq
+#print axioms Rsx.Lower.convLeftAt
+#print axioms Rsx.Lower.convLeft
+#print axioms Rsx.Lower.convBothSort
+#print axioms Rsx.Lower.convIrrPrincipal
+#print axioms Rsx.Lower.convIrrSuccZero
+#print axioms Rsx.Lower.lookup_nil_no_value
+#print axioms Rsx.Lower.lit_expand_ne_sort
+#print axioms Rsx.Lower.convToSort
+#print axioms Rsx.Lower.convRightOf
+#print axioms Rsx.Lower.convRight
+#print axioms Rsx.Lower.convTransRight
+#print axioms Rsx.Lower.tyLeft
+#print axioms Rsx.Lower.tyBothSort
+#print axioms Rsx.Lower.sortGap_stuck
+#print axioms Rsx.Lower.eqN_succ_inj
+#print axioms Rsx.Lower.instantiate_eq_sort
+#print axioms Rsx.Lower.instantiate0_eq_sort
+#print axioms Rsx.Lower.transparentBody_badEnv_ne_sort
+#print axioms Rsx.Lower.badEnv_delta_rhs_ne_sort
 #print axioms Rsx.Lower.adeqConstHead
 #print axioms Rsx.Lower.cBadTy
 #print axioms Rsx.Lower.lowerF_cBad
@@ -1566,3 +5608,22 @@ end Rsx
 #print axioms Rsx.Lower.eval_emit_ctor_box
 #print axioms Rsx.Lower.lowerF_not_adequate_convValue
 #print axioms Rsx.Lower.convValue_witness_excluded
+#print axioms Rsx.Lower.erasable_lit
+#print axioms Rsx.Lower.loop_irr
+#print axioms Rsx.Lower.erase_loop_none
+#print axioms Rsx.Lower.erase_bomb_none
+#print axioms Rsx.Lower.lowerF_bomb
+#print axioms Rsx.Lower.loopBodiesTyped
+#print axioms Rsx.Lower.lowerF_not_adequate_divArg
+#print axioms Rsx.Lower.appsSpine_foldApps
+#print axioms Rsx.Lower.whnf_beta_spine
+#print axioms Rsx.Lower.norm_beta_spine
+#print axioms Rsx.Lower.norm_beta_spine_eq
+#print axioms Rsx.Lower.whnf_zeta_spine
+#print axioms Rsx.Lower.norm_zeta_spine
+#print axioms Rsx.Lower.norm_zeta_spine_eq
+#print axioms Rsx.Lower.whnf_delta_spine
+#print axioms Rsx.Lower.norm_delta_spine
+#print axioms Rsx.Lower.norm_delta_spine_eq
+#print axioms Rsx.Lower.good_const_delta_of_eval
+#print axioms Rsx.Lower.run_apply_lit_body

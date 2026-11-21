@@ -1,0 +1,28 @@
+import Lib.Proc
+import Lib.ProcBytes
+
+-- The recorded transport supplies two different replies to the same Tstat.
+-- Both the inner and the outer continuation are pending at the first Tstat.
+def statSample (fid : Int) : Proc :=
+  request [102,115,10,11,0,0,0,124,0,0,fid,0,0,0]
+
+def sampleFid (fid : Int) (r : List Int) : Int :=
+  if nGet r 9 == 65 then fid else fid + 1
+
+def sampleResult (s r : List Int) : List Int := [nGet s 9,nGet r 9]
+
+def sampleExit (bytes : List Int) : List Int := 37 :: bytes
+
+def nestedSample (fid : Int) : Proc := do {
+  let r <- statSample fid;
+  let s <- statSample (sampleFid fid r);
+  sampleResult s r
+}
+
+def main : Proc UInt8 := do {
+  let bytes <- nestedSample 1;
+  sampleExit bytes
+}
+
+def traceStep (state response : List Int) : List Int :=
+  1812203133 :: drive9 main state response

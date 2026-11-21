@@ -1,0 +1,683 @@
+# Reason-style spelling for the common pre-elaboration tree.
+# Theorem/proposition adapters use stock Lean 4.14.0@410fab7284703f41660ca2454218dcca9b2ec896:
+# src/Lean/Parser/Command.lean (theorem/declSig/declValSimple),
+# src/Init/Notation.lean (=, nonassociative 50; And/Or/Not), src/Init/Core.lean (Iff, nonassociative 20).
+# Signature kind 2 is theorem; logical Eq/Iff are operators 24/25.
+# Logical And/Or are operators 26/27; logical Not is unary operator 4.
+# Header order follows stock Lean 4.14.0@410fab7284703f41660ca2454218dcca9b2ec896,
+# src/Lean/Parser/Module.lean:14-22: optional prelude, imports, then commands.
+# Header nodes 56/57 are list19 entries; module leaf58 preserves unresolved spelling.
+surface rsv
+lexical
+  ws " \t\n\r"
+  comment "//"
+  block-open "/*"
+  block-close "*/"
+  open "(" "[" "{"
+  close ")" "]" "}"
+  token ident [A-Za-z_\x80-\xff][A-Za-z_0-9.?!'\x80-\xff]* @keywords
+  token rawname [A-Za-z_\x80-\xff][A-Za-z_0-9.?!'\x80-\xff]*
+  # Measured stock-header exclusions only; dots and longer names retain the keyword bytes.
+  token moduleident [A-Za-z_\x80-\xff][A-Za-z_0-9?!'\x80-\xff]*([.][A-Za-z_\x80-\xff][A-Za-z_0-9?!'\x80-\xff]*)* @reject-prefix=(Type|_|runtime|import|prelude)[^A-Za-z_0-9.?!'\x80-\xff]
+  token number [0-9]+
+  # Adjacent <- is bind; comparison to a negative operand prints < -... .
+  token less < @reject-prefix=<[-]
+  token quoted " @string-literal @incomplete=61
+  token interpClosed " @interpolation=closed @incomplete=61
+  token interpOpen " @interpolation=open @incomplete=61
+  token interpMiddle } @interpolation=middle @incomplete=61
+  token interpEnd } @interpolation=end @incomplete=61
+  token scalar [\x21-\x7e]|[\xc2-\xdf][\x80-\xbf]|\xe0[\xa0-\xbf][\x80-\xbf]|[\xe1-\xec\xee-\xef][\x80-\xbf][\x80-\xbf]|\xed[\x80-\x9f][\x80-\xbf]|\xf0[\x90-\xbf][\x80-\xbf][\x80-\xbf]|[\xf1-\xf3][\x80-\xbf][\x80-\xbf][\x80-\xbf]|\xf4[\x80-\x8f][\x80-\xbf][\x80-\xbf]
+grammar
+  File := FileHeader @tree=(18,$0,B,0) @template=$0
+  FileHeader := Prelude Imports @tree=(19,$0,$1,0) @template=$0\n$1
+  FileHeader := Imports @tree=$0 @template=$0
+  Prelude := 'prelude '; @tree=(57,0,0,0) @template=prelude;
+  Imports := Import Imports @tree=(19,$0,$1,0) @template=$0\n$1
+  Imports := Commands @tree=$0 @template=$0
+  Import := 'import ModuleName '; @tree=(56,$1,0,0) @template=import\s$1;
+  Import := 'import 'runtime ModuleName '; @tree=(56,$2,1,0) @template=import\sruntime\s$2;
+  ModuleName := moduleident @tree=(58,s0,e0,0) @template=$0
+  Commands := Decl Commands @tree=(19,$0,$1,0) @template=$0\n$1
+  Commands := eps @tree=-1 @template=
+  Decl := 'val Partial Name '= '( Groups ') ': Type '=> Body '; @tree=(20,$2,(21,$5,$8,$1),$10) @template=val\s$1$2\s=\s($5):\s$8\s=>\s$10;
+  Decl := 'val Partial Name ': Type '= Body '; @tree=(20,$2,(21,-1,$4,$1),$6) @template=val\s$1$2:\s$4\s=\s$6;
+  Decl := 'lemma Name '= '( TheoremGroups ') ': Expr '=> Body '; @tree=(20,$1,(21,$4,$7,2),$9) @template=lemma\s$1\s=\s($4):\s$7\s=>\s$9;
+  Decl := 'lemma Name ': Expr '=> Body '; @tree=(20,$1,(21,-1,$3,2),$5) @template=lemma\s$1:\s$3\s=>\s$5;
+  Partial := 'partial @tree=1 @template=partial\s
+  Partial := eps @tree=0 @template=
+  Body := Expr TermOpt @tree=(25,$0,a1($1),0) @template=$0$1
+  Body := 'function '{ Clauses '} TermOpt @tree=(23,$2,a1($4),0) @template=function\s{\n${2:2}}$4
+  TermOpt := 'termination_by '( Names ') Expr @tree=(45,$2,$4,0) @template=\stermination_by\s($2)\s$4
+  TermOpt := 'termination_by Expr @tree=(45,-1,$1,0) @template=\stermination_by\s$1
+  TermOpt := 'termination_by 'structural '( Names ') Expr @tree=(45,$3,$5,1) @template=\stermination_by\sstructural\s($3)\s$5
+  TermOpt := 'termination_by 'structural Expr @tree=(45,-1,$2,1) @template=\stermination_by\sstructural\s$2
+  TermOpt := eps @tree=-1 @template=
+  Groups := Name ': Type MoreGroups @tree=(22,(12,$0,-1,0),$2,$3) @template=$0:\s$2$3
+  Groups := '[ Names '] ': Type MoreGroups @tree=(22,$1,$4,$5) @template=[$1]:\s$4$5
+  Groups := eps @tree=-1 @template=
+  MoreGroups := ', Groups @tree=$1 @template=,\s$1
+  MoreGroups := eps @tree=-1 @template=
+  TheoremGroups := Name ': Expr TheoremMoreGroups @tree=(22,(12,$0,-1,0),$2,$3) @template=$0:\s$2$3
+  TheoremGroups := '[ Names '] ': Expr TheoremMoreGroups @tree=(22,$1,$4,$5) @template=[$1]:\s$4$5
+  TheoremGroups := eps @tree=-1 @template=
+  TheoremMoreGroups := ', TheoremGroups @tree=$1 @template=,\s$1
+  TheoremMoreGroups := eps @tree=-1 @template=
+  Names := Name NamesTail @tree=(12,$0,$1,0) @template=$0$1
+  NamesTail := ', Names @tree=$1 @template=,\s$1
+  NamesTail := eps @tree=-1 @template=
+  Name := ident @tree=(1,s0,e0,0) @template=$0
+  Name := 'name '( rawname ') @tree=(1,s2,e2,0) @template=name($2)
+  Name := 'global '( rawname ') @tree=(1,s2,e2,-9) @template=global($2)
+  # Match RSL's existing data-name ABI: -10 records deriving's presence.
+  DataName := Name @tree=$0 @template=$0
+  DataName := rawname 'deriving @tree=(1,s0,e0,-10) @template=$0\s$1
+  Type := TyProd '-> Type @tree=(16,$0,$2,0) @template=$0\s->\s$2
+  Type := TyProd @tree=$0 @template=$0
+  # Explicit identity fallback; ordinary type inverses remain first.
+  # The reserved introducer and closing delimiter keep Expr out of TyApp.
+  Type := 'expr_type '( Expr ') @tree=$2 @template=expr_type($2) @forbid-clear
+  TyProd := TyApp '* TyProd @tree=(41,$0,$2,0) @template=$0\s*\s$2
+  TyProd := TyApp @tree=$0 @template=$0
+  TyApp := TyApp '( Type ') @tree=(5,$0,(12,$2,-1,0),0) @template=$0($2)
+  TyApp := Name @tree=$0 @template=$0
+  TyApp := '( Type ') @tree=(13,$1,0,0) @template=($1)
+  Decl := 'type DataName Params '= '{ Fields '} '; @tree=(26,$1,$5,a1($2)) @template=type\s$1$2\s=\s{\n${5:2}};
+  Decl := 'type DataName Params '= Ctors '; @tree=(38,$1,$4,a1($2)) @template=type\s$1$2\s=\n${4:2};
+  Params := '( ParamNames ') @tree=$1 @template=($1)
+  Params := eps @tree=-1 @template=
+  ParamNames := Name ParamTail @tree=(12,$0,$1,0) @template=$0$1
+  ParamNames := 'implicit Name ParamTail @tree=(12,$1,$2,0) @template=implicit\s$1$2
+  ParamTail := ', ParamNames @tree=$1 @template=,\s$1
+  ParamTail := eps @tree=-1 @template=
+  Fields := Name ': Type '= Expr '; Fields @tree=(27,$0,(40,$2,$4,0),$6) @template=$0:\s$2\s=\s$4;\n$6
+  Fields := Name ': Type '; Fields @tree=(27,$0,$2,$4) @template=$0:\s$2;\n$4
+  Fields := eps @tree=-1 @template=
+  Ctors := '| Name CtorArgs CtorResult Ctors @tree=(12,(39,$1,$2,a1($3)),$4,0) @template=|\s$1$2$3\n$4
+  Ctors := eps @tree=-1 @template=
+  CtorArgs := '( Types ') @tree=$1 @template=($1)
+  CtorArgs := eps @tree=-1 @template=
+  Types := Type MoreTypes @tree=(12,$0,$1,0) @template=$0$1
+  MoreTypes := ', Types @tree=$1 @template=,\s$1
+  MoreTypes := eps @tree=-1 @template=
+  CtorResult := ': Type @tree=$1 @template=:\s$1
+  CtorResult := eps @tree=-1 @template=
+  Decl := 'rec '{ Commands '} @tree=(28,$2,0,0) @template=rec\s{\n${2:2}}
+  Decl := 'module Name '= '{ Commands '} '; @tree=(34,$1,$4,0) @template=module\s$1\s=\s{\n${4:2}};
+  Decl := 'scope '{ Commands '} @tree=(36,-1,$2,-1) @template=scope\s{\n${2:2}}
+  Decl := 'open Names Hidden '; @tree=(35,$1,$2,0) @template=open\s$1$2;
+  Decl := 'open Names Hidden 'in '{ Commands '} @tree=(36,$1,$5,$2) @template=open\s$1$2\sin\s{\n${5:2}}
+  Hidden := 'hiding '( Names ') @tree=$2 @template=\shiding\s($2)
+  Hidden := eps @tree=-1 @template=
+  Decl := 'alias Name '= Type '; @tree=(37,$1,$3,0) @template=alias\s$1\s=\s$3;
+  Expr := Call @tree=$0 @template=$0
+  Call := Call '( Expr ') @tree=(5,$0,(12,$2,-1,0),0) @template=$0($2) @forbid-clear
+  Call := Atom @tree=$0 @template=$0
+  Atom := Name @tree=$0 @template=$0
+  Atom := number @tree=(2,s0,e0,d0) @template=$0
+  Atom := quoted @tree=(3,s0,e0,0) @template=$0
+  Atom := '_ @tree=(4,0,0,0) @template=_
+  Atom := 'char '( number ') @tree=(2,-1,-1,d2) @template=char($2)
+  Atom := 'if '( Expr ') '{ Expr '} 'else '{ Expr '} @tree=(8,$2,$5,$9) @template=if\s($2)\s{\s$5\s}\selse\s{\s$9\s}
+  Atom := '{ 'let Name Annotation '= Expr '; Expr '} @tree=(9,$2,$3,(10,$5,$7,0)) @template={\slet\s$2$3\s=\s$5;\s$7\s} @forbid-clear
+  Annotation := ': Type @tree=$1 @template=:\s$1
+  Annotation := eps @tree=-1 @template=
+  Atom := 'fun '( LambdaGroups ') '=> '{ Expr '} @tree=(32,$2,$6,0) @template=fun\s($2)\s=>\s{\s$6\s} @forbid-clear
+  LambdaGroups := Name LambdaTail @tree=(22,(12,$0,-1,0),-1,$1) @template=$0$1
+  LambdaGroups := Name ': Type LambdaTail @tree=(22,(12,$0,-1,0),$2,$3) @template=$0:\s$2$3
+  LambdaGroups := '[ Names '] ': Type LambdaTail @tree=(22,$1,$4,$5) @template=[$1]:\s$4$5
+  # Tag55 is the existing RSL/Tree lambda-pattern role, not a name spine.
+  # Put a typed pattern's colon outside its delimiter to keep it distinct
+  # from an untyped pattern whose Expr already contains an annotation.
+  LambdaGroups := 'pattern '( Expr ') LambdaTail @tree=(22,(55,$2,0,0),-1,$4) @template=pattern($2)$4
+  LambdaGroups := 'pattern '( Expr ') ': Type LambdaTail @tree=(22,(55,$2,1,0),$5,$6) @template=pattern($2):\s$5$6
+  LambdaGroups := eps @tree=-1 @template=
+  LambdaTail := ', LambdaGroups @tree=$1 @template=,\s$1
+  LambdaTail := eps @tree=-1 @template=
+  Atom := 'switch '( Elems ') '{ Clauses '} @tree=(31,$2,$5,0) @template=switch\s($2)\s{\n${5:2}} @forbid-clear
+  Clauses := '| Elems '=> Expr '; ClauseTail @tree=(24,$1,$3,$5) @template=|\s$1\s=>\s$3;\n$5
+  ClauseTail := Clauses @tree=$0 @template=$0
+  ClauseTail := eps @tree=-1 @template=
+  Atom := '[ ElemOpt '] @tree=(11,$1,0,0) @template=[$1] @forbid-clear
+  # The flag-1 array tree remains distinct from the flag-0 list tree.
+  Atom := '# '[ ElemOpt '] @tree=(11,$2,1,0) @template=#[$2] @layout=1:adjacent @forbid-clear
+  ElemOpt := Elems @tree=$0 @template=$0
+  ElemOpt := eps @tree=-1 @template=
+  Elems := Expr ElemTail @tree=(12,$0,$1,0) @template=$0$1
+  ElemTail := ', Elems @tree=$1 @template=,\s$1
+  ElemTail := eps @tree=-1 @template=
+  Atom := '( Expr ') @tree=(13,$1,0,0) @template=($1) @forbid-clear
+  Atom := '( Expr ': Type ') @tree=(30,$1,$3,0) @template=($1:\s$3) @forbid-clear
+  Atom := '( Expr ', Expr ') @tree=(42,$1,$3,0) @template=($1,\s$3) @forbid-clear
+  Atom := 'arrow '( Expr ', Expr ') @tree=(16,$2,$4,0) @template=arrow($2,\s$4)
+  Atom := 'product '( Expr ', Expr ') @tree=(41,$2,$4,0) @template=product($2,\s$4)
+  Atom := 'prop_and '( Expr ', Expr ') @tree=(6,26,$2,$4) @template=prop_and($2,\s$4)
+  Atom := 'prop_or '( Expr ', Expr ') @tree=(6,27,$2,$4) @template=prop_or($2,\s$4)
+  Atom := 'prop_not '( Expr ') @tree=(7,4,$2,0) @template=prop_not($2)
+  Atom := 'constructor '( ElemOpt ') @tree=(47,$2,0,0) @template=constructor($2) @forbid-clear
+  Call := Call '[ Expr ']? @tree=(33,$0,$2,0) @template=$0[$2]? @forbid-clear
+  Call := Call '. rawname @tree=(29,$0,s2,e2) @template=$0\s.\s$2
+  Call := Call '. number @tree=(17,$0,d2,0) @template=$0\s.\s$2
+  Atom := 'method '( Expr ', rawname ') @tree=(44,$2,s4,e4) @template=method($2,\s$4)
+  Atom := '. rawname @tree=(43,s1,e1,0) @template=.$1
+  Atom := '{ RecFields '} @tree=(14,-1,$1,0) @template={\s$1\s} @forbid-clear
+  # A trailing : Type overlaps the distinct parenthesized ascription tree30:
+  # ({fields}: Type) was both 30(14(-1,fields,0),Type,0) and
+  # 13(14(Type,fields,0),0,0). Keep short records unannotated; the existing
+  # tree_14 inverse below retains typed records and copies with their slots.
+  Atom := '{ '... Expr ', RecFields '} @tree=(14,-1,$4,a1($2)) @template={\s...$2,\s$4\s}
+  Atom := '{ '... ', RecFields '} @tree=(14,-1,$3,-1) @template={\s...,\s$3\s}
+  RecFields := Name ': Expr RecTail @tree=(15,$0,$2,$3) @template=$0:\s$2$3
+  RecFields := eps @tree=-1 @template=
+  RecTail := ', RecFields @tree=$1 @template=,\s$1
+  RecTail := eps @tree=-1 @template=
+  Atom := 'do '{ DoSteps '} @tree=(46,$2,0,0) @template=do\s{\n${2:2}} @forbid-clear
+  # Generic stock do syntax is kind1; legacy do remains kind0. Source:
+  # Lean 4.14.0@410fab7284703f41660ca2454218dcca9b2ec896,
+  # Parser/Do.lean:23-35,57-58,73-90,188-191. Explicit semicolons retain
+  # every statement and the optional return operand in the syntax tree.
+  Atom := 'do: '{ GenDoSteps '} @tree=(46,$2,1,0) @template=do:\s{\n${2:2}} @forbid-clear
+  DoSteps := Name '<- Expr '; DoSteps @tree=(12,(43,$0,$2,0),$4,0) @template=$0\s<-\s$2;\n$4
+  DoSteps := 'let Name Annotation '= Expr '; DoSteps @tree=(12,(45,$1,$2,$4),$6,0) @template=let\s$1$2\s=\s$4;\n$6
+  DoSteps := Expr '; DoSteps @tree=(12,(44,$0,0,0),$2,0) @template=$0;\n$2
+  DoSteps := eps @tree=-1 @template=
+  GenDoSteps := GenDoStep GenDoStepsTail @tree=(12,$0,$1,0) @template=$0\n$1
+  GenDoStepsTail := GenDoSteps @tree=$0 @template=$0
+  GenDoStepsTail := eps @tree=-1 @template=
+  # Source: Lean 4.14.0@410fab7284703f41660ca2454218dcca9b2ec896,
+  # src/Lean/Parser/Do.lean:57-88 (withForbidden "=" on do-let pattern).
+  GenDoPat := Expr @tree=$0 @template=$0 @forbid=%3D
+  # Pattern trees include typed tag30; fallback is a nonempty kind1 do.
+  # Keep these inverse patterns before the ordinary RHS-link patterns.
+  GenDoStep := Expr '<- Expr '| '{ GenDoSteps '} '; @tree=(43,$0,(59,$2,(46,$5,1,0),0),0) @template=$0\s<-\s$2\s|\s{\n${5:2}};
+  GenDoStep := 'let GenDoPat '= Expr '| '{ GenDoSteps '} '; @tree=(45,$1,-1,(59,$3,(46,$6,1,0),0)) @template=let\s$1\s=\s$3\s|\s{\n${6:2}};
+  GenDoStep := Expr '<- Expr '; @tree=(43,$0,$2,0) @template=$0\s<-\s$2;
+  GenDoStep := 'let GenDoPat Annotation '= Expr '; @tree=(45,$1,$2,$4) @template=let\s$1$2\s=\s$4;
+  GenDoStep := 'return Expr '; @tree=(44,$1,1,0) @template=return\s$1;
+  GenDoStep := 'return '; @tree=(44,-1,1,0) @template=return;
+  GenDoStep := Expr '; @tree=(44,$0,0,0) @template=$0;
+  Expr := Expr '+ Expr @tree=(6,1,$0,$2) @template=$0\s+\s$2 @prio=65 @assoc=left
+  Expr := Expr '- Expr @tree=(6,2,$0,$2) @template=$0\s-\s$2 @prio=65 @assoc=left
+  Expr := Expr '* Expr @tree=(6,3,$0,$2) @template=$0\s*\s$2 @prio=70 @assoc=left
+  Expr := Expr '/ Expr @tree=(6,4,$0,$2) @template=$0\s/\s$2 @prio=70 @assoc=left
+  Expr := Expr '== Expr @tree=(6,5,$0,$2) @template=$0\s==\s$2 @prio=50 @assoc=non
+  Expr := Expr '= Expr @tree=(6,24,$0,$2) @template=$0\s=\s$2 @prio=50 @assoc=non
+  Expr := Expr '<=> Expr @tree=(6,25,$0,$2) @template=$0\s<=>\s$2 @prio=20 @assoc=non
+  Expr := Expr '!= Expr @tree=(6,6,$0,$2) @template=$0\s!=\s$2 @prio=50 @assoc=non
+  Expr := Expr less Expr @tree=(6,7,$0,$2) @template=$0\s<\s$2 @prio=50 @assoc=non
+  Expr := Expr '> Expr @tree=(6,8,$0,$2) @template=$0\s>\s$2 @prio=50 @assoc=non
+  Expr := Expr '<= Expr @tree=(6,9,$0,$2) @template=$0\s<=\s$2 @prio=50 @assoc=non
+  Expr := Expr '>= Expr @tree=(6,10,$0,$2) @template=$0\s>=\s$2 @prio=50 @assoc=non
+  Expr := Expr '&& Expr @tree=(6,11,$0,$2) @template=$0\s&&\s$2 @prio=35 @assoc=left
+  Expr := Expr '|| Expr @tree=(6,12,$0,$2) @template=$0\s||\s$2 @prio=30 @assoc=left
+  Expr := Expr ':: Expr @tree=(6,13,$0,$2) @template=$0\s::\s$2 @prio=67 @assoc=right
+  Expr := Expr '++ Expr @tree=(6,14,$0,$2) @template=$0\s++\s$2 @prio=65 @assoc=left
+  Expr := Expr '% Expr @tree=(6,15,$0,$2) @template=$0\s%\s$2 @prio=70 @assoc=left
+  Expr := Expr '≠ Expr @tree=(6,16,$0,$2) @template=$0\s≠\s$2 @prio=50 @assoc=non
+  Expr := Expr '≤ Expr @tree=(6,17,$0,$2) @template=$0\s≤\s$2 @prio=50 @assoc=non
+  Expr := Expr '≥ Expr @tree=(6,18,$0,$2) @template=$0\s≥\s$2 @prio=50 @assoc=non
+  Expr := Expr '&&& Expr @tree=(6,19,$0,$2) @template=$0\s&&&\s$2 @prio=60 @assoc=left
+  Expr := Expr '||| Expr @tree=(6,20,$0,$2) @template=$0\s|||\s$2 @prio=55 @assoc=left
+  Expr := Expr '^^^ Expr @tree=(6,21,$0,$2) @template=$0\s^^^\s$2 @prio=58 @assoc=left
+  Expr := Expr '<<< Expr @tree=(6,22,$0,$2) @template=$0\s<<<\s$2 @prio=75 @assoc=left
+  Expr := Expr '>>> Expr @tree=(6,23,$0,$2) @template=$0\s>>>\s$2 @prio=75 @assoc=left
+  Expr := '- Expr @tree=(7,1,$1,0) @template=-$1 @prio=75
+  Expr := '! Expr @tree=(7,2,$1,0) @template=!$1 @prio=40
+  Expr := '~~~ Expr @tree=(7,3,$1,0) @template=~~~$1 @prio=100
+  # Finite canonical tree spelling for the pinned grammar port. Private
+  # children keep their actual tag/slot roles; old inverses remain first.
+  Expr := CLExpr @tree=$0 @template=$0
+  Expr := CExpr @tree=$0 @template=$0
+  Decl := CLDecl @tree=$0 @template=$0
+  Decl := CDecl @tree=$0 @template=$0
+  GenDoStep := CDo @tree=$0 @template=$0
+  CTree := 'tree_none @tree=-1 @template=tree_none
+  CTree := CLExpr @tree=$0 @template=$0
+  CTree := CLDecl @tree=$0 @template=$0
+  CTree := CLHelper @tree=$0 @template=$0
+  CTree := CExpr @tree=$0 @template=$0
+  CTree := CDecl @tree=$0 @template=$0
+  CTree := CDo @tree=$0 @template=$0
+  CTree := CHelper @tree=$0 @template=$0
+  C1 := CTree @tree=(12,$0,-1,0) @template=$0
+  C2 := CTree ', C1 @tree=(12,$0,$2,0) @template=$0,\s$2
+  C3 := CTree ', C2 @tree=(12,$0,$2,0) @template=$0,\s$2
+  C4 := CTree ', C3 @tree=(12,$0,$2,0) @template=$0,\s$2
+  C5 := CTree ', C4 @tree=(12,$0,$2,0) @template=$0,\s$2
+  C6 := CTree ', C5 @tree=(12,$0,$2,0) @template=$0,\s$2
+  C7 := CTree ', C6 @tree=(12,$0,$2,0) @template=$0,\s$2
+  C8 := CTree ', C7 @tree=(12,$0,$2,0) @template=$0,\s$2
+  C9 := CTree ', C8 @tree=(12,$0,$2,0) @template=$0,\s$2
+  CChildren := CTree CChildrenTail @tree=(12,$0,$1,0) @template=$0$1
+  CChildrenTail := ', CChildren @tree=$1 @template=,\s$1
+  CChildrenTail := eps @tree=-1 @template=
+  # Distinguish ordinary numeric spans from the character scalar sentinel.
+  CLExpr := 'tree_name '( rawname ') @tree=(1,s2,e2,0) @template=tree_name($2)
+  CLExpr := 'tree_global '( rawname ') @tree=(1,s2,e2,-9) @template=tree_global($2)
+  CLExpr := 'tree_derived '( rawname ') @tree=(1,s2,e2,-10) @template=tree_derived($2)
+  CLExpr := 'tree_num '( number ') @tree=(2,s2,e2,d2) @template=tree_num($2)
+  CLExpr := 'tree_char '( number ') @tree=(2,-1,-1,d2) @template=tree_char($2)
+  CLExpr := 'tree_str '( quoted ') @tree=(3,s2,e2,0) @template=tree_str($2)
+  CLExpr := 'tree_4 '( ') @tree=(4,0,0,0) @template=tree_4()
+  CLExpr := 'tree_5 '( CTree ', CTree ') @tree=(5,$2,$4,0) @template=tree_5($2,\s$4)
+  CLExpr := 'binary_1 '( CTree ', CTree ') @tree=(6,1,$2,$4) @template=binary_1($2,\s$4)
+  CLExpr := 'binary_2 '( CTree ', CTree ') @tree=(6,2,$2,$4) @template=binary_2($2,\s$4)
+  CLExpr := 'binary_3 '( CTree ', CTree ') @tree=(6,3,$2,$4) @template=binary_3($2,\s$4)
+  CLExpr := 'binary_4 '( CTree ', CTree ') @tree=(6,4,$2,$4) @template=binary_4($2,\s$4)
+  CLExpr := 'binary_5 '( CTree ', CTree ') @tree=(6,5,$2,$4) @template=binary_5($2,\s$4)
+  CLExpr := 'binary_6 '( CTree ', CTree ') @tree=(6,6,$2,$4) @template=binary_6($2,\s$4)
+  CLExpr := 'binary_7 '( CTree ', CTree ') @tree=(6,7,$2,$4) @template=binary_7($2,\s$4)
+  CLExpr := 'binary_8 '( CTree ', CTree ') @tree=(6,8,$2,$4) @template=binary_8($2,\s$4)
+  CLExpr := 'binary_9 '( CTree ', CTree ') @tree=(6,9,$2,$4) @template=binary_9($2,\s$4)
+  CLExpr := 'binary_10 '( CTree ', CTree ') @tree=(6,10,$2,$4) @template=binary_10($2,\s$4)
+  CLExpr := 'binary_11 '( CTree ', CTree ') @tree=(6,11,$2,$4) @template=binary_11($2,\s$4)
+  CLExpr := 'binary_12 '( CTree ', CTree ') @tree=(6,12,$2,$4) @template=binary_12($2,\s$4)
+  CLExpr := 'binary_13 '( CTree ', CTree ') @tree=(6,13,$2,$4) @template=binary_13($2,\s$4)
+  CLExpr := 'binary_14 '( CTree ', CTree ') @tree=(6,14,$2,$4) @template=binary_14($2,\s$4)
+  CLExpr := 'binary_15 '( CTree ', CTree ') @tree=(6,15,$2,$4) @template=binary_15($2,\s$4)
+  CLExpr := 'binary_16 '( CTree ', CTree ') @tree=(6,16,$2,$4) @template=binary_16($2,\s$4)
+  CLExpr := 'binary_17 '( CTree ', CTree ') @tree=(6,17,$2,$4) @template=binary_17($2,\s$4)
+  CLExpr := 'binary_18 '( CTree ', CTree ') @tree=(6,18,$2,$4) @template=binary_18($2,\s$4)
+  CLExpr := 'binary_19 '( CTree ', CTree ') @tree=(6,19,$2,$4) @template=binary_19($2,\s$4)
+  CLExpr := 'binary_20 '( CTree ', CTree ') @tree=(6,20,$2,$4) @template=binary_20($2,\s$4)
+  CLExpr := 'binary_21 '( CTree ', CTree ') @tree=(6,21,$2,$4) @template=binary_21($2,\s$4)
+  CLExpr := 'binary_22 '( CTree ', CTree ') @tree=(6,22,$2,$4) @template=binary_22($2,\s$4)
+  CLExpr := 'binary_23 '( CTree ', CTree ') @tree=(6,23,$2,$4) @template=binary_23($2,\s$4)
+  CLExpr := 'binary_24 '( CTree ', CTree ') @tree=(6,24,$2,$4) @template=binary_24($2,\s$4)
+  CLExpr := 'binary_25 '( CTree ', CTree ') @tree=(6,25,$2,$4) @template=binary_25($2,\s$4)
+  CLExpr := 'binary_26 '( CTree ', CTree ') @tree=(6,26,$2,$4) @template=binary_26($2,\s$4)
+  CLExpr := 'binary_27 '( CTree ', CTree ') @tree=(6,27,$2,$4) @template=binary_27($2,\s$4)
+  CLExpr := 'binary_28 '( CTree ', CTree ') @tree=(6,28,$2,$4) @template=binary_28($2,\s$4)
+  CLExpr := 'binary_29 '( CTree ', CTree ') @tree=(6,29,$2,$4) @template=binary_29($2,\s$4)
+  CLExpr := 'binary_30 '( CTree ', CTree ') @tree=(6,30,$2,$4) @template=binary_30($2,\s$4)
+  CLExpr := 'binary_31 '( CTree ', CTree ') @tree=(6,31,$2,$4) @template=binary_31($2,\s$4)
+  CLExpr := 'binary_32 '( CTree ', CTree ') @tree=(6,32,$2,$4) @template=binary_32($2,\s$4)
+  CLExpr := 'binary_33 '( CTree ', CTree ') @tree=(6,33,$2,$4) @template=binary_33($2,\s$4)
+  CLExpr := 'binary_34 '( CTree ', CTree ') @tree=(6,34,$2,$4) @template=binary_34($2,\s$4)
+  CLExpr := 'binary_35 '( CTree ', CTree ') @tree=(6,35,$2,$4) @template=binary_35($2,\s$4)
+  CLExpr := 'binary_36 '( CTree ', CTree ') @tree=(6,36,$2,$4) @template=binary_36($2,\s$4)
+  CLExpr := 'binary_37 '( CTree ', CTree ') @tree=(6,37,$2,$4) @template=binary_37($2,\s$4)
+  CLExpr := 'unary_1 '( CTree ') @tree=(7,1,$2,0) @template=unary_1($2)
+  CLExpr := 'unary_2 '( CTree ') @tree=(7,2,$2,0) @template=unary_2($2)
+  CLExpr := 'unary_3 '( CTree ') @tree=(7,3,$2,0) @template=unary_3($2)
+  CLExpr := 'unary_4 '( CTree ') @tree=(7,4,$2,0) @template=unary_4($2)
+  CLExpr := 'tree_8 '( CTree ', CTree ', CTree ') @tree=(8,$2,$4,$6) @template=tree_8($2,\s$4,\s$6)
+  CLExpr := 'tree_9 '( CTree ', CTree ', CTree ') @tree=(9,$2,$4,$6) @template=tree_9($2,\s$4,\s$6)
+  CLHelper := 'tree_10 '( CTree ', CTree ') @tree=(10,$2,$4,0) @template=tree_10($2,\s$4)
+  CLExpr := 'tree_11_list '( CTree ') @tree=(11,$2,0,0) @template=tree_11_list($2)
+  CLExpr := 'tree_11_array '( CTree ') @tree=(11,$2,1,0) @template=tree_11_array($2)
+  CLHelper := 'tree_12 '( CTree ', CTree ') @tree=(12,$2,$4,0) @template=tree_12($2,\s$4)
+  CLExpr := 'tree_13 '( CTree ') @tree=(13,$2,0,0) @template=tree_13($2)
+  CLExpr := 'tree_14 '( CTree ', CTree ', CTree ') @tree=(14,$2,$4,a1($6)) @template=tree_14($2,\s$4,\s$6)
+  CLExpr := 'tree_14_wild '( CTree ') @tree=(14,-1,$2,-1) @template=tree_14_wild($2)
+  CLHelper := 'tree_15 '( CTree ', CTree ', CTree ') @tree=(15,$2,$4,$6) @template=tree_15($2,\s$4,\s$6)
+  CLExpr := 'tree_16 '( CTree ', CTree ') @tree=(16,$2,$4,0) @template=tree_16($2,\s$4)
+  CLExpr := 'tree_17 '( CTree ', number ') @tree=(17,$2,d4,0) @template=tree_17($2,\s$4)
+  CLHelper := 'tree_18 '( CTree ') @tree=(18,$2,E,0) @template=tree_18($2)
+  CLHelper := 'tree_19 '( CTree ', CTree ') @tree=(19,$2,$4,0) @template=tree_19($2,\s$4)
+  CLDecl := 'tree_20 '( CTree ', CTree ', CTree ') @tree=(20,$2,$4,$6) @template=tree_20($2,\s$4,\s$6)
+  CLHelper := 'tree_21_def '( CTree ', CTree ') @tree=(21,$2,$4,0) @template=tree_21_def($2,\s$4)
+  CLHelper := 'tree_21_partial '( CTree ', CTree ') @tree=(21,$2,$4,1) @template=tree_21_partial($2,\s$4)
+  CLHelper := 'tree_21_theorem '( CTree ', CTree ') @tree=(21,$2,$4,2) @template=tree_21_theorem($2,\s$4)
+  CLHelper := 'tree_22 '( CTree ', CTree ', CTree ') @tree=(22,$2,$4,$6) @template=tree_22($2,\s$4,\s$6)
+  CLHelper := 'tree_23 '( CTree ', CTree ') @tree=(23,$2,a1($4),0) @template=tree_23($2,\s$4)
+  CLHelper := 'tree_24 '( CTree ', CTree ', CTree ') @tree=(24,$2,$4,$6) @template=tree_24($2,\s$4,\s$6)
+  CLHelper := 'tree_25 '( CTree ', CTree ') @tree=(25,$2,a1($4),0) @template=tree_25($2,\s$4)
+  CLDecl := 'tree_26 '( CTree ', CTree ', CTree ') @tree=(26,$2,$4,a1($6)) @template=tree_26($2,\s$4,\s$6)
+  CLHelper := 'tree_27 '( CTree ', CTree ', CTree ') @tree=(27,$2,$4,$6) @template=tree_27($2,\s$4,\s$6)
+  CLDecl := 'tree_28 '( CTree ') @tree=(28,$2,0,0) @template=tree_28($2)
+  CLExpr := 'tree_29 '( CTree ', rawname ') @tree=(29,$2,s4,e4) @template=tree_29($2,\s$4)
+  CLExpr := 'tree_30 '( CTree ', CTree ') @tree=(30,$2,$4,0) @template=tree_30($2,\s$4)
+  CLExpr := 'tree_31 '( CTree ', CTree ') @tree=(31,$2,$4,0) @template=tree_31($2,\s$4)
+  CLExpr := 'tree_32 '( CTree ', CTree ') @tree=(32,$2,$4,0) @template=tree_32($2,\s$4)
+  CLExpr := 'tree_33 '( CTree ', CTree ') @tree=(33,$2,$4,0) @template=tree_33($2,\s$4)
+  CLDecl := 'tree_34 '( CTree ', CTree ') @tree=(34,$2,$4,0) @template=tree_34($2,\s$4)
+  CLDecl := 'tree_35 '( CTree ', CTree ') @tree=(35,$2,$4,0) @template=tree_35($2,\s$4)
+  CLDecl := 'tree_36 '( CTree ', CTree ', CTree ') @tree=(36,$2,$4,$6) @template=tree_36($2,\s$4,\s$6)
+  CLDecl := 'tree_37 '( CTree ', CTree ') @tree=(37,$2,$4,0) @template=tree_37($2,\s$4)
+  CLDecl := 'tree_38 '( CTree ', CTree ', CTree ') @tree=(38,$2,$4,a1($6)) @template=tree_38($2,\s$4,\s$6)
+  CLHelper := 'tree_39 '( CTree ', CTree ', CTree ') @tree=(39,$2,$4,a1($6)) @template=tree_39($2,\s$4,\s$6)
+  CLHelper := 'tree_40 '( CTree ', CTree ') @tree=(40,$2,$4,0) @template=tree_40($2,\s$4)
+  CLExpr := 'tree_41 '( CTree ', CTree ') @tree=(41,$2,$4,0) @template=tree_41($2,\s$4)
+  CLExpr := 'tree_42 '( CTree ', CTree ') @tree=(42,$2,$4,0) @template=tree_42($2,\s$4)
+  CLExpr := 'tree_43 '( rawname ') @tree=(43,s2,e2,0) @template=tree_43($2)
+  CLExpr := 'tree_44 '( CTree ', rawname ') @tree=(44,$2,s4,e4) @template=tree_44($2,\s$4)
+  CLHelper := 'tree_45 '( CTree ', CTree ') @tree=(45,$2,$4,0) @template=tree_45($2,\s$4)
+  CLHelper := 'tree_45_structural '( CTree ', CTree ') @tree=(45,$2,$4,1) @template=tree_45_structural($2,\s$4)
+  CLExpr := 'tree_46_legacy '( CDoSteps ') @tree=(46,$2,0,0) @template=tree_46_legacy($2)
+  CLExpr := 'tree_46_general '( CDoSteps ') @tree=(46,$2,1,0) @template=tree_46_general($2)
+  CLExpr := 'tree_47 '( CTree ') @tree=(47,$2,0,0) @template=tree_47($2)
+  CLDecl := 'tree_48 '( CTree ', CTree ', CTree ') @tree=(48,$2,$4,$6) @template=tree_48($2,\s$4,\s$6)
+  CLHelper := 'tree_55_untyped '( CTree ') @tree=(55,$2,0,0) @template=tree_55_untyped($2)
+  CLHelper := 'tree_55_typed '( CTree ') @tree=(55,$2,1,0) @template=tree_55_typed($2)
+  CLDecl := 'tree_56 '( CTree ') @tree=(56,$2,0,0) @template=tree_56($2)
+  CLDecl := 'tree_56_runtime '( CTree ') @tree=(56,$2,1,0) @template=tree_56_runtime($2)
+  CLDecl := 'tree_57 '( ') @tree=(57,0,0,0) @template=tree_57()
+  CLHelper := 'tree_58 '( moduleident ') @tree=(58,s2,e2,0) @template=tree_58($2)
+  CLHelper := 'tree_59 '( CTree ', CTree ') @tree=(59,$2,$4,0) @template=tree_59($2,\s$4)
+  CLHelper := 'tree_60 '( CDoStep ') @tree=(60,$2,0,0) @template=tree_60($2)
+  CDoSteps := CDoStep CDoStepsTail @tree=(12,$0,$1,0) @template=$0$1
+  CDoSteps := eps @tree=-1 @template=
+  CDoStepsTail := ', CDoSteps @tree=$1 @template=,\s$1
+  CDoStepsTail := eps @tree=-1 @template=
+  CDoStep := 'do_43 '( CTree ', CTree ') @tree=(43,$2,$4,0) @template=do_43($2,\s$4)
+  CDoStep := 'do_44 '( CTree ') @tree=(44,$2,0,0) @template=do_44($2)
+  CDoStep := 'return_44 '( CTree ') @tree=(44,$2,1,0) @template=return_44($2)
+  CDoStep := 'do_45 '( CTree ', CTree ', CTree ') @tree=(45,$2,$4,$6) @template=do_45($2,\s$4,\s$6)
+  CDoStep := CDo @tree=$0 @template=$0
+  # Direct statement variants stay out of Expr: doExpr44 is a wrapper,
+  # not a second spelling of these context2 nodes.
+  CDo := 'syntax_200 '( C4 ') @tree=(200,$2,0,0) @template=syntax_200($2)
+  CHelper := 'syntax_201 '( C2 ') @tree=(201,$2,0,0) @template=syntax_201($2)
+  CHelper := 'syntax_202 '( C2 ') @tree=(202,$2,0,0) @template=syntax_202($2)
+  CHelper := 'syntax_203 '( C2 ') @tree=(203,$2,0,0) @template=syntax_203($2)
+  CHelper := 'syntax_204 '( C2 ') @tree=(204,$2,0,0) @template=syntax_204($2)
+  CDo := 'syntax_205 '( C2 ') @tree=(205,$2,0,0) @template=syntax_205($2)
+  CDo := 'syntax_206 '( C2 ') @tree=(206,$2,0,0) @template=syntax_206($2)
+  CHelper := 'syntax_207 '( C3 ') @tree=(207,$2,0,0) @template=syntax_207($2)
+  CDo := 'syntax_208 '( C4 ') @tree=(208,$2,0,0) @template=syntax_208($2)
+  CHelper := 'syntax_209 '( C2 ') @tree=(209,$2,0,0) @template=syntax_209($2)
+  CHelper := 'syntax_210 '( C2 ') @tree=(210,$2,0,0) @template=syntax_210($2)
+  CDo := 'syntax_211 '( C3 ') @tree=(211,$2,0,0) @template=syntax_211($2)
+  CHelper := 'syntax_212 '( C3 ') @tree=(212,$2,0,0) @template=syntax_212($2)
+  CHelper := 'syntax_213 '( C1 ') @tree=(213,$2,0,0) @template=syntax_213($2)
+  CHelper := 'syntax_214 '( C1 ') @tree=(214,$2,0,0) @template=syntax_214($2)
+  CDo := 'syntax_215 '( ') @tree=(215,-1,0,0) @template=syntax_215()
+  CDo := 'syntax_216 '( ') @tree=(216,-1,0,0) @template=syntax_216()
+  CDo := 'syntax_217 '( C1 ') @tree=(217,$2,0,0) @template=syntax_217($2)
+  CDo := 'syntax_218 '( C1 ') @tree=(218,$2,0,0) @template=syntax_218($2)
+  CDo := 'syntax_219 '( C2 ') @tree=(219,$2,0,0) @template=syntax_219($2)
+  CDo := 'syntax_220 '( C1 ') @tree=(220,$2,0,0) @template=syntax_220($2)
+  CDo := 'syntax_221 '( C3 ') @tree=(221,$2,0,0) @template=syntax_221($2)
+  CDo := 'syntax_222 '( C2 ') @tree=(222,$2,0,0) @template=syntax_222($2)
+  CDo := 'syntax_223 '( C3 ') @tree=(223,$2,0,0) @template=syntax_223($2)
+  CDo := 'syntax_224 '( C1 ') @tree=(224,$2,0,0) @template=syntax_224($2)
+  CDo := 'syntax_225 '( C1 ') @tree=(225,$2,0,0) @template=syntax_225($2)
+  CDo := 'syntax_229 '( C1 ') @tree=(229,$2,0,0) @template=syntax_229($2)
+  CDo := 'syntax_232 '( C1 ') @tree=(232,$2,0,0) @template=syntax_232($2)
+  CExpr := 'syntax_234 '( C1 ') @tree=(234,$2,0,0) @template=syntax_234($2)
+  CExpr := 'syntax_235 '( C2 ') @tree=(235,$2,0,0) @template=syntax_235($2)
+  CExpr := 'syntax_236 '( C3 ') @tree=(236,$2,0,0) @template=syntax_236($2)
+  CExpr := 'syntax_237 '( C1 ') @tree=(237,$2,0,0) @template=syntax_237($2)
+  # Command.lean and its finite declaration/modifier/binder dependencies.
+  CDecl := 'syntax_300 '( C2 ') @tree=(300,$2,0,0) @template=syntax_300($2)
+  CHelper := 'syntax_301 '( ') @tree=(301,-1,0,0) @template=syntax_301()
+  CHelper := 'syntax_302 '( ') @tree=(302,-1,0,0) @template=syntax_302()
+  CHelper := 'syntax_303 '( ') @tree=(303,-1,0,0) @template=syntax_303()
+  CHelper := 'syntax_304 '( ') @tree=(304,-1,0,0) @template=syntax_304()
+  CHelper := 'syntax_305 '( C1 ') @tree=(305,$2,0,0) @template=syntax_305($2)
+  CHelper := 'syntax_306 '( C2 ') @tree=(306,$2,0,0) @template=syntax_306($2)
+  CHelper := 'syntax_307 '( ') @tree=(307,-1,0,0) @template=syntax_307()
+  CHelper := 'syntax_308 '( ') @tree=(308,-1,0,0) @template=syntax_308()
+  CHelper := 'syntax_309 '( C2 ') @tree=(309,$2,0,0) @template=syntax_309($2)
+  CHelper := 'syntax_310 '( C3 ') @tree=(310,$2,0,0) @template=syntax_310($2)
+  CHelper := 'syntax_311 '( ') @tree=(311,-1,0,0) @template=syntax_311()
+  CHelper := 'syntax_312 '( ') @tree=(312,-1,0,0) @template=syntax_312()
+  CHelper := 'syntax_313 '( ') @tree=(313,-1,0,0) @template=syntax_313()
+  CDecl := 'syntax_314 '( C2 ') @tree=(314,$2,0,0) @template=syntax_314($2)
+  CHelper := 'syntax_315 '( C1 ') @tree=(315,$2,0,0) @template=syntax_315($2)
+  CDecl := 'syntax_316 '( C2 ') @tree=(316,$2,0,0) @template=syntax_316($2)
+  CDecl := 'syntax_317 '( C2 ') @tree=(317,$2,0,0) @template=syntax_317($2)
+  CDecl := 'syntax_318 '( C2 ') @tree=(318,$2,0,0) @template=syntax_318($2)
+  CDecl := 'syntax_319 '( C1 ') @tree=(319,$2,0,0) @template=syntax_319($2)
+  CDecl := 'syntax_320 '( C1 ') @tree=(320,$2,0,0) @template=syntax_320($2)
+  CDecl := 'syntax_321 '( C1 ') @tree=(321,$2,0,0) @template=syntax_321($2)
+  CDecl := 'syntax_322 '( C1 ') @tree=(322,$2,0,0) @template=syntax_322($2)
+  CDecl := 'syntax_323 '( C1 ') @tree=(323,$2,0,0) @template=syntax_323($2)
+  CDecl := 'syntax_324 '( C1 ') @tree=(324,$2,0,0) @template=syntax_324($2)
+  CDecl := 'syntax_325 '( C1 ') @tree=(325,$2,0,0) @template=syntax_325($2)
+  CDecl := 'syntax_326 '( C1 ') @tree=(326,$2,0,0) @template=syntax_326($2)
+  CDecl := 'syntax_327 '( C1 ') @tree=(327,$2,0,0) @template=syntax_327($2)
+  CDecl := 'syntax_328 '( C3 ') @tree=(328,$2,0,0) @template=syntax_328($2)
+  CDecl := 'syntax_329 '( C1 ') @tree=(329,$2,0,0) @template=syntax_329($2)
+  CDecl := 'syntax_330 '( C6 ') @tree=(330,$2,0,0) @template=syntax_330($2)
+  CDecl := 'syntax_331 '( C4 ') @tree=(331,$2,0,0) @template=syntax_331($2)
+  CDecl := 'syntax_332 '( C3 ') @tree=(332,$2,0,0) @template=syntax_332($2)
+  CDecl := 'syntax_333 '( C4 ') @tree=(333,$2,0,0) @template=syntax_333($2)
+  CDecl := 'syntax_334 '( C4 ') @tree=(334,$2,0,0) @template=syntax_334($2)
+  CDecl := 'syntax_335 '( C2 ') @tree=(335,$2,0,0) @template=syntax_335($2)
+  CHelper := 'syntax_336 '( C2 ') @tree=(336,$2,0,0) @template=syntax_336($2)
+  CHelper := 'syntax_337 '( C2 ') @tree=(337,$2,0,0) @template=syntax_337($2)
+  CDecl := 'syntax_338 '( C7 ') @tree=(338,$2,0,0) @template=syntax_338($2)
+  CDecl := 'syntax_339 '( C6 ') @tree=(339,$2,0,0) @template=syntax_339($2)
+  CDecl := 'syntax_340 '( C7 ') @tree=(340,$2,0,0) @template=syntax_340($2)
+  CHelper := 'syntax_341 '( C5 ') @tree=(341,$2,0,0) @template=syntax_341($2)
+  CHelper := 'syntax_342 '( C5 ') @tree=(342,$2,0,0) @template=syntax_342($2)
+  CHelper := 'syntax_343 '( C5 ') @tree=(343,$2,0,0) @template=syntax_343($2)
+  CHelper := 'syntax_344 '( C5 ') @tree=(344,$2,0,0) @template=syntax_344($2)
+  CHelper := 'syntax_345 '( C4 ') @tree=(345,$2,0,0) @template=syntax_345($2)
+  CHelper := 'syntax_346 '( C2 ') @tree=(346,$2,0,0) @template=syntax_346($2)
+  CDecl := 'syntax_347 '( C7 ') @tree=(347,$2,0,0) @template=syntax_347($2)
+  CHelper := 'syntax_348 '( C1 ') @tree=(348,$2,0,0) @template=syntax_348($2)
+  CHelper := 'syntax_349 '( C2 ') @tree=(349,$2,0,0) @template=syntax_349($2)
+  CDecl := 'syntax_350 '( C8 ') @tree=(350,$2,0,0) @template=syntax_350($2)
+  CHelper := 'syntax_351 '( ') @tree=(351,-1,0,0) @template=syntax_351()
+  CHelper := 'syntax_352 '( ') @tree=(352,-1,0,0) @template=syntax_352()
+  CHelper := 'syntax_353 '( ') @tree=(353,-1,0,0) @template=syntax_353()
+  CHelper := 'syntax_354 '( ') @tree=(354,-1,0,0) @template=syntax_354()
+  CHelper := 'syntax_355 '( ') @tree=(355,-1,0,0) @template=syntax_355()
+  CDecl := 'syntax_356 '( C9 ') @tree=(356,$2,0,0) @template=syntax_356($2)
+  CHelper := 'syntax_357 '( C2 ') @tree=(357,$2,0,0) @template=syntax_357($2)
+  CDecl := 'syntax_358 '( C4 ') @tree=(358,$2,0,0) @template=syntax_358($2)
+  CDecl := 'syntax_359 '( C4 ') @tree=(359,$2,0,0) @template=syntax_359($2)
+  CDecl := 'syntax_360 '( C3 ') @tree=(360,$2,0,0) @template=syntax_360($2)
+  CDecl := 'syntax_361 '( C3 ') @tree=(361,$2,0,0) @template=syntax_361($2)
+  CDecl := 'syntax_362 '( C2 ') @tree=(362,$2,0,0) @template=syntax_362($2)
+  CDecl := 'syntax_363 '( C2 ') @tree=(363,$2,0,0) @template=syntax_363($2)
+  CHelper := 'syntax_364 '( C2 ') @tree=(364,$2,0,0) @template=syntax_364($2)
+  CHelper := 'syntax_368 '( ') @tree=(368,-1,0,0) @template=syntax_368()
+  CHelper := 'syntax_369 '( ') @tree=(369,-1,0,0) @template=syntax_369()
+  CHelper := 'syntax_370 '( C3 ') @tree=(370,$2,0,0) @template=syntax_370($2)
+  CHelper := 'syntax_371 '( C2 ') @tree=(371,$2,0,0) @template=syntax_371($2)
+  CHelper := 'syntax_372 '( C2 ') @tree=(372,$2,0,0) @template=syntax_372($2)
+  CHelper := 'syntax_373 '( C2 ') @tree=(373,$2,0,0) @template=syntax_373($2)
+  CHelper := 'syntax_374 '( C2 ') @tree=(374,$2,0,0) @template=syntax_374($2)
+  CHelper := 'syntax_375 '( C2 ') @tree=(375,$2,0,0) @template=syntax_375($2)
+  CHelper := 'syntax_376 '( C2 ') @tree=(376,$2,0,0) @template=syntax_376($2)
+  CDecl := 'syntax_377 '( C2 ') @tree=(377,$2,0,0) @template=syntax_377($2)
+  CDecl := 'syntax_378 '( C4 ') @tree=(378,$2,0,0) @template=syntax_378($2)
+  # Term.lean's finite selected kinds. Helpers stay in private CTree;
+  # they are never promoted through an ambiguous universal Expr alias.
+  CExpr := 'syntax_100 '( ') @tree=(100,-1,0,0) @template=syntax_100()
+  CExpr := 'syntax_101 '( ') @tree=(101,-1,0,0) @template=syntax_101()
+  CExpr := 'syntax_102 '( C1 ') @tree=(102,$2,0,0) @template=syntax_102($2)
+  CExpr := 'syntax_103 '( C1 ') @tree=(103,$2,0,0) @template=syntax_103($2)
+  CExpr := 'syntax_105 '( C1 ') @tree=(105,$2,0,0) @template=syntax_105($2)
+  CExpr := 'syntax_106 '( C1 ') @tree=(106,$2,0,0) @template=syntax_106($2)
+  CExpr := 'syntax_107 '( C1 ') @tree=(107,$2,0,0) @template=syntax_107($2)
+  CHelper := 'syntax_108 '( C2 ') @tree=(108,$2,0,0) @template=syntax_108($2)
+  CHelper := 'syntax_109 '( ') @tree=(109,-1,0,0) @template=syntax_109()
+  CExpr := 'syntax_110 '( C2 ') @tree=(110,$2,0,0) @template=syntax_110($2)
+  CExpr := 'syntax_111 '( C3 ') @tree=(111,$2,0,0) @template=syntax_111($2)
+  CExpr := 'syntax_112 '( C3 ') @tree=(112,$2,0,0) @template=syntax_112($2)
+  CExpr := 'syntax_113 '( C3 ') @tree=(113,$2,0,0) @template=syntax_113($2)
+  CExpr := 'syntax_114 '( C2 ') @tree=(114,$2,0,0) @template=syntax_114($2)
+  CExpr := 'syntax_115 '( C3 ') @tree=(115,$2,0,0) @template=syntax_115($2)
+  CExpr := 'syntax_116 '( C2 ') @tree=(116,$2,0,0) @template=syntax_116($2)
+  CExpr := 'syntax_117 '( C1 ') @tree=(117,$2,0,0) @template=syntax_117($2)
+  CExpr := 'syntax_118 '( C3 ') @tree=(118,$2,0,0) @template=syntax_118($2)
+  CHelper := 'syntax_119 '( C2 ') @tree=(119,$2,0,0) @template=syntax_119($2)
+  CHelper := 'syntax_121 '( ') @tree=(121,-1,0,0) @template=syntax_121()
+  CHelper := 'syntax_122 '( ') @tree=(122,-1,0,0) @template=syntax_122()
+  CExpr := 'syntax_123 '( C4 ') @tree=(123,$2,0,0) @template=syntax_123($2)
+  CHelper := 'syntax_124 '( C2 ') @tree=(124,$2,0,0) @template=syntax_124($2)
+  CHelper := 'syntax_125 '( C2 ') @tree=(125,$2,0,0) @template=syntax_125($2)
+  CHelper := 'syntax_126 '( C1 ') @tree=(126,$2,0,0) @template=syntax_126($2)
+  CHelper := 'syntax_127 '( C1 ') @tree=(127,$2,0,0) @template=syntax_127($2)
+  CHelper := 'syntax_128 '( C3 ') @tree=(128,$2,0,0) @template=syntax_128($2)
+  CExpr := 'syntax_129 '( C4 ') @tree=(129,$2,0,0) @template=syntax_129($2)
+  CHelper := 'syntax_134 '( C3 ') @tree=(134,$2,0,0) @template=syntax_134($2)
+  CHelper := 'syntax_135 '( C4 ') @tree=(135,$2,0,0) @template=syntax_135($2)
+  CExpr := 'syntax_136 '( C2 ') @tree=(136,$2,0,0) @template=syntax_136($2)
+  CExpr := 'syntax_137 '( C2 ') @tree=(137,$2,0,0) @template=syntax_137($2)
+  CHelper := 'syntax_138 '( C4 ') @tree=(138,$2,0,0) @template=syntax_138($2)
+  CExpr := 'syntax_139 '( C2 ') @tree=(139,$2,0,0) @template=syntax_139($2)
+  CHelper := 'syntax_140 '( C3 ') @tree=(140,$2,0,0) @template=syntax_140($2)
+  CHelper := 'syntax_141 '( C1 ') @tree=(141,$2,0,0) @template=syntax_141($2)
+  CHelper := 'syntax_142 '( C3 ') @tree=(142,$2,0,0) @template=syntax_142($2)
+  CExpr := 'syntax_143 '( C1 ') @tree=(143,$2,0,0) @template=syntax_143($2)
+  CExpr := 'syntax_144 '( C2 ') @tree=(144,$2,0,0) @template=syntax_144($2)
+  CHelper := 'syntax_145 '( C1 ') @tree=(145,$2,0,0) @template=syntax_145($2)
+  CExpr := 'syntax_146 '( C1 ') @tree=(146,$2,0,0) @template=syntax_146($2)
+  CExpr := 'syntax_147 '( ') @tree=(147,-1,0,0) @template=syntax_147()
+  CHelper := 'syntax_154 '( C3 ') @tree=(154,$2,0,0) @template=syntax_154($2)
+  CHelper := 'syntax_155 '( C2 ') @tree=(155,$2,0,0) @template=syntax_155($2)
+  CExpr := 'syntax_156 '( C4 ') @tree=(156,$2,0,0) @template=syntax_156($2)
+  CExpr := 'syntax_157 '( C4 ') @tree=(157,$2,0,0) @template=syntax_157($2)
+  CExpr := 'syntax_158 '( C3 ') @tree=(158,$2,0,0) @template=syntax_158($2)
+  CHelper := 'syntax_159 '( C2 ') @tree=(159,$2,0,0) @template=syntax_159($2)
+  CHelper := 'syntax_160 '( ') @tree=(160,-1,0,0) @template=syntax_160()
+  CHelper := 'syntax_161 '( ') @tree=(161,-1,0,0) @template=syntax_161()
+  # Same finite structural quotation ABI as RSD and RSL.
+  CExpr := 'syntax_162 '( C1 ') @tree=(162,$2,0,0) @template=syntax_162($2)
+  CHelper := 'quoted_name '( rawname ') @tree=(163,(12,(58,s2,e2,0),-1,0),0,0) @template=quoted_name($2)
+  CHelper := 'syntax_164 '( C1 ') @tree=(164,$2,0,0) @template=syntax_164($2)
+  CHelper := 'syntax_165 '( C1 ') @tree=(165,$2,0,0) @template=syntax_165($2)
+  CHelper := 'syntax_166 '( C1 ') @tree=(166,$2,0,0) @template=syntax_166($2)
+  CHelper := 'syntax_167 '( C1 ') @tree=(167,$2,0,0) @template=syntax_167($2)
+  CHelper := 'syntax_168 '( C1 ') @tree=(168,$2,0,0) @template=syntax_168($2)
+  CHelper := 'syntax_169 '( C1 ') @tree=(169,$2,0,0) @template=syntax_169($2)
+  # Notation400 is a direct nonempty spine. Interpolation408 uses a
+  # separate odd alternating chunk3/Expr spine, not raw term text.
+  CExpr := 'syntax_400 '( CChildren ') @tree=(400,$2,0,0) @template=syntax_400($2)
+  CExpr := 'syntax_401 '( ') @tree=(401,-1,0,0) @template=syntax_401()
+  CExpr := 'syntax_402 '( C3 ') @tree=(402,$2,0,0) @template=syntax_402($2)
+  CExpr := 'syntax_403 '( C2 ') @tree=(403,$2,0,0) @template=syntax_403($2)
+  CHelper := 'syntax_404 '( C2 ') @tree=(404,$2,0,0) @template=syntax_404($2)
+  CExpr := 'syntax_405 '( C2 ') @tree=(405,$2,0,0) @template=syntax_405($2)
+  CExpr := 'syntax_406 '( C3 ') @tree=(406,$2,0,0) @template=syntax_406($2)
+  CHelper := 'syntax_407 '( C1 ') @tree=(407,$2,0,0) @template=syntax_407($2)
+  CHelper := 'syntax_408 '( CInterp ') @tree=(408,$2,0,0) @template=syntax_408($2)
+  CExpr := 'syntax_409 '( C1 ') @tree=(409,$2,0,0) @template=syntax_409($2)
+  CExpr := 'syntax_410 '( C1 ') @tree=(410,$2,0,0) @template=syntax_410($2)
+  CExpr := 'syntax_411 '( C2 ') @tree=(411,$2,0,0) @template=syntax_411($2)
+  CExpr := 'syntax_412 '( C2 ') @tree=(412,$2,0,0) @template=syntax_412($2)
+  CExpr := 'syntax_413 '( C1 ') @tree=(413,$2,0,0) @template=syntax_413($2)
+  CExpr := 'syntax_414 '( C2 ') @tree=(414,$2,0,0) @template=syntax_414($2)
+  CExpr := 'syntax_415 '( C1 ') @tree=(415,$2,0,0) @template=syntax_415($2)
+  CInterp := CChunkClosed @tree=(12,$0,-1,0) @template=$0
+  CInterp := CChunkOpen ', CTree ', CInterpTail @tree=(12,$0,(12,$2,$4,0),0) @template=$0,\s$2,\s$4
+  CInterpTail := CChunkEnd @tree=(12,$0,-1,0) @template=$0
+  CInterpTail := CChunkMiddle ', CTree ', CInterpTail @tree=(12,$0,(12,$2,$4,0),0) @template=$0,\s$2,\s$4
+  CChunkClosed := 'chunk_closed '( interpClosed ') @tree=(3,s2,e2,0) @template=chunk_closed($2)
+  CChunkOpen := 'chunk_open '( interpOpen ') @tree=(3,s2,e2,0) @template=chunk_open($2)
+  CChunkMiddle := 'chunk_middle '( interpMiddle ') @tree=(3,s2,e2,0) @template=chunk_middle($2)
+  CChunkEnd := 'chunk_end '( interpEnd ') @tree=(3,s2,e2,0) @template=chunk_end($2)
+  # Term500 contains tactic syntax. Private finite nodes preserve all
+  # sequence/config/pattern/location roles, including presence599.
+  CExpr := 'syntax_500 '( C1 ') @tree=(500,$2,0,0) @template=syntax_500($2)
+  CHelper := 'syntax_501 '( C1 ') @tree=(501,$2,0,0) @template=syntax_501($2)
+  CHelper := 'syntax_502 '( C1 ') @tree=(502,$2,0,0) @template=syntax_502($2)
+  CHelper := 'syntax_503 '( C1 ') @tree=(503,$2,0,0) @template=syntax_503($2)
+  CHelper := 'syntax_504 '( ') @tree=(504,-1,0,0) @template=syntax_504()
+  CHelper := 'syntax_505 '( C5 ') @tree=(505,$2,0,0) @template=syntax_505($2)
+  CHelper := 'syntax_506 '( C1 ') @tree=(506,$2,0,0) @template=syntax_506($2)
+  CHelper := 'syntax_507 '( C3 ') @tree=(507,$2,0,0) @template=syntax_507($2)
+  CHelper := 'syntax_508 '( C2 ') @tree=(508,$2,0,0) @template=syntax_508($2)
+  CHelper := 'syntax_509 '( C3 ') @tree=(509,$2,0,0) @template=syntax_509($2)
+  CHelper := 'syntax_510 '( C2 ') @tree=(510,$2,0,0) @template=syntax_510($2)
+  CHelper := 'syntax_511 '( ') @tree=(511,-1,0,0) @template=syntax_511()
+  CHelper := 'syntax_512 '( C3 ') @tree=(512,$2,0,0) @template=syntax_512($2)
+  CHelper := 'syntax_513 '( C5 ') @tree=(513,$2,0,0) @template=syntax_513($2)
+  CHelper := 'syntax_514 '( C1 ') @tree=(514,$2,0,0) @template=syntax_514($2)
+  CHelper := 'syntax_515 '( C1 ') @tree=(515,$2,0,0) @template=syntax_515($2)
+  CHelper := 'syntax_516 '( C1 ') @tree=(516,$2,0,0) @template=syntax_516($2)
+  CHelper := 'syntax_517 '( C2 ') @tree=(517,$2,0,0) @template=syntax_517($2)
+  CHelper := 'syntax_518 '( C2 ') @tree=(518,$2,0,0) @template=syntax_518($2)
+  CHelper := 'syntax_519 '( C2 ') @tree=(519,$2,0,0) @template=syntax_519($2)
+  CHelper := 'syntax_520 '( ') @tree=(520,-1,0,0) @template=syntax_520()
+  CHelper := 'syntax_521 '( C2 ') @tree=(521,$2,0,0) @template=syntax_521($2)
+  CHelper := 'syntax_522 '( C1 ') @tree=(522,$2,0,0) @template=syntax_522($2)
+  CHelper := 'syntax_523 '( C3 ') @tree=(523,$2,0,0) @template=syntax_523($2)
+  CHelper := 'syntax_524 '( C1 ') @tree=(524,$2,0,0) @template=syntax_524($2)
+  CHelper := 'syntax_525 '( C2 ') @tree=(525,$2,0,0) @template=syntax_525($2)
+  CHelper := 'syntax_526 '( C1 ') @tree=(526,$2,0,0) @template=syntax_526($2)
+  CHelper := 'syntax_527 '( C2 ') @tree=(527,$2,0,0) @template=syntax_527($2)
+  CHelper := 'syntax_528 '( C1 ') @tree=(528,$2,0,0) @template=syntax_528($2)
+  CHelper := 'syntax_529 '( C2 ') @tree=(529,$2,0,0) @template=syntax_529($2)
+  CHelper := 'syntax_530 '( C4 ') @tree=(530,$2,0,0) @template=syntax_530($2)
+  CHelper := 'syntax_531 '( ') @tree=(531,-1,0,0) @template=syntax_531()
+  CHelper := 'syntax_532 '( C3 ') @tree=(532,$2,0,0) @template=syntax_532($2)
+  CHelper := 'syntax_533 '( C1 ') @tree=(533,$2,0,0) @template=syntax_533($2)
+  CHelper := 'syntax_534 '( C1 ') @tree=(534,$2,0,0) @template=syntax_534($2)
+  CHelper := 'syntax_535 '( C2 ') @tree=(535,$2,0,0) @template=syntax_535($2)
+  CHelper := 'syntax_536 '( C1 ') @tree=(536,$2,0,0) @template=syntax_536($2)
+  CHelper := 'syntax_537 '( ') @tree=(537,-1,0,0) @template=syntax_537()
+  CHelper := 'syntax_538 '( C1 ') @tree=(538,$2,0,0) @template=syntax_538($2)
+  CHelper := 'syntax_539 '( C2 ') @tree=(539,$2,0,0) @template=syntax_539($2)
+  CHelper := 'syntax_540 '( C4 ') @tree=(540,$2,0,0) @template=syntax_540($2)
+  CHelper := 'syntax_541 '( C1 ') @tree=(541,$2,0,0) @template=syntax_541($2)
+  CHelper := 'syntax_542 '( C4 ') @tree=(542,$2,0,0) @template=syntax_542($2)
+  CHelper := 'syntax_543 '( C1 ') @tree=(543,$2,0,0) @template=syntax_543($2)
+  CHelper := 'syntax_544 '( C1 ') @tree=(544,$2,0,0) @template=syntax_544($2)
+  CHelper := 'syntax_545 '( C1 ') @tree=(545,$2,0,0) @template=syntax_545($2)
+  CHelper := 'syntax_546 '( C2 ') @tree=(546,$2,0,0) @template=syntax_546($2)
+  CHelper := 'syntax_547 '( C1 ') @tree=(547,$2,0,0) @template=syntax_547($2)
+  CHelper := 'syntax_548 '( C2 ') @tree=(548,$2,0,0) @template=syntax_548($2)
+  CHelper := 'syntax_549 '( C3 ') @tree=(549,$2,0,0) @template=syntax_549($2)
+  CHelper := 'syntax_550 '( C2 ') @tree=(550,$2,0,0) @template=syntax_550($2)
+  CHelper := 'syntax_551 '( C1 ') @tree=(551,$2,0,0) @template=syntax_551($2)
+  CHelper := 'syntax_552 '( C1 ') @tree=(552,$2,0,0) @template=syntax_552($2)
+  CHelper := 'syntax_553 '( ') @tree=(553,-1,0,0) @template=syntax_553()
+  CHelper := 'syntax_554 '( C5 ') @tree=(554,$2,0,0) @template=syntax_554($2)
+  CHelper := 'syntax_555 '( C1 ') @tree=(555,$2,0,0) @template=syntax_555($2)
+  CHelper := 'syntax_556 '( C1 ') @tree=(556,$2,0,0) @template=syntax_556($2)
+  CHelper := 'syntax_557 '( C2 ') @tree=(557,$2,0,0) @template=syntax_557($2)
+  CHelper := 'syntax_558 '( C1 ') @tree=(558,$2,0,0) @template=syntax_558($2)
+  CHelper := 'syntax_559 '( ') @tree=(559,-1,0,0) @template=syntax_559()
+  CHelper := 'syntax_560 '( ') @tree=(560,-1,0,0) @template=syntax_560()
+  CHelper := 'syntax_561 '( C1 ') @tree=(561,$2,0,0) @template=syntax_561($2)
+  CHelper := 'syntax_562 '( ') @tree=(562,-1,0,0) @template=syntax_562()
+  CHelper := 'syntax_563 '( ') @tree=(563,-1,0,0) @template=syntax_563()
+  CHelper := 'syntax_564 '( ') @tree=(564,-1,0,0) @template=syntax_564()
+  CHelper := 'syntax_565 '( ') @tree=(565,-1,0,0) @template=syntax_565()
+  CHelper := 'syntax_565_assumption '( C1 ') @tree=(565,$2,0,0) @template=syntax_565_assumption($2)
+  CHelper := 'syntax_565_show '( C2 ') @tree=(565,$2,0,0) @template=syntax_565_show($2)
+  CHelper := 'syntax_565_refine '( C3 ') @tree=(565,$2,0,0) @template=syntax_565_refine($2)
+  CHelper := 'syntax_565_let '( C4 ') @tree=(565,$2,0,0) @template=syntax_565_let($2)
+  CHelper := 'syntax_566 '( ') @tree=(566,-1,0,0) @template=syntax_566()
+  CHelper := 'syntax_567 '( C1 ') @tree=(567,$2,0,0) @template=syntax_567($2)
+  CHelper := 'syntax_568 '( C1 ') @tree=(568,$2,0,0) @template=syntax_568($2)
+  CHelper := 'syntax_569 '( C1 ') @tree=(569,$2,0,0) @template=syntax_569($2)
+  CHelper := 'syntax_570 '( C2 ') @tree=(570,$2,0,0) @template=syntax_570($2)
+  CHelper := 'syntax_571 '( C1 ') @tree=(571,$2,0,0) @template=syntax_571($2)
+  CHelper := 'syntax_599 '( ') @tree=(599,-1,0,0) @template=syntax_599()
+residues
+  6 desugar
+  17 do_expansion
+  60 header
+  61 unclosed
+  62 syntax
+  63 unknown_form
+  64 arity
+  65 bad_binder
+  66 input_cap
+  67 grammar
+  68 grammar_cap
+  69 item_cap
+  70 forest_cap
+  71 budget
+  72 ambiguity
+  73 constructor_pattern
+  74 constructor_operand
+  75 no_inverse
+  76 template
+  77 lexical_regex
+  78 layout_constraint
+  79 longest_cycle
+examples
+  example "Inductive type and recursion" "inductive U where\n  | wrap : U -> U\n  | leaf : U\ndef build : Nat -> U\n  | 0 => U.leaf\n  | n + 1 => U.wrap (build n)\n"
+  example "Structure and instance" "structure Pair where\n  a : Int\n  b : Int\ndef total : Int := let p : Pair := { a := 4, b := 5 }; p.a + p.b\n"
+  example "Theorem with term proof (oracle gap)" "theorem identity (p : Prop) (h : p) : p := h\n"
+
+probes
+  pair "authored-binder" "def f (x : Int) : Int := x + 1\n" "val f = (x: Int): Int => x + 1;\n"
+  pair "fresh-word-bridge" "def f (x : UInt32) : UInt32 := x + 1\n" "val f = (x: UInt32): UInt32 => x + 1;\n"
+  pair "authored-prec" "def g (x : Int) (y : Int) : Int := x + y * 2\n" "val g = (x: Int, y: Int): Int => x + y * 2;\n"
+  treepair "arrow-return-type" "def apply (f : Int -> Int) (x : Int) : Int -> Int := f\n" "val apply = (f: Int -> Int, x: Int): Int -> Int => f;\n"
+  refuse "unclosed-comment" "val f = (x: Int): Int => x + 1; /* open" "61" "31"
+  refuse "unclosed-string" "val f = (): String => \"open" "61" "22"
+  refuse "non-assoc-eq" "val f = (x: Int): Bool => x == x == x;\n" "62" "39"
+  mutant "swapped-binary-forms" "def f (x : Int) : Int := x + 1\n" "(6,1,$0,$2)" "MUTANT_SLOT" "(6,2,$0,$2)" "(6,1,$0,$2)" "MUTANT_SLOT" "(6,2,$0,$2)"
+  mutant "dropped-binder-type" "def f (x : Int) : Int := x + 1\n" "@template=$0:\\s$2$3" "@template=$0$3"
+  mutant "swapped-add-mul-prec" "def g (x : Int) (y : Int) : Int := x + y * 2\n" "Expr := Expr '+ Expr @tree=(6,1,$0,$2) @template=$0\\s+\\s$2 @prio=65 @assoc=left" "Expr := Expr '+ Expr @tree=(6,1,$0,$2) @template=$0\\s+\\s$2 @prio=70 @assoc=left" "Expr := Expr '* Expr @tree=(6,3,$0,$2) @template=$0\\s*\\s$2 @prio=70 @assoc=left" "Expr := Expr '* Expr @tree=(6,3,$0,$2) @template=$0\\s*\\s$2 @prio=65 @assoc=left" "CLExpr := 'binary_3 '( CTree ', CTree ') @tree=(6,3,$2,$4) @template=binary_3($2,\\s$4)" "CTree := 'binary_3_disabled @tree=-1 @template=binary_3_disabled"

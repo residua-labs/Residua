@@ -1,0 +1,95 @@
+# release/checks/qformat — conformance check for the typed content address
+
+What a stranger can check with only `sha256sum`, `printf`, `cat`, `wc`,
+`tr`, `awk` and `test`. The specification is `docs/QFORMAT.md`
+(English) / `docs/QFORMAT.zh-CN.md` (中文). Six identity vectors and
+two planted controls, each recomputed from the bytes that ship in
+`vectors/`; expected outputs are in `VECTORS.tsv`.
+
+A q of kind `K` over a byte string `c` is `SHA-256("K <len>\0" ++ c)`,
+where `<len>` is the decimal byte length of `c`. A digest is `SHA-256(c)`
+with no header. The printed form of both is `sha256:<hex>`.
+
+## 1. Identity vectors
+
+```sh
+cd release/checks/qformat
+
+q() { # q <kind> <file>
+  { printf '%s %d\0' "$1" "$(wc -c < "$2" | tr -d ' ')"; cat "$2"; } \
+    | sha256sum | awk '{print "sha256:"$1}'
+}
+
+test "$(q blob    vectors/one.bin)"   = sha256:50453b3680a2bce6f2257866ab2bb108847e738d7accc7be9cab21fbcb6980d0
+test "$(q nf-key  vectors/nf1.bin)"   = sha256:3c50c5403f51dddc63ef121773ea1d5fdd8edb85e46f7b2bbc718c4b2ba30968
+test "$(q blob    vectors/hello.bin)" = sha256:541d93b47019daa4c4ba3ea924b3141471bc301c7e033dc7d8c9d2723569905e
+test "$(q rsx-atom vectors/hello.bin)" = sha256:c78f0f276656f21eb440bcc1cc9011b134c252a6a582c5afae0f786fe27de854
+```
+
+Each `test` prints nothing and exits 0. Expected vector values:
+
+```
+sha256:50453b3680a2bce6f2257866ab2bb108847e738d7accc7be9cab21fbcb6980d0
+sha256:3c50c5403f51dddc63ef121773ea1d5fdd8edb85e46f7b2bbc718c4b2ba30968
+sha256:541d93b47019daa4c4ba3ea924b3141471bc301c7e033dc7d8c9d2723569905e
+sha256:c78f0f276656f21eb440bcc1cc9011b134c252a6a582c5afae0f786fe27de854
+```
+
+## 2. Digest interop control
+
+Digests are raw SHA-256 for interop — they must equal `sha256sum`
+byte for byte and must NOT carry the header:
+
+```sh
+test "$(sha256sum vectors/one.bin   | awk '{print "sha256:"$1}')" \
+   = sha256:4bf5122f344554c53bde2ebb8cd2b7e3d1600ad631c385a5d7cce23c7785459a
+test "$(sha256sum vectors/hello.bin | awk '{print "sha256:"$1}')" \
+   = sha256:a3a285698dc7dbfe23947339ee187d471f643617f88b4af70209bb1a01edd9d9
+test "$(q blob vectors/one.bin)" != \
+     "$(sha256sum vectors/one.bin | awk '{print "sha256:"$1}')"
+```
+
+## 3. Planted controls
+
+**Kind separation.** The same bytes under two kinds give different q's,
+always:
+
+```sh
+test "$(q blob vectors/hello.bin)" != "$(q rsx-atom vectors/hello.bin)"
+```
+
+**The digest–q boundary (crafted preimage).** `vectors/crafted.bin` is a
+file whose bytes are exactly a valid tagged preimage
+(`"rsx-atom 7\x005:hello"`, 18 bytes). Its *digest* therefore equals
+`q(rsx-atom, "5:hello")` — that is unavoidable, and it is why the two
+addresses are different names typed by their field, not by the printed
+hex:
+
+```sh
+test "$(sha256sum vectors/crafted.bin | awk '{print "sha256:"$1}')" \
+   = sha256:c78f0f276656f21eb440bcc1cc9011b134c252a6a582c5afae0f786fe27de854
+```
+
+A comparison site that expects `q:rsx-atom` refuses `crafted.bin`'s
+digest field; a reader must not substitute one address for the other
+because the hex is equal.
+
+## Expected outputs
+
+Every `test` above exits 0 and prints nothing. `VECTORS.tsv` records the
+same eight rows (six vectors, two planted controls). A mismatch means
+either the shipped bytes changed (check `sha256sum -c` on the archive
+digest first) or the preimage rule was misread — `len` is the byte
+length of the canonical bytes only, decimal, no leading zeros, and the
+NUL is a single `0x00`.
+
+## Provenance of the vectors
+
+The six vector values were produced by three independent in-tree
+implementations of the tagged q agreeing on one another and on this
+independent recomputation (`printf` + `sha256sum`), at the batch's
+landed source revision; the two planted controls are negative controls
+planted for this check. The full sweep evidence of the batch (per-site
+classification, per-kind store round trips, the seed light sample) is
+repository-side under `reports/qformat/` and cited by the release note
+`release/notes/qformat-1.md`.

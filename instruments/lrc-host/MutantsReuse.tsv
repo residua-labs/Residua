@@ -1,7 +1,0 @@
-# FILE	FROM	TO  (FROM occurs exactly once in FILE; every row must make the differential report a mismatch)
-lib/lrc/ResetReuse.rsd	mkReset c.size x	mkReset c.ssize x
-lib/lrc/ResetReuse.rsd	if r.found || !hasFreeVar instr x then	if r.found then
-lib/lrc/ResetReuse.rsd	if bodyEq b b' then { next := next + 1, body := b }	if true then { next := next + 1, body := b }
-lib/lrc/ExpandResetReuse.rsd	if erConsumed (vdeclVar b) (bodyOf b) then	if !erConsumed (vdeclVar b) (bodyOf b) then
-lib/lrc/ExpandResetReuse.rsd	mkIf rf.next bSlow rf.body	mkIf rf.next rf.body bSlow
-lib/lrc/ExpandResetReuse.rsd	erSetFields y (reuseArgs v) (replaceVar (vdeclVar b) y (bodyOf b))	erSetFields y (reuseArgs v) (bodyOf b)

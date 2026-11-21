@@ -1,0 +1,12 @@
+# VECTORS — typed content address (q format v1), conformance rows
+# Columns: name	address_kind	bytes_file	expected (sha256: hex, or "distinct"/"equal" for planted rows)
+# "digest" rows hash the file bytes raw; "q:<kind>" rows hash
+# "<kind> <len>\0" ++ file bytes. See README.md for the commands.
+q-blob-one	q:blob	vectors/one.bin	sha256:50453b3680a2bce6f2257866ab2bb108847e738d7accc7be9cab21fbcb6980d0
+q-nf-key-nf1	q:nf-key	vectors/nf1.bin	sha256:3c50c5403f51dddc63ef121773ea1d5fdd8edb85e46f7b2bbc718c4b2ba30968
+q-blob-hello	q:blob	vectors/hello.bin	sha256:541d93b47019daa4c4ba3ea924b3141471bc301c7e033dc7d8c9d2723569905e
+q-rsx-atom-hello	q:rsx-atom	vectors/hello.bin	sha256:c78f0f276656f21eb440bcc1cc9011b134c252a6a582c5afae0f786fe27de854
+digest-one	digest	vectors/one.bin	sha256:4bf5122f344554c53bde2ebb8cd2b7e3d1600ad631c385a5d7cce23c7785459a
+digest-hello	digest	vectors/hello.bin	sha256:a3a285698dc7dbfe23947339ee187d471f643617f88b4af70209bb1a01edd9d9
+planted-kind-separation	q:blob-vs-q:rsx-atom	vectors/hello.bin	distinct
+planted-digest-eq-q	digest-vs-q:rsx-atom	vectors/crafted.bin	equal

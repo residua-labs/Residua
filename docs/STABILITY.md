@@ -1,0 +1,11 @@
+# STABILITY — what 0.2 promises
+
+English | [中文](STABILITY.zh-CN.md)
+
+- Frozen semantics are pinned by q; a change is a new revision with a
+  new q, never an edit in place.
+- The 0.x series promises no source, wire or ABI compatibility between
+  versions. The rsd surface of 0.2 (a Lean 4.14 subset) is a bootstrap
+  surface and will change.
+- Each version ships its specification set by q and a performance
+  record in a fixed form, so versions can be compared.

@@ -1,6 +1,0 @@
-# the source table sidecar: the .rscm beside this file was emitted from the .rsd beside this file
-# by the current emitter (emitTyped, the current emitter lowered form) under stock Lean 4.14.0 on
-# the benchmark source revision 2 (closure_claim = 0). It names both hashes; edit neither file.
-rscm_file	benchmarks/merkle.rscm	rscm_sha256	f2db211b93b9f60710955333482b212f35889a80754868e7a1f4b02a58bedad9	rscm_bytes	15545
-rsd_file	benchmarks/merkle.rsd	rsd_sha256	91773b1d848206a1d5730782977cc17cba332bf44144983f4d8f8e9d038d4dab
-root	merkle	entry	24	declared_arity	3	modules	33

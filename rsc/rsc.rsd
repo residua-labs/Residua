@@ -6092,38 +6092,30 @@ def lrcModule (lay : Layers) (g : Dg) (sigs : List (List Int)) (n : Nat) (pubs :
   -- under the alloc layer the stage's own heap (lib/lrc/Emit.rsd, "The stage's heap"): its three
   -- functions follow the internal ones, one for each declaration
   let heap := if lay.alloc then rtBase + n + decls.length else 0
-  -- the bytes of an object field: 4 under the layer `narrow`, which is a layout of the stage's own heap
-  -- (docs/OBJECT-ABI.md "Narrow fields"); such a module has one more function, exported as `fw`, that says so
-  let fw := if lay.narrow && lay.alloc then 4 else 8
   -- under the facts bit, which the stage does not use otherwise: internal functions return their
   -- results and a refusal is thrown to the entry (lib/lrc/Emit.rsd "How a function ends")
   let conv := if lay.facts then 1 else 0
   -- string literals as persistent objects in the module's data (lib/lrc/Emit.rsd)
   let lits := Lrc.litPool decls
-  let em := Lrc.emitFns g sigs rtBase n heap conv lits pubs decls fw decls
+  let em := Lrc.emitFns g sigs rtBase n heap conv lits pubs decls decls
   if !em.ok then outFail (lrcRefused (Lrc.Residue.nodeNotWritten em.fn))
   else
-    let fns := (rtFnsOfWithLayers lay) rts ++ em.publics ++ em.internals ++ (if heap == 0 then [] else Lrc.heapFnsFor (Lrc.declsUseArr n decls) heap fw)
-      ++ (if fw == 4 then [Lrc.narrowFn] else [])
+    let fns := (rtFnsOfWithLayers lay) rts ++ em.publics ++ em.internals ++ (if heap == 0 then [] else Lrc.heapFnsFor (Lrc.declsUseArr n decls) heap)
     -- the runtime's dup and drop, where the emitter still calls them (`compileFrom` does the same)
     let fns := runtimeInlineFns lay rtBase fns
-    -- the module's last function is the one that names the width (lib/lrc/Emit.rsd `narrowFn`)
-    let last := fns.length - 1
-    let exps := shiftExps rtBase (expsFor n) ++ (if fw == 4 then [{ name := Lrc.narrowName, idx := last }] else [])
-    outOk (encode { fns := if lay.reg then rgFns fns else fns, exps := exps, tags := conv,
+    outOk (encode { fns := if lay.reg then rgFns fns else fns, exps := shiftExps rtBase (expsFor n), tags := conv,
                     lowData := Lrc.litData lits })
 
 -- LRC: the stage on an image. One gate admits it (lib/lrc/FromWire.rsd `q` and `admit`, an NF
 -- instance); what is admitted goes through the passes under the word's options and is written as
 -- a module. The module's functions read the class's type context, as the translation did.
-def lrcCompile (lay : Layers) (g : Dg) (intr : List Int) (sigs : List (List Int)) (n : Nat) (bodies : List Int) (ws : List (List Int)) : Out :=
+def lrcCompile (lay : Layers) (g : Dg) (intr : List Int) (sigs : List (List Int)) (n : Nat) (bodies : List Int) : Out :=
   -- arrays are cells of the stage's own heap: without it a list stays cells (lib/lrc/FromWire.rsd "Arrays")
-  let c := Lrc.q { types := g, intr := intr, sigs := sigs, n := n, bodies := bodies, arrays := lay.alloc, narrow := lay.narrow && lay.alloc,
-                   widths := ws }
+  let c := Lrc.q { types := g, intr := intr, sigs := sigs, n := n, bodies := bodies, arrays := lay.alloc }
   match Lrc.admit c with
   | Except.error e => outFail (lrcRefused e)
   | Except.ok im =>
-    lrcModule lay c.types sigs n im.pubs (Lrc.pipelineWith ((if lay.cte then 1 else if lay.fuse then 0 else Lrc.pipelineDefault) + (if lay.qbe then 4 else 0) + (if lay.tail then 8 else 0) + (if lay.static then 16 else 0) + (if lay.borrow then 0 else 32) + (if lay.dropSpec then 0 else 256) + (if lay.narrow && lay.alloc then 2048 else 0)) im.n im.decls)
+    lrcModule lay c.types sigs n im.pubs (Lrc.pipelineWith ((if lay.cte then 1 else if lay.fuse then 0 else Lrc.pipelineDefault) + (if lay.qbe then 4 else 0) + (if lay.tail then 8 else 0) + (if lay.static then 16 else 0) + (if lay.borrow then 0 else 32) + (if lay.dropSpec then 0 else 256)) im.n im.decls)
 
 def compileFrom (lay : Layers) (g : Dg) (tbl : List TE) (hrest : List Int) : Out :=
     let g := { g with nodeUse := if g.on then nodeUsed g else [] }
@@ -6140,7 +6132,7 @@ def compileFrom (lay : Layers) (g : Dg) (tbl : List TE) (hrest : List Int) : Out
         let intrinsics := intrinsicKinds lay g 0 ss.ss ss.rest
         -- LRC: under the stage's word the stage compiles the image or refuses it (`lrcCompile`);
         -- with the layer off every image takes the path below.
-        if lrcOn lay then lrcCompile lay g intrinsics ss.ss c.n.toNat ss.rest (readSigWs g c.n.toNat c.rest)
+        if lrcOn lay then lrcCompile lay g intrinsics ss.ss c.n.toNat ss.rest
         else
         let bodies := if lay.rc && g.on then cseBodies g ss.ss intrinsics c.n.toNat 0 ss.rest else ss.rest
         let n := c.n.toNat

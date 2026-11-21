@@ -1,0 +1,2066 @@
+-- semantics/Syntax/Class.rsd: the formal spec of the syntax engine's grammar class (SYNTAX-SPEC-0).
+-- closure_claim = 0.
+--
+-- The class fixed by the owner (2026-11-15): context-free grammars + a regular lexer +
+-- indentation (layout) constraints + SDF-style disambiguation filters. Profiles are data
+-- (rsdc/profiles/*.syn); one engine. This file defines the class as a Lean 4.14 relation:
+-- what a grammar of the class is, what a derivation tree is, and when a tree parses an
+-- input (`SynSpec.Parses`). The engine's byte-level interpreter for the same class is
+-- rsdc/syntax/Syn.rsd (its `SRule`/`SynLex`/`SynContext` structures are the operational
+-- form of `SynSpec.Prod`/`SynSpec.LexC`/`SynSpec.Ctx` here); that interpreter is the
+-- differential target, never the spec.
+--
+-- Sources (reports/synspec/PRIOR-WORK.md):
+--   * Context-free derivations and the parse relation: Jonas Rau and Tobias Nipkow,
+--     "Earley_Parser", Archive of Formal Proofs 2021 (derivation trees / yield / Parse).
+--   * Byte regular expressions and the derivative matcher: J. A. Brzozowski,
+--     "Derivatives of regular expressions", JACM 11(4), 1964; the Krauss–Nipkow
+--     "Regular Sets and Expressions" AFP formalisation (2010) for `nullable`/`deriv`.
+--   * Layout constraints: Michael D. Adams, "Principled parsing for indentation-sensitive
+--     languages: revisiting Landin's offside rule", POPL 2013 — relations between the
+--     first/last positions of a node's children (our twelve `LayoutOp`s are the engine's
+--     vocabulary of the same family; `boundary` in the same sense as Erdweg et al.,
+--     "Layout-sensitive generalized parsing", SLE 2012, §4.2).
+--   * Disambiguation filters: Eelco Visser, "Syntax Definition for Language Prototyping",
+--     PhD thesis 1997 (SDF: priorities, associativity, follow restrictions, reject and
+--     prefer/avoid) and Scott & Johnstone, "Recognition is not parsing" (SCI 2010) for
+--     packed families over which the max-filters quantify.
+--
+-- Check: lean semantics/Syntax/Class.rsd
+
+import Std.Data.HashMap
+
+namespace SynSpec
+
+-- ---------------------------------------------------------------------------
+-- bytes and positions
+
+abbrev Byte := Nat
+abbrev Bs := List Byte
+
+def isByte (b : Nat) : Bool := b <= 255
+
+structure Coord where
+  line : Nat
+  col : Nat   -- Unicode scalar columns (UTF-8 leading bytes), Lean 4.14 Position.lean convention
+  ind : Nat   -- width of the line's leading space/tab run, in the same scalar count
+  deriving Repr, DecidableEq
+
+-- index of the first byte of p's line
+def lineStart (w : Bs) (p : Nat) : Nat :=
+  p - ((w.take p).reverse.takeWhile (fun b => b != 10)).length
+
+-- coordinates of byte position p: line, scalar column, and the line's indent width.
+-- Port of rsdc/syntax/Syn.rsd `synCoordinates` (itself Lean 4.14 Data/Position.lean
+-- columnOfPos: columns advance only on UTF-8 leading bytes).
+def coord (w : Bs) (p : Nat) : Coord :=
+  let ls := lineStart w p
+  let col := ((w.drop ls).take (p - ls)).foldl
+    (fun n b => n + (if b < 128 || b >= 192 then 1 else 0)) 0
+  let ind := ((w.drop ls).takeWhile (fun b => b == 32 || b == 9)).foldl
+    (fun n b => n + (if b < 128 || b >= 192 then 1 else 0)) 0
+  { line := (w.take p).countP (· == 10), col := col, ind := ind }
+
+-- ---------------------------------------------------------------------------
+-- skippables: whitespace bytes, a line-comment opener, nesting block comments.
+-- skipEnd w p is the least position ≥ p at which real input begins; it is
+-- w.length + 1 when a block comment never closes (the engine's 61 sentinel).
+
+structure Skip where
+  ws : Bs          -- whitespace bytes
+  lineCom : Bs     -- line-comment opener ([] = absent)
+  blkO : Bs        -- block-comment opener ([] = absent)
+  blkC : Bs        -- block-comment closer
+  deriving Repr
+
+def isPre (pre : Bs) (w : Bs) : Bool :=
+  match pre, w with
+  | [], _ => true
+  | b :: pre', b' :: w' => b == b' && isPre pre' w'
+  | _, _ => false
+
+def toNl (w : Bs) (p : Nat) : Nat :=
+  go (w.length + 1) p
+where
+  go : Nat → Nat → Nat
+    | 0, _ => w.length
+    | f + 1, q =>
+      if q >= w.length then w.length
+      else if w.getD q 0 == 10 then q else go f (q + 1)
+
+def blkEnd (sk : Skip) (w : Bs) (p d : Nat) : Nat :=
+  go (w.length + 2) p d
+where
+  go : Nat → Nat → Nat → Nat
+    | 0, _, _ => w.length + 1
+    | f + 1, q, d =>
+      if q >= w.length then w.length + 1
+      else if isPre sk.blkO (w.drop q) then go f (q + sk.blkO.length) (d + 1)
+      else if isPre sk.blkC (w.drop q) then
+        if d <= 1 then q + sk.blkC.length else go f (q + sk.blkC.length) (d - 1)
+      else go f (q + 1) d
+
+-- the least non-skippable position ≥ p; w.length + 1 on an unclosed block comment
+def skipEnd (sk : Skip) (w : Bs) (p : Nat) : Nat :=
+  go (w.length + 2) p
+where
+  go : Nat → Nat → Nat
+    | 0, q => q
+    | f + 1, q =>
+      if q >= w.length then q
+      else if w.getD q 0 ∈ sk.ws then go f (q + 1)
+      else if sk.lineCom != [] && isPre sk.lineCom (w.drop q) then
+        go f (toNl w (q + sk.lineCom.length))
+      else if sk.blkO != [] && isPre sk.blkO (w.drop q) then
+        let b := blkEnd sk w (q + sk.blkO.length) 1
+        if b > w.length then b else go f b
+      else q
+
+-- ---------------------------------------------------------------------------
+-- byte regular expressions (the .syn regex syntax: concatenation, |, (...),
+-- *, +, ?, ., [a-z], [^a-z], escapes; `.` excludes LF). Membership is the
+-- textbook inductively-defined language; the executable side is the
+-- Brzozowski derivative, proved correct below (mem_deriv etc.).
+
+inductive Rx where
+  | nil                                   -- never matches (derivative sink)
+  | eps                                   -- the empty word
+  | lit (b : Byte)                        -- a single byte
+  | cls (ranges : List (Byte × Byte)) (neg : Bool)  -- character class, possibly negated
+  | cat (a b : Rx)
+  | alt (a b : Rx)
+  | star (a : Rx)
+  deriving Repr, DecidableEq
+
+def Rx.plus (a : Rx) : Rx := .cat a (.star a)
+def Rx.opt (a : Rx) : Rx := .alt a .eps
+
+def Rx.inRanges (ranges : List (Byte × Byte)) (b : Byte) : Bool :=
+  ranges.any (fun (lo, hi) => lo <= b && b <= hi)
+
+inductive Rx.Mem : Rx → Bs → Prop where
+  | eps : Mem .eps []
+  | lit {b} : Mem (.lit b) [b]
+  | cls {ranges neg b} : Rx.inRanges ranges b = !neg → Mem (.cls ranges neg) [b]
+  | cat {a b s₁ s₂} : Mem a s₁ → Mem b s₂ → Mem (.cat a b) (s₁ ++ s₂)
+  | altL {a b s} : Mem a s → Mem (.alt a b) s
+  | altR {a b s} : Mem b s → Mem (.alt a b) s
+  | starNil {a} : Mem (.star a) []
+  | starCons {a s₁ s₂} : Mem a s₁ → Mem (.star a) s₂ → Mem (.star a) (s₁ ++ s₂)
+
+def Rx.nullable : Rx → Bool
+  | .nil => false
+  | .eps => true
+  | .lit _ => false
+  | .cls _ _ => false
+  | .cat a b => nullable a && nullable b
+  | .alt a b => nullable a || nullable b
+  | .star _ => true
+
+def Rx.deriv : Rx → Byte → Rx
+  | .nil, _ => .nil
+  | .eps, _ => .nil
+  | .lit c, b => if b == c then .eps else .nil
+  | .cls rs neg, b => if (Rx.inRanges rs b) != neg then .eps else .nil
+  | .cat a b, c => .alt (.cat (a.deriv c) b) (if a.nullable then b.deriv c else .nil)
+  | .alt a b, c => .alt (a.deriv c) (b.deriv c)
+  | .star a, c => .cat (a.deriv c) (.star a)
+
+def Rx.derivs (r : Rx) (s : Bs) : Rx := s.foldl Rx.deriv r
+
+-- the executable membership test: s ∈ L(r) iff derivs r s is nullable.
+def Rx.mem (r : Rx) (s : Bs) : Bool := (r.derivs s).nullable
+
+-- longest-prefix match end: the largest end ≥ start whose slice is a member.
+-- Returns `none` when no prefix (including the empty one) matches.
+def Rx.matchEnd (r : Rx) (w : Bs) (start : Nat) : Option Nat :=
+  go r (w.length + 1) start none
+where
+  go (r : Rx) : Nat → Nat → Option Nat → Option Nat
+    | 0, _, last => last
+    | f + 1, p, last =>
+      let last := if r.nullable then some p else last
+      match w.drop p with
+      | [] => last
+      | b :: _ => go (r.deriv b) f (p + 1) last
+
+-- ---------------------------------------------------------------------------
+-- the grammar of the class (card revision 06:2xZ): K-style syntax definitions —
+-- sorts (= Lean 4.14 syntax categories), productions over terminals and
+-- nonterminal occurrences, lexical tokens as regular relations, a layout sort
+-- (`Skip`), K attributes (priority `prec`, `disamb` prefer/avoid/bracket,
+-- ordered-choice `choiceGroup`/`choiceRank` a la Ford 2004, longest-match), and
+-- Lean's position checks (`boundaries`/`layout`/`Ctx.scope`/`Ctx.forbid`) as
+-- layout constraints (their formal reading: Adams POPL 2013).
+--
+-- Occurrences carry an explicit required precedence `rbp` (Lean's
+-- `ParserDescr.cat cat rbp`, Init/Prelude.lean:4134; K resolves it from
+-- `syntax priority`/associativity — the meaning functions compute it).
+
+abbrev Nt := String
+abbrev LexId := Nat   -- index into Grammar.lex
+abbrev Lit := Bs      -- literal byte spelling
+
+inductive Sym where
+  | nt (n : Nt) (rbp : Nat := 0)  -- child derivation must satisfy the rbp floor
+  | lit (bs : Lit)                -- literal terminal (token table, longest match)
+  | cls (i : LexId)               -- lexical class token
+  | header                        -- the profile's declared header literal
+  deriving Repr, DecidableEq
+
+-- a token class's matcher: a declared regular relation. The first two kinds
+-- are the engine's named builtins (stock string/interpolated-string scans,
+-- Lean 4.14 StrInterpolation/Basic); they are regular relations too, supplied
+-- by name so the class stays data-driven (see reports/synspec/OUTSIDE-CLASS.tsv).
+inductive TokScan where
+  | regex (r : Rx)
+  | stringLit
+  | interp (mode : Nat)   -- 1 closed, 2 open, 3 middle, 4 end
+  deriving Repr, DecidableEq
+
+structure LexC where
+  name : String
+  scan : TokScan
+  keywords : Bool            -- its spellings are reserved when they equal a grammar literal
+  rejectPrefix : List Rx     -- lexical negative lookahead at the token's start
+  incomplete : Nat           -- refusal code reported when a match is left pending (0 = none)
+  deriving Repr
+
+-- Adams-style layout operators on positions (SynSpec.coord values).
+-- Semantics of op k over (baseCol, baseInd) of the node's first non-skip byte,
+-- (childLine, childCol) of the child's first non-skip byte, previousLine of the
+-- previous byte, and raw positions (start, previous): see layoutHolds.
+inductive Forbid where
+  | inherit | clear | set (tok : Bs)
+  deriving Repr, DecidableEq
+
+structure Prod where
+  lhs : Nt
+  rhs : List Sym
+  prio : Int := -1                 -- K `syntax priority` level; -1 = none. Lean checkPrec:
+                                   -- applies under context floor f iff prio < 0 ∨ f ≤ prio
+  assoc : Nat := 0                 -- K associativity: 0 none, 1 left, 2 right, 3 nonassoc
+                                   -- (resolved to occurrence rbps by the meaning functions;
+                                   -- also enforced directly by Prod.allow below)
+  disamb : Nat := 0                -- K disambiguation: 0 normal, 1 prefer, 2 avoid, 3 bracket
+  kind : Nt := ""                  -- syntax-node kind ("" defaults to the production index)
+  layout : List (Nat × Nat) := []  -- (rhs index, layout op 1..12)
+  layoutRoot : Bool := false       -- this node's start is the layout origin for descendants
+  layoutClear : Bool := false      -- suspend the inherited layout origin
+  scopedLayout : List (Nat × Nat) := []  -- layout ops relative to the (possibly inherited) scope
+  longestLeft : Bool := false      -- binary rules only: retain families with maximal first-child end
+  maximalChild : Int := -1         -- RHS nonterminal slot whose successful end must be maximal
+  choiceGroup : Int := -1          -- ≥0: this production competes by rank inside the group
+  choiceRank : Int := -1           -- retained iff maximal among surviving same-call alternatives
+  notStart : Int := -1             -- the item's first non-skip byte may not be this byte
+  refuse : List (Nat × Nat) := []  -- (consumed RHS count, residue code) for refusal naming
+  positionAfterLinebreak : Bool := false
+  forbid : Forbid := .inherit      -- token spelling forbidden at terminals inside this node
+  notFollowed : List (Nat × List Bs) := []  -- (boundary index, token spellings) follow restrictions
+  boundaries : List (Nat × Nat) := []     -- (boundary index, zero-width predicate 1..7)
+  -- @tree constructor pattern / @template printer payload are node-ABI data,
+  -- not recognition semantics: OUTSIDE-CLASS rows.
+  deriving Repr, DecidableEq
+
+structure Grammar where
+  name : String
+  header : Bs                      -- required file prefix ([] = none)
+  skip : Skip
+  openB : Bs                       -- bracket bytes (refusal diagnostics only)
+  closeB : Bs
+  lex : List LexC
+  nts : List Nt                    -- nonterminal names in declaration order
+  prods : List Prod
+  residues : List (Nat × String)   -- refusal code → profile-declared name
+  deriving Repr
+
+def Grammar.start (g : Grammar) : Nt := g.nts.headD ""
+
+def Grammar.literals (g : Grammar) : List Lit :=
+  g.prods.foldl (fun acc p => acc ++ p.rhs.filterMap (fun | .lit bs => some bs | _ => none)) []
+
+-- ---------------------------------------------------------------------------
+-- inherited context (the engine's SynContext): the layout scope origin, a
+-- forbidden token spelling, and the previous sibling's end position.
+
+structure Ctx where
+  scope : Option Nat := none   -- byte position whose coord is the layout origin
+  forbid : Option Bs := none   -- a token spelling refused at terminals
+  tail : Option Nat := none    -- previous sibling's end in the enclosing chain
+  deriving Repr
+
+def ctx0 : Ctx := {}
+
+-- a node's own context, from its production and inherited context.
+-- Port of synRuleScope + synRuleContext: layoutClear suspends, layoutRoot resets
+-- to the node's own start, positionAfterLinebreak resets on a leading linebreak.
+def ownScope (p : Prod) (sk : Skip) (w : Bs) (s : Nat) (inh : Ctx) : Option Nat :=
+  let saved := if p.layoutClear then none else if p.layoutRoot then some s else inh.scope
+  if p.positionAfterLinebreak then
+    match inh.tail with
+    | some tl => if (coord w (skipEnd sk w s)).line > (coord w tl).line then some s else saved
+    | none => saved
+  else saved
+
+def ownCtx (p : Prod) (sk : Skip) (w : Bs) (s : Nat) (inh : Ctx) : Ctx :=
+  { scope := ownScope p sk w s inh
+    forbid := match p.forbid with | .inherit => inh.forbid | .clear => none | .set t => some t
+    tail := inh.tail }
+
+-- a child's inherited context: the tail becomes the previous sibling's end
+-- when it is past the node's start (synPrefixContext).
+def childCtx (own : Ctx) (s prev : Nat) (inhTail : Option Nat) : Ctx :=
+  { own with tail := if prev > s then some prev else inhTail }
+
+-- ---------------------------------------------------------------------------
+-- terminal matching (scannerless: every symbol starts at the next non-skip pos)
+
+-- whether `lit`'s match at start is shadowed by a keywords-class regex that
+-- wholly matches the literal yet continues past it (synLiteralBoundary), and
+-- whether a longer registered literal matches at start (synLongerToken).
+def kwBoundary (g : Grammar) (w : Bs) (start len : Nat) : Bool :=
+  g.lex.all fun l =>
+    if !l.keywords then true
+    else match l.scan with
+      | .regex r =>
+        -- if the literal is wholly in the class's language, the class's match
+        -- at start may not exceed the literal's length
+        (Rx.matchEnd r w start).getD 0 <= start + len
+      | _ => true
+
+def litMatchAt (w : Bs) (bs : Bs) (s : Nat) : Bool :=
+  (w.drop s).take bs.length == bs
+
+def longerLit (g : Grammar) (w : Bs) (s len : Nat) : Bool :=
+  g.literals.any fun tok =>
+    tok.length > len && litMatchAt w tok s && kwBoundary g w s tok.length
+
+-- a whole registered token spelling at position p (used by @forbid and
+-- @not-followed guards): literal bytes + keyword boundary + no longer literal.
+def wholeTok (g : Grammar) (w : Bs) (tok : Bs) (pos : Nat) : Bool :=
+  let s := skipEnd g.skip w pos
+  s < w.length && litMatchAt w tok s &&
+    kwBoundary g w s tok.length && !longerLit g w s tok.length
+
+-- the engine's named builtin scans (stock Lean 4.14 string/interpolation
+-- chunks). Regular relations: stated by name, supplied by the matcher layer.
+inductive ScanRel : TokScan → Bs → Nat → Nat → Prop where
+  | regex {r w s e} : Rx.Mem r ((w.drop s).take (e - s)) →
+      (∀ e', e' > e → e' ≤ w.length → ¬ Rx.Mem r ((w.drop s).take (e' - s))) →
+      s < e → ScanRel (.regex r) w s e
+  | stringLit {w s e} : True → ScanRel .stringLit w s e   -- relation defined by the builtin
+  | interp {m w s e} : True → ScanRel (.interp m) w s e   -- relation defined by the builtin
+
+-- a token-class leaf at [s,e): the class's relation holds, the match is
+-- nonempty, no reject-prefix regex matches at s, and a keywords class may not
+-- produce a registered literal spelling.
+inductive TermMatch (g : Grammar) (w : Bs) : Sym → Nat → Nat → Prop where
+  | lit {bs s e} : bs ≠ [] → e = s + bs.length → litMatchAt w bs s = true →
+      kwBoundary g w s bs.length = true → longerLit g w s bs.length = false →
+      TermMatch g w (.lit bs) s e
+  | cls {i s e} : (h : i < g.lex.length) →
+      ScanRel (g.lex[i]'h).scan w s e → s < e →
+      (∀ r ∈ (g.lex[i]'h).rejectPrefix, Rx.matchEnd r w s = none) →
+      ((g.lex[i]'h).keywords = true →
+        ∀ r, (g.lex[i]'h).scan = .regex r →
+          ∀ e', e' = e → ((w.drop s).take (e - s)) ∉ g.literals) →
+      TermMatch g w (.cls i) s e
+  | header {s e} : g.header ≠ [] → e = s + g.header.length →
+      litMatchAt w g.header s = true → TermMatch g w .header s e
+
+-- ---------------------------------------------------------------------------
+-- per-slot checks (port of synLayoutAllow/synBoundariesAllow/synTokenGuardsAllow/
+-- synAllow/synRuleStartAllow)
+
+-- layout ops (Adams POPL 2013; engine synLayoutOp): op 1..12
+def layoutHolds (op : Nat) (w : Bs) (base start previous finish : Nat) : Bool :=
+  let a := coord w base; let b := coord w start; let pc := coord w (previous - 1)
+  if start >= finish then true else
+  match op with
+  | 1 => b.col == a.col                                  -- aligned
+  | 2 => b.col > a.col                                   -- indented
+  | 3 => b.line == pc.line || b.col > a.ind              -- continuation
+  | 4 => b.line == pc.line                               -- same-line
+  | 5 => b.line > pc.line                                -- new-line
+  | 6 => start == previous                               -- adjacent
+  | 7 => b.line > pc.line && b.col <= a.ind              -- boundary
+  | 8 => b.line == pc.line || b.col == a.col             -- aligned-or-same-line
+  | 9 => b.line == pc.line || b.col == a.ind             -- indent-or-same-line
+  | 10 => start > previous                               -- separated
+  | 11 => b.col >= a.col                                 -- not-outdented
+  | 12 => b.col > a.col                                  -- argument
+  | _ => false
+
+-- boundary predicates (zero-width, ops 1..7; engine synBoundaryAtom
+-- Syn.rsd:1971-1979, Pratt.rsd:543-547, Lean Basic.lean:1146-1185):
+-- at boundary position `pos`; `tl` is the previous token's end — the
+-- boundary position itself for an internal index, else the inherited
+-- tail. Ops 1..3 are defined only when a preceding token exists
+-- (`tail >= 0` in the engine): at position 0 with no inherited tail
+-- they refuse (S3).
+def boundaryHolds (op : Nat) (g : Grammar) (w : Bs) (own : Ctx)
+    (origin pos : Nat) (tail : Option Nat) : Bool :=
+  let start := skipEnd g.skip w pos
+  let tl := if pos > origin then some pos else tail
+  match op with
+  | 1 => tl.any (fun t => start > t)                   -- ws: skipped bytes precede the next token
+  | 2 => tl.any (fun t => start == t)                  -- no-ws
+  | 3 => tl.any (fun t => (coord w start).line > (coord w t).line)  -- linebreak
+  | _ =>
+    match own.scope with
+    | none => true                                     -- no saved position: col/line tests are no-ops
+    | some sc =>
+      let a := coord w (skipEnd g.skip w sc); let b := coord w start
+      match op with
+      | 4 => b.col >= a.col                            -- col-ge
+      | 5 => b.col > a.col                             -- col-gt
+      | 6 => b.col == a.col                            -- col-eq
+      | 7 => b.line == a.line                          -- line-eq
+      | _ => false
+
+-- SDF priority/associativity between the parent's production `p` at child
+-- index `symI` and the child's production `cp` (engine synAllow): constraints
+-- only between productions of the SAME nonterminal (recursive positions).
+def Prod.allow (p : Prod) (symI : Nat) (cp : Prod) : Bool :=
+  if cp.lhs != p.lhs then true
+  else if p.prio >= 0 && cp.prio >= 0 && cp.prio < p.prio then false
+  else if p.assoc != 0 && p.prio >= 0 && p.prio == cp.prio then
+    let fl := p.rhs.foldl (fun (acc : Int × Int × Nat) (sy : Sym) =>
+        match sy with
+        | .nt n _ => if n == p.lhs then
+            (if acc.1 < 0 then Int.ofNat acc.2.2 else acc.1, Int.ofNat acc.2.2, acc.2.2 + 1)
+          else (acc.1, acc.2.1, acc.2.2 + 1)
+        | _ => (acc.1, acc.2.1, acc.2.2 + 1)) (-1, -1, 0)
+    if p.assoc == 1 then Int.ofNat symI != fl.2.1        -- left: not at last recursive slot
+    else if p.assoc == 2 then Int.ofNat symI != fl.1     -- right: not at first
+    else Int.ofNat symI != fl.1 && Int.ofNat symI != fl.2.1  -- nonassoc: neither
+  else true
+
+-- ---------------------------------------------------------------------------
+-- derivation trees, yield, the parse relation
+
+inductive Tree where
+  | leaf (s e : Nat)            -- a terminal covering input bytes [s, e)
+  | node (pi : Nat) (cs : List Tree)  -- production index + children
+  deriving Repr, BEq
+
+mutual
+def Tree.size : Tree → Nat
+  | .leaf _ _ => 1
+  | .node _ cs => 1 + Tree.sizeL cs
+def Tree.sizeL : List Tree → Nat
+  | [] => 0
+  | c :: r => c.size + Tree.sizeL r
+end
+
+mutual
+def Tree.yield : Tree → List (Nat × Nat)
+  | .leaf s e => [(s, e)]
+  | .node _ cs => Tree.yieldL cs
+def Tree.yieldL : List Tree → List (Nat × Nat)
+  | [] => []
+  | c :: r => c.yield ++ Tree.yieldL r
+end
+
+-- span of a tree: first leaf's start and last leaf's end (a nullary node
+-- spans the empty interval at `d`)
+mutual
+def Tree.span (d : Nat) : Tree → Nat × Nat
+  | .leaf s e => (s, e)
+  | .node _ cs => Tree.spanL d cs
+def Tree.spanL (d : Nat) : List Tree → Nat × Nat
+  | [] => (d, d)
+  | [c] => c.span d
+  | c :: r => ((c.span d).1, (Tree.spanL d r).2)
+end
+
+mutual
+def Tree.end (d : Nat) : Tree → Nat
+  | .leaf _ e => e
+  | .node _ cs => Tree.endL d cs
+def Tree.endL (d : Nat) : List Tree → Nat
+  | [] => d
+  | [c] => c.end d
+  | _ :: r => Tree.endL d r
+end
+
+-- bracket collapse (K `bracket` attribute, k-frontend tree: a bracket
+-- production contributes no node; its single nonterminal child's tree is the
+-- result). Nodes whose production index has no production are kept as-is.
+mutual
+def Tree.strip (g : Grammar) : Tree → Tree
+  | .leaf s e => .leaf s e
+  | .node pi cs =>
+    let cs' := Tree.stripL g cs
+    match g.prods[pi]? with
+    | some p =>
+      if p.disamb == 3 then
+        (cs'.find? (fun | .node _ _ => true | _ => false)).getD (.node pi cs')
+      else .node pi cs'
+    | none => .node pi cs'
+def Tree.stripL (g : Grammar) : List Tree → List Tree
+  | [] => []
+  | c :: r => Tree.strip g c :: Tree.stripL g r
+end
+
+-- ---------------------------------------------------------------------------
+-- executable term matching (the Bool reading of TermMatch)
+
+def termMatchB (g : Grammar) (w : Bs) : Sym → Nat → Nat → Bool
+  | .lit bs, s, e =>
+    bs != [] && e == s + bs.length && litMatchAt w bs s &&
+    kwBoundary g w s bs.length && !longerLit g w s bs.length
+  | .cls i, s, e =>
+    match g.lex[i]? with
+    | some l =>
+      s < e &&
+      l.rejectPrefix.all (fun r => Rx.matchEnd r w s == none) &&
+      (match l.scan with
+       | .regex r =>
+         Rx.matchEnd r w s == some e &&
+         !(l.keywords && (w.drop s).take (e - s) ∈ g.literals)
+       | _ => false)   -- named builtin scans are engine data; no class meaning
+    | none => false
+  | .header, s, e =>
+    g.header != [] && e == s + g.header.length && litMatchAt w g.header s
+  | _, _, _ => false
+
+-- ---------------------------------------------------------------------------
+-- the bounded candidate universe (reference enumeration), the validity
+-- checker, the survivor filters, and `Parses`.
+--
+-- `enumD g w ctx fuel floor n s` enumerates structurally-tiled derivation
+-- trees of sort n starting at s — every production of n that the precedence
+-- floor admits (`precAtLeast`), every tiling of the rhs over the input, each
+-- terminal checked by `termMatchB`, each nonterminal child enumerated
+-- recursively under its occurrence floor (first child of a trailing
+-- production inherits the ambient floor, per Lean's prattParser where the
+-- operand is already on the stack). Fuel bounds height; it is the honest
+-- bound of a total reference decider for small inputs (the card's
+-- "uncached recursive-descent reading of the semantics").
+
+def Prod.isTrailing (p : Prod) : Bool :=
+  match p.rhs with | .nt n _ :: _ => n == p.lhs | _ => false
+
+def precAtLeast (prio : Int) (floor : Int) : Bool :=
+  prio < 0 || floor <= prio
+
+def rootPrec (g : Grammar) : Tree → Int
+  | .node pi _ => (g.prods[pi]?).map Prod.prio |>.getD (-2)
+  | _ => -2
+
+-- longest-prefix terminal match end at a non-skip position
+def matchSym (g : Grammar) (w : Bs) : Sym → Nat → Option Nat
+  | .lit bs, s =>
+    if bs != [] && litMatchAt w bs s && kwBoundary g w s bs.length &&
+       !longerLit g w s bs.length then some (s + bs.length) else none
+  | .cls i, s =>
+    match g.lex[i]? with
+    | some l =>
+      match l.scan with
+      | .regex r =>
+        match Rx.matchEnd r w s with
+        | some e =>
+          if s < e && l.rejectPrefix.all (fun r' => Rx.matchEnd r' w s == none) &&
+             !(l.keywords && (w.drop s).take (e - s) ∈ g.literals)
+          then some e else none
+        | none => none
+      | _ => none
+    | none => none
+  | .header, s =>
+    if g.header != [] && litMatchAt w g.header s then some (s + g.header.length)
+    else none
+  | _, _ => none
+
+-- disambiguation score (K prefer/avoid): avoid < normal/bracket < prefer
+def dScore : Nat → Int
+  | 2 => 0 | 1 => 2 | _ => 1
+
+-- does candidate c' strictly beat candidate c at the same site?
+-- (Ford 2004 ordered choice: greater choiceRank wins inside its group;
+--  K prefer/avoid: greater disamb score wins; longest match is the
+--  maximal-child/longest-left clauses below.)
+def beats (g : Grammar) (c' c : Tree × Nat) : Bool :=
+  match c', c with
+  | (.node pi' _, _), (.node pi _, _) =>
+    match g.prods[pi']?, g.prods[pi]? with
+    | some p', some p =>
+      (p'.choiceGroup >= 0 && p'.choiceGroup == p.choiceGroup &&
+        p'.choiceRank > p.choiceRank) ||
+      (dScore p'.disamb > dScore p.disamb)
+    | _, _ => false
+  | _, _ => false
+
+-- child spans of a node starting at pos: (starts, ends) per child. Each
+-- child's `d` (the position a nullary/eps subtree's empty span sits at,
+-- Tree.spanL) is the first non-skip position after the previous child's
+-- end — where the engine's item chain would be — not the parent's own
+-- start (S2; Syn.rsd's per-item start positions are always post-skip).
+def spanLists (g : Grammar) (w : Bs) (pos : Nat) (cs : List Tree)
+    : List Nat × List Nat :=
+  (cs.foldl (fun (acc : Nat × List Nat × List Nat) c =>
+      let sp := c.span (skipEnd g.skip w acc.1)
+      (sp.2, acc.2.1 ++ [sp.1], acc.2.2 ++ [sp.2])) (pos, [], [])).2
+
+-- first child's end (longest-left family comparison)
+def firstEnd (_g : Grammar) (d : Nat) : Tree → Nat
+  | .node _ (c :: _) => c.end d
+  | t => t.end d
+
+-- the shared enumeration table (S5): one entry per
+-- (fuel, floor, context, sort, position) — the engine's synFullContextKey
+-- (Syn.rsd:1927) is the same tuple minus the fuel bound. Without it,
+-- k >= 2 left-recursive productions of a sort issue the same recursive
+-- call once per alternative, Omega(k^fuel) recomputation overall; the
+-- table makes the reference usable as a differential oracle at `bnd`.
+structure EKey where
+  fuel : Nat
+  floor : Int
+  scope : Option Nat
+  forbid : Option Bs
+  tail : Option Nat
+  n : Nt
+  s : Nat
+  deriving BEq, Hashable
+
+abbrev EMap := Std.HashMap EKey (List (Tree × Nat))
+-- the state threads TWO tables: enumD's enumeration table and the
+-- validCands per-site valid-candidate table (a site key maps to the
+-- enumerated candidates there that pass validB — computed once per site,
+-- not once per rival).
+abbrev EM := StateM (EMap × EMap)
+
+-- small monadic list helpers (avoid version-sensitive flatMapM/allM/filterM)
+def flatMapEM : List α → (α → EM (List β)) → EM (List β)
+  | [], _ => pure []
+  | x :: r, f => do
+    let a ← f x; let b ← flatMapEM r f; pure (a ++ b)
+
+def allEM : List α → (α → EM Bool) → EM Bool
+  | [], _ => pure true
+  | x :: r, f => do
+    if (← f x) then allEM r f else pure false
+
+def filterEM : List α → (α → EM Bool) → EM (List α)
+  | [], _ => pure []
+  | x :: r, f => do
+    let keep ← f x; let t ← filterEM r f; pure (if keep then x :: t else t)
+
+mutual
+-- `enumD g w ctx fuel floor n s` enumerates derivation trees of sort n
+-- starting at the first non-skip position ≥ s, returning (tree, end) pairs.
+-- Only structurally-matched candidates are generated: a production of n the
+-- floor admits, terminals matched by `matchSym`, nonterminal children
+-- enumerated recursively under their occurrence floor — the first child of a
+-- trailing production inherits the ambient floor, per Lean's prattParser
+-- where the operand is already on the stack parsed under it. Fuel bounds
+-- derivation height: the honest bound of a total reference for small inputs
+-- (the card's "uncached recursive-descent reading of the semantics"). Runs in
+-- EM only to share the EKey table; the list it returns is exactly the pure
+-- recursive descent's.
+def enumD (g : Grammar) (w : Bs) (ctx : Ctx)
+    : Nat → Int → Nt → Nat → EM (List (Tree × Nat))
+  | 0, _, _, _ => pure []
+  | fuel + 1, floor, n, s => do
+    let key : EKey :=
+      { fuel := fuel + 1, floor := floor, scope := ctx.scope,
+        forbid := ctx.forbid, tail := ctx.tail, n := n, s := s }
+    let tbl ← get
+    match tbl.1.get? key with
+    | some v => pure v
+    | none =>
+      let s0 := skipEnd g.skip w s
+      let v ←
+        if s0 > w.length then pure [] else
+          flatMapEM g.prods.enum fun (pi, p) =>
+            if p.lhs == n && precAtLeast p.prio floor then do
+              let own := ownCtx p g.skip w s0 ctx
+              let its ← enumIt g w own fuel floor p.isTrailing p.rhs s0 []
+              pure (its.map fun (cs, e) => (.node pi cs, e))
+            else pure []
+      modify (fun t => (t.1.insert key v, t.2))
+      pure v
+termination_by fuel _ _ _ => (fuel, 0)
+-- tile `items` over the input from `pos`; acc accumulates children.
+def enumIt (g : Grammar) (w : Bs) (own : Ctx)
+    : Nat → Int → Bool → List Sym → Nat → List Tree → EM (List (List Tree × Nat))
+  | 0, _, _, _, _, _ => pure []
+  | _, _, _, [], pos, acc => pure [(acc, pos)]
+  | fuel + 1, floor, isTrail, sym :: rest, pos, acc => do
+    let sI := skipEnd g.skip w pos
+    match sym with
+    | .nt n' rbp => do
+      let isOp0 := acc.isEmpty && isTrail
+      let fl : Int := if isOp0 then floor else Int.ofNat rbp
+      let cs ← enumD g w own fuel fl n' sI
+      flatMapEM cs fun (c, e') =>
+        -- operand of a trailing production: its root precedence must reach
+        -- the occurrence's rbp (Lean checkLhsPrec)
+        if isOp0 && !(rootPrec g c < 0 || Int.ofNat rbp <= rootPrec g c) then
+          pure []
+        else enumIt g w own (fuel + 1) floor isTrail rest e' (acc ++ [c])
+    | _ =>
+      match matchSym g w sym sI with
+      | none => pure []
+      | some e => enumIt g w own (fuel + 1) floor isTrail rest e (acc ++ [.leaf sI e])
+termination_by fuel _ _ its _ _ => (fuel, its.length)
+
+end
+
+mutual
+-- the valid candidates of a sort at a site: enumerated trees filtered by
+-- validB. THIS set is what the survivor filters quantify over — it is a
+-- property of the site (ctx, fuel, floor, sort, position), not of the
+-- candidate being checked, so it is computed once per site key and shared
+-- across every child tree asking at that site. Without the table, each
+-- child's survivor check re-validated every rival's subtree — rivals x
+-- depth exponential (S5).
+def validCands (g : Grammar) (w : Bs) (ctx : Ctx) (fuel : Nat) (fl : Int)
+    (n : Nt) (s : Nat) : EM (List (Tree × Nat)) := do
+  let key : EKey :=
+    { fuel := fuel, floor := fl, scope := ctx.scope,
+      forbid := ctx.forbid, tail := ctx.tail, n := n, s := s }
+  let tbl ← get
+  match tbl.2.get? key with
+  | some v => pure v
+  | none => do
+    let cs ← enumD g w ctx fuel fl n s
+    let v ← filterEM cs fun (c, _) => validB g w ctx ctx.tail fuel fl s c
+    modify (fun t => (t.1, t.2.insert key v))
+    pure v
+termination_by (fuel, 1, 0)
+-- derivation validity, fuel-bounded: structure, terminals, precedence floors,
+-- layout constraints, and per-site survivor filters. Fuel keeps every
+-- recursion strictly descending. Runs in EM to share the enumD table.
+def validB (g : Grammar) (w : Bs) (ctx : Ctx) (tail : Option Nat)
+    : Nat → Int → Nat → Tree → EM Bool
+  | 0, _, _, _ => pure false
+  | _ + 1, _, _, .leaf _ _ => pure false
+  | fuel + 1, floor, pos, .node pi cs => do
+    match g.prods[pi]? with
+    | none => pure false
+    | some p =>
+      let own := ownCtx p g.skip w pos ctx
+      let (ss, es) := spanLists g w pos cs
+      let end' := es.getLastD pos
+      if !(precAtLeast p.prio floor &&
+        cs.length == p.rhs.length &&
+        (p.notStart < 0 ||
+          Int.ofNat (w.getD (skipEnd g.skip w pos) 0) != p.notStart) &&
+        p.layout.all (fun q =>
+          layoutHolds q.2 w (skipEnd g.skip w pos) (ss.getD q.1 0)
+            (if q.1 == 0 then pos else es.getD (q.1 - 1) 0) (es.getD q.1 0)) &&
+        p.scopedLayout.all (fun q =>
+          match own.scope with
+          | none => q.2 == 12
+          | some sc =>
+            layoutHolds q.2 w (skipEnd g.skip w sc) (ss.getD q.1 0)
+              (if q.1 == 0 then pos else es.getD (q.1 - 1) 0) (es.getD q.1 0)) &&
+        p.boundaries.all (fun q =>
+          boundaryHolds q.2 g w own pos
+            (if q.1 == 0 then pos else if q.1 ≤ es.length then es.getD (q.1 - 1) 0 else end')
+            tail) &&
+        p.notFollowed.all (fun q =>
+          q.2.all fun tok =>
+            !wholeTok g w tok
+              (if q.1 == 0 then pos else if q.1 ≤ es.length then es.getD (q.1 - 1) 0 else end')))
+      then pure false
+      else do
+        let kids ← validKids g w own tail p fuel floor pos p.isTrailing 0 pos (p.rhs.zip cs)
+        if !kids then pure false
+        -- longest-left: no valid same-production same-span family member has
+        -- a longer first child (binary rules only). S4b: candidates of a
+        -- different production (pi' != pi) do not compete; S2: firstEnd's
+        -- eps default is the first non-skip position of the node's start.
+        else if !p.longestLeft || cs.length != 2 then pure true
+        else do
+          let d0 := skipEnd g.skip w pos
+          let vc ← validCands g w ctx fuel floor p.lhs pos
+          pure (vc.all fun (c', e') => e' != end' ||
+            (match c' with | .node pi' _ => pi' != pi | _ => true) ||
+            firstEnd g d0 c' <= firstEnd g d0 (.node pi cs))
+termination_by fuel _ _ _ => (fuel, 0, 0)
+-- validity of the (rhs item, child tree) pairs; prevEnd is the previous
+-- child's end (the node's pos initially); tail is the node's inherited tail.
+-- S2: each child's default span position `d` is the first non-skip position
+-- after prevEnd, so a nullary child's empty span sits where the chain is.
+def validKids (g : Grammar) (w : Bs) (own : Ctx) (tail : Option Nat) (p : Prod)
+    : Nat → Int → Nat → Bool → Nat → Nat → List (Sym × Tree) → EM Bool
+  | _, _, _, _, _, _, [] => pure true
+  | 0, _, _, _, _, _, _ => pure false
+  | fuel + 1, floor, pos, isTrail, i, prevEnd, (sym, c) :: rest => do
+    let d := skipEnd g.skip w prevEnd
+    let sI := (c.span d).1
+    let eI := (c.span d).2
+    if !(sI == d) then pure false
+    else
+      match sym with
+      | .nt n' rbp =>
+        let isOp0 := i == 0 && isTrail
+        let fl : Int := if isOp0 then floor else Int.ofNat rbp
+        let cctx := childCtx own pos (if i == 0 then pos else prevEnd) tail
+        match c with
+        | .node cpi _ =>
+          match g.prods[cpi]? with
+          | none => pure false
+          | some cp => do
+            if !(cp.lhs == n' && p.allow i cp &&
+                (!isOp0 || rootPrec g c < 0 || Int.ofNat rbp <= rootPrec g c))
+            then pure false
+            else do
+              -- C4: child origin is pre-skip `prevEnd` (Earley AgendaPrediction.rsd:45;
+              -- Syn.rsd:1540,1551,2028; EarleyRows.rsd:298-300), so slot-0 layout/scopedLayout
+              -- sees inter-token trivia `[prevEnd, sI)` instead of collapsing `previous == start`.
+              let vc ← validB g w cctx cctx.tail fuel fl prevEnd c
+              if !vc then pure false
+              else do
+                -- survivor condition at this site (S4a): the site's valid
+                -- candidate set comes from the shared table; only a
+                -- strictly-better member covering the SAME span (e' == eI)
+                -- kills, and maximalChild keeps the largest valid end
+                let vs ← validCands g w cctx fuel fl n' prevEnd
+                let ok := vs.all fun (c', e') =>
+                  (e' != eI || !beats g (c', e') (c, eI)) &&
+                  (p.maximalChild != i || e' <= eI)
+                if !ok then pure false
+                else validKids g w own tail p (fuel + 1) floor pos isTrail (i + 1) eI rest
+        | _ => pure false
+      | _ =>
+        if !(c == .leaf sI eI && termMatchB g w sym sI eI &&
+            (match own.forbid with
+             | none => true
+             | some tok => !wholeTok g w tok sI))
+        then pure false
+        else validKids g w own tail p (fuel + 1) floor pos isTrail (i + 1) eI rest
+termination_by fuel _ _ _ _ _ z => (fuel, 2, z.length)
+
+end
+
+-- ---------------------------------------------------------------------------
+-- Parses, and the executable reference decider.
+
+-- the height bound belongs to the DECIDER, not the spec: taller derivations
+-- repeat a (span, production) pair on some root path and are shortened
+-- (the pumping argument — see ParsesCompleteAtBound below).
+def bnd (g : Grammar) (w : Bs) : Nat :=
+  (w.length + 1) * (g.prods.length + 1) + 2
+
+-- refParsesF: the fueled engine behind both the spec relation and the
+-- decider — enumerate at fuel F, keep valid full-cover survivors (no
+-- strictly-better valid same-span candidate at the top sort either — the
+-- survivor condition applies at the root site exactly as inside validKids),
+-- then strip bracket nodes. Total, plainly the generative reading.
+-- S1: full cover means the FIRST NON-SKIP position at/after the tree's end
+-- is w.length — trailing trivia is skipped (synReadFrom's `finSkip >=
+-- ba.size`, Syn.rsd:2641; Pratt.rsd:431; Lean Basic.lean:1016). A tree end
+-- inside an unclosed block comment (skipEnd = w.length + 1) is refused.
+-- S4a: the top survivor filter is same-span too (e' == e).
+def refParsesF (g : Grammar) (s : Nt) (w : Bs) (F : Nat) : List Tree :=
+  let h0 := skipEnd g.skip w 0
+  if g.header != [] && !(h0 <= w.length && litMatchAt w g.header h0) then []
+  else
+    let m : EM (List Tree) := do
+      let cs ← enumD g w ctx0 F 0 s 0
+      let v ← filterEM cs fun (c, e) =>
+        if skipEnd g.skip w e == w.length
+        then validB g w ctx0 none F 0 0 c
+        else pure false
+      pure ((v.filter fun (c, e) =>
+          v.all fun (c', e') => e' != e || !beats g (c', e') (c, e)).map
+        fun (c, _) => c.strip g)
+    m.run' ({}, {})
+
+/-- `Parses g s w t`: the tree `t` parses the token string of `w` in sort `s`:
+    SOME derivation `D` of the class (validB: productions of `s`, terminals
+    matched, precedence floors respected, position checks and follow-
+    restrictions holding, every site surviving the choice/prefer/avoid and
+    longest filters) covers exactly `w` and collapses (bracket-transparency)
+    to `t`. UNBOUNDED: existentially quantified over all derivation heights;
+    no bound occurs in the definition. -/
+abbrev Parses (g : Grammar) (s : Nt) (w : Bs) (t : Tree) : Prop :=
+  ∃ F : Nat, (refParsesF g s w F).any (· == t) = true
+
+-- the executable reference decider at the stated bound.
+def refParses (g : Grammar) (s : Nt) (w : Bs) : List Tree :=
+  refParsesF g s w (bnd g w)
+
+-- soundness of the decider against unbounded Parses: proved.
+theorem refParses_sound (g : Grammar) (s : Nt) (w : Bs) (t : Tree)
+    (h : (refParses g s w).any (· == t) = true) : Parses g s w t :=
+  ⟨bnd g w, h⟩
+
+/-- the stated completeness bound (the pumping claim, card item 2): a
+    derivation taller than `bnd` repeats a (span, production) pair on a root
+    path; contracting the repetition preserves span and sort, and every check
+    is per-site on (sort, span), so a surviving representative within `bnd`
+    exists. Stated as a named proposition — the decider's completeness
+    direction rests on it. -/
+def ParsesCompleteAtBound : Prop :=
+  ∀ (g : Grammar) (s : Nt) (w : Bs) (t : Tree),
+    Parses g s w t → (refParses g s w).any (· == t) = true
+
+
+
+
+-- ---------------------------------------------------------------------------
+-- Lean 4.14's ParserDescr (Init/Prelude.lean:4107-4152, TrailingParserDescr
+-- :4154) mirrored, and its meaning by mapping into the class
+-- (compileParserDescr, Lean/Parser/Extension.lean:277-). The mapping is the
+-- content of "ParserDescr combinators are given their meaning by mapping
+-- into this class" (card revision 06:2xZ): orelse becomes a fresh auxiliary
+-- sort whose two productions carry a same-group choice rank (Ford 2004
+-- ordered choice: the earlier alternative ranks higher); nodes become
+-- productions; cat becomes a nonterminal occurrence at its rbp; sepBy/many
+-- desugar to fresh auxiliary sorts; position checks land on `boundaries`/
+-- `Ctx` (withPosition/checkCol*/checkWs*/withForbidden/withoutPosition).
+
+inductive PD where
+  | const (name : Nt)
+  | unary (name : Nt) (p : PD)
+  | binary (name : Nt) (p q : PD)
+  | node (kind : Nt) (prec : Nat) (p : PD)
+  | trailingNode (kind : Nt) (prec lhsPrec : Nat) (p : PD)
+  | symbol (val : Bs)
+  | nonReservedSymbol (val : Bs) (includeIdent : Bool)
+  | cat (catName : Nt) (rbp : Nat)
+  | parser (declName : Nt)
+  | nodeWithAntiquot (name : Nt) (kind : Nt) (p : PD)
+  | sepBy (p : PD) (sep : Bs) (psep : PD) (trail : Bool)
+  | sepBy1 (p : PD) (sep : Bs) (psep : PD) (trail : Bool)
+  deriving Repr
+
+-- named unary aliases of the position-check family
+-- (Lean/Parser/Basic.lean: withPosition :1510, checkColEq :1433, checkColGe
+--  :1452, checkColGt :1476, checkLineEq :1494, checkWsBefore :1146,
+--  checkNoWsBefore :1183, checkLinebreakBefore :1163, withForbidden :1532,
+--  withoutForbidden :1540, withoutPosition :1522); every other unary name
+-- is outside the class (an OUTSIDE-CLASS row).
+def posAlias : Nt → Option Nat
+  | "colEq" => some 6 | "colGe" => some 4 | "colGt" => some 5
+  | "lineEq" => some 7 | "ws" => some 1 | "noWs" => some 2
+  | "linebreak" => some 3 | _ => none
+
+-- fresh sort supply for desugaring
+def auxNt (n : Nat) : Nt := s!"_aux{n}"
+
+-- mapping state: generated productions and fresh auxiliary sort/group counters
+structure MSt where
+  prods : List Prod := []
+  nextAux : Nat := 0
+  nextGrp : Nat := 0
+
+/-- `pdItems m d` maps a ParserDescr to the rhs item sequence plus boundary
+    checks, forbid mode, a position-check flag (0 none, 1 layoutRoot,
+    2 layoutClear, 3 positionAfterLinebreak), follow restrictions, and the
+    updated mapping state (new productions for desugared constructs).
+    `none` marks a construct the class cannot carry — an OUTSIDE-CLASS row. -/
+def pdItems (m : MSt) : PD →
+    Option (List Sym × List (Nat × Nat) × Forbid × Nat × List (Nat × List Bs) × MSt)
+  | .symbol v => some ([.lit v], [], .inherit, 0, [], m)
+  | .nonReservedSymbol v _ => some ([.lit v], [], .inherit, 0, [], m)
+    -- the includeIdent nuance is outside the class: OUTSIDE-CLASS row
+  | .cat n rbp => some ([.nt n rbp], [], .inherit, 0, [], m)
+  | .binary "andthen" p q =>
+    match pdItems m p with
+    | none => none
+    | some (i₁, b₁, f₁, l₁, n₁, m₁) =>
+      match pdItems m₁ q with
+      | none => none
+      | some (i₂, b₂, f₂, l₂, n₂, m₂) =>
+        some (i₁ ++ i₂,
+              b₁ ++ b₂.map (fun (i, o) => (i + i₁.length, o)),
+              if f₁ matches .inherit then f₂ else f₁,
+              if l₁ == 0 then l₂ else l₁,
+              n₁ ++ n₂.map (fun (i, ts) => (i + i₁.length, ts)), m₂)
+  | .binary "orelse" p q =>
+    -- Ford 2004 ordered choice: a fresh auxiliary sort whose two productions
+    -- share a choice group; the first alternative carries the higher rank.
+    let aux := auxNt m.nextAux
+    let g := Int.ofNat m.nextGrp
+    match pdItems { m with nextAux := m.nextAux + 1, nextGrp := m.nextGrp + 1 } p with
+    | none => none
+    | some (i₁, b₁, f₁, l₁, n₁, m₁) =>
+      match pdItems m₁ q with
+      | none => none
+      | some (i₂, b₂, f₂, l₂, n₂, m₂) =>
+        let pa : Prod := { lhs := aux, rhs := i₁, kind := aux, boundaries := b₁,
+                           forbid := f₁, layoutRoot := l₁ == 1,
+                           layoutClear := l₁ == 2,
+                           positionAfterLinebreak := l₁ == 3,
+                           notFollowed := n₁, refuse := [],
+                           choiceGroup := g, choiceRank := 1 }
+        let pb : Prod := { lhs := aux, rhs := i₂, kind := aux, boundaries := b₂,
+                           forbid := f₂, layoutRoot := l₂ == 1,
+                           layoutClear := l₂ == 2,
+                           positionAfterLinebreak := l₂ == 3,
+                           notFollowed := n₂, refuse := [],
+                           choiceGroup := g, choiceRank := 0 }
+        some ([.nt aux 0], [], .inherit, 0, [],
+              { m₂ with prods := pa :: pb :: m₂.prods })
+  | .binary "withForbidden" p q =>
+    -- `withForbidden (tk : Token) (p : Parser)` (Basic.lean:1532): the token
+    -- argument must map to a literal spelling, then it rides the class's
+    -- Prod.forbid channel (same as the profile's @forbid attribute).
+    match pdItems m p with
+    | some ([.lit tok], _, _, _, _, _) =>
+      match pdItems m q with
+      | some (i, b, _, l, n, m') => some (i, b, .set tok, l, n, m')
+      | none => none
+    | _ => none
+  | .binary _ _ _ => none                  -- other aliases → outside class
+  | .unary name p =>
+    match posAlias name with
+    | some op =>
+      match pdItems m p with
+      | none => none
+      | some (i, b, f, l, n, m') =>
+        some (i, (0, op) :: b, f, l, n, m')   -- boundary 0 = before p's first item
+    | none =>
+      if name == "withPosition" then
+        match pdItems m p with
+        | none => none
+        | some (i, b, f, _, n, m') => some (i, b, f, 1, n, m')
+      else if name == "withPositionAfterLinebreak" then
+        match pdItems m p with
+        | none => none
+        | some (i, b, f, _, n, m') => some (i, b, f, 3, n, m')
+      else if name == "withoutPosition" then
+        match pdItems m p with
+        | none => none
+        | some (i, b, f, _, n, m') => some (i, b, f, 2, n, m')
+      else if name == "withoutForbidden" then
+        match pdItems m p with
+        | none => none
+        | some (i, b, _, l, n, m') => some (i, b, .clear, l, n, m')
+      else if name == "withForbidden" then
+        -- bare-unary cannot supply the token argument (Basic.lean:1532);
+        -- an OUTSIDE-CLASS row. The token-carrying shape is
+        -- .binary "withForbidden" (.symbol tok) p, mapped above.
+        none
+      else if name == "optional" then
+        let aux := auxNt m.nextAux
+        match pdItems { m with nextAux := m.nextAux + 1 } p with
+        | none => none
+        | some (i, b, _, _, _, m₁) =>
+          let someP : Prod := { lhs := aux, rhs := i, kind := aux,
+                                boundaries := b, refuse := [] }
+          let nilP : Prod := { lhs := aux, rhs := [], kind := aux, refuse := [] }
+          some ([.nt aux 0], [], .inherit, 0, [],
+                { m₁ with prods := someP :: nilP :: m₁.prods })
+      else if name == "many" then
+        let aux := auxNt m.nextAux
+        match pdItems { m with nextAux := m.nextAux + 1 } p with
+        | none => none
+        | some (i, b, _, _, _, m₁) =>
+          let recP : Prod := { lhs := aux, rhs := i ++ [.nt aux 0], kind := aux,
+                               boundaries := b, refuse := [] }
+          let nilP : Prod := { lhs := aux, rhs := [], kind := aux, refuse := [] }
+          some ([.nt aux 0], [], .inherit, 0, [],
+                { m₁ with prods := recP :: nilP :: m₁.prods })
+      else if name == "notFollowedBy" then
+        match p with
+        | .symbol v => some ([], [], .inherit, 0, [(0, [v])], m)
+        | _ => none          -- only literal follow-restriction carried
+      else none                              -- unknown alias → outside class
+  | .sepBy p _ psep trail =>
+    -- aux ::= p psep aux | p psep | ε   (sep is antiquot syntax only,
+    -- Init/Prelude.lean:4145)
+    let aux := auxNt m.nextAux
+    match pdItems { m with nextAux := m.nextAux + 1 } psep with
+    | none => none
+    | some (sp, _, _, _, _, m₁) =>
+      match pdItems m₁ p with
+      | none => none
+      | some (i, b, _, l, nf, m₂) =>
+        let cons : Prod := { lhs := aux, rhs := i ++ sp ++ [.nt aux 0],
+                             kind := aux, boundaries := b, refuse := [],
+                             layoutRoot := l == 1, layoutClear := l == 2,
+                             notFollowed := nf }
+        let trl  : Prod := { lhs := aux, rhs := i ++ sp, kind := aux,
+                             boundaries := b, refuse := [], notFollowed := nf }
+        let nil  : Prod := { lhs := aux, rhs := [], kind := aux, refuse := [] }
+        let ps := if trail then [cons, trl, nil] else [cons, nil]
+        some ([.nt aux 0], [], .inherit, 0, [],
+              { m₂ with prods := ps ++ m₂.prods })
+  | .sepBy1 p _ psep trail =>
+    -- aux ::= p psep aux | p psep | p
+    let aux := auxNt m.nextAux
+    match pdItems { m with nextAux := m.nextAux + 1 } psep with
+    | none => none
+    | some (sp, _, _, _, _, m₁) =>
+      match pdItems m₁ p with
+      | none => none
+      | some (i, b, _, l, nf, m₂) =>
+        let cons : Prod := { lhs := aux, rhs := i ++ sp ++ [.nt aux 0],
+                             kind := aux, boundaries := b, refuse := [],
+                             layoutRoot := l == 1, layoutClear := l == 2,
+                             notFollowed := nf }
+        let trl  : Prod := { lhs := aux, rhs := i ++ sp, kind := aux,
+                             boundaries := b, refuse := [], notFollowed := nf }
+        let one' : Prod := { lhs := aux, rhs := i, kind := aux,
+                             boundaries := b, refuse := [], notFollowed := nf }
+        let ps := if trail then [cons, trl, one'] else [cons, one']
+        some ([.nt aux 0], [], .inherit, 0, [],
+              { m₂ with prods := ps ++ m₂.prods })
+  | .node k prec p =>
+    -- a node nested inside an item sequence is a fresh auxiliary sort whose
+    -- production carries the node's kind and precedence
+    let aux := auxNt m.nextAux
+    match pdItems { m with nextAux := m.nextAux + 1 } p with
+    | none => none
+    | some (i, b, f, l, n, m₁) =>
+      let np : Prod := { lhs := aux, rhs := i, kind := k, prio := Int.ofNat prec,
+                         boundaries := b, forbid := f,
+                         layoutRoot := l == 1, layoutClear := l == 2,
+                         positionAfterLinebreak := l == 3,
+                         notFollowed := n, refuse := [] }
+      some ([.nt aux 0], [], .inherit, 0, [],
+            { m₁ with prods := np :: m₁.prods })
+  | _ => none
+    -- const/parser/nodeWithAntiquot/trailingNode-as-item → outside class
+
+
+-- the meaning of one ParserDescr declaration in category `catName`:
+-- a production list of the class (none = outside-class construct).
+-- TrailingNode's operand occurrence carries the ambient floor: the parser's
+-- leading symbol is already on the stack (prattParser), so the first item is
+-- `.nt catName lhsPrec` flagged isTrailing in Prod.isTrailing.
+def pdProds (catName : Nt) (d : PD) : Option (List Prod) :=
+  let mk (prec : Int) (kind : Nt)
+         (r : List Sym × List (Nat × Nat) × Forbid × Nat × List (Nat × List Bs) × MSt)
+         : List Prod :=
+    let (i, b, f, l, n, m) := r
+    ({ lhs := catName, rhs := i, kind := kind, prio := prec,
+       boundaries := b, forbid := f,
+       layoutRoot := l == 1, layoutClear := l == 2,
+       positionAfterLinebreak := l == 3, notFollowed := n,
+       refuse := [] } : Prod) :: m.prods
+  match d with
+  | .node k prec p => (pdItems {} p).map (mk (Int.ofNat prec) k)
+  | .trailingNode k prec lhsPrec p =>
+    match pdItems {} p with
+    | none => none
+    | some (i, b, f, l, n, m) =>
+      ({ lhs := catName, rhs := .nt catName lhsPrec :: i, kind := k,
+         prio := Int.ofNat prec, boundaries := b.map (fun (j, o) => (j + 1, o)),
+         forbid := f, layoutRoot := l == 1, layoutClear := l == 2,
+         positionAfterLinebreak := l == 3,
+         notFollowed := n.map (fun (j, ts) => (j + 1, ts)),
+         refuse := [] } : Prod) :: m.prods
+  | d' => (pdItems {} d').map (mk (-1) catName)
+
+-- ---------------------------------------------------------------------------
+-- ---------------------------------------------------------------------------
+-- the meaning of a .syn profile (rsdc/profiles/*.syn as parsed data).
+--
+-- A .syn file is a record of class data: its rules ARE productions of the
+-- class (SRule fields map onto Prod fields one-to-one), its lexical classes
+-- are regular token relations, its skip declarations are the layout sort.
+-- The mirror type keeps the engine's SP section shape; the constructs a
+-- profile can express that have no recognition meaning (@tree constructor
+-- patterns, @template printer payloads, examples/probes sections, named
+-- builtin scans other than regex/stringLit/interp) are named in
+-- reports/synspec/OUTSIDE-CLASS.tsv — the meaning function's input type has
+-- no slot for them, which IS the outside-class naming.
+
+structure SynLexD where
+  name : String
+  scan : TokScan            -- the compiled regular relation (.syn regex source
+                            -- compiles through the derivative builder ported in
+                            -- Regex.rsd; at the class level it IS the relation)
+  keywords : Bool
+  rejectPrefix : List Rx := []
+  incomplete : Nat := 0
+
+structure SynFile where
+  name : String
+  header : Bs := []
+  skip : Skip
+  openB : Bs := []
+  closeB : Bs := []
+  lex : List SynLexD := []
+  nts : List Nt
+  rules : List Prod         -- .syn rules are literally productions of the class
+  residues : List (Nat × String) := []
+
+def synToGrammar (f : SynFile) : Grammar :=
+  { name := f.name, header := f.header, skip := f.skip,
+    openB := f.openB, closeB := f.closeB,
+    lex := f.lex.map fun l =>
+      ({ name := l.name, scan := l.scan, keywords := l.keywords,
+         rejectPrefix := l.rejectPrefix, incomplete := l.incomplete } : LexC),
+    nts := f.nts,
+    prods := f.rules,
+    residues := f.residues }
+
+-- the three shipped profiles denote grammars of the class through
+-- synToGrammar: their recognition constructs are Prod/LexC/Skip data.
+-- (rsd.syn, rsj.syn, rsm.syn use @tree/@template payloads — OUTSIDE-CLASS
+-- rows — and the named builtin scans represented in TokScan.)
+def synSample : SynFile := {
+  name := "sample", skip := { ws := [32], lineCom := [], blkO := [], blkC := [] },
+  nts := ["S"],
+  rules := [({ lhs := "S", rhs := [.lit [120]], kind := "x" } : Prod)] }
+
+#guard (synToGrammar synSample).name == "sample"
+#guard refParses (synToGrammar synSample) "S" [120] == [.node 0 [.leaf 0 1]]
+
+-- ---------------------------------------------------------------------------
+-- reading .syn profile files: a total reader from the file text to SynFile.
+-- The second component of synParse mechanically enumerates constructs the
+-- class does not carry — the rows of reports/synspec/OUTSIDE-CLASS.tsv.
+
+def strBs (s : String) : Bs := s.toUTF8.data.toList.map UInt8.toNat
+def chBs (c : Char) : Bs := (String.singleton c).toUTF8.data.toList.map UInt8.toNat
+
+def hexV (c : Char) : Nat :=   -- 16 marks a non-hex digit
+  let n := c.toNat
+  if n >= 48 && n <= 57 then n - 48
+  else if n >= 65 && n <= 70 then n - 55
+  else if n >= 97 && n <= 102 then n - 87
+  else 16
+
+def hxB (a b : Char) : Byte := hexV a * 16 + hexV b
+
+-- unescape a quoted "..." body (escapes \n \t \r \s \\ \" \xHH); fueled,
+-- each step consumes at least one char
+def unescF : Nat → List Char → Bs
+  | 0, _ => []
+  | _, [] => []
+  | f + 1, '\\' :: 'x' :: a :: b :: r =>
+    if hexV a < 16 && hexV b < 16 then hxB a b :: unescF f r
+    else 92 :: unescF f ('x' :: a :: b :: r)
+  | f + 1, '\\' :: c :: r =>
+    match c with
+    | 'n' => 10 :: unescF f r
+    | 't' => 9 :: unescF f r
+    | 'r' => 13 :: unescF f r
+    | 's' => 32 :: unescF f r
+    | '\\' => 92 :: unescF f r
+    | '"' => 34 :: unescF f r
+    | c => chBs c ++ unescF f r
+  | f + 1, c :: r => chBs c ++ unescF f r
+termination_by f _ => f
+
+def unesc (cs : List Char) : Bs := unescF (cs.length + 1) cs
+
+-- the body of a "..."-quoted word, unescaped
+def unq (s : String) : Bs :=
+  let t := s.trim
+  if t.startsWith "\"" && t.endsWith "\"" && t.length >= 2
+  then unesc ((t.drop 1).take (t.length - 2)).toList else strBs t
+
+-- the pieces between double quotes
+def quotedParts (s : String) : List String :=
+  (s.split (· == '"')).enum.filterMap fun (i, p) => if i % 2 == 1 then some p else none
+
+def wsOf (s : String) : List String := (s.split (· == ' ')).filter (· != "")
+
+-- the .syn regex dialect → Rx (concatenation, |, (...), *, +, ?, ., [..],
+-- [^..], \xHH and escaped literal bytes; multi-byte literal chars are the
+-- concatenation of their UTF-8 bytes). Fueled: every mutual call consumes
+-- one unit, so termination is by the fuel alone.
+def rxLit (c : Char) : Rx :=
+  match chBs c with
+  | [] => .eps
+  | b :: r => r.foldl (fun a x => .cat a (.lit x)) (.lit b)
+
+def rxEsc : List Char → Option (Rx × List Char)
+  | 'x' :: a :: b :: r =>
+    if hexV a < 16 && hexV b < 16 then some (.lit (hxB a b), r) else none
+  | 'n' :: r => some (.lit 10, r)
+  | 't' :: r => some (.lit 9, r)
+  | 'r' :: r => some (.lit 13, r)
+  | c :: r => some (rxLit c, r)
+  | [] => none
+
+def rxClsChar : List Char → Option (Byte × List Char)
+  | '\\' :: 'x' :: a :: b :: r =>
+    if hexV a < 16 && hexV b < 16 then some (hxB a b, r) else none
+  | '\\' :: c :: r =>
+    if c.toNat <= 255 then some (c.toNat, r) else none
+  | c :: r =>
+    if c.toNat <= 255 then some (c.toNat, r) else none
+  | [] => none
+
+def rxClsItems : Nat → List Char → List (Byte × Byte) →
+    Option (List (Byte × Byte) × List Char)
+  | 0, _, _ => none
+  | _ + 1, ']' :: r, acc => some (acc.reverse, r)
+  | f + 1, c :: r, acc =>
+    match rxClsChar (c :: r) with
+    | some (lo, r') =>
+      match r' with
+      | '-' :: ']' :: _ => rxClsItems f r' ((lo, lo) :: acc)  -- literal '-'
+      | '-' :: r'' =>
+        match rxClsChar r'' with
+        | some (hi, r3) => rxClsItems f r3 ((lo, hi) :: acc)
+        | none => none
+      | _ => rxClsItems f r' ((lo, lo) :: acc)
+    | none => none
+  | _, [], _ => none
+termination_by f _ _ => f
+
+def rxCls : List Char → Option (Rx × List Char)
+  | '^' :: r =>
+    match rxClsItems (r.length + 2) r [] with
+    | some (rs, t) => some (.cls rs true, t)
+    | none => none
+  | cs =>
+    match rxClsItems (cs.length + 2) cs [] with
+    | some (rs, t) => some (.cls rs false, t)
+    | none => none
+
+mutual
+-- alternation: seq ('|' seq)*
+def rxAlt : Nat → List Char → Option (Rx × List Char)
+  | 0, _ => none
+  | f + 1, cs =>
+    match rxSeq f cs with
+    | some (a, '|' :: r) =>
+      match rxAlt f r with
+      | some (b, r') => some (.alt a b, r')
+      | none => none
+    | x => x
+termination_by f _ => f
+
+-- concatenation: atom+ until end, '|' or ')'
+def rxSeq : Nat → List Char → Option (Rx × List Char)
+  | 0, _ => none
+  | f + 1, cs =>
+    match cs with
+    | [] => some (.eps, [])
+    | '|' :: _ => some (.eps, cs)
+    | ')' :: _ => some (.eps, cs)
+    | _ =>
+      match rxAtom f cs with
+      | some (a, r) =>
+        match rxSeq f r with
+        | some (b, r') => some (.cat a b, r')
+        | none => none
+      | none => none
+termination_by f _ => f
+
+-- one atom plus an optional postfix
+def rxAtom : Nat → List Char → Option (Rx × List Char)
+  | 0, _ => none
+  | f + 1, cs =>
+    let r : Option (Rx × List Char) :=
+      match cs with
+      | '(' :: t =>
+        match rxAlt f t with
+        | some (a, ')' :: t') => some (a, t')
+        | _ => none
+      | '[' :: t => rxCls t
+      | '\\' :: t => rxEsc t
+      | '.' :: t => some (.cls [(10, 10)] true, t)
+      | c :: t => some (rxLit c, t)
+      | [] => none
+    match r with
+    | some (a, '*' :: t) => some (.star a, t)
+    | some (a, '+' :: t) => some (Rx.plus a, t)
+    | some (a, '?' :: t) => some (Rx.opt a, t)
+    | x => x
+termination_by f _ => f
+end
+
+def parseRx (s : String) : Option Rx :=
+  let cs := s.toList
+  match rxAlt (10 * cs.length + 32) cs with
+  | some (r, []) => some r
+  | _ => none
+
+-- ---------------------------------------------------------------------------
+-- attribute application: the attr name goes to the outside list whenever the
+-- construct is not carried by the class (@tree/@template included — the two
+-- named outside-class rows).
+
+def splitEq (s : String) : String × String :=
+  match s.split (· == '=') with
+  | [] => ("", "")
+  | [k] => (k, "")
+  | k :: r => (k, "=".intercalate r)
+
+def lookupN (t : List (String × Nat)) (k : String) : Option Nat :=
+  match t.find? (·.1 == k) with
+  | some (_, n) => some n
+  | none => none
+
+def layoutOpT : List (String × Nat) :=
+  [("aligned", 1), ("indented", 2), ("continuation", 3), ("same-line", 4),
+   ("new-line", 5), ("adjacent", 6), ("boundary", 7), ("aligned-or-same-line", 8),
+   ("indent-or-same-line", 9), ("separated", 10), ("not-outdented", 11),
+   ("argument", 12)]
+
+def boundOpT : List (String × Nat) :=
+  [("ws", 1), ("no-ws", 2), ("linebreak", 3), ("col-ge", 4), ("col-gt", 5),
+   ("col-eq", 6), ("line-eq", 7)]
+
+def pairsOf : List String → List (String × Nat) → Option (List (Nat × Nat))
+  | [], _ => some []
+  | p :: r, t =>
+    match p.split (· == ':') with
+    | [i, o] =>
+      match i.toNat?, lookupN t o, pairsOf r t with
+      | some n, some m, some acc => some ((n, m) :: acc)
+      | _, _, _ => none
+    | _ => none
+
+def refusePairs : List String → Option (List (Nat × Nat))
+  | [] => some []
+  | p :: r =>
+    match p.split (· == ':') with
+    | [n, c] =>
+      match n.toNat?, c.toNat?, refusePairs r with
+      | some a, some b, some acc => some ((a, b) :: acc)
+      | _, _, _ => none
+    | _ => none
+
+-- %HH-decoding of filter-token spellings (Syn.rsd:420-421 — % quotes the
+-- delimiters %, |, ; and itself)
+def filtTok : List Char → Bs
+  | '%' :: a :: b :: r =>
+    if hexV a < 16 && hexV b < 16 then hxB a b :: filtTok r else 37 :: filtTok r
+  | c :: r => chBs c ++ filtTok r
+  | [] => []
+
+def nfGroups : List String → Option (List (Nat × List Bs))
+  | [] => some []
+  | grp :: r =>
+    let cs := grp.toList
+    let ds := cs.takeWhile Char.isDigit
+    match ds with
+    | [] => none
+    | _ =>
+      match cs.drop ds.length with
+      | ':' :: rest =>
+        match (String.mk ds).toNat?, nfGroups r with
+        | some i, some acc =>
+          let toks := (String.mk rest).split (· == '|')
+          some ((i, toks.map fun t => filtTok t.toList) :: acc)
+        | _, _ => none
+      | _ => none
+
+def interpMode (v : String) : Nat :=
+  if v == "closed" then 1 else if v == "open" then 2
+  else if v == "middle" then 3 else if v == "end" then 4 else 0
+
+-- apply one @attr word to a production; unconsumed attrs are named.
+def attrApply (p : Prod) (a : String) : Prod × List String :=
+  let (k, v) := splitEq (a.drop 1)
+  let bad : Prod × List String := (p, ["@" ++ k])
+  let withP (q : Prod) : Prod × List String := (q, [])
+  let intAt (set : Int → Prod) : Prod × List String :=
+    match v.toInt? with
+    | some n => withP (set n) | none => bad
+  match k with
+  | "prio" => intAt fun n => { p with prio := n }
+  | "assoc" =>
+    match v with
+    | "left" => withP { p with assoc := 1 }
+    | "right" => withP { p with assoc := 2 }
+    | "non" => withP { p with assoc := 3 }
+    | _ => bad
+  | "disamb" =>
+    match v with
+    | "prefer" => withP { p with disamb := 1 }
+    | "avoid" => withP { p with disamb := 2 }
+    | "bracket" => withP { p with disamb := 3 }
+    | _ => bad
+  | "layout" =>
+    match pairsOf (v.split (· == ',')) layoutOpT with
+    | some ps => withP { p with layout := p.layout ++ ps } | none => bad
+  | "scoped-layout" =>
+    match pairsOf (v.split (· == ',')) layoutOpT with
+    | some ps => withP { p with scopedLayout := p.scopedLayout ++ ps } | none => bad
+  | "boundary" =>
+    match pairsOf (v.split (· == ',')) boundOpT with
+    | some ps => withP { p with boundaries := p.boundaries ++ ps } | none => bad
+  | "refuse" =>
+    match refusePairs (v.split (· == ',')) with
+    | some ps => withP { p with refuse := p.refuse ++ ps } | none => bad
+  | "not-followed" =>
+    match nfGroups (v.split (· == ';')) with
+    | some gs => withP { p with notFollowed := p.notFollowed ++ gs } | none => bad
+  | "forbid" => withP { p with forbid := .set (filtTok v.toList) }
+  | "forbid-clear" => withP { p with forbid := .clear }
+  | "layout-root" => withP { p with layoutRoot := true }
+  | "layout-clear" => withP { p with layoutClear := true }
+  | "longest-left" => withP { p with longestLeft := true }
+  | "position-after-linebreak" => withP { p with positionAfterLinebreak := true }
+  | "maximal-child" => intAt fun n => { p with maximalChild := n }
+  | "choice-group" => intAt fun n => { p with choiceGroup := n }
+  | "choice-rank" => intAt fun n => { p with choiceRank := n }
+  | "not-start" => intAt fun n => { p with notStart := n }
+  | _ => bad     -- @tree/@template and anything unrecognized → outside row
+
+-- ---------------------------------------------------------------------------
+-- the line reader
+
+structure SynSt where
+  f : SynFile
+  sec : Nat := 0     -- 0 preamble, 1 lexical, 2 grammar, 3 residues, 4+ ignored
+  out : List String := []
+
+-- index of a name in the lexical-class table (List.idxOf? is absent here)
+def idxOf : List String → String → Nat → Option Nat
+  | [], _, _ => none
+  | x :: r, w, i => if x == w then some i else idxOf r w (i + 1)
+
+-- a grammar rhs item: eps, header, 'literal, token-class name, nonterminal
+def itemSym (lexNames : List String) (w : String) : Option Sym :=
+  if w == "eps" then none
+  else if w == "header" then some .header
+  else if w.startsWith "'" then some (.lit (strBs (w.drop 1)))
+  else match idxOf lexNames w 0 with
+    | some i => some (.cls i)
+    | none => some (.nt w 0)
+
+def lexLine (st : SynSt) (l : String) (ws : List String) : SynSt :=
+  match ws with
+  | "token" :: name :: src :: attrs =>
+    let g := attrs.foldl (fun (acc : Bool × List Rx × Nat × Nat × List String) a =>
+        let (kw, rps, inc, im, out) := acc
+        let (k, v) := splitEq (a.drop 1)
+        if k == "keywords" then (true, rps, inc, im, out)
+        else if k == "string-literal" then (kw, rps, inc, 5, out)
+        else if k == "incomplete" then
+          match v.toNat? with
+          | some n => (kw, rps, n, im, out) | none => (kw, rps, inc, im, out ++ ["@incomplete"])
+        else if k == "interpolation" then
+          if interpMode v != 0 then (kw, rps, inc, interpMode v, out)
+          else (kw, rps, inc, im, out ++ ["@interpolation"])
+        else if k == "reject-prefix" then
+          match parseRx v with
+          | some r => (kw, rps ++ [r], inc, im, out)
+          | none => (kw, rps, inc, im, out ++ ["@reject-prefix"])
+        else (kw, rps, inc, im, out ++ ["@" ++ k]))
+      (false, [], 0, 0, [])
+    let (kw, rps, inc, im, out') := g
+    let (scan, out'') :=
+      if im == 5 then (TokScan.stringLit, out')
+      else if im != 0 then (TokScan.interp im, out')
+      else match parseRx src with
+        | some r => (TokScan.regex r, out')
+        | none => (TokScan.regex .nil, out' ++ ["regex:" ++ name])
+    { st with
+      f := { st.f with lex := st.f.lex ++
+        [{ name := name, scan := scan, keywords := kw,
+           rejectPrefix := rps, incomplete := inc }] },
+      out := st.out ++ out'' }
+  | kw :: _ =>
+    let rest := (l.drop kw.length).trim
+    match kw with
+    | "ws" => { st with f := { st.f with skip := { st.f.skip with ws := unq rest } } }
+    | "comment" => { st with f := { st.f with skip := { st.f.skip with lineCom := unq rest } } }
+    | "block-open" => { st with f := { st.f with skip := { st.f.skip with blkO := unq rest } } }
+    | "block-close" => { st with f := { st.f with skip := { st.f.skip with blkC := unq rest } } }
+    | "open" =>
+      { st with f := { st.f with openB := (quotedParts rest).foldl (fun a q => a ++ unesc q.toList) [] } }
+    | "close" =>
+      { st with f := { st.f with closeB := (quotedParts rest).foldl (fun a q => a ++ unesc q.toList) [] } }
+    | _ => { st with out := st.out ++ ["lexical-line:" ++ l] }
+  | _ => { st with out := st.out ++ ["lexical-line:" ++ l] }
+
+def ruleLine (st : SynSt) (ws : List String) : SynSt :=
+  match ws with
+  | lhs :: ":=" :: rest =>
+    let lexNames := st.f.lex.map (·.name)
+    let (items, attrs) := rest.partition fun w => !(w.startsWith "@")
+    let rhs := items.filterMap (itemSym lexNames)
+    let f := { st.f with
+      nts := if st.f.nts.contains lhs then st.f.nts else st.f.nts ++ [lhs] }
+    let (p, out') := attrs.foldl (fun (po : Prod × List String) a =>
+        let (p, o) := po
+        let (p', e) := attrApply p a
+        (p', o ++ e))
+      (({ lhs := lhs, rhs := rhs } : Prod), [])
+    { st with f := { f with rules := f.rules ++ [p] }, out := st.out ++ out' }
+  | _ => { st with out := st.out ++ ["grammar-line:" ++ String.intercalate " " ws] }
+
+def resLine (st : SynSt) (ws : List String) : SynSt :=
+  match ws with
+  | n :: name :: _ =>
+    match n.toNat? with
+    | some c => { st with f := { st.f with residues := st.f.residues ++ [(c, name)] } }
+    | none => { st with out := st.out ++ ["residue-line"] }
+  | _ => st
+
+def synLine (st : SynSt) (line : String) : SynSt :=
+  let l := line.trim
+  if l == "" || l.startsWith "#" then st
+  else
+    let ws := wsOf l
+    match ws with
+    | ["lexical"] => { st with sec := 1 }
+    | ["grammar"] => { st with sec := 2 }
+    | ["residues"] => { st with sec := 3 }
+    | ["examples"] => { st with sec := 4, out := st.out ++ ["examples-section"] }
+    | ["probes"] => { st with sec := 5, out := st.out ++ ["probes-section"] }
+    | ["sources"] => { st with sec := 6, out := st.out ++ ["sources-section"] }
+    | ["surface", n] => { st with f := { st.f with name := n } }
+    | _ =>
+      match st.sec with
+      | 0 =>
+        match ws with
+        | "header" :: _ =>
+          { st with f := { st.f with header := unq ((l.drop 6).trim) } }
+        | _ => { st with out := st.out ++ ["preamble-line:" ++ l] }
+      | 1 => lexLine st l ws
+      | 2 => ruleLine st ws
+      | 3 => resLine st ws
+      | _ => st
+
+def dedupS (l : List String) : List String :=
+  l.foldl (fun a x => if a.elem x then a else a ++ [x]) []
+
+def synParse (src : String) : SynFile × List String :=
+  go { f := { name := "",
+              skip := { ws := [], lineCom := [], blkO := [], blkC := [] },
+              nts := [], rules := [] } }
+     (src.split (· == '\n'))
+where
+  go (st : SynSt) : List String → SynFile × List String
+    | [] => (st.f, dedupS st.out)
+    | line :: r => go (synLine st line) r
+
+-- independent line counts over the raw .syn text (S0): `token` lines in the
+-- lexical section, `lhs := ...` rule lines in the grammar section, and the
+-- distinct rule lhs names — counted straight off the file, not through
+-- synParse's state machine. The profile #guards compare the reader's
+-- counts against these derived numbers, so a profile edit (adding or
+-- removing rules) cannot break the class file, while a reader that drops
+-- or double-counts a line still fails the guard.
+def synCounts (src : String) : Nat × Nat × Nat :=
+  let st := (src.split (· == '\n')).foldl step (0, 0, 0, [])
+  (st.2.1, st.2.2.1, st.2.2.2.length)
+where
+  step (st : Nat × Nat × Nat × List String) (line : String)
+      : Nat × Nat × Nat × List String :=
+    let (sec, nlex, nrules, lhs) := st
+    let l := line.trim
+    if l == "" || l.startsWith "#" then st else
+    match wsOf l with
+    | ["lexical"] => (1, nlex, nrules, lhs)
+    | ["grammar"] => (2, nlex, nrules, lhs)
+    | ["residues"] | ["examples"] | ["probes"] | ["sources"] =>
+      (9, nlex, nrules, lhs)
+    | ws =>
+      match sec, ws with
+      | 1, "token" :: _ :: _ :: _ => (sec, nlex + 1, nrules, lhs)
+      | 2, x :: ":=" :: _ =>
+        (sec, nlex, nrules + 1,
+         if lhs.elem x then lhs else lhs ++ [x])
+      | _, _ => st
+
+-- ---------------------------------------------------------------------------
+-- the denotations of the three shipped profiles: each parses to a SynFile
+-- whose synToGrammar image is a grammar of the class, with the outside-class
+-- enumeration mechanically checked to be only the known rows.
+
+def rsdSrc : String := include_str "../../rsdc/profiles/rsd.syn"
+def rsjSrc : String := include_str "../../rsdc/profiles/rsj.syn"
+def rsmSrc : String := include_str "../../rsdc/profiles/rsm.syn"
+
+def rsdParsed := synParse rsdSrc
+def rsjParsed := synParse rsjSrc
+def rsmParsed := synParse rsmSrc
+
+def rsdG := synToGrammar rsdParsed.1
+def rsjG := synToGrammar rsjParsed.1
+def rsmG := synToGrammar rsmParsed.1
+
+-- the second-pass counts the reader must match (S0: derived, not hard-coded)
+def rsdCounts := synCounts rsdSrc
+def rsjCounts := synCounts rsjSrc
+def rsmCounts := synCounts rsmSrc
+
+-- every outside-class name the reader met, across all three profiles
+def knownOutside : List String :=
+  ["@tree", "@template", "examples-section", "probes-section", "sources-section"]
+
+#guard rsdG.name == "rsd" && rsdG.nts.length == rsdCounts.2.2 &&
+        rsdG.prods.length == rsdCounts.2.1 && rsdG.lex.length == rsdCounts.1 &&
+        rsdParsed.2.all (fun x => knownOutside.elem x)
+#guard rsjG.name == "rsj" && rsjG.nts.length == rsjCounts.2.2 &&
+        rsjG.prods.length == rsjCounts.2.1 && rsjG.lex.length == rsjCounts.1 &&
+        rsjParsed.2.all (fun x => knownOutside.elem x)
+#guard rsmG.name == "rsl" && rsmG.nts.length == rsmCounts.2.2 &&
+        rsmG.prods.length == rsmCounts.2.1 && rsmG.lex.length == rsmCounts.1 &&
+        rsmG.header == strBs "#lang rsd" &&
+        rsmParsed.2.all (fun x => knownOutside.elem x)
+
+-- enumerated small grammars and the guard family (correctness = fixpoint +
+-- differential on the reference + mutants refused)
+
+-- G1: arithmetic with priority/associativity — E ::= num | E + E (left,1) | E * E (left,2)
+def G1 : Grammar := {
+  name := "arith", header := [], skip := { ws := [32, 9, 10], lineCom := [], blkO := [], blkC := [] },
+  openB := [], closeB := [],
+  lex := [{ name := "num", scan := .regex (Rx.plus (Rx.cls [(48, 57)] false)),
+            keywords := false, rejectPrefix := [], incomplete := 0 }],
+  nts := ["E"],
+  prods := [
+    { lhs := "E", rhs := [.cls 0], kind := "num", prio := -1 },
+    { lhs := "E", rhs := [.nt "E" 1, .lit [43], .nt "E" 2], kind := "add", prio := 1, assoc := 1 },
+    { lhs := "E", rhs := [.nt "E" 2, .lit [42], .nt "E" 3], kind := "mul", prio := 2, assoc := 1 }],
+  residues := [] }
+
+-- mutant grammar: precedence swapped (add binds tighter than mul)
+def G1m : Grammar := { G1 with prods := [
+    { lhs := "E", rhs := [.cls 0], kind := "num", prio := -1 },
+    { lhs := "E", rhs := [.nt "E" 2, .lit [43], .nt "E" 3], kind := "add", prio := 2, assoc := 1 },
+    { lhs := "E", rhs := [.nt "E" 1, .lit [42], .nt "E" 2], kind := "mul", prio := 1, assoc := 1 }] }
+
+def wA : Bs := [49, 43, 50, 42, 51]      -- "1+2*3"
+def wAm : Bs := [49, 43, 43, 50]         -- "1++2" (mutant input)
+
+def tA : Tree := .node 1 [.node 0 [.leaf 0 1], .leaf 1 2,
+                          .node 2 [.node 0 [.leaf 2 3], .leaf 3 4, .node 0 [.leaf 4 5]]]
+def tAm : Tree := .node 2 [.node 1 [.node 0 [.leaf 0 1], .leaf 1 2, .node 0 [.leaf 2 3]],
+                            .leaf 3 4, .node 0 [.leaf 4 5]]   -- mutant: (1+2)*3
+
+#guard refParses G1 "E" wA == [tA]               -- precedence/assoc: 1+(2*3)
+#guard refParses G1m "E" wA == [tAm]             -- mutant grammar parses differently
+#guard refParses G1 "E" wAm == []                -- mutant input refused
+
+-- G2: a layout-constrained block — B ::= "{" x "}" with x at the SAME column
+-- as "{" (checkColEq; Lean checkColEq, Basic.lean:1433)
+def G2 : Grammar := {
+  name := "blk", header := [], skip := { ws := [32, 9, 10], lineCom := [], blkO := [], blkC := [] },
+  openB := [], closeB := [], lex := [], nts := ["B", "S"],
+  prods := [
+    { lhs := "B", rhs := [.lit [123], .nt "S" 0, .lit [125]], kind := "blk",
+      layoutRoot := true, boundaries := [(1, 6)] },   -- item 1 at saved-pos column
+    { lhs := "S", rhs := [.lit [120]], kind := "x" }],
+  residues := [] }
+
+def wB1 : Bs := [123, 10, 120, 125]       -- "{\nx}"    (x at col 0 = col of '{')
+def wB2 : Bs := [123, 10, 32, 120, 125]   -- "{\n x}"   (x at col 1 ≠ 0)
+def tB : Tree := .node 0 [.leaf 0 1, .node 1 [.leaf 2 3], .leaf 3 4]
+
+#guard refParses G2 "B" wB1 == [tB]       -- position check holds
+#guard refParses G2 "B" wB2 == []         -- mutant input refused (wrong column)
+
+-- G3: dangling else via Ford-2004 ordered choice (choiceGroup/choiceRank):
+-- the if-with-else alternative (rank 1) beats the if-only alternative (rank 0)
+def G3 : Grammar := {
+  name := "ifelse", header := [], skip := { ws := [32, 9, 10], lineCom := [], blkO := [], blkC := [] },
+  openB := [], closeB := [], lex := [], nts := ["S", "E"],
+  prods := [
+    { lhs := "S", rhs := [.lit [105, 102], .nt "E" 0, .lit [116, 104, 101, 110],
+                          .nt "S" 0, .lit [101, 108, 115, 101], .nt "S" 0],
+      kind := "ifE", choiceGroup := 0, choiceRank := 1 },
+    { lhs := "S", rhs := [.lit [105, 102], .nt "E" 0, .lit [116, 104, 101, 110],
+                          .nt "S" 0], kind := "if", choiceGroup := 0, choiceRank := 0 },
+    { lhs := "E", rhs := [.lit [120]], kind := "x" },
+    { lhs := "S", rhs := [.lit [120]], kind := "x" }],
+  residues := [] }
+
+def G3m : Grammar := { G3 with prods := [
+    { lhs := "S", rhs := [.lit [105, 102], .nt "E" 0, .lit [116, 104, 101, 110],
+                          .nt "S" 0, .lit [101, 108, 115, 101], .nt "S" 0],
+      kind := "ifE", choiceGroup := 0, choiceRank := 0 },
+    { lhs := "S", rhs := [.lit [105, 102], .nt "E" 0, .lit [116, 104, 101, 110],
+                          .nt "S" 0], kind := "if", choiceGroup := 0, choiceRank := 1 },
+    { lhs := "E", rhs := [.lit [120]], kind := "x" },
+    { lhs := "S", rhs := [.lit [120]], kind := "x" }] }
+
+-- "if x then if x then x else x": under the same-span survivor rule (S4a)
+-- the two alternatives at the inner site cover different ends, so both
+-- inner parses stay valid; the ordered choice then decides at the TOP
+-- site between the two same-span trees — the higher-ranked alternative
+-- (ifE, rank 1) wins and the else binds to the OUTER if. This matches the
+-- engine's synChoiceRetained, which compares ranks only among completions
+-- at the same Earley cell (Syn.rsd:2099-2111).
+def wI : Bs := [105,102,32,120,32,116,104,101,110,32,105,102,32,120,32,
+                116,104,101,110,32,120,32,101,108,115,101,32,120]
+def tI : Tree := .node 1 [.leaf 0 2, .node 2 [.leaf 3 4], .leaf 5 9,
+                   .node 0 [.leaf 10 12, .node 2 [.leaf 13 14], .leaf 15 19,
+                            .node 3 [.leaf 20 21], .leaf 22 26, .node 3 [.leaf 27 28]]]
+def tIm : Tree := .node 0 [.leaf 0 2, .node 2 [.leaf 3 4], .leaf 5 9,
+                    .node 1 [.leaf 10 12, .node 2 [.leaf 13 14], .leaf 15 19,
+                             .node 3 [.leaf 20 21]], .leaf 22 26, .node 3 [.leaf 27 28]]
+
+#guard refParses G3 "S" wI == [tIm]       -- outer ifE (rank 1) wins at same span
+#guard refParses G3m "S" wI == [tI]       -- mutant ranks: else binds the inner if
+
+-- G4: bracket transparency (K bracket attribute)
+def G4 : Grammar := {
+  name := "par", header := [], skip := { ws := [32, 9, 10], lineCom := [], blkO := [], blkC := [] },
+  openB := [], closeB := [], lex := [], nts := ["E"],
+  prods := [
+    { lhs := "E", rhs := [.lit [40], .nt "E" 0, .lit [41]], kind := "par", disamb := 3 },
+    { lhs := "E", rhs := [.lit [120]], kind := "x" }],
+  residues := [] }
+
+def wP : Bs := [40, 120, 41]              -- "(x)"
+def tP : Tree := .node 1 [.leaf 1 2]      -- the bracket contributes no node
+
+#guard refParses G4 "E" wP == [tP]
+
+-- G5: prefer/avoid (K disambiguation): the prefer-marked production wins the
+-- same-span site
+def G5 : Grammar := {
+  name := "pref", header := [], skip := { ws := [32, 9, 10], lineCom := [], blkO := [], blkC := [] },
+  openB := [], closeB := [], lex := [], nts := ["S"],
+  prods := [
+    { lhs := "S", rhs := [.lit [120]], kind := "a", disamb := 2 },  -- avoid
+    { lhs := "S", rhs := [.lit [120]], kind := "b", disamb := 1 },  -- prefer
+    { lhs := "S", rhs := [.lit [120]], kind := "c" }],              -- normal
+  residues := [] }
+
+#guard refParses G5 "S" [120] == [.node 1 [.leaf 0 1]]   -- prefer wins
+
+-- ---------------------------------------------------------------------------
+-- the S1..S5 repair guards (surface-orch GOAL-REVIEW findings 1, 3): each
+-- witness now gives the result Lean's parser semantics gives, with a mutant
+-- control.
+
+-- S1: trailing trivia is skipped by the end test (synReadFrom finSkip,
+-- Syn.rsd:2641; Pratt.rsd:431; Lean Basic.lean:1016). GS1 exercises ws, a
+-- line comment, and a block comment; an unclosed block comment refuses.
+def GS1 : Grammar := {
+  name := "triv", header := [],
+  skip := { ws := [32], lineCom := [35], blkO := [47, 42], blkC := [42, 47] },
+  openB := [], closeB := [], lex := [], nts := ["S"],
+  prods := [{ lhs := "S", rhs := [.lit [97]], kind := "a" }],
+  residues := [] }
+
+#guard refParses GS1 "S" [97] == [.node 0 [.leaf 0 1]]              -- "a"
+#guard refParses GS1 "S" [32, 97] == [.node 0 [.leaf 1 2]]          -- " a" (leading ws already worked)
+#guard refParses GS1 "S" [97, 32] == [.node 0 [.leaf 0 1]]          -- "a " S1 witness
+#guard refParses GS1 "S" [97, 35, 120] == [.node 0 [.leaf 0 1]]     -- "a#x" line comment to EOL
+#guard refParses GS1 "S" [97, 47, 42, 120, 42, 47] ==
+  [.node 0 [.leaf 0 1]]                                             -- "a/*x*/" block comment
+#guard refParses GS1 "S" [97, 47, 42, 120] == []                    -- "a/*x" unclosed → refuse
+#guard refParses GS1 "S" [97, 32, 98] == []                         -- "a b" trailing junk refused
+
+-- S2: a nullary (eps) child's empty span sits at the first non-skip
+-- position after the previous child's end (the chain's position), not at
+-- the parent's start (Tree.spanL's `d`).
+def GS2 : Grammar := {
+  name := "eps", header := [], skip := { ws := [32], lineCom := [], blkO := [], blkC := [] },
+  openB := [], closeB := [], lex := [], nts := ["S", "E"],
+  prods := [
+    { lhs := "S", rhs := [.nt "E" 0, .lit [97]], kind := "ea" },
+    { lhs := "E", rhs := [], kind := "eps" }],
+  residues := [] }
+
+def GS2b : Grammar := { GS2 with prods := [
+    { lhs := "S", rhs := [.lit [97], .nt "E" 0], kind := "ae" },
+    { lhs := "E", rhs := [], kind := "eps" }] }
+
+def GS2m : Grammar := { GS2 with prods := [
+    { lhs := "S", rhs := [.nt "E" 0, .lit [97]], kind := "ea" },
+    { lhs := "E", rhs := [.lit [122]], kind := "z" }] }   -- mutant: E is 'z, not eps
+
+#guard refParses GS2 "S" [32, 97] == [.node 0 [.node 1 [], .leaf 1 2]]  -- " a" S2 witness
+#guard refParses GS2 "S" [97] == [.node 0 [.node 1 [], .leaf 0 1]]      -- "a"
+#guard refParses GS2b "S" [97] == [.node 0 [.leaf 0 1, .node 1 []]]     -- "a" eps at 1
+#guard refParses GS2b "S" [97, 32] == [.node 0 [.leaf 0 1, .node 1 []]] -- "a " eps at 2
+#guard refParses GS2 "S" [32] == []                                    -- " " no 'a
+#guard refParses GS2m "S" [32, 97] == []                               -- mutant grammar refused
+
+-- S3: boundary ops 1..3 (ws / no-ws / linebreak) are defined only with a
+-- preceding token (engine tail >= 0; Syn.rsd:1975-1978, Pratt.rsd:543-547,
+-- Basic.lean:1146-1185). At index 0 with no inherited tail they refuse.
+def GS3 : Grammar := {
+  name := "bnd", header := [], skip := { ws := [32, 10], lineCom := [], blkO := [], blkC := [] },
+  openB := [], closeB := [], lex := [], nts := ["S"],
+  prods := [{ lhs := "S", rhs := [.lit [97]], kind := "a", boundaries := [(0, 1)] }],
+  residues := [] }
+
+def GS3n : Grammar := { GS3 with prods := [
+    { lhs := "S", rhs := [.lit [97]], kind := "a", boundaries := [(0, 2)] }] }
+def GS3l : Grammar := { GS3 with prods := [
+    { lhs := "S", rhs := [.lit [97]], kind := "a", boundaries := [(0, 3)] }] }
+def GS3i : Grammar := { GS3 with prods := [
+    { lhs := "S", rhs := [.lit [97], .lit [98]], kind := "ab", boundaries := [(1, 1)] }] }
+def GS3in : Grammar := { GS3i with prods := [
+    { lhs := "S", rhs := [.lit [97], .lit [98]], kind := "ab", boundaries := [(1, 2)] }] }
+def GS3t : Grammar := { GS3 with nts := ["T", "S"], prods := [
+    { lhs := "T", rhs := [.lit [120], .nt "S" 0], kind := "xs" },
+    { lhs := "S", rhs := [.lit [97]], kind := "a", boundaries := [(0, 1)] }] }
+
+#guard refParses GS3 "S" [32, 97] == []            -- ws at 0, no preceding token
+#guard refParses GS3n "S" [97] == []               -- no-ws at 0, no preceding token
+#guard refParses GS3l "S" [10, 97] == []           -- linebreak at 0, no preceding token
+#guard refParses GS3i "S" [97, 32, 98] ==
+  [.node 0 [.leaf 0 1, .leaf 2 3]]                 -- "a b": ws between items holds
+#guard refParses GS3i "S" [97, 98] == []           -- "ab": ws fails
+#guard refParses GS3in "S" [97, 98] ==
+  [.node 0 [.leaf 0 1, .leaf 1 2]]                 -- "ab": no-ws holds
+#guard refParses GS3in "S" [97, 32, 98] == []      -- "a b": no-ws fails
+#guard refParses GS3t "T" [120, 32, 97] ==
+  [.node 0 [.leaf 0 1, .node 1 [.leaf 2 3]]]       -- "x a": ws at S start, tail = 1
+#guard refParses GS3t "T" [120, 97] == []          -- "xa": no ws before 'a'
+
+-- S4a: `beats` compares only candidates of the same span — a higher-ranked
+-- alternative of a different end may not kill a valid shorter child.
+def GS4a : Grammar := {
+  name := "beats", header := [], skip := { ws := [32], lineCom := [], blkO := [], blkC := [] },
+  openB := [], closeB := [], lex := [], nts := ["S", "A"],
+  prods := [
+    { lhs := "S", rhs := [.nt "A" 0, .lit [98]], kind := "sAB" },
+    { lhs := "S", rhs := [.nt "A" 0], kind := "sA" },
+    { lhs := "A", rhs := [.lit [97]], kind := "a", choiceGroup := 0, choiceRank := 0 },
+    { lhs := "A", rhs := [.lit [97], .lit [98]], kind := "ab", choiceGroup := 0, choiceRank := 1 }],
+  residues := [] }
+
+def GS4a2 : Grammar := { GS4a with prods := [
+    { lhs := "S", rhs := [.nt "A" 0], kind := "sA" },
+    { lhs := "A", rhs := [.lit [97]], kind := "a0", choiceGroup := 0, choiceRank := 0 },
+    { lhs := "A", rhs := [.lit [97]], kind := "a1", choiceGroup := 0, choiceRank := 1 }] }
+
+-- on "ab" both S tilings are valid: A := 'a (rank 0, ends 1) is NOT killed
+-- by A := 'a 'b (rank 1, ends 2) — different spans
+#guard refParses GS4a "S" [97, 98] ==
+  [.node 0 [.node 2 [.leaf 0 1], .leaf 1 2],
+   .node 1 [.node 3 [.leaf 0 1, .leaf 1 2]]]
+-- mutant control: same-span rivals still compete — rank 1 kills rank 0
+#guard refParses GS4a2 "S" [97] == [.node 0 [.node 2 [.leaf 0 1]]]
+
+-- S4b: `longestLeft` compares only same-production family members. The
+-- first children are token-CLASS leaves, not literals: on "abc" the lit 'a'
+-- is not a whole token (registered 'ab' is longer, TermMatch.lit), so .lit
+-- children could never produce both tilings. .cls regex matches have no
+-- longer-literal refusal, so both tilings below are live candidates.
+def GS4lex : List LexC := [
+  { name := "a1", scan := .regex (Rx.cls [(97, 122)] false),
+    keywords := false, rejectPrefix := [], incomplete := 0 },
+  { name := "a2", scan := .regex (Rx.cat (Rx.cls [(97, 122)] false)
+                                        (Rx.cls [(97, 122)] false)),
+    keywords := false, rejectPrefix := [], incomplete := 0 }]
+
+def GS4b : Grammar := {
+  name := "ll", header := [], skip := { ws := [], lineCom := [], blkO := [], blkC := [] },
+  openB := [], closeB := [], lex := GS4lex, nts := ["S"],
+  prods := [
+    { lhs := "S", rhs := [.cls 0, .lit [98, 99]], kind := "abc1", longestLeft := true },
+    { lhs := "S", rhs := [.cls 1, .lit [99]], kind := "abc2" }],
+  residues := [] }
+
+def GS4b2 : Grammar := {
+  name := "ll2", header := [], skip := { ws := [], lineCom := [], blkO := [], blkC := [] },
+  openB := [], closeB := [], lex := GS4lex, nts := ["S", "B", "C"],
+  prods := [
+    { lhs := "S", rhs := [.nt "B" 0, .nt "C" 0], kind := "bc", longestLeft := true },
+    { lhs := "B", rhs := [.cls 0], kind := "a" },
+    { lhs := "B", rhs := [.cls 1], kind := "ab" },
+    { lhs := "C", rhs := [.lit [99]], kind := "c" },
+    { lhs := "C", rhs := [.lit [98, 99]], kind := "bc" }],
+  residues := [] }
+
+-- "abc": 'a 'bc's candidate is not killed by the 'ab 'c production's longer
+-- first child — different production. Both tilings survive.
+#guard refParses GS4b "S" [97, 98, 99] ==
+  [.node 0 [.leaf 0 1, .leaf 1 3], .node 1 [.leaf 0 2, .leaf 2 3]]
+-- mutant control: same-production longest-left still filters —
+-- B := 'ab (firstEnd 2) beats B := 'a (firstEnd 1) inside S := B C
+#guard refParses GS4b2 "S" [97, 98, 99] ==
+  [.node 0 [.node 2 [.leaf 0 2], .node 3 [.leaf 2 3]]]
+
+-- S5: the shared EKey table bounds enumD on k >= 2 left-recursive
+-- productions — this input was Omega(k^bnd) before the table.
+def GS5 : Grammar := {
+  name := "lr", header := [], skip := { ws := [32], lineCom := [], blkO := [], blkC := [] },
+  openB := [], closeB := [],
+  lex := [{ name := "num", scan := .regex (Rx.plus (Rx.cls [(48, 57)] false)),
+            keywords := false, rejectPrefix := [], incomplete := 0 }],
+  nts := ["E"],
+  prods := [
+    { lhs := "E", rhs := [.cls 0], kind := "num", prio := -1 },
+    { lhs := "E", rhs := [.nt "E" 1, .lit [45], .nt "E" 2], kind := "sub", prio := 1, assoc := 1 },
+    { lhs := "E", rhs := [.nt "E" 1, .lit [43], .nt "E" 2], kind := "add", prio := 1, assoc := 1 }],
+  residues := [] }
+
+def GS5m : Grammar := { GS5 with prods := [
+    { lhs := "E", rhs := [.cls 0], kind := "num", prio := -1 },
+    { lhs := "E", rhs := [.nt "E" 2, .lit [45], .nt "E" 1], kind := "sub", prio := 1, assoc := 2 },
+    { lhs := "E", rhs := [.nt "E" 2, .lit [43], .nt "E" 1], kind := "add", prio := 1, assoc := 2 }] }
+
+-- "1-2+3-4" at bnd = 8*4+2 = 34 fuel: left-assoc gives ((1-2)+3)-4
+#guard refParses GS5 "E" [49, 45, 50, 43, 51, 45, 52] ==
+  [.node 1 [.node 2 [.node 1 [.node 0 [.leaf 0 1], .leaf 1 2, .node 0 [.leaf 2 3]],
+                            .leaf 3 4, .node 0 [.leaf 4 5]],
+                    .leaf 5 6, .node 0 [.leaf 6 7]]]
+-- mutant: right-assoc occurrence floors give 1-(2+(3-4))
+#guard refParses GS5m "E" [49, 45, 50, 43, 51, 45, 52] ==
+  [.node 1 [.node 0 [.leaf 0 1], .leaf 1 2,
+             .node 2 [.node 0 [.leaf 2 3], .leaf 3 4,
+                       .node 1 [.node 0 [.leaf 4 5], .leaf 5 6, .node 0 [.leaf 6 7]]]]]
+
+-- the ParserDescr mapping: `syntax term:51 "≤" term:51`-shape nodes map
+#guard (pdProds "term" (.node "le" 51
+          (.binary "andthen" (.symbol [226, 137, 164])
+           (.binary "andthen" (.cat "term" 51) (.symbol [120]))))).isSome
+
+-- orelse carries ordered choice: first alternative gets the higher rank
+#guard (pdProds "t" (.node "n" 0
+          (.binary "orelse" (.symbol [97]) (.symbol [98])))).isSome
+
+-- outside-class rows are refusal data: const/parser/antiquot don't map
+#guard (pdProds "t" (.parser "ident")).isNone
+#guard (pdProds "t" (.const "Term.app")).isNone
+#guard (pdProds "t" (.nodeWithAntiquot "a" "k" (.symbol [120]))).isNone
+
+-- C1: skipEnd loops after closing block comment (trailing ws/comments skipped)
+#guard refParses GS1 "S" [97, 47, 42, 120, 42, 47, 32] == [.node 0 [.leaf 0 1]]
+#guard refParses GS1 "S" [47, 42, 120, 42, 47, 32, 47, 42, 121, 42, 47, 97] ==
+  [.node 0 [.leaf 11 12]]
+#guard refParses GS1 "S" [97, 47, 42, 120, 42, 47, 47, 42, 121] == []
+
+-- C2: @refuse is refusal naming on failure and does not reject matching parses
+def GS7 : Grammar := {
+  name := "ref", header := [], skip := { ws := [32], lineCom := [], blkO := [], blkC := [] },
+  openB := [], closeB := [], lex := [], nts := ["S"],
+  prods := [{ lhs := "S", rhs := [.lit [97]], kind := "a", refuse := [(1, 65)] }],
+  residues := [(65, "bad")] }
+
+#guard refParses GS7 "S" [97] == [.node 0 [.leaf 0 1]]
+#guard refParses GS7 "S" [98] == []
+
+-- C3: header after leading trivia accepted; missing header refused even without .header sym
+def GS8 : Grammar := {
+  name := "hdr", header := [35, 104, 49],
+  skip := { ws := [32], lineCom := [], blkO := [], blkC := [] },
+  openB := [], closeB := [], lex := [], nts := ["S"],
+  prods := [{ lhs := "S", rhs := [.header, .lit [97]], kind := "ha" }],
+  residues := [] }
+
+def GS8b : Grammar := {
+  name := "hdr_pre", header := [98],
+  skip := { ws := [32], lineCom := [], blkO := [], blkC := [] },
+  openB := [], closeB := [], lex := [], nts := ["S"],
+  prods := [{ lhs := "S", rhs := [.lit [97]], kind := "a" }],
+  residues := [] }
+
+#guard refParses GS8 "S" [32, 35, 104, 49, 32, 97] == [.node 0 [.leaf 1 4, .leaf 5 6]]
+#guard refParses GS8 "S" [32, 97] == []
+#guard refParses GS8b "S" [97] == []
+
+-- @disamb attribute maps prefer/avoid/bracket without outside-class warnings
+def disambParsed := synParse
+  "surface d\ngrammar\n  S := 'a @disamb=prefer\n  S := 'a @disamb=avoid\n  S := '( S ') @disamb=bracket\n"
+#guard disambParsed.2.isEmpty &&
+  (disambParsed.1.rules.map (·.disamb) == [1, 2, 3])
+
+-- C4: child nonterminal inherits pre-skip origin `prevEnd` so `@scoped-layout=0:new-line` sees trivia
+def GS9 : Grammar := {
+  name := "scoped_nl", header := [],
+  skip := { ws := [32, 10], lineCom := [], blkO := [], blkC := [] },
+  openB := [], closeB := [], lex := [], nts := ["S", "Item"],
+  prods := [
+    { lhs := "S", rhs := [.lit [107], .lit [97], .nt "Item" 0], kind := "s", layoutRoot := true },
+    { lhs := "Item", rhs := [.lit [58], .lit [98]], kind := "it", scopedLayout := [(0, 5)] }],
+  residues := [] }
+
+#guard refParses GS9 "S" [107, 32, 97, 10, 32, 58, 98] ==
+  [.node 0 [.leaf 0 1, .leaf 2 3, .node 1 [.leaf 5 6, .leaf 6 7]]]
+#guard refParses GS9 "S" [107, 32, 97, 32, 58, 98] == []
+
+#print axioms Parses
+#print axioms refParses
+
+end SynSpec

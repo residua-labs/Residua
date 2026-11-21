@@ -254,13 +254,6 @@ def fwSlice (g : Dg) (recTy : List Int) (i : Nat) : SliceR :=
     if n.ok != profile.cOk || n.n < 0 then sliceFail else fwSliceGo g i 0 n.n.toNat n.rest
   | _ => sliceFail
 
--- the IR type of a parameter or a result whose wire type is a Bool (`bool`) or a scalar of `w` declared bits (the type
--- table's tag 11, contracts/tasks/WIRE-SEQ-0.md revision 2; lib/RscBase.rsd `readSigWs` reads the widths of a
--- signature): lean.h's uint8, uint16, uint32; `ts` for anything else. lib/lrc/Pack.rsd and lib/lrc/Range.rsd read
--- the type there; a value's type inside a body stays the word.
-def tysOfWidth (bool : Bool) (w : Int) (ts : List Int) : List Int :=
-  if bool || w == 8 then [tyU8] else if w == 16 then [tyOfWidth 2] else if w == 32 then [tyOfWidth 4] else ts
-
 -- the types of a function's parameters, one run per parameter, and of its result
 structure SigR where
   ok : Bool
@@ -600,13 +593,6 @@ structure Cx where
   arr : Bool := false
   -- `mag` names the functions that pack numbers into a node ("Numbers in nodes")
   num : Bool := false
-  -- The v1 Nat-to-UInt32 conversion can use the short form for an immediate Nat.
-  shortNatWord : Bool := false
-  -- an object field is four bytes (rsc's layer `narrow`): a small number has the bounds of `magLimsOf true`
-  narrow : Bool := false
-  -- the declared widths of each function's signature, its parameters' and then its result's (lib/RscBase.rsd
-  -- `readSigWs`); none: no width is known
-  ws : List (List Int) := []
 
 structure TV where
   ok : Bool
@@ -1368,41 +1354,19 @@ lists as before); what the stage builds is small whenever it can be. -/
 -- the limbs of the largest magnitude that is written as a small number: below 256^7 = 2^56
 def magLimbs : Nat := 7
 
--- The bounds of a small number. Where an object field is eight bytes they are the ones above. Where it is four
--- (rsc's layer `narrow`, docs/OBJECT-ABI.md "Narrow fields") a word in a field has 32 bits, and the bounds are
--- lean.h's on a target with pointers of four bytes (`LEAN_MAX_SMALL_NAT`, `LEAN_MAX_SMALL_INT`, `LEAN_MIN_SMALL_INT`):
--- a magnitude below `nat` is a small number; an integer whose magnitude is below `int` is a small integer; two
--- factors below `half`, either way, have a product that is both; a list of at most `limbs` limbs may be a small
--- number. `narrow`: these are the narrow bounds, under which `limbs` limbs can hold a number that is not below
--- `nat`, and a small number can be the magnitude of an integer that is not small.
-structure MagLims where
-  nat : Int
-  int : Int
-  half : Int
-  limbs : Nat
-  narrow : Bool
-  deriving Inhabited
-
-def magLimsOf (narrow : Bool) : MagLims :=
-  if narrow then { nat := 2147483648, int := 1073741824, half := 32768, limbs := 4, narrow := true }
-  else { nat := 72057594037927936, int := 72057594037927936, half := 268435456, limbs := magLimbs, narrow := false }
-
 -- natOfGo orig rest acc mul k: `rest` is what is left of the list `orig`, `acc` the value of the k
 -- limbs before it, and mul = 256^k. The small number, or `orig` itself when it has more limbs.
-def declNatOfGo (n : Nat) (lims : MagLims) : Decl :=
+def declNatOfGo (n : Nat) : Decl :=
   let self := hNatOfGo n
   let call := mkVDecl 16 tyTObj (mkFap self [1, 9, 11, 13, 15]) (mkRet [16])
   let count := mkVDecl 14 tyI64 (mkLit 1) (mkVDecl 15 tyI64 (mkPrim primAddW 0 0 [5, 14]) call)
   let scale := mkVDecl 12 tyI64 (mkLit 256) (mkVDecl 13 tyI64 (mkPrim primMulW 0 0 [4, 12]) count)
   let sum := mkVDecl 10 tyI64 (mkPrim primMulW 0 0 [8, 4]) (mkVDecl 11 tyI64 (mkPrim primAddW 0 0 [3, 10]) scale)
   let more := mkVDecl 8 tyI64 (mkSProj 1 0 2) (mkVDecl 9 tyTObj (mkProj 0 2) sum)
-  let cell := mkVDecl 6 tyI64 (mkLit (lims.limbs : Int)) (mkVDecl 7 tyI64 (mkPrim primEq 0 0 [5, 6]) (mkIfW 7 (mkRet [1]) more))
-  let boxed := mkVDecl 17 tyTObj (mkPrim primBox 0 0 [3]) (mkRet [17])
-  -- under the narrow bounds the limbs can hold a number that is no small number: the list stays
-  let done := if lims.narrow then mkVDecl 18 tyI64 (mkLit lims.nat) (mkVDecl 19 tyI64 (mkPrim primLt 0 0 [3, 18]) (mkIfW 19 boxed (mkRet [1])))
-    else boxed
+  let cell := mkVDecl 6 tyI64 (mkLit (magLimbs : Int)) (mkVDecl 7 tyI64 (mkPrim primEq 0 0 [5, 6]) (mkIfW 7 (mkRet [1]) more))
   { f := self, xs := [pT 1, pT 2, pI 3, pI 4, pI 5], rets := [tyTObj], ext := false,
-    body := mkCase 2 tyTObj [mkAltCtor nilInfo done, mkAltCtor (consInfo lsScalar) cell] }
+    body := mkCase 2 tyTObj
+      [mkAltCtor nilInfo (mkVDecl 17 tyTObj (mkPrim primBox 0 0 [3]) (mkRet [17])), mkAltCtor (consInfo lsScalar) cell] }
 
 -- natOf l: the magnitude's word of a limb list
 def declNatOf (n : Nat) : Decl :=
@@ -1479,17 +1443,13 @@ def declIntMag (n : Nat) : Decl :=
 
 -- The word of the integer of sign s (variable 1) and magnitude word m (variable 2): the small integer when m is
 -- a small number and the integer is not the wire's zero below zero; the object otherwise.
-def declIntOf (n : Nat) (lims : MagLims) : Decl :=
+def declIntOf (n : Nat) : Decl :=
   let obj := mkVDecl 20 tyTObj (mkCtor intBoxInfo [2]) (mkSSet 20 1 0 1 tyI64 (mkRet [20]))
   let boxed := mkVDecl 11 tyI64 (mkPrim primMulW 0 0 [3, 10]) (mkVDecl 12 tyTObj (mkPrim primBoxS 0 0 [11]) (mkRet [12]))
   let turn := mkVDecl 9 tyI64 (mkLit 1) (mkVDecl 10 tyI64 (mkPrim primSubW 0 0 [9, 8]) boxed)
   let word := mkVDecl 7 tyI64 (mkLit 2) (mkVDecl 8 tyI64 (mkPrim primMulW 0 0 [1, 7]) turn)
   let below := mkVDecl 6 tyI64 (mkPrim primAnd 0 0 [1, 5]) (mkIfW 6 (mkJmp 30 []) word)
-  let zero := mkVDecl 4 tyI64 (mkLit 0) (mkVDecl 5 tyI64 (mkPrim primEq 0 0 [3, 4]) below)
-  -- under the narrow bounds a small number can be above a small integer's magnitude: the object then
-  let fits := if lims.narrow then mkVDecl 14 tyI64 (mkLit lims.int) (mkVDecl 15 tyI64 (mkPrim primLt 0 0 [3, 14]) (mkIfW 15 zero (mkJmp 30 [])))
-    else zero
-  let small := mkVDecl 3 tyI64 (mkPrim primUnbox 0 0 [2]) fits
+  let small := mkVDecl 3 tyI64 (mkPrim primUnbox 0 0 [2]) (mkVDecl 4 tyI64 (mkLit 0) (mkVDecl 5 tyI64 (mkPrim primEq 0 0 [3, 4]) below))
   -- the sign is a Bool: its parameter has the IR type of one, as an image function's has (lib/lrc/Pack.rsd reads it)
   { f := hIntOf n, xs := [{ x := 1, borrow := false, ty := tyU8 }, pT 2], rets := [tyTObj], ext := false,
     body := mkJDecl 30 [] obj (mkVDecl 13 tyI64 (mkPrim primIsScalar 0 0 [2]) (mkIfW 13 small (mkJmp 30 []))) }
@@ -1516,7 +1476,7 @@ def magField (g : Dg) (ty : List Int) : Int :=
   if v == natRecTy then 0 else if v == intRecTy then 1 else -1
 
 -- An integer's record written out, `bs` at its first field's name: a literal sign, then the magnitude as a literal
--- of at most `lims.limbs` limbs and below `lims.int`, and not the zero below zero. `n` is the integer.
+-- of at most `magLimbs` limbs, and not the zero below zero. `n` is the integer.
 structure IntLit where
   ok : Bool
   n : Int
@@ -1536,7 +1496,7 @@ def litMag : Nat → List Int → Int
     if litLimb e >= 0 && rest >= 0 then litLimb e + 256 * rest else -1
   | _, _ => -1
 
-def intLit (lims : MagLims) (g : Dg) (bs : List Int) : IntLit :=
+def intLit (g : Dg) (bs : List Int) : IntLit :=
   let nm := skipName bs
   if nm.ok != profile.cOk then { ok := false, n := 0 }
   else
@@ -1545,8 +1505,8 @@ def intLit (lims : MagLims) (g : Dg) (bs : List Int) : IntLit :=
       match drE g (skipE g profile.v2Fuel nm.rest).rest with
       | 34 :: bs2 =>
         let nm2 := skipName bs2
-        let v := if nm2.ok == profile.cOk && magNameAt intMagName bs2 then litMag lims.limbs (drE g nm2.rest) else -1
-        if v < 0 || v >= lims.int || (sign != 0 && v == 0) then { ok := false, n := 0 } else { ok := true, n := if sign != 0 then 0 - v else v }
+        let v := if nm2.ok == profile.cOk && magNameAt intMagName bs2 then litMag magLimbs (drE g nm2.rest) else -1
+        if v < 0 || (sign != 0 && v == 0) then { ok := false, n := 0 } else { ok := true, n := if sign != 0 then 0 - v else v }
       | _ => { ok := false, n := 0 }
     | _ => { ok := false, n := 0 }
 
@@ -1784,8 +1744,9 @@ caller's fuel. Signs are the words 0 and 1 (1: below zero). The short form takes
 own, so a program may come to its value on a smaller budget than its limb lists would need; it
 never refuses where they would not. -/
 
--- the bounds the short forms test are `MagLims` ("Magnitudes"): 2^56 for a small number and 2^28 for two factors
--- whose product is one, or the narrow ones
+-- 2^56 and 2^28: the bound of a small number, and a bound on two factors whose product is one
+def magLim : Int := 72057594037927936
+def magHalf : Int := 268435456
 
 def magI (x : Nat) (p : Nat) (ys : List Int) : N := mkVDecl x tyI64 (mkPrim p 0 0 ys) mkUnreachable
 def magL (x : Nat) (v : Int) : N := mkVDecl x tyI64 (mkLit v) mkUnreachable
@@ -1812,18 +1773,18 @@ structure MagWrap where
   deriving Inhabited
 
 -- operations 1 to 5 and 12 to 15: two natural numbers
-def magNat (lims : MagLims) (op : Int) (a b v j : Nat) (rty : Int) : N :=
+def magNat (op : Int) (a b v j : Nat) (rty : Int) : N :=
   let x : Int := ((v + 3 : Nat) : Int)
   let y : Int := ((v + 4 : Nat) : Int)
   if op == 1 then
-    let sum := [magI (v + 5) primAddW [x, y], magL (v + 6) lims.nat, magI (v + 7) primLt [((v + 5 : Nat) : Int), ((v + 6 : Nat) : Int)]]
+    let sum := [magI (v + 5) primAddW [x, y], magL (v + 6) magLim, magI (v + 7) primLt [((v + 5 : Nat) : Int), ((v + 6 : Nat) : Int)]]
     magBoth a b v j (assemble sum (mkIfW (v + 7) (assemble [magBox (v + 8) (v + 5)] (mkRet [((v + 8 : Nat) : Int)])) (mkJmp j [])))
   else if op == 2 then
     let zero := assemble [magL (v + 6) 0, magBox (v + 7) (v + 6)] (mkRet [((v + 7 : Nat) : Int)])
     let diff := assemble [magI (v + 8) primSubW [x, y], magBox (v + 9) (v + 8)] (mkRet [((v + 9 : Nat) : Int)])
     magBoth a b v j (assemble [magI (v + 5) primLt [x, y]] (mkIfW (v + 5) zero diff))
   else if op == 3 then
-    let small := [magL (v + 5) lims.half, magI (v + 6) primLt [x, ((v + 5 : Nat) : Int)], magI (v + 7) primLt [y, ((v + 5 : Nat) : Int)],
+    let small := [magL (v + 5) magHalf, magI (v + 6) primLt [x, ((v + 5 : Nat) : Int)], magI (v + 7) primLt [y, ((v + 5 : Nat) : Int)],
       magI (v + 8) primAnd [((v + 6 : Nat) : Int), ((v + 7 : Nat) : Int)]]
     let prod := assemble [magI (v + 9) primMulW [x, y], magBox (v + 10) (v + 9)] (mkRet [((v + 10 : Nat) : Int)])
     magBoth a b v j (assemble small (mkIfW (v + 8) prod (mkJmp j [])))
@@ -1844,27 +1805,27 @@ def magBothS (a b v j : Nat) (fast : N) : N :=
   let nums := [magI (v + 3) primUnboxS [(a : Int)], magI (v + 4) primUnboxS [(b : Int)]]
   assemble test (mkIfW (v + 2) (assemble nums fast) (mkJmp j []))
 
--- the word of the number in r, returned when its magnitude is a small integer's (below `lims.int` either way: 2^56)
-def magOfS (lims : MagLims) (r v j : Nat) : N :=
+-- the word of the number in r, returned when its magnitude is a small number's (below 2^56 either way)
+def magOfS (r v j : Nat) : N :=
   let w := v + 14
-  let parts := [magL w lims.int, magI (w + 1) primLt [(r : Int), (w : Int)], magL (w + 2) (0 - lims.int),
+  let parts := [magL w magLim, magI (w + 1) primLt [(r : Int), (w : Int)], magL (w + 2) (0 - magLim),
     magI (w + 3) primLt [((w + 2 : Nat) : Int), (r : Int)], magI (w + 4) primAnd [((w + 1 : Nat) : Int), ((w + 3 : Nat) : Int)]]
   assemble parts (mkIfW (w + 4) (assemble [mkVDecl (w + 5) tyTObj (mkPrim primBoxS 0 0 [(r : Int)]) mkUnreachable] (mkRet [((w + 5 : Nat) : Int)])) (mkJmp j []))
 
 -- operations 6 to 10 and 16 to 19: two integers, each one word
-def magInt (lims : MagLims) (op : Int) (a b v j : Nat) (rty : Int) : N :=
+def magInt (op : Int) (a b v j : Nat) (rty : Int) : N :=
   let x : Int := ((v + 3 : Nat) : Int)
   let y : Int := ((v + 4 : Nat) : Int)
   let r := v + 13
-  if op == 6 then magBothS a b v j (assemble [magI r primAddW [x, y]] (magOfS lims r v j))
-  else if op == 7 then magBothS a b v j (assemble [magI r primSubW [x, y]] (magOfS lims r v j))
+  if op == 6 then magBothS a b v j (assemble [magI r primAddW [x, y]] (magOfS r v j))
+  else if op == 7 then magBothS a b v j (assemble [magI r primSubW [x, y]] (magOfS r v j))
   else if op == 8 then
-    -- two factors below `lims.half` either way (2^28): the product is a small integer
-    let small := [magL (v + 30) lims.half, magL (v + 31) (0 - lims.half), magI (v + 32) primLt [x, ((v + 30 : Nat) : Int)],
+    -- two factors below 2^28 either way: the product is a small integer
+    let small := [magL (v + 30) magHalf, magL (v + 31) (0 - magHalf), magI (v + 32) primLt [x, ((v + 30 : Nat) : Int)],
       magI (v + 33) primLt [((v + 31 : Nat) : Int), x], magI (v + 34) primLt [y, ((v + 30 : Nat) : Int)], magI (v + 35) primLt [((v + 31 : Nat) : Int), y],
       magI (v + 36) primAnd [((v + 32 : Nat) : Int), ((v + 33 : Nat) : Int)], magI (v + 37) primAnd [((v + 34 : Nat) : Int), ((v + 35 : Nat) : Int)],
       magI (v + 38) primAnd [((v + 36 : Nat) : Int), ((v + 37 : Nat) : Int)]]
-    magBothS a b v j (assemble small (mkIfW (v + 38) (assemble [magI r primMulW [x, y]] (magOfS lims r v j)) (mkJmp j [])))
+    magBothS a b v j (assemble small (mkIfW (v + 38) (assemble [magI r primMulW [x, y]] (magOfS r v j)) (mkJmp j [])))
   else if op == 9 || op == 10 then
     -- only for two numbers that are not below zero and a divisor that is not zero: every convention of a quotient agrees there
     let test := [magL (v + 5) 0, magI (v + 6) primLt [x, ((v + 5 : Nat) : Int)], magI (v + 7) primLt [y, ((v + 5 : Nat) : Int)],
@@ -1888,17 +1849,13 @@ def magNeg (a v j : Nat) : N :=
     (mkRet [((v + 4 : Nat) : Int)])
   assemble [magI v primIsScalar [(a : Int)]] (mkIfW v small (mkJmp j []))
 
--- An immediate natural is its own word (operation 30), or its low bits (UInt.ofNat).
-def magToWord (m v j : Nat) (mask : Int) : N :=
-  let word := v + 1
-  let finish := if mask < 0 then mkRet [(word : Int)]
-    else mkVDecl (v + 2) tyI64 (mkPrim primMask mask 0 [(word : Int)]) (mkRet [((v + 2 : Nat) : Int)])
-  let small := mkVDecl word tyI64 (mkPrim primUnbox 0 0 [(m : Int)]) finish
-  assemble [magI v primIsScalar [(m : Int)]] (mkIfW v small (mkJmp j []))
+-- operation 30: the word of a natural number (the front end's function gives the largest word for a number above it): a small number's own
+def magToWord (m v j : Nat) : N :=
+  assemble [magI v primIsScalar [(m : Int)]] (mkIfW v (assemble [magI (v + 1) primUnbox [(m : Int)]] (mkRet [((v + 1 : Nat) : Int)])) (mkJmp j []))
 
--- operation 31: the natural number of a word: a word from 0 to below `lims.nat` (2^56) is a small number
-def magOfWord (lims : MagLims) (w v j : Nat) : N :=
-  let test := [magL v 0, magI (v + 1) primLt [(w : Int), (v : Int)], magI (v + 2) primNot [((v + 1 : Nat) : Int)], magL (v + 3) lims.nat,
+-- operation 31: the natural number of a word: a word from 0 to below 2^56 is a small number
+def magOfWord (w v j : Nat) : N :=
+  let test := [magL v 0, magI (v + 1) primLt [(w : Int), (v : Int)], magI (v + 2) primNot [((v + 1 : Nat) : Int)], magL (v + 3) magLim,
     magI (v + 4) primLt [(w : Int), ((v + 3 : Nat) : Int)], magI (v + 5) primAnd [((v + 2 : Nat) : Int), ((v + 4 : Nat) : Int)]]
   assemble test (mkIfW (v + 5) (assemble [magBox (v + 6) w] (mkRet [((v + 6 : Nat) : Int)])) (mkJmp j []))
 
@@ -1906,7 +1863,7 @@ def magOfWord (lims : MagLims) (w v j : Nat) : N :=
 -- not ok when d has not the operation's parameters and results (then d stays as it is). An
 -- operation numbered 100 higher has its right operand as the function's first parameter, which is
 -- how the front end writes a difference, a quotient and a remainder (`magOps` says which, from a run).
-def magWrap (lims : MagLims) (op0 : Int) (d : Decl) (slow : Nat) (mask : Int) : MagWrap :=
+def magWrap (op0 : Int) (d : Decl) (slow : Nat) : MagWrap :=
   let rev := op0 >= 100
   let op := if rev then op0 - 100 else op0
   let v := magTop d.xs + 1
@@ -1929,11 +1886,10 @@ def magWrap (lims : MagLims) (op0 : Int) (d : Decl) (slow : Nat) (mask : Int) : 
   let one := d.xs.length == 1 && d.rets.length == 1
   let pty := (d.xs.headD { x := 0, borrow := false, ty := tyIrr }).ty
   let neg := one && pty == tyTObj && rty == tyTObj && op0 == 11
-  if one && (op0 == 30 || mask >= 0) && pty == tyTObj && rty == tyI64 then
-    { ok := true, body := mkJDecl j [] slowly (magToWord y0 v j mask) }
-  else if one && op0 == 31 && pty == tyI64 && rty == tyTObj then { ok := true, body := mkJDecl j [] slowly (magOfWord lims y0 v j) }
-  else if nat then { ok := true, body := mkJDecl j [] slowly (magNat lims op x0 x1 v j rty) }
-  else if int2 || cmp then { ok := true, body := mkJDecl j [] slowly (magInt lims op x0 x1 v j rty) }
+  if one && op0 == 30 && pty == tyTObj && rty == tyI64 then { ok := true, body := mkJDecl j [] slowly (magToWord y0 v j) }
+  else if one && op0 == 31 && pty == tyI64 && rty == tyTObj then { ok := true, body := mkJDecl j [] slowly (magOfWord y0 v j) }
+  else if nat then { ok := true, body := mkJDecl j [] slowly (magNat op x0 x1 v j rty) }
+  else if int2 || cmp then { ok := true, body := mkJDecl j [] slowly (magInt op x0 x1 v j rty) }
   else if neg then { ok := true, body := mkJDecl j [] slowly (magNeg y0 v j) }
   else { ok := false, body := d.body }
 
@@ -1964,15 +1920,12 @@ def declLenA (n shape : Nat) : Decl :=
   { f := hLenA n shape, xs := [pT 1], rets := [tyI64], ext := false,
     body := mkVDecl 2 tyI64 (mkPrim primIsArr 0 0 [1]) (mkIfW 2 size walk) }
 
--- `narrow`: the bounds of a small number in the module are the narrow ones (`magLimsOf`); the functions that make
--- one from a list read them
-def helperDecls (n : Nat) (narrow : Bool := false) : List Decl :=
-  let lims := magLimsOf narrow
+def helperDecls (n : Nat) : List Decl :=
   [declLen n lsScalar, declLen n lsObject, declDrop n lsScalar, declDrop n lsObject,
    declRev n lsScalar, declRev n lsObject, declApp n lsScalar, declApp n lsObject, declEq n,
-   declNatOf n, declNatOfGo n lims, declNatDigits n, declDigitsGo n, declMagEq n,
+   declNatOf n, declNatOfGo n, declNatDigits n, declDigitsGo n, declMagEq n,
    declLenA n lsScalar, declLenA n lsObject,
-   declIntSign n, declIntMag n, declIntOf n lims, declIntEq n]
+   declIntSign n, declIntMag n, declIntOf n, declIntEq n]
 
 -- The list in word `w` as cells: a fresh word, which takes the place of `w` ("Arrays"). In an
 -- image without arrays, and for the irrelevant word, `w` itself.
@@ -2071,23 +2024,6 @@ def afterPrefix : List Int → List Int → Option (List Int)
   | [], rest => some rest
   | x :: xs, y :: ys => if x == y then afterPrefix xs ys else none
   | _ :: _, [] => none
-
--- The complete v1 body of the Nat-to-UInt32 composition (rsdc/Compile.rsd, magnitudeNatWord*Bound).
--- It reverses the base-256 limbs of v0 and folds from 0 with (acc * 256 + digit) % modulus.
--- For an immediate number this is just unbox and mask, as in Lean 4.14's lean_uint32_of_nat.
--- Check the body, including both fold types, the projection and every variable and constant.
--- Check the UInt32 modulus as well. A different body uses ordinary lowering.
-def natWordMask (body : List Int) : Int :=
-  if body.headD 0 != 50 then -1
-  else
-    let reverseLimbs := [50, 4, 0, 50, 4, 0, 35] ++ natRecTy ++ [0, 3, 0, 22, 26, 23, 3, 0, 3, 1]
-    let zero : List Int := [0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
-    let step : List Int := [11, 6, 8, 3, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 3, 0, 0]
-    match afterPrefix (reverseLimbs ++ zero ++ step) body with
-    | some modulus =>
-      let m := readLeafI64 modulus
-      if m.ok == profile.cOk && m.n == 4294967296 then 4294967295 else -1
-    | none => -1
 
 -- an expression that reads neither of the two innermost variables (the loop's element and its accumulator)
 def fvOuter (g : Dg) (e : List Int) : FvR :=
@@ -2220,9 +2156,7 @@ partial def eqItems (cx : Cx) (ty : List Int) (wa wb : List Int) (next : Nat) : 
         let b := intAt 0 wb
         let j := next + 3
         let r := next + 4
-        -- the numbers with their signs, as the short forms box them: what a jump knows of a box then folds
-        -- (lib/lrc/JoinOnce.rsd `foldKnown`)
-        let small := assemble [magI (next + 5) primUnboxS [a], magI (next + 6) primUnboxS [b], magI (next + 7) primEq [((next + 5 : Nat) : Int), ((next + 6 : Nat) : Int)]]
+        let small := assemble [magI (next + 5) primUnbox [a], magI (next + 6) primUnbox [b], magI (next + 7) primEq [((next + 5 : Nat) : Int), ((next + 6 : Nat) : Int)]]
           (mkJmp j [((next + 7 : Nat) : Int)])
         let other := mkVDecl (next + 8) tyI64 (mkFap (hIntEq cx.n) [a, b]) (mkJmp j [((next + 8 : Nat) : Int)])
         { ok := wa.length == 1 && wb.length == 1, next := next + 9, r := (r : Int),
@@ -2677,9 +2611,9 @@ partial def trValV (cx : Cx) (want : List Int) (env : List Val) (facts : List In
             if !e.ok then tvFail fwType bs
             else { ok := true, err := none, next := e.next, items := a.items ++ b.items ++ e.items, val := valWords [e.r] [tyI64], rest := after }
     else if tag == 33 then { ok := true, err := none, next := next, items := [], val := valNone, rest := after }
-    else if tag == 34 && magNameAt intSgnName bs && (intLit (magLimsOf cx.narrow) cx.g bs).ok then
+    else if tag == 34 && magNameAt intSgnName bs && (intLit cx.g bs).ok then
       -- an integer written out: its word ("An integer is one word")
-      let i := (intLit (magLimsOf cx.narrow) cx.g bs).n
+      let i := (intLit cx.g bs).n
       { ok := true, err := none, next := next + 2,
         items := [mkVDecl next tyI64 (mkLit i) mkUnreachable, mkVDecl (next + 1) tyTObj (mkPrim primBoxS 0 0 [(next : Int)]) mkUnreachable],
         val := valWords [((next + 1 : Nat) : Int)] [tyTObj], rest := after }
@@ -2689,11 +2623,9 @@ partial def trValV (cx : Cx) (want : List Int) (env : List Val) (facts : List In
       else
         -- the field's type and the type of the fields that follow, from the record type of the place
         let rh := wtRecHead cx.g want
-        -- a magnitude: a literal of at most `magLimbs` limbs (and below the bound of a small number, which under the
-        -- narrow bounds the limbs can reach) is its small number; any other list goes through `natOf`
+        -- a magnitude: a literal of at most `magLimbs` limbs is its small number; any other list goes through `natOf`
         let isMag := magNameAt natMagName bs || magNameAt intMagName bs
-        let lit0 := if isMag then litMag (magLimsOf cx.narrow).limbs (drE cx.g nm.rest) else -1
-        let lit := if lit0 >= (magLimsOf cx.narrow).nat then -1 else lit0
+        let lit := if isMag then litMag magLimbs (drE cx.g nm.rest) else -1
         -- the magnitude of another marker record: its word as it is ("A magnitude where no list is needed")
         let pj := if isMag && lit < 0 then magProjOf cx.g nm.rest else magProjNone
         let pr := if pj.ok then trVal cx pj.ty env facts next pj.e else tvFail fwWire bs
@@ -3733,15 +3665,14 @@ structure ParamsR where
 -- the parameters in order: parameter i is variable index i of the body (the innermost `let` is 0
 -- and shifts them up), so the environment lists them first to last
 -- A parameter of the wire's type Bool gets the IR type uint8 in the declaration's parameter list
--- (the value's type inside the body stays the word): lib/lrc/Pack.rsd reads it there. A parameter of a declared
--- width (`ws`, one for each parameter; none given: no width) gets the type of that width the same way.
-def fwParams (g : Dg) : List (List Int) → List (List Int) → Nat → List Int → ParamsR
-  | ts :: rest, wt :: wts, next, ws =>
+-- (the value's type inside the body stays the word): lib/lrc/Pack.rsd reads it there.
+def fwParams (g : Dg) : List (List Int) → List (List Int) → Nat → ParamsR
+  | ts :: rest, wt :: wts, next =>
     let f := freshFor ts next
-    let r := fwParams g rest wts f.next (ws.drop 1)
+    let r := fwParams g rest wts f.next
     { next := r.next, env := valTyped f.vars ts wt :: r.env,
-      ps := paramsOfWords f.vars (tysOfWidth (tyView g wt == [1]) (ws.headD 0) ts) ++ r.ps }
-  | _, _, next, _ => { next := next, env := [], ps := [] }
+      ps := paramsOfWords f.vars (if tyView g wt == [1] then [tyU8] else ts) ++ r.ps }
+  | _, _, next => { next := next, env := [], ps := [] }
 
 structure FnR where
   ok : Bool
@@ -3761,13 +3692,12 @@ def fwFn (cx : Cx) (f : Nat) (body : List Int) : FnR :=
   let sg := fwSig cx.g (sigOf cx.sigs f)
   if !sg.ok then { ok := false, err := some fwType, decl := declNone f, rest := after }
   else
-    let ws := sigOf cx.ws f
-    let ps := fwParams cx.g sg.params sg.ptys 1 ws
+    let ps := fwParams cx.g sg.params sg.ptys 1
     -- a function without a live parameter takes one irrelevant parameter (see trCall)
     let xs := if ps.ps.isEmpty then [{ x := ps.next, borrow := false, ty := tyIrr }] else ps.ps
     let next := if ps.ps.isEmpty then ps.next + 1 else ps.next
     let b := trTail { cx with rty := sg.rty } ps.env [] next body
-    let rets := tysOfWidth (tyView cx.g sg.rty == [1]) (intAt sg.params.length ws) (liveTys sg.result)
+    let rets := if tyView cx.g sg.rty == [1] then [tyU8] else liveTys sg.result
     if !b.ok then { ok := false, err := b.err, decl := declNone f, rest := after }
     else
       let lo := liftsOut (kidAt 0 b.items)
@@ -3930,7 +3860,7 @@ def pubTwin (cx : Cx) (f tmp from1 : Nat) : List Decl :=
   let sgB := fwSigB cx.g (sigOf cx.sigs f)
   if !sg.ok || !sgB.ok || (!boundNeeds cx.g cx.arr sg.rty && sg.params == sgB.params) then []
   else
-    let ps := fwParams cx.g sgB.params sgB.ptys from1 (sigOf cx.ws f)
+    let ps := fwParams cx.g sgB.params sgB.ptys from1
     let xs := if ps.ps.isEmpty then [{ x := ps.next, borrow := false, ty := tyIrr }] else ps.ps
     let next := if ps.ps.isEmpty then ps.next + 1 else ps.next
     let inw := unboundParams cx sgB.ptys ps.env next
@@ -4042,7 +3972,7 @@ def errsAdd (f : Nat) (err : Option Residue) (errs : List Residue) : List Residu
 partial def fwFns (cx : Cx) (helpers : List Nat) (f n : Nat) (bodies : List Int) (acc : List Decl) (errs : List Residue) (lifted : List Decl)
     (pubs : List Int := []) : ImageR :=
   if f >= n then
-    let decls := acc.reverse ++ helperDecls cx.n cx.narrow ++ lifted
+    let decls := acc.reverse ++ helperDecls cx.n ++ lifted
     match badCall (dtOfList decls) decls with
     | [caller, callee] =>
       -- the callee's own refusal when it has one, at the callee; a call of a function without a body, at the caller
@@ -4063,10 +3993,7 @@ partial def fwFns (cx : Cx) (helpers : List Nat) (f n : Nat) (bodies : List Int)
           -- one of the front end's integer operations gets its short form; the function as written follows the lifted loops
           let op := factOf (f : Int) cx.mag
           let tmp := liftBase + declMaxIndex r.decl + 1
-          let mask := if cx.shortNatWord then natWordMask body else -1
-          let mask := if mask >= 0 && sigOf cx.sigs f == (1 :: (natRecTy ++ [0])) then mask else -1
-          let w := if mask >= 0 || (op >= 0 && (op % 100 < 20 || op == 30 || op == 31)) then magWrap (magLimsOf cx.narrow) op r.decl tmp mask
-            else { ok := false, body := r.decl.body }
+          let w := if op >= 0 && (op % 100 < 20 || op == 30 || op == 31) then magWrap op r.decl tmp else { ok := false, body := r.decl.body }
           let lifts := if w.ok then r.lifts ++ [{ r.decl with f := tmp }] else r.lifts
           -- the boundary twin, when the result's forms inside are not the boundary's ("The boundary")
           let twin := pubTwin cx f (tmp + 1) (declMaxIndex r.decl + 3)
@@ -4154,11 +4081,6 @@ def layRawInts : Int := 512
 -- the tag under which a class is marked: its nodes are told apart by their tag somewhere (a match on the tag,
 -- a read of the tag)
 def layMarkTag : Int := 255
--- The tag under which a class is merged: some read of one of its nodes finds no single tag (the image reads a
--- field that every constructor of the type has, without a match before it). Every tag of the class then has one
--- layout, the union of what its tags store, so the read needs no tag: lean.h's `lean_ctor_get` does not ask
--- for one either. The entry's flags are those of the reads that found no tag.
-def layMergeTag : Int := 254
 
 -- what an allocation asks of its layout: 1 the string, 2 the list of integers, 4 a list of
 -- children, 8 times the scalar fields it sets (bit j for f2 + j); 256 that it is an allocation as
@@ -4222,30 +4144,6 @@ def layOf (m : Map) (root : Nat) (t : Int) : Lay :=
     { found := true, kids := hit.val.toNat, minKids := hit.sb.toNat, str := hit.sa % 2 == 1, ints := hit.sa / 2 % 2 == 1,
       list := hit.sa / 4 % 2 == 1, rel := relOfMask (hit.sa / 8), num := num, box := num != 0 && hit.sa / 4 % 2 == 0 && !marked }
 
-def layMerged (m : Map) (root : Nat) : Bool := (mapNode m (layKey root layMergeTag)).tag != 0
-
-structure LayAcc where
-  found : Bool
-  kids : Int
-  minKids : Int
-  sa : Int
-  deriving Inhabited
-
-def layUnionGo (m : Map) (root : Nat) : List Int → LayAcc → LayAcc
-  | [], acc => acc
-  | t :: ts, acc =>
-    let hit := mapNode m (layKey root t)
-    if hit.tag == 0 || intAt 0 hit.extra == 0 then layUnionGo m root ts acc
-    else layUnionGo m root ts { found := true, kids := (if hit.val > acc.kids then hit.val else acc.kids), minKids := (if hit.sb < acc.minKids then hit.sb else acc.minKids), sa := bitsOr 15 acc.sa hit.sa }
-
--- The one layout of a merged class (`layMergeTag`), over the image's tags: the most children any tag has and the
--- fewest, a string, a list of integers, a list of children and each scalar when some tag stores it. A number's
--- node in such a class is written as the image wrote it (`num` 0).
-def layUnion (m : Map) (tags : List Int) (root : Nat) : Lay :=
-  let a := layUnionGo m root tags { found := false, kids := 0, minKids := 1000000, sa := (mapNode m (layKey root layMergeTag)).sa }
-  if !a.found then { found := false, kids := 0, minKids := 0, str := false, ints := false, list := false, rel := [0, 0, 0, 0, 0] }
-  else { found := true, kids := a.kids.toNat, minKids := a.minKids.toNat, str := a.sa % 2 == 1, ints := a.sa / 2 % 2 == 1, list := a.sa / 4 % 2 == 1, rel := relOfMask (a.sa / 8), num := 0, box := false }
-
 -- one allocation with k children (`site`; k = -1 for a list), or one read of the children as a list, entered
 def layAdd (m : Map) (root : Nat) (t : Int) (site : Bool) (k : Int) (flags : Int) : Map :=
   let hit := mapNode m (layKey root t)
@@ -4286,9 +4184,6 @@ structure LayCx where
 
 def layRoot (lx : LayCx) (f : Nat) (x : Int) : Nat := if lx.cl.bad || x < 0 then 0 else ocFind lx.cl (ocVar f x.toNat)
 
--- the layout of class `root` and tag t: the class's one layout when it is merged
-def layAt (lx : LayCx) (root : Nat) (t : Int) : Lay := if layMerged lx.m root then layUnion lx.m lx.tags root else layOf lx.m root t
-
 -- The tag of node h at a read: known from an alternative, or the one candidate of its class. -1
 -- when the class leaves several. -2 when it leaves none: no constructor of the image builds an
 -- object that reaches this place with a tag not yet tested, so the place is never reached with one.
@@ -4309,12 +4204,10 @@ partial def layScan (lx : LayCx) (f : Nat) (known excl : List Int) (m : Map) (n 
     let e := vdeclExpr n
     let h := intAt 0 e.ys
     let rd := nrFlags e
-    let t := if isNodeRead e then layTagOf lx f known excl h else -1
+    let t := if rd != 0 then layTagOf lx f known excl h else -1
     let m1 := if isNodeNew e then layAdd m (layRoot lx f (vdeclVar n : Int)) e.b true e.c (nnFlags e)
-      -- a read that finds no single tag: the class is merged, and what the read asks for is asked of every tag
-      else if isNodeRead e && t == -1 then layAdd m (layRoot lx f h) layMergeTag false (-1) rd
-      else if t >= 0 && rd != 0 then layAdd m (layRoot lx f h) t false (-1) rd
-      -- a read of the tag: the class is marked
+      else if t >= 0 then layAdd m (layRoot lx f h) t false (-1) rd
+      -- a read of the tag: the class is marked (a read of f8 that finds no single tag refuses the image, `layGo`)
       else if e.op == opPrim && primOp e == primTagOf then layMark m (layRoot lx f h)
       else m
     layScan lx f known excl m1 (bodyOf n)
@@ -4445,7 +4338,7 @@ mutual
 partial def layGo (lx : LayCx) (f : Nat) (known excl : List Int) (next : Nat) (n : N) : LyR :=
   if n.op == opVDecl && isNodeNew (vdeclExpr n) then
     let e := vdeclExpr n
-    let l := layAt lx (layRoot lx f (vdeclVar n : Int)) e.b
+    let l := layOf lx.m (layRoot lx f (vdeclVar n : Int)) e.b
     if l.box && numForm e == l.num then
       -- the node is its number (`Lay.box`): no allocation
       let k := layGo lx f known excl next (bodyOf n)
@@ -4462,11 +4355,11 @@ partial def layGo (lx : LayCx) (f : Nat) (known excl : List Int) (next : Nat) (n
     let x := vdeclVar n
     let h := intAt 0 e.ys
     let t := layTagOf lx f known excl h
-    let l := layAt lx (layRoot lx f h) t
+    let l := layOf lx.m (layRoot lx f h) t
     let form := numForm e
     let plain := { e with d := 0 }
     let depth := numDepth e
-    if t == -1 && !layMerged lx.m (layRoot lx f h) then { ok := false, next := next, node := n }
+    if t == -1 then { ok := false, next := next, node := n }
     else if t == -2 || !l.found then
       let k := layGo lx f known excl next (bodyOf n)
       { ok := k.ok, next := k.next, node := { n with kids := [layDummy plain, k.node] } }
@@ -4495,11 +4388,11 @@ partial def layGo (lx : LayCx) (f : Nat) (known excl : List Int) (next : Nat) (n
     let x := vdeclVar n
     let h := intAt 0 e.ys
     let t := layTagOf lx f known excl h
-    let l := layAt lx (layRoot lx f h) t
+    let l := layOf lx.m (layRoot lx f h) t
     let dead := t == -2 || !l.found
     let i := e.b.toNat
     let k := layGo lx f known excl (next + 6) (bodyOf n)
-    if t == -1 && !layMerged lx.m (layRoot lx f h) then { ok := false, next := next, node := n }
+    if t == -1 then { ok := false, next := next, node := n }
     else if dead then { ok := k.ok, next := k.next, node := { n with kids := [layDummy e, k.node] } }
     else if primOp e == primNodeKid && l.list then
       -- child i of a list of children: the first of what `drop i` leaves, the refusal when it leaves nothing
@@ -4538,7 +4431,7 @@ partial def layAlts (lx : LayCx) (f : Nat) (known excl : List Int) (next : Nat) 
       else layGo lx f known excl next (altBody alt)
     let rest := layAlts lx f known excl b.next h tested alts
     { ok := b.ok && rest.ok, next := rest.next,
-      alts := (if t >= 0 then mkAltCtor (layInfo (layAt lx (layRoot lx f h) t) t) b.node else altSetBody alt b.node) :: rest.alts }
+      alts := (if t >= 0 then mkAltCtor (layInfo (layOf lx.m (layRoot lx f h) t) t) b.node else altSetBody alt b.node) :: rest.alts }
 end
 
 structure RsDecls where
@@ -4581,20 +4474,14 @@ def layAnyDecl : List Decl → Bool
 -- image that way too: it is the layout of an image whose classes say nothing).
 -- `plain`: the front end's integer operations as the image wrote them, with no short form ("Magnitudes"):
 -- the host check compares the two.
--- `narrow`: an object field is four bytes in the module (rsc's layer of that name): the bounds of a small number are
--- the narrow ones ("Magnitudes", `magLimsOf`). Nothing else of the translation reads it.
--- `widths`: the declared widths of the signatures (lib/RscBase.rsd `readSigWs`); a parameter and a result of a
--- declared width get the IR type of that width, which is what lib/lrc/Pack.rsd lays a node's fields out by.
-def fromWireWith (oneClass plain : Bool) (g : Dg) (intr : List Int) (sigs : List (List Int)) (n : Nat) (bodies : List Int) (arrays : Bool := true)
-    (narrow : Bool := false) (widths : List (List Int) := []) : ImageR :=
+def fromWireWith (oneClass plain : Bool) (g : Dg) (intr : List Int) (sigs : List (List Int)) (n : Nat) (bodies : List Int) (arrays : Bool := true) : ImageR :=
   let tab := fwScan g intr ctEmpty 0 n bodies
   if !tab.ok then { ok := false, err := tab.err, fn := 0, decls := [], tab := tab }
   else
     let reserved := reservedFns intr 0
     let helpers := (calledClosure g bodies reserved reserved).filter (fun f => !reserved.contains f)
     let cx : Cx := { g := g, intr := intr, sigs := sigs, tab := tab, n := n, inl := fwInl g intr sigs 0 n bodies [],
-                     mag := if plain then [] else magFind g sigs n bodies intr, arr := arrays && arrAny g intr 0 n bodies,
-                     shortNatWord := !plain && !g.on, narrow := narrow, ws := widths }
+                     mag := if plain then [] else magFind g sigs n bodies intr, arr := arrays && arrAny g intr 0 n bodies }
     let cx := { cx with num := numFn numUnpackNat cx.mag >= 0 || numFn numUnpackInt cx.mag >= 0 || numFn numHold cx.mag >= 0 }
     let im := fwFns cx helpers 0 n bodies [] [] []
     -- an image without a node is as it was written; the classes are found only for one that has some
@@ -4631,10 +4518,6 @@ structure Request where
   plainInts : Bool := false
   -- may a list be an array ("Arrays"): asked for where the module has the stage's own heap
   arrays : Bool := true
-  -- the module's object fields are four bytes (rsc's layer `narrow`): the bounds of a small number follow
-  narrow : Bool := false
-  -- the declared widths of the signatures (lib/RscBase.rsd `readSigWs`)
-  widths : List (List Int) := []
 
 structure Class where
   types : Dg
@@ -4645,8 +4528,6 @@ structure Class where
   oneClass : Bool
   plainInts : Bool
   arrays : Bool
-  narrow : Bool
-  widths : List (List Int)
 
 -- what is admitted: the image's functions as IR declarations, the stage's own list functions after
 -- them; `n` is the number of the image's functions
@@ -4664,11 +4545,10 @@ def pubEntry (pubs : List Int) (f : Nat) : Nat :=
 
 def q (r : Request) : Class :=
   { types := { r.types with ranges := [], certs := [], nodeUse := [] }, intr := r.intr, sigs := r.sigs, n := r.n,
-    bodies := r.bodies, oneClass := r.oneClass, plainInts := r.plainInts, arrays := r.arrays, narrow := r.narrow,
-    widths := r.widths }
+    bodies := r.bodies, oneClass := r.oneClass, plainInts := r.plainInts, arrays := r.arrays }
 
 def admit (c : Class) : Except Residue Translated :=
-  let im := fromWireWith c.oneClass c.plainInts c.types c.intr c.sigs c.n c.bodies c.arrays c.narrow c.widths
+  let im := fromWireWith c.oneClass c.plainInts c.types c.intr c.sigs c.n c.bodies c.arrays
   match im.err with
   | some e => Except.error (residueAt im.fn e)
   | none =>

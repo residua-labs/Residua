@@ -1,0 +1,60 @@
+# Standalone expression/function profile added after engine pin (E4 Engine-ness).
+# AST node ABI follows rsdc/syntax/Tree.rsd and rsdc/syntax/Pattern.rsd:
+# 18=file, 19=decl-list, 20=decl, 21=sig, 22=binder, 25=body, 16=arrow, 6=binop, 5=app, 13=paren, 1=ident, 2=num.
+surface rse
+lexical
+  ws " \t\n\r"
+  comment "//"
+  block-open "/*"
+  block-close "*/"
+  open "(" "{"
+  close ")" "}"
+  token ident [A-Za-z_][A-Za-z_0-9']* @keywords
+  token number [0-9]+
+grammar
+  File := Commands @tree=(18,$0,B,0) @template=$0
+  Commands := Decl Commands @tree=(19,$0,$1,0) @template=$0\n$1
+  Commands := eps @tree=-1 @template=
+  Decl := 'fn Name '( Groups ') '-> Type '{ Expr '} @tree=(20,$1,(21,$3,$6,0),(25,$8,0,0)) @template=fn\s$1($3)\s->\s$6\s{\s$8\s}
+  Groups := Name ': Type MoreGroups @tree=(22,(12,$0,-1,0),$2,$3) @template=$0:\s$2$3
+  Groups := eps @tree=-1 @template=
+  MoreGroups := ', Groups @tree=$1 @template=,\s$1
+  MoreGroups := eps @tree=-1 @template=
+  Name := ident @tree=(1,s0,e0,0) @template=$0
+  Type := Type '-> Type @tree=(16,$0,$2,0) @template=$0\s->\s$2 @prio=25 @assoc=right
+  Type := Name @tree=$0 @template=$0
+  Expr := Expr '+ Expr @tree=(6,1,$0,$2) @template=$0\s+\s$2 @prio=65 @assoc=left
+  Expr := Expr '- Expr @tree=(6,2,$0,$2) @template=$0\s-\s$2 @prio=65 @assoc=left
+  Expr := Expr '* Expr @tree=(6,3,$0,$2) @template=$0\s*\s$2 @prio=70 @assoc=left
+  Expr := Expr '== Expr @tree=(6,5,$0,$2) @template=$0\s==\s$2 @prio=50 @assoc=non
+  Expr := Call @tree=$0 @template=$0
+  Call := Call '( Expr ') @tree=(5,$0,(12,$2,-1,0),0) @template=$0($2) @prio=80 @assoc=left
+  Call := Atom @tree=$0 @template=$0
+  Atom := Name @tree=$0 @template=$0
+  Atom := number @tree=(2,s0,e0,d0) @template=$0
+  Atom := '( Expr ') @tree=(13,$1,0,0) @template=($1)
+residues
+  61 unclosed
+  62 syntax
+  66 input_cap
+  67 grammar
+  68 grammar_cap
+  69 item_cap
+  70 forest_cap
+  71 budget
+  72 ambiguity
+  73 constructor_pattern
+  74 constructor_operand
+  75 no_inverse
+  76 template
+  77 lexical_regex
+  78 layout_constraint
+  79 longest_cycle
+probes
+  pair "fn-add" "def f (x : Int) : Int := x + 1\n" "fn f(x: Int) -> Int { x + 1 }\n"
+  pair "fn-mul-prec" "def g (x : Int) (y : Int) : Int := x + y * 2\n" "fn g(x: Int, y: Int) -> Int { x + y * 2 }\n"
+  pair "fn-blk-trailing-ws" "def f (x : Int) : Int := x + 1\n" "/* lead */ fn f(x: Int) -> Int { x + 1 } /* trail */   "
+  refuse "non-assoc-eq" "fn h(x: Int) -> Int { x == x == x }\n" "62" "36"
+  refuse "unclosed-comment" "fn f(x: Int) -> Int { x + 1 } /* open" "61" "29"
+  mutant "swapped-add-sub" "def f (x : Int) : Int := x + 1\n" "(6,1,$0,$2)" "MUTANT_SLOT" "(6,2,$0,$2)" "(6,1,$0,$2)" "MUTANT_SLOT" "(6,2,$0,$2)"
+  mutant "dropped-return-arrow" "def f (x : Int) : Int := x + 1\n" "@template=fn\\s$1($3)\\s->\\s$6\\s{\\s$8\\s}" "@template=fn\\s$1($3)\\s$6\\s{\\s$8\\s}"

@@ -29,6 +29,15 @@ static char **args;
 static int result = 1;
 static wasm_rt_memory_t *memory;
 
+/* wasm32 seeds lack aw. A weak definition also links on Mach-O when
+ * the generated object has no such export. A generated export overrides it. */
+static int has_aw = 1;
+__attribute__((weak, noinline)) uint64_t w2c_seed_aw(w2c_seed *instance) {
+  (void)instance;
+  has_aw = 0;
+  return 32;
+}
+
 _Noreturn static void fail(const char *reason) {
   fprintf(stderr, "%s\n", reason);
   exit(1);
@@ -87,6 +96,10 @@ static void *run(void *unused) {
   w2c_seed instance;
   wasm2c_seed_instantiate(&instance);
   memory = w2c_seed_memory(&instance);
+  uint64_t address_width = w2c_seed_aw(&instance);
+  if (address_width != (memory->is64 ? 64 : 32) ||
+      (has_aw && address_width != 64))
+    fail("seed_address_width");
 #if defined(__linux__) && defined(MADV_HUGEPAGE) && WASM_RT_USE_MMAP
   /* The module's whole heap is this one linear memory, and the runtime has reserved its address range up to
    * max_pages. Ask for transparent huge pages there: the kernel's usual setting (`madvise`) gives them only on

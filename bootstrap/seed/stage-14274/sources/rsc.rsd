@@ -224,7 +224,7 @@ def step (r : Request) (s : State) : Result := decision s
 end Lib.Fuel
 
 end RscSourceModule_c0c639cbe80deab07f8a0c97ab578e5cedfcff554b17a30358bef5d853bad5ff
-section RscSourceModule_a535a046b4cad1de06728c869d9e2c53125e1c97b5f70bae1f33372662a120b3
+section RscSourceModule_b616c95952977f208ccb2228e374c06da803cf595048129a906a83b379f0cf66
 structure Profile where
   fnMin : Nat
   fnMax : Nat
@@ -422,8 +422,6 @@ structure Layers where
   static : Bool := false
   alloc : Bool := false
   ctor : Bool := false
-  -- object fields of four bytes in a module of the stage with its own heap (docs/OBJECT-ABI.md "Narrow fields")
-  narrow : Bool := false
   deriving BEq
 
 def layersOff : Layers := { arr := false, reg := false, tail := false, qbe := false, cte := false, fuse := false, facts := false }
@@ -444,14 +442,13 @@ def layersOn : Layers := { arr := true, reg := true, tail := true, qbe := true, 
 -- bit 5 selects fusion, bit 6 certified type facts, bit 7 RC,
 -- bit 8 borrow inference, bit 9 drop specialization, bit 10 reset/reuse,
 -- bit 11 persistent ground objects, bit 12 the batched allocator fast path,
--- bit 13 constructor-object access (BACKEND-OPT-0 T2; opt-in),
--- bit 14 narrow object fields (docs/OBJECT-ABI.md "Narrow fields"; opt-in).
+-- bit 13 constructor-object access (BACKEND-OPT-0 T2; opt-in).
 -- The allocator bit is opt-in until its whole-program gates pass. Existing
 -- configuration words, including the default and `all`, keep their meaning.
 -- Reject unknown bits
 -- before reading input. The environment stays in the native wrapper only.
 def layersFromBits (bits : Int) : Option Layers :=
-  if bits < 0 || bits >= 32768 then none
+  if bits < 0 || bits >= 16384 then none
   else some { arr := bits % 2 == 1
             , reg := (bits / 2) % 2 == 1
             , tail := (bits / 4) % 2 == 1
@@ -465,8 +462,7 @@ def layersFromBits (bits : Int) : Option Layers :=
             , reuse := (bits / 1024) % 2 == 1
             , static := (bits / 2048) % 2 == 1
             , alloc := (bits / 4096) % 2 == 1
-            , ctor := (bits / 8192) % 2 == 1
-            , narrow := (bits / 16384) % 2 == 1 }
+            , ctor := (bits / 8192) % 2 == 1 }
 
 def addLayer (lay : Layers) (n : String) : Option Layers :=
   if n == "" then some lay
@@ -484,7 +480,6 @@ def addLayer (lay : Layers) (n : String) : Option Layers :=
   else if n == "static" then some { lay with static := true }
   else if n == "alloc" then some { lay with alloc := true }
   else if n == "ctor" then some { lay with ctor := true }
-  else if n == "narrow" then some { lay with narrow := true }
   else if n == "all" then some layersOn
   else if n == "off" then some layersOff
   else none
@@ -1062,13 +1057,6 @@ def readTyIter (g : Dg) (fuel : Nat) (work : List TyWork) (acc : List Int)
               readTyIter g k ws (pushBytes (54 :: lebU id.toNat) acc)
                 (span + 1 + (lebSpan bs).n) (if nd > need then nd else need) r.rest
             | _ => tyFail profile.cRefKind r.rest
-        | 11 :: _ :: bs =>
-          let nd := if w.depth > need then w.depth else need
-          readTyIter g k ws (0 :: acc) (span + 2) nd bs
-        | 10 :: _ :: _ :: bs =>
-          let nd := if w.depth > need then w.depth else need
-          readTyIter g k ({ kind := 0, n := 0, depth := w.depth + 1 } :: ws)
-            (4 :: acc) (span + 3) nd bs
         | t :: bs =>
           let nd := if w.depth > need then w.depth else need
           if t == 0 || t == 1 || t == 2 || t == 3 then
@@ -1187,10 +1175,6 @@ def tyNeedGo (fuel : Nat) (kind : Nat) (n : Nat) (rest : List Int) : Rd :=
     else
       match rest with
       | [] => rdFail profile.cTrunc []
-      | 11 :: _ :: bs => rdOk 1 bs
-      | 10 :: _ :: _ :: bs =>
-        let a := tyNeedGo k 0 0 bs
-        if a.ok != profile.cOk then a else rdOk (1 + a.n) a.rest
       | t :: bs =>
         if t == 0 || t == 1 || t == 2 || t == 3 then rdOk 1 bs
         else if t == 4 || t == 8 || t == 9 then
@@ -1258,10 +1242,6 @@ def tpRun (g : Dg) (named : Bool) : Nat → List Int → List Int → Tn
 def tyNode (g : Dg) (rest : List Int) : Tn :=
   match rest with
   | [] => tnFail profile.cTrunc []
-  | 11 :: _ :: bs => { ok := profile.cOk, need := 1, acc := [0], rest := bs }
-  | 10 :: _ :: _ :: bs =>
-    let a := tpOne g [4] bs
-    if a.ok != profile.cOk then a else { a with need := 1 + a.need }
   | t :: bs =>
     if t == 0 || t == 1 || t == 2 || t == 3 then { ok := profile.cOk, need := 1, acc := [t], rest := bs }
     else if t == 4 || t == 8 || t == 9 then
@@ -1396,11 +1376,6 @@ def typeDigest (g : Dg) (fuel kind n : Nat) (h : Int) (rest : List Int) : Rd :=
         match dgAt g r.n.toNat with
         | 0 :: _ :: _ :: hash :: _ => rdOk hash r.rest
         | _ => rdFail profile.cRef r.rest
-      | 11 :: _ :: bs => rdOk (typeHash [0] 0) bs
-      | 10 :: _ :: _ :: bs =>
-        let h := typeHash [4] 0
-        let a := typeDigest g k 0 0 0 bs
-        if a.ok != profile.cOk then a else rdOk (typeHash [a.n] h) a.rest
       | t :: bs =>
         let h := typeHash [t] 0
         if t <= 3 then rdOk h bs
@@ -1578,8 +1553,6 @@ def sizeGoWithLayers (tg : Dg) (lay : Layers) (fuel : Nat) (arr : List (List Int
     else
       match rest with
       | [] => szFail profile.cTrunc []
-      | 11 :: _ :: bs => ((sizeGoWithLayers tg) lay) k arr mode eqt 0 0 acc map (0 :: bs)
-      | 10 :: _ :: _ :: bs => ((sizeGoWithLayers tg) lay) k arr mode eqt 0 0 acc map (4 :: bs)
       | t :: bs =>
         if t == 0 || t == 1 then { ok := profile.cOk, n := acc + 1, map := map ++ [0], rest := bs }
         else if t == 2 then { ok := profile.cOk, n := acc + 1, map := map ++ [if mode == 2 || mode == 3 then 0 else 1], rest := bs }
@@ -1676,8 +1649,6 @@ def listTysGo (tg : Dg) (fuel : Nat) (kind : Nat) (n : Nat) (seen : Map) (acc : 
     else
       match rest with
       | [] => ltFail profile.cTrunc []
-      | 11 :: _ :: bs => (listTysGo tg) k 0 0 seen acc (0 :: bs)
-      | 10 :: _ :: _ :: bs => (listTysGo tg) k 0 0 seen acc (4 :: bs)
       | t :: bs =>
         if t == 0 || t == 1 || t == 2 then { ok := profile.cOk, acc := acc, rest := bs, seen := seen }
         else if t == 3 then { ok := profile.cOk, acc := (addT tg) acc [4, 0], rest := bs, seen := seen }
@@ -1831,30 +1802,6 @@ def sigOf : List (List Int) → Nat → List Int
   | [], _ => []
   | s :: _, 0 => s
   | _ :: ss, k + 1 => sigOf ss k
-
--- The declared width in bits of the fixed-width scalar type that a type's stream begins with (tag 11 and its width
--- byte: contracts/tasks/WIRE-SEQ-0.md revision 2), 0 for any other type. `readTyD` gives such a type as the word it
--- means, so whoever wants the width reads it here, beside it.
-def tyRawWidth : List Int → Int
-  | 11 :: w :: _ => w
-  | _ => 0
-
--- the widths of k types in a row
-def readTyWs (g : Dg) : Nat → List Int → List Int
-  | 0, _ => []
-  | k + 1, rest => tyRawWidth rest :: readTyWs g k (readTyD g rest).rest
-
--- For each function its signature's declared widths, the parameters' and then the result's: the stream `readSigs`
--- reads, read beside it (lib/lrc/FromWire.rsd lays a node's fields out by them). Where a signature does not read,
--- the lists end (`readSigs` names the cause).
-def readSigWs (g : Dg) : Nat → List Int → List (List Int)
-  | 0, _ => []
-  | k + 1, rest =>
-    let r := readLeb rest
-    if r.ok != profile.cOk || r.n < 0 || r.n > (profile.arityMax : Int) then []
-    else
-      let t := readTys g (r.n.toNat + 1) [] r.rest
-      if t.ok != profile.cOk then [] else readTyWs g (r.n.toNat + 1) r.rest :: readSigWs g k t.rest
 
 -- The i-th type of a run of types.
 def nthTy (tg : Dg) : Nat → List Int → List Int
@@ -2309,7 +2256,7 @@ def skipEGo (g : Dg) (fuel : Nat) (kind : Nat) (n : Nat) (rest : List Int) : Rd 
 def skipE (g : Dg) (fuel : Nat) (rest : List Int) : Rd :=
   skipEGo g fuel 0 0 rest
 
-end RscSourceModule_a535a046b4cad1de06728c869d9e2c53125e1c97b5f70bae1f33372662a120b3
+end RscSourceModule_b616c95952977f208ccb2228e374c06da803cf595048129a906a83b379f0cf66
 section RscSourceModule_ca831ca434ea3007dbf57508f7395b318bfaf0b417253069538683018507b6ff
 structure StorageCode where
   ok : Bool := true
@@ -5611,7 +5558,7 @@ def imContains (t : IMap) (k : Nat) : Bool := imFind t k >= 0
 end Lrc
 
 end RscSourceModule_1ff22675ad5027332a70dc6cc24627d08c94ade9a514130c6476dd8299ea2bdf
-section RscSourceModule_522421824af1c36f41dab0408fcf057758d15123dd60218766775d4ecf9d0426
+section RscSourceModule_0223b95aaade8ee4dc4859a8a61c53d3d32f528136f2a55940d6b936d81c65e4
 namespace Lrc
 
 structure N where
@@ -5914,13 +5861,6 @@ def altIsDefault (alt : N) : Bool := alt.op == opAltDefault
 -- Basic:606 mkIf: a case on a `uint8`, the type Lean gives the result of `isShared`. The
 -- alternative for `false` comes first. Type 0 is Bool: constructor 0 false, constructor 1 true.
 def tyU8 : Int := 10
--- The bytes a scalar of IR type `ty` takes in an object's scalar area, where lib/lrc/Pack.rsd found that every
--- value stored there has the type: lean.h's uint8, uint16 and uint32 (the codes 10, 11, 12: `tyU8` here,
--- `tyU16C` and `tyU32C` below); any other scalar is a word of 8 bytes. A `sset` names the type (field `d`); a
--- `sproj` names the bytes it reads in field `c`: 1, 2 or 4, and 0 for a word.
-def tyWidth (ty : Int) : Nat := if ty == 10 then 1 else if ty == 11 then 2 else if ty == 12 then 4 else 8
-def tyOfWidth (w : Nat) : Int := if w == 1 then 10 else if w == 2 then 11 else if w == 4 then 12 else 0
-def sprojWidth (e : N) : Nat := if e.c == 1 then 1 else if e.c == 2 then 2 else if e.c == 4 then 4 else 8
 def boolInfo (v : Nat) : CtorInfo := { cidx := v, size := 0, ssize := 0, tid := 0 }
 def mkIf (x : Nat) (t e : N) : N :=
   mkCase x tyU8 [mkAltCtor (boolInfo 0) e, mkAltCtor (boolInfo 1) t]
@@ -6138,112 +6078,7 @@ def dtToList (tab : DeclTab) : List Decl :=
 
 end Lrc
 
-namespace Lrc
-
-/-! ## The lambda-RC IR at revision 2 (WAIST-0 r2)
-
-lib/lrc/Ir.rsd's `Lrc.N` plus the six forms it does not have (its header names them: Basic:206,
-258, 212, 214, 217, 219): `uproj`, `uset`, `pap`, `ap`, `box`, `unbox`. Each form is an
-operation code on the same node structure `Lrc.N`, the way Ir.rsd makes its own forms. The r1
-codes are unchanged (expressions 30 to 39, bodies 1 to 13, alternatives 20 and 21); r2 adds
-expression codes 40 to 44 and body code 14. A program of the r1 IR is one that uses none of the
-r2 codes and no usize constructor (`Lrc.Sem.r1Node`), and a usize count rides in `kids` so that
-an r1 constructor is an r2 constructor unchanged. closure_claim = 0.
-
-The forms are ported, never invented:
-* src/lean/Lean/Compiler/IR/Basic.lean, elan leanprover--lean4---v4.14.0 (commit 410fab728470):
-  `Expr` :194-222, `FnBody` :250-274, `CtorInfo` with its `usize` count :174-178 and `isRef`
-  counting it :187-191.
-* src/lean/Lean/Compiler/IR/EmitC.lean 4.14.0: `emitUSet` :309, `emitUProj` :381,
-  `emitPartialApp` :430-437, `emitApp` :438-443, `emitBoxFn`/`emitBox`/`emitUnbox` :445-459,
-  `emitVDecl` :502-517 (an `unbox`'s type is the bound variable's :515, so it is kept in the
-  node, field `a`).
-* include/lean/lean.h 4.14.0: `lean_box`/`lean_unbox` :290-291, `lean_ctor_get_usize` :572,
-  `lean_ctor_set_usize` :602, `LeanClosure` 245 :70, `lean_alloc_closure` :638-647,
-  `lean_closure_get`/`lean_closure_set` :648-655; src/include/lean/lean.h 4.14.0:
-  `lean_box_uint32`/`lean_unbox_uint32` :1948-1967, `lean_box_uint64`/`lean_unbox_uint64`
-  :1970-1978, `lean_box_usize`/`lean_unbox_usize` :1980-1988, `lean_box_float`/`unbox_float`
-  :1990-1999.
-* src/runtime/apply.cpp 4.14.0 (generated): `fix_args` and `lean_apply_1`..`lean_apply_16`,
-  `lean_apply_m`, `lean_apply_n` — see the `.ap` arm below for what each does.
-* Ullrich and de Moura, "Counting Immutable Beans" (IFL 2019): lambda-RC with pap and
-  application. -/
-
--- expression operation codes (r1 ends at `opIsShared` = 39)
-def opPap : Nat := 40
-def opAp : Nat := 41
-def opBox : Nat := 42
-def opUnbox : Nat := 43
-def opUProj : Nat := 44
--- body operation codes (r1 ends at `opUnreachable` = 13)
-def opUSet : Nat := 14
-
--- lean.h:70 `LeanClosure`: the tag of a closure object in the heap
-def cloTag : Nat := 245
-
--- the carried scalar type codes (lib/lrc/Ir.rsd `tyU8` :325, `tyIsScalar` :48: scalars are 0 or >= 10)
-def tyU8C : Int := 10
-def tyU16C : Int := 11
-def tyU32C : Int := 12
-def tyUSizeC : Int := 13
-def tyFloatC : Int := 14
-
-/-! ### Expressions -/
-
--- Basic:212 `Expr.pap c ys`: a closure of function c (its index, as `fap`'s) holding the captured
--- arguments `ys`, strictly fewer than c's arity (lean.h:639 `assert(num_fixed < arity)`).
-def mkPap (f : Nat) (ys : List Int) : N := { n0 opPap with a := (f : Int), ys := ys }
-def papFn (e : N) : Nat := e.a.toNat
-def papArgs (e : N) : List Int := e.ys
-
--- Basic:214 `Expr.ap x ys`: the application of the closure value `x` to `ys`.
-def mkAp (x : Nat) (ys : List Int) : N := { n0 opAp with a := (x : Int), ys := ys }
-def apVar (e : N) : Nat := e.a.toNat
-def apArgs (e : N) : List Int := e.ys
-
--- Basic:217 `Expr.box ty x`: the scalar `x` of type `ty` as an object. For usize, uint64 and
--- float a constructor of tag 0 with one scalar lane (lean.h:1970, :1980, :1990); for the smaller
--- scalar types the tagged word (lean.h:290, :1948 on 64-bit).
-def mkBox (ty : Int) (x : Nat) : N := { n0 opBox with a := ty, ys := [(x : Int)] }
-def boxTy (e : N) : Int := e.a
-def boxVar (e : N) : Nat := (intAt 0 e.ys).toNat
-
--- Basic:219 `Expr.unbox x`: the scalar of the object word `x`. The Expr carries no type; EmitC
--- reads the bound variable's (`emitVDecl` :515 `emitUnbox z t x`), which the node keeps in `a`.
-def mkUnbox (ty : Int) (x : Nat) : N := { n0 opUnbox with a := ty, ys := [(x : Int)] }
-def unboxTy (e : N) : Int := e.a
-def unboxVar (e : N) : Nat := (intAt 0 e.ys).toNat
-
--- Basic:206 `Expr.uproj i x`: the usize word at `sizeof(void*)*i` of `x` (lean.h:572
--- `lean_ctor_get_usize`; i counts from the object fields, so usize slot j stands at index
--- size + j).
-def mkUProj (i : Nat) (x : Nat) : N := { n0 opUProj with a := (i : Int), ys := [(x : Int)] }
-def uprojIdx (e : N) : Nat := e.a.toNat
-def uprojVar (e : N) : Nat := (intAt 0 e.ys).toNat
-
-/-! ### Bodies -/
-
--- Basic:258 `FnBody.uset x i y b`: the usize word `y` at `sizeof(void*)*i` of `x`; same shape as
--- `mkSet` (a = x, b = i, ys = [y], kids = [b]).
-def mkUSet (x : Nat) (i : Nat) (y : Int) (b : N) : N :=
-  { n0 opUSet with a := (x : Int), b := (i : Int), ys := [y], kids := [b] }
-def usetVar (n : N) : Nat := n.a.toNat
-def usetIdx (n : N) : Nat := n.b.toNat
-def usetArg (n : N) : Nat := (intAt 0 n.ys).toNat
-
-/-! ### The usize constructor count -/
-
--- Basic:174 `CtorInfo` has a `usize` count between `size` and `ssize` that our port dropped (the
--- wire has none). The count rides in `kids`: `mkUCtor i u ys` is `ctor i ys` whose first kid is
--- the literal count. An r1 constructor has no kids, so `ctorUsize` reads 0 for it and an r1
--- program is an r2 program unchanged.
-def mkUCtor (i : CtorInfo) (usize : Nat) (ys : List Int) : N :=
-  { withInfo (n0 opCtor) i with ys := ys, kids := [mkLit (usize : Int)] }
-def ctorUsize (e : N) : Nat := (kidAt 0 e.kids).a.toNat
-
-end Lrc
-
-end RscSourceModule_522421824af1c36f41dab0408fcf057758d15123dd60218766775d4ecf9d0426
+end RscSourceModule_0223b95aaade8ee4dc4859a8a61c53d3d32f528136f2a55940d6b936d81c65e4
 section RscSourceModule_8b54098ffaaeac2319f582b0191f3b28fb5895a98fea2883cfaf5ccbf397a98d
 namespace Lrc
 
@@ -6379,408 +6214,6 @@ def hasFreeVar (b : N) (x : Nat) : Bool := hasIdxGo x b
 end Lrc
 
 end RscSourceModule_8b54098ffaaeac2319f582b0191f3b28fb5895a98fea2883cfaf5ccbf397a98d
-section RscSourceModule_335be10c862e23d1e4b5088c7a5f31ae6cfbd014a65e0b517211ea6c341f89fe
-namespace Lrc
-
-def primAdd : Nat := 6
-def primSub : Nat := 7
-def primMul : Nat := 8
-def primNeg : Nat := 9
-def primDiv : Nat := 10
-def primMod : Nat := 11
-def primLt : Nat := 12
-def primGt : Nat := 13
-def primEq : Nat := 14
-def primAnd : Nat := 15
-def primOr : Nat := 16
-def primNot : Nat := 17
-def primListLen : Nat := 24
-def primListAppend : Nat := 26
-def primListDrop : Nat := 27
--- the constructor index of a node value, as a word
-def primTagOf : Nat := 100
--- always refuses, as stuck with the type-mismatch reason: `unwrap` of an absent option
--- (rsc/rsc.rsd, `refuseStuck stTypeMismatch`). Not total, so its binding stays.
-def primFail : Nat := 101
--- are two strings equal: their byte sizes, then their bytes (rsc/rsc.rsd `strEq`)
-def primStrEq : Nat := 102
--- The wire's add, sub and mul without the test for a result outside i64: written by
--- lib/lrc/Range.rsd where the operands' ranges keep every result inside. They cannot refuse.
-def primAddW : Nat := 103
-def primSubW : Nat := 104
-def primMulW : Nat := 105
--- the argument's low bits: `mod` by a power of two, whose mask is the node's first immediate
-def primMask : Nat := 106
--- The magnitude of an integer as one word (lib/lrc/FromWire.rsd "Magnitudes"): is the word a small
--- number (its low bit: lean.h `lean_is_scalar`); the word of a small number (`lean_box`); the small
--- number of a word (`lean_unbox`). They read their argument and consume nothing.
-def primIsScalar : Nat := 107
-def primBox : Nat := 108
-def primUnbox : Nat := 109
--- A node of the image before its layout is decided (lib/lrc/FromWire.rsd "Layout"): the
--- translation writes these, and the layout replaces every one before the declarations leave
--- lib/lrc/FromWire.rsd; no pass and no emitter meets one. A read's one argument is the node: child i
--- (the first immediate), scalar field j (the first immediate; f2 is 0), the string, the list of
--- integers (the ninth field of the node record), the children as a list.
-def primNodeKid : Nat := 110
-def primNodeScalar : Nat := 111
-def primNodeStr : Nat := 112
-def primNodeInts : Nat := 113
-def primNodeKids : Nat := 114
--- The allocation: the first immediate is the tag, the second the number of children written as a
--- literal list, or -1 when the children are a list that is not a literal. The arguments are the
--- five scalar fields f2 .. f6, the string, the list of integers, then the children (or the one
--- list); a field written as its literal default is the irrelevant argument.
-def primNodeNew : Nat := 115
--- Words as unsigned numbers: the shift to the right by the first immediate; the quotient and the
--- remainder, which the stage writes only behind a test that the divisor is not zero (they are not
--- counted as total, so no pass moves one from behind its test).
-def primShrW : Nat := 116
-def primDivU : Nat := 117
-def primRemU : Nat := 118
-
--- Arrays (lib/lrc/FromWire.rsd "Arrays"; lean.h `lean_array_object`, `lean_sarray_object`): a list
--- held as one object with its elements side by side. Is the value one; its number of elements
--- (0 for the empty list); element i, which the stage reads only behind a test of the index; the
--- array with one more element at its end; with element i replaced, behind the same test; the array
--- of a list's elements; the list of an array's elements (any other value as it is); the array of
--- the elements from index lo up to hi, both brought into the array's range. The first immediate
--- of get, push, set, ofList and slice is the shape of a cell of the list's type (lib/lrc/FromWire.rsd
--- `lsScalar`, `lsObject`).
-def primIsArr : Nat := 119
-def primArrSize : Nat := 120
-def primArrGet : Nat := 121
-def primArrPush : Nat := 122
-def primArrSet : Nat := 123
-def primArrOfList : Nat := 124
-def primArrToList : Nat := 125
-def primArrSlice : Nat := 126
-
--- An integer as one word (lib/lrc/FromWire.rsd "An integer is one word"; lean.h `lean_box` and `lean_unbox` of a
--- number with a sign, as its Int has them): the word of a small integer, and the small integer of a word. They
--- read their argument and consume nothing.
-def primBoxS : Nat := 127
-def primUnboxS : Nat := 128
-
--- The arguments a primitive consumes: every other argument of every primitive is read and not
--- consumed. As lean.h's `lean_array_push`, `lean_array_fset` and `lean_array_to_list` take their
--- array, and the element they store, owned: an array nothing else holds is written in place.
-def primOwned (p i : Nat) : Bool :=
-  (p == primArrPush && (i == 0 || i == 1)) || (p == primArrSet && (i == 0 || i == 2))
-    || (p == primArrOfList && i == 0) || (p == primArrToList && i == 0)
-
-def primConsumes (p : Nat) : Bool :=
-  p == primArrPush || p == primArrSet || p == primArrOfList || p == primArrToList
-
--- the parameters of a primitive that consumes an argument, as a declaration's would say it
-def primParamsGo (p : Nat) : Nat → Nat → List Param
-  | _, 0 => []
-  | i, k + 1 => { x := i + 1, borrow := !primOwned p i, ty := tyObj } :: primParamsGo p (i + 1) k
-
-def primParams (p n : Nat) : List Param := if primConsumes p then primParamsGo p 0 n else []
-
--- A total primitive never ends the run: its binding may be removed when nothing reads the result.
--- Checked arithmetic (signed overflow, division by zero, inexact division) and every operator not
--- named here may refuse, and a refusing computation stays where it is even when its result is dead
--- (AUDIT-RSC-OPT-5 refused an optimizer for removing one). A primitive that only allocates counts
--- as total: running out of memory is a capacity outcome, which a program is allowed to lose.
-def primTotal (p : Nat) : Bool :=
-  p == primLt || p == primGt || p == primEq || p == primAnd || p == primOr || p == primNot
-    || p == primListLen || p == primListAppend || p == primListDrop || p == primTagOf || p == primStrEq
-    || p == primAddW || p == primSubW || p == primMulW || p == primMask
-    || p == primIsScalar || p == primBox || p == primUnbox || p == primShrW
-    || p == primIsArr || p == primArrSize || p == primArrPush || p == primArrOfList || p == primArrToList || p == primArrSlice
-    || p == primBoxS || p == primUnboxS
-
-end Lrc
-
-end RscSourceModule_335be10c862e23d1e4b5088c7a5f31ae6cfbd014a65e0b517211ea6c341f89fe
-section RscSourceModule_9713a9288672d469892906cb25ce6b35a562018d4c2362c6d096c2aa722ef6d1
-namespace Lrc
-
-def lwCloTid : Nat := 1000245
--- a code names a function and its number of captured arguments (below lwCodeMul; a pap that holds that many, or an
--- arm past it, is a refusal: the closure becomes `unreachable`, never a code of another function)
-def lwCodeMul : Nat := 65536
-def lwCode (f k : Nat) : Nat := f * lwCodeMul + k
-
-def lwScalar (code : Nat) : CtorInfo := { cidx := code, size := 0, ssize := 0, tid := lwCloTid }
--- the largest constructor tag (lean.h `LeanMaxCtorTag`): the lowered closure is an ordinary constructor, so that the
--- semantics' reads of it (proj, case) are those of any constructor; lean.h's own tag 245 is the unlowered form's
-def lwCloTag : Nat := 244
-def lwCloInfo (k : Nat) : CtorInfo := { cidx := lwCloTag, size := k + 1, ssize := 0, tid := lwCloTid }
-
--- x := the closure of `code` over the captured arguments `ys`; cv is a variable for the code
-def lwAlloc (x cv code : Nat) (ys : List Int) (b : N) : N :=
-  mkVDecl cv tyObj (mkCtor (lwScalar code) []) (mkVDecl x tyObj (mkCtor (lwCloInfo ys.length) ((cv : Int) :: ys)) b)
-
-structure NN where
-  a : Nat
-  b : Nat
-  deriving Inhabited
-
-structure ClR where
-  node : N
-  next : Nat
-  deriving Inhabited
-
-structure ClsR where
-  nodes : List N
-  next : Nat
-  deriving Inhabited
-
-structure ClScan where
-  cfs : List Nat
-  cw : Nat
-  deriving Inhabited
-
-def lwClR (n : N) (k : Nat) : ClR := { node := n, next := k }
-
-def lwNN (a b : Nat) : NN := { a := a, b := b }
-
-def lwLookup (x : Nat) : List NN -> Option Nat
-  | [] => none
-  | p :: ps => if p.a == x then some p.b else lwLookup x ps
-
-/-! ## What the program has: the functions that are pap targets and the widest application -/
-
-mutual
-partial def lwScan (n : N) (fs : List Nat) (w : Nat) : ClScan :=
-  if n.op == opVDecl then
-    let e := vdeclExpr n
-    let fs := if e.op == opPap && !fs.contains (papFn e) then fs ++ [papFn e] else fs
-    let w := if e.op == opAp && (apArgs e).length > w then (apArgs e).length else w
-    lwScan (bodyOf n) fs w
-  else if n.op == opJDecl then
-    let r := lwScan (jdeclBody n) fs w
-    lwScan (bodyOf n) r.cfs r.cw
-  else if n.op == opCase then lwScanAlts (caseAlts n) fs w
-  else if n.op == opJmp || n.op == opRet || n.op == opUnreachable then { cfs := fs, cw := w : ClScan }
-  else lwScan (bodyOf n) fs w
-partial def lwScanAlts : List N → List Nat → Nat → ClScan
-  | [], fs, w => { cfs := fs, cw := w : ClScan }
-  | alt :: alts, fs, w =>
-    let r := lwScan (altBody alt) fs w
-    lwScanAlts alts r.cfs r.cw
-end
-
-def lwScanDecls : List Decl → List Nat → Nat → ClScan
-  | [], fs, w => { cfs := fs, cw := w : ClScan }
-  | d :: ds, fs, w =>
-    let r := if d.ext then { cfs := fs, cw := w : ClScan } else lwScan d.body fs w
-    lwScanDecls ds r.cfs r.cw
-
-def lwMaxFn : List Decl → Nat → Nat
-  | [], m => m
-  | d :: ds, m => lwMaxFn ds (if d.f > m then d.f else m)
-
-/-! ## The dispatcher `apply_n`
-
-Parameters: 1 the closure, 2 .. n + 1 the arguments. A body is a case on the closure: a scalar is returned (apply.cpp
-`lean_is_scalar`), a closure is taken apart by its code. -/
-
--- the variables 1 .. n + 1 as arguments
-def lwArgVars (n : Nat) : List Int := (List.range n).map (fun i => ((i + 2 : Nat) : Int))
-
--- the captured arguments of the closure c, as fresh variables from `next`: vdecl v_i (proj (i + 1) c)
-def lwBindCaps (c next k : Nat) (b : N) : N :=
-  ((List.range k).reverse).foldl (fun acc i => mkVDecl (next + i) tyObj (mkProj (i + 1) c) acc) b
-
-def lwVarList (next k : Nat) : List Int := (List.range k).map (fun i => ((next + i : Nat) : Int))
-
--- the arm of the code (f, k) of arity a, for n arguments; the result is the arm's body and the next free variable
-def lwArm (dBase f a k n next : Nat) : ClR :=
-  let caps := lwVarList next k
-  let args := lwArgVars n
-  let next := next + k
-  let need := a - k
-  let body : ClR :=
-    if n == need then
-      let r := next
-      lwClR (mkVDecl r tyObj (mkFap f (caps ++ args)) (mkRet [(r : Int)])) (next + 1)
-    else if n < need then
-      -- fix_args: the closure of (f, k + n) over the old captured arguments and the new ones
-      let cv := next
-      let x := next + 1
-      if k + n >= lwCodeMul then lwClR mkUnreachable next
-      else lwClR (lwAlloc x cv (lwCode f (k + n)) (caps ++ args) (mkRet [(x : Int)])) (next + 2)
-    else
-      -- the first `need` arguments now, the result applied to the rest
-      let r := next
-      let r2 := next + 1
-      let rest := n - need
-      lwClR (mkVDecl r tyObj (mkFap f (caps ++ args.take need))
-        (mkVDecl r2 tyObj (mkFapSame (dBase + rest - 1) ((r : Int) :: args.drop need)) (mkRet [(r2 : Int)]))) (next + 2)
-  lwClR (lwBindCaps 1 (next - k) k body.node) body.next
-
--- the arms of every (f, k) with k below the arity of f, for each pap target f
-def lwArmsK (dBase f a n c : Nat) : Nat -> Nat -> List N -> ClsR
-  | 0, next, acc => { nodes := acc, next := next }
-  | k + 1, next, acc =>
-    let kk := c - (k + 1)
-    let arm := lwArm dBase f a kk n next
-    lwArmsK dBase f a n c k arm.next (acc ++ [mkAltCtor (lwScalar (lwCode f kk)) arm.node])
-
-def lwArms (dBase : Nat) (decls : List Decl) (n : Nat) : List Nat -> Nat -> ClsR
-  | [], next => { nodes := [], next := next }
-  | f :: fs, next =>
-    let a := match declAt f decls with
-      | some d => d.xs.length
-      | none => 0
-    let r := lwArmsK dBase f a n (if a < lwCodeMul then a else lwCodeMul) (if a < lwCodeMul then a else lwCodeMul) next []
-    let rest := lwArms dBase decls n fs r.next
-    { nodes := r.nodes ++ rest.nodes, next := rest.next }
-
-def lwApplyDecl (dBase : Nat) (decls : List Decl) (fs : List Nat) (n : Nat) : Decl :=
-  let xs : List Param := (List.range (n + 1)).map (fun i => { x := i + 1, borrow := false, ty := tyObj })
-  let sv := n + 2
-  let v := n + 3
-  let arms := lwArms dBase decls n fs (n + 4)
-  let dispatch := mkCase v tyObj (arms.nodes ++ [mkAltDefault mkUnreachable])
-  -- the tag 244 is also a scalar word (an erased proof can be any word): apply.cpp tests `lean_is_scalar` first, so under
-  -- the tag the word is tested once more (a word of another tag is returned as it is in the default arm below;
-  -- `primIsScalar` has no meaning on an unboxed integer, Sem.rsd, so a typed word 244 held as an integer stays a stop)
-  let inner := mkVDecl sv tyU8 (mkPrim primIsScalar 0 0 [1]) (mkCase sv tyU8 [mkAltCtor (lwScalar 1) (mkRet [1]), mkAltDefault (mkVDecl v tyObj (mkProj 0 1) dispatch)])
-  let closureAlt := mkAltCtor { cidx := lwCloTag, size := 1, ssize := 0, tid := lwCloTid } inner
-  -- a value whose tag is not the closure's is a scalar: the erased proof, returned as it is. (apply.cpp tests
-  -- `lean_is_scalar`; an object of another tag would be a type error, which the typed IR excludes and Sem.rsd refuses.)
-  let scalarAlt := mkAltDefault (mkRet [1])
-  { f := dBase + n - 1, xs := xs, rets := [tyObj], ext := false, body := mkCase 1 tyObj [closureAlt, scalarAlt] }
-
-/-! ## The rewrite of a body -/
-
-def lwBoxInObj (ty : Int) : Bool := ty == tyI64 || ty == tyUSizeC || ty == tyFloatC
-
--- the continuation `b` after the vdecl `x ty e`, with `e` one of the six forms; none when `e` is not one
-def lwVDecl (dBase next : Nat) (env : List NN) (n : N) (e : N) (b : N) : Option ClR :=
-  let x := vdeclVar n
-  let ty := vdeclTy n
-  if e.op == opPap then
-    if (papArgs e).length >= lwCodeMul then some { node := mkUnreachable, next := next }
-    else some { node := mkVDecl next tyObj (mkCtor (lwScalar (lwCode (papFn e) (papArgs e).length)) [])
-                     (mkVDecl x ty (mkCtor (lwCloInfo (papArgs e).length) ((next : Int) :: papArgs e)) b), next := next + 1 }
-  else if e.op == opAp then
-    some { node := mkVDecl x ty (mkFapSame (dBase + (apArgs e).length - 1) ((apVar e : Int) :: apArgs e)) b, next := next }
-  else if e.op == opBox then
-    if lwBoxInObj (boxTy e) then
-      some { node := mkVDecl x ty (mkCtor { cidx := 0, size := 0, ssize := 8, tid := lwCloTid + 1 } [])
-                       (mkSSet x 0 0 (boxVar e) tyI64 b), next := next }
-    else some { node := mkVDecl x ty (mkPrim primBox 0 0 [(boxVar e : Int)]) b, next := next }
-  else if e.op == opUnbox then
-    if lwBoxInObj (unboxTy e) then some { node := mkVDecl x ty (mkSProj 0 0 (unboxVar e)) b, next := next }
-    else some { node := mkVDecl x ty (mkPrim primUnbox 0 0 [(unboxVar e : Int)]) b, next := next }
-  -- usize slot i of an object of s fields is at index s + i (LOWERING-NOTE.md; Sem.rsd's `uproj` reads slot i of the
-  -- usize lane), the scalar at byte 8 s + 8 i: `sproj s (8 i)`, and Sem.rsd demands the field count s in `sproj`.
-  -- s is known where the object was built or taken apart in this function; elsewhere the form stays.
-  else if e.op == opUProj then
-    match lwLookup (uprojVar e) env with
-    | some sz => some { node := mkVDecl x ty (mkSProj sz (8 * uprojIdx e) (uprojVar e)) b, next := next }
-    | none => none
-  else if e.op == opCtor && ctorUsize e > 0 then
-    let i := infoOf e
-    some { node := mkVDecl x ty (mkCtor { i with ssize := i.ssize + 8 * ctorUsize e } e.ys) b, next := next }
-  else none
-
-mutual
-partial def lwGo (dBase : Nat) (env : List NN) (n : N) (next : Nat) : ClR :=
-  if n.op == opVDecl then
-    let e := vdeclExpr n
-    let env := if e.op == opCtor || e.op == opReuse then lwNN (vdeclVar n) (infoOf e).size :: env else env
-    let k := lwGo dBase env (bodyOf n) next
-    match lwVDecl dBase k.next env n e k.node with
-    | some r => r
-    | none => { node := { n with kids := [vdeclExpr n, k.node] }, next := k.next }
-  else if n.op == opJDecl then
-    let v := lwGo dBase env (jdeclBody n) next
-    let k := lwGo dBase env (bodyOf n) v.next
-    { node := { n with kids := [v.node, k.node] }, next := k.next }
-  else if n.op == opCase then
-    let r := lwAlts dBase env (caseVar n) (caseAlts n) next
-    { node := { n with kids := r.nodes }, next := r.next }
-  else if n.op == opUSet then
-    let k := lwGo dBase env (bodyOf n) next
-    match lwLookup (usetVar n) env with
-    | some sz => { node := mkSSet (usetVar n) sz (8 * usetIdx n) (usetArg n) tyI64 k.node, next := k.next }
-    | none => { node := { n with kids := [k.node] }, next := k.next }
-  else if n.op == opJmp || n.op == opRet || n.op == opUnreachable then { node := n, next := next }
-  else
-    let k := lwGo dBase env (bodyOf n) next
-    { node := { n with kids := [k.node] }, next := k.next }
-partial def lwAlts (dBase : Nat) (env : List NN) (x : Nat) : List N -> Nat -> ClsR
-  | [], next => { nodes := [], next := next }
-  | alt :: alts, next =>
-    let env' := if alt.op == opAltCtor then lwNN x (infoOf alt).size :: env else env
-    let b := lwGo dBase env' (altBody alt) next
-    let r := lwAlts dBase env x alts b.next
-    { nodes := altSetBody alt b.node :: r.nodes, next := r.next }
-end
-
-def lwDecl (dBase : Nat) (d : Decl) : Decl :=
-  if d.ext then d else { d with body := (lwGo dBase [] d.body (declMaxIndex d + 1)).node }
-
--- Is a body free of the six forms (a program of the r1 IR is returned as it is)
-mutual
-partial def lwHasR2 (n : N) : Bool :=
-  if n.op == opVDecl then
-    let e := vdeclExpr n
-    e.op == opPap || e.op == opAp || e.op == opBox || e.op == opUnbox || e.op == opUProj || (e.op == opCtor && ctorUsize e > 0)
-      || lwHasR2 (bodyOf n)
-  else if n.op == opJDecl then lwHasR2 (jdeclBody n) || lwHasR2 (bodyOf n)
-  else if n.op == opCase then lwHasR2Alts (caseAlts n)
-  else if n.op == opJmp || n.op == opRet || n.op == opUnreachable then false
-  else n.op == opUSet || lwHasR2 (bodyOf n)
-partial def lwHasR2Alts : List N → Bool
-  | [] => false
-  | alt :: alts => lwHasR2 (altBody alt) || lwHasR2Alts alts
-end
-
-def lwAnyR2 : List Decl → Bool
-  | [] => false
-  | d :: ds => (!d.ext && lwHasR2 d.body) || lwAnyR2 ds
-
--- The program with the six forms lowered. `apply_1 .. apply_w` (w the widest application) follow the functions.
-def lowerR2 (decls : List Decl) : List Decl :=
-  if !lwAnyR2 decls then decls
-  else
-    let sc := lwScanDecls decls [] 0
-    let dBase := lwMaxFn decls 0 + 1
-    let lowered := decls.map (lwDecl dBase)
-    lowered ++ ((List.range sc.cw).map (fun i => lwApplyDecl dBase decls sc.cfs (i + 1)))
-
-/-! ## Under narrow fields
-
-Where an object field is four bytes (rsc's layer `narrow`, lib/lrc/Emit.rsd "The width of an object field") a
-tagged word holds 31 bits. A scalar of 32 bits is then boxed as lean.h boxes it on a target whose pointers are 4
-bytes (src/include/lean/lean.h `lean_box_uint32` and `lean_unbox_uint32`, the arm `sizeof(void*) == 4`): in a
-constructor with one scalar word, as a uint64 is everywhere. Before the lowering, every `box` and `unbox` of that
-type gets the type of a word, and the lowering above does the rest. -/
-
-mutual
-partial def lwWideGo (n : N) : N :=
-  if n.op == opVDecl then
-    let e := vdeclExpr n
-    let e2 := if (e.op == opBox || e.op == opUnbox) && e.a == tyU32C then { e with a := tyI64 } else e
-    { n with kids := [e2, lwWideGo (bodyOf n)] }
-  else if n.op == opJDecl then { n with kids := [lwWideGo (jdeclBody n), lwWideGo (bodyOf n)] }
-  else if n.op == opCase then { n with kids := lwWideAlts (caseAlts n) }
-  else if n.op == opJmp || n.op == opRet || n.op == opUnreachable then n
-  else { n with kids := [lwWideGo (bodyOf n)] }
-partial def lwWideAlts : List N → List N
-  | [] => []
-  | alt :: alts => altSetBody alt (lwWideGo (altBody alt)) :: lwWideAlts alts
-end
-
-def lwWideDecl (d : Decl) : Decl :=
-  if d.ext then d else { d with body := lwWideGo d.body }
-
--- the lowering for a module whose object fields are four bytes when `narrow`; without it, `lowerR2`
-def lowerR2N (narrow : Bool) (decls : List Decl) : List Decl :=
-  if !lwAnyR2 decls then decls
-  else lowerR2 (if narrow then decls.map lwWideDecl else decls)
-
-end Lrc
-
-end RscSourceModule_9713a9288672d469892906cb25ce6b35a562018d4c2362c6d096c2aa722ef6d1
 section RscSourceModule_ed859bf0d81cda955506fa54a38b0d8335f587dc524bc218fe3e3535a82298c3
 namespace Lrc
 
@@ -7275,7 +6708,7 @@ def inlineOnce (nImg : Nat) (decls : List Decl) : List Decl := ilWith nImg 0 (il
 end Lrc
 
 end RscSourceModule_93e303f2d0c971c685fb208c9df32bd4737ecb2b79539f24e96aef620ecc5310
-section RscSourceModule_e960f66064f8e8f11811b35ae3b2bfc4ea4debc04cf69e012b8e6574845e9dad
+section RscSourceModule_7e9f66b76cdad3ee6443a866ca9caa91fbc5a4a63115db6721aed70d9681d7bd
 namespace Lrc
 
 -- may this expression be shared; `calls`: calls too
@@ -7342,8 +6775,8 @@ partial def csRun (y x : Int) (avail : List N) (m : IMap) (n : N) : CsRun :=
   if n.op == opSSet && n.a == y then
     let d := csDef (renIdx m (intAt 0 n.ys)) avail
     let r := csRun y x avail m (bodyOf n)
-    let same := d.op == opSProj && d.a == n.b && d.b == n.c && intAt 0 d.ys == x && sprojWidth d == tyWidth n.d
-    { ok := r.ok && same, bytes := r.bytes + tyWidth n.d, rest := r.rest }
+    let same := d.op == opSProj && d.a == n.b && d.b == n.c && intAt 0 d.ys == x && (d.c == 1) == (n.d == tyU8)
+    { ok := r.ok && same, bytes := r.bytes + (if n.d == tyU8 then 1 else 8), rest := r.rest }
   else { ok := true, bytes := 0, rest := n }
 
 -- the object whose field the new cell's first field is, -1 for none; `next` follows the `ctor`
@@ -7353,67 +6786,6 @@ def csDiscr (e : N) (next : N) (avail : List N) (m : IMap) : Int :=
   if !e.ys.isEmpty then (if d0.op == opProj then intAt 0 d0.ys else -1)
   else if next.op == opSSet && d1.op == opSProj then intAt 0 d1.ys
   else -1
-
-/-! ## A closed constructor term built again (CSE:62, a constructor application is a `let` value)
-
-In LCNF a constructor application is a pure `let` value and CSE.lean shares it like any other. Here
-that is taken for the closed terms only: a constructor whose object fields are closed values of
-the path (a literal, a constructor without fields, a number put in a box, a closed cell bound
-above) and whose `sset`s, which follow the binding directly, store literals. Such a term is a
-constant; built twice on one path it is one cell with two owners. Not taken: Lean's wider rule
-for any constructor application, because a cell with variable fields that stays unique is updated
-in place by the passes after this one, and a shared one is not.
-
-The front end writes a string literal as such a term (a cell for each character), so two calls
-that differ in nothing but which evaluation of one literal they pass become one call here, as
-they do with a literal of the IR (deriv's `d "x" x`, written twice in its source). A cell is kept
-in `avail` with its scalars as the second kid: only closed cells stand there with fields. -/
-
--- the expression the path bound to v is a closed value
-def csClosed (v : Int) (avail : List N) : Bool :=
-  let d := csDef v avail
-  d.op == opLit || d.op == opLitStr || d.op == opCtor
-    || (d.op == opPrim && (primOp d == primBox || primOp d == primBoxS) && (csDef (intAt 0 d.ys) avail).op == opLit)
-
-def csAllClosed (avail : List N) : List Int → Bool
-  | [] => true
-  | y :: ys => csClosed y avail && csAllClosed avail ys
-
--- The `sset`s on the new cell x that follow its `ctor`: ok when each stores a literal of the
--- path; key: place, width and variable of each (equal literals are one variable by now).
-structure CsLitRun where
-  ok : Bool
-  key : List Int
-  rest : N
-  deriving Inhabited
-
-partial def csLitRun (x : Int) (avail : List N) (m : IMap) (n : N) : CsLitRun :=
-  if n.op == opSSet && n.a == x then
-    let v := renIdx m (intAt 0 n.ys)
-    let r := csLitRun x avail m (bodyOf n)
-    { ok := r.ok && (csDef v avail).op == opLit, key := n.b :: n.c :: n.d :: v :: r.key, rest := r.rest }
-  else { ok := true, key := [], rest := n }
-
-mutual
--- does the code write to x
-partial def csWrites (x : Int) (n : N) : Bool :=
-  if n.op == opVDecl then csWrites x (bodyOf n)
-  else if n.op == opJDecl then csWrites x (jdeclBody n) || csWrites x (bodyOf n)
-  else if n.op == opCase then csWritesAlts x (caseAlts n)
-  else if n.op == opRet || n.op == opJmp || n.op == opUnreachable then false
-  else ((n.op == opSet || n.op == opSSet || n.op == opSetTag) && n.a == x) || csWrites x (bodyOf n)
-partial def csWritesAlts (x : Int) : List N → Bool
-  | [] => false
-  | alt :: alts => csWrites x (altBody alt) || csWritesAlts x alts
-end
-
--- the closed cell above of this constructor, these fields and these scalars; -1 for none
-def csFindCell (e : N) (ty : Int) (key : List Int) : List N → Int
-  | [] => -1
-  | p :: ps =>
-    if p.ys.isEmpty && p.b == ty && (vdeclExpr p).op == opCtor && csSame (vdeclExpr p) e
-        && (kidAt 1 p.kids).op == opLit && (kidAt 1 p.kids).ys == key then p.a
-    else csFindCell e ty key ps
 
 mutual
 -- `avail`: the bindings above on this path, the nearest first (CSE:18 State.map); `m`: the
@@ -7426,13 +6798,6 @@ partial def csGo (calls : Bool) (facts : List Int) (avail : List N) (m : IMap) (
     let run := csRun n.a x avail m (bodyOf n)
     if x >= 0 && csFact x info facts && e.ys.length == info.size && csFieldsOf x avail 0 e.ys && run.ok && run.bytes == info.ssize then
       csGo calls facts avail (imInsert m n.a.toNat x.toNat) run.rest
-    else if e.op == opCtor && info.isRef && n.ys.isEmpty && csAllClosed avail e.ys then
-      let lr := csLitRun n.a avail m (bodyOf n)
-      if lr.ok && !csWrites n.a lr.rest then
-        let y := csFindCell e n.b lr.key avail
-        if y >= 0 then csGo calls facts avail (imInsert m n.a.toNat y.toNat) lr.rest
-        else { n with kids := [e, csGo calls facts ({ n with kids := [e, { n0 opLit with ys := lr.key }] } :: avail) m (bodyOf n)] }
-      else { n with kids := [e, csGo calls facts avail m (bodyOf n)] }
     else if csKey calls e then
       match csFind e (csTypes (vdeclBinds n)) avail with
       | some p => csGo calls facts avail (csSubst m (csVars (vdeclBinds n)) (csVars (vdeclBinds p))) (bodyOf n)
@@ -7469,7 +6834,123 @@ def cse (calls : Bool) : List Decl → List Decl
 
 end Lrc
 
-end RscSourceModule_e960f66064f8e8f11811b35ae3b2bfc4ea4debc04cf69e012b8e6574845e9dad
+end RscSourceModule_7e9f66b76cdad3ee6443a866ca9caa91fbc5a4a63115db6721aed70d9681d7bd
+section RscSourceModule_335be10c862e23d1e4b5088c7a5f31ae6cfbd014a65e0b517211ea6c341f89fe
+namespace Lrc
+
+def primAdd : Nat := 6
+def primSub : Nat := 7
+def primMul : Nat := 8
+def primNeg : Nat := 9
+def primDiv : Nat := 10
+def primMod : Nat := 11
+def primLt : Nat := 12
+def primGt : Nat := 13
+def primEq : Nat := 14
+def primAnd : Nat := 15
+def primOr : Nat := 16
+def primNot : Nat := 17
+def primListLen : Nat := 24
+def primListAppend : Nat := 26
+def primListDrop : Nat := 27
+-- the constructor index of a node value, as a word
+def primTagOf : Nat := 100
+-- always refuses, as stuck with the type-mismatch reason: `unwrap` of an absent option
+-- (rsc/rsc.rsd, `refuseStuck stTypeMismatch`). Not total, so its binding stays.
+def primFail : Nat := 101
+-- are two strings equal: their byte sizes, then their bytes (rsc/rsc.rsd `strEq`)
+def primStrEq : Nat := 102
+-- The wire's add, sub and mul without the test for a result outside i64: written by
+-- lib/lrc/Range.rsd where the operands' ranges keep every result inside. They cannot refuse.
+def primAddW : Nat := 103
+def primSubW : Nat := 104
+def primMulW : Nat := 105
+-- the argument's low bits: `mod` by a power of two, whose mask is the node's first immediate
+def primMask : Nat := 106
+-- The magnitude of an integer as one word (lib/lrc/FromWire.rsd "Magnitudes"): is the word a small
+-- number (its low bit: lean.h `lean_is_scalar`); the word of a small number (`lean_box`); the small
+-- number of a word (`lean_unbox`). They read their argument and consume nothing.
+def primIsScalar : Nat := 107
+def primBox : Nat := 108
+def primUnbox : Nat := 109
+-- A node of the image before its layout is decided (lib/lrc/FromWire.rsd "Layout"): the
+-- translation writes these, and the layout replaces every one before the declarations leave
+-- lib/lrc/FromWire.rsd; no pass and no emitter meets one. A read's one argument is the node: child i
+-- (the first immediate), scalar field j (the first immediate; f2 is 0), the string, the list of
+-- integers (the ninth field of the node record), the children as a list.
+def primNodeKid : Nat := 110
+def primNodeScalar : Nat := 111
+def primNodeStr : Nat := 112
+def primNodeInts : Nat := 113
+def primNodeKids : Nat := 114
+-- The allocation: the first immediate is the tag, the second the number of children written as a
+-- literal list, or -1 when the children are a list that is not a literal. The arguments are the
+-- five scalar fields f2 .. f6, the string, the list of integers, then the children (or the one
+-- list); a field written as its literal default is the irrelevant argument.
+def primNodeNew : Nat := 115
+-- Words as unsigned numbers: the shift to the right by the first immediate; the quotient and the
+-- remainder, which the stage writes only behind a test that the divisor is not zero (they are not
+-- counted as total, so no pass moves one from behind its test).
+def primShrW : Nat := 116
+def primDivU : Nat := 117
+def primRemU : Nat := 118
+
+-- Arrays (lib/lrc/FromWire.rsd "Arrays"; lean.h `lean_array_object`, `lean_sarray_object`): a list
+-- held as one object with its elements side by side. Is the value one; its number of elements
+-- (0 for the empty list); element i, which the stage reads only behind a test of the index; the
+-- array with one more element at its end; with element i replaced, behind the same test; the array
+-- of a list's elements; the list of an array's elements (any other value as it is); the array of
+-- the elements from index lo up to hi, both brought into the array's range. The first immediate
+-- of get, push, set, ofList and slice is the shape of a cell of the list's type (lib/lrc/FromWire.rsd
+-- `lsScalar`, `lsObject`).
+def primIsArr : Nat := 119
+def primArrSize : Nat := 120
+def primArrGet : Nat := 121
+def primArrPush : Nat := 122
+def primArrSet : Nat := 123
+def primArrOfList : Nat := 124
+def primArrToList : Nat := 125
+def primArrSlice : Nat := 126
+
+-- An integer as one word (lib/lrc/FromWire.rsd "An integer is one word"; lean.h `lean_box` and `lean_unbox` of a
+-- number with a sign, as its Int has them): the word of a small integer, and the small integer of a word. They
+-- read their argument and consume nothing.
+def primBoxS : Nat := 127
+def primUnboxS : Nat := 128
+
+-- The arguments a primitive consumes: every other argument of every primitive is read and not
+-- consumed. As lean.h's `lean_array_push`, `lean_array_fset` and `lean_array_to_list` take their
+-- array, and the element they store, owned: an array nothing else holds is written in place.
+def primOwned (p i : Nat) : Bool :=
+  (p == primArrPush && (i == 0 || i == 1)) || (p == primArrSet && (i == 0 || i == 2))
+    || (p == primArrOfList && i == 0) || (p == primArrToList && i == 0)
+
+def primConsumes (p : Nat) : Bool :=
+  p == primArrPush || p == primArrSet || p == primArrOfList || p == primArrToList
+
+-- the parameters of a primitive that consumes an argument, as a declaration's would say it
+def primParamsGo (p : Nat) : Nat → Nat → List Param
+  | _, 0 => []
+  | i, k + 1 => { x := i + 1, borrow := !primOwned p i, ty := tyObj } :: primParamsGo p (i + 1) k
+
+def primParams (p n : Nat) : List Param := if primConsumes p then primParamsGo p 0 n else []
+
+-- A total primitive never ends the run: its binding may be removed when nothing reads the result.
+-- Checked arithmetic (signed overflow, division by zero, inexact division) and every operator not
+-- named here may refuse, and a refusing computation stays where it is even when its result is dead
+-- (AUDIT-RSC-OPT-5 refused an optimizer for removing one). A primitive that only allocates counts
+-- as total: running out of memory is a capacity outcome, which a program is allowed to lose.
+def primTotal (p : Nat) : Bool :=
+  p == primLt || p == primGt || p == primEq || p == primAnd || p == primOr || p == primNot
+    || p == primListLen || p == primListAppend || p == primListDrop || p == primTagOf || p == primStrEq
+    || p == primAddW || p == primSubW || p == primMulW || p == primMask
+    || p == primIsScalar || p == primBox || p == primUnbox || p == primShrW
+    || p == primIsArr || p == primArrSize || p == primArrPush || p == primArrOfList || p == primArrToList || p == primArrSlice
+    || p == primBoxS || p == primUnboxS
+
+end Lrc
+
+end RscSourceModule_335be10c862e23d1e4b5088c7a5f31ae6cfbd014a65e0b517211ea6c341f89fe
 section RscSourceModule_6bf963f316356c183db26ade9193f2b0b4c03879319405ac93e288b7f9cc4208
 namespace Lrc
 
@@ -9924,7 +9405,7 @@ def trmc (nImg mode : Nat) (decls : List Decl) : List Decl :=
 end Lrc
 
 end RscSourceModule_d8243965cdb54cb3e3123c9703595060b1a38ab92024e6cd49598b97ae12599f
-section RscSourceModule_bc271fe82960e3927b2a15c5f75b6b2211e82e518e3789e028a68fb275eca405
+section RscSourceModule_f31bbee19058914c197f10b5463fdfdef6ce4a34525861f43830a1c854d6e54e
 namespace Lrc
 
 def pkMem (x : Int) : List Int → Bool
@@ -9947,92 +9428,31 @@ def pkBind (x : Int) (i : CtorInfo) (env : List Int) : List Int :=
 -- field `off` of constructor c
 def pkKey (c : Int) (off : Nat) : Int := c * 4096 + (off : Int)
 
-/-! ## What a value's bytes are
+def pkAllBytes (bytes : VSet) : List Int → Bool
+  | [] => true
+  | y :: ys => y >= 0 && vsContains bytes y.toNat && pkAllBytes bytes ys
 
-A variable is known, on the path walked, to hold a value of at most 1, 2 or 4 bytes (lean.h's uint8, uint16,
-uint32); a value of fewer bytes is one of more, so `b1` is part of `b2` and `b2` of `b4`. `lits` holds the
-variables bound to a literal that is not negative, each with its value: a modulus by one is below it. -/
-
-structure PkV where
-  b1 : VSet
-  b2 : VSet
-  b4 : VSet
-  lits : List Int
-  deriving Inhabited
-
-def pkV0 : PkV := { b1 := vsEmpty, b2 := vsEmpty, b4 := vsEmpty, lits := [] }
-
--- the bytes of variable x: 1, 2 or 4, and 8 when nothing is known
-def pkVar (v : PkV) (x : Nat) : Nat :=
-  if vsContains v.b1 x then 1 else if vsContains v.b2 x then 2 else if vsContains v.b4 x then 4 else 8
-
--- x holds a value of w bytes
-def pkKnow (v : PkV) (x : Nat) (w : Nat) : PkV :=
-  if w == 1 then { v with b1 := vsInsert v.b1 x, b2 := vsInsert v.b2 x, b4 := vsInsert v.b4 x }
-  else if w == 2 then { v with b2 := vsInsert v.b2 x, b4 := vsInsert v.b4 x }
-  else if w == 4 then { v with b4 := vsInsert v.b4 x }
-  else v
-
--- the literal x is bound to, -1 when it is bound to none
-def pkLitOf (y : Int) : List Int → Int
-  | x :: a :: rest => if x == y then a else pkLitOf y rest
-  | _ => -1
-
-def pkMax (a b : Nat) : Nat := if a > b then a else b
-
--- the bytes of the widest argument; a place that is no variable is a word
-def pkArgs (v : PkV) : List Int → Nat
-  | [] => 1
-  | y :: ys => pkMax (if y >= 0 then pkVar v y.toNat else 8) (pkArgs v ys)
-
--- the bytes of a number from 0 to `a`
-def pkLit (a : Int) : Nat :=
-  if a < 0 then 8 else if a <= 255 then 1 else if a <= 65535 then 2 else if a <= 4294967295 then 4 else 8
-
--- ok: no scalar field of an unknown object was met. w2, w4, w8: the fields that hold a value of at least 2, of
--- at least 4, of 8 bytes (a field of w8 is in w4, one of w4 in w2); a field in none of them is a byte.
+-- ok: no scalar field of an unknown object was met. wide: the fields that hold a word.
 structure PkS where
   ok : Bool
-  w2 : List Int
-  w4 : List Int
-  w8 : List Int
+  wide : List Int
   deriving Inhabited
 
--- the bytes of the field `key`
-def pkField (s : PkS) (key : Int) : Nat :=
-  if pkMem key s.w8 then 8 else if pkMem key s.w4 then 4 else if pkMem key s.w2 then 2 else 1
-
--- the field holds a value of w bytes too
-def pkWiden (s : PkS) (key : Int) (w : Nat) : PkS :=
-  let s2 := if w >= 2 && !pkMem key s.w2 then { s with w2 := key :: s.w2 } else s
-  let s4 := if w >= 4 && !pkMem key s2.w4 then { s2 with w4 := key :: s2.w4 } else s2
-  if w >= 8 && !pkMem key s4.w8 then { s4 with w8 := key :: s4.w8 } else s4
-
-def pkGrown (s : PkS) : Nat := s.w2.length + s.w4.length + s.w8.length
-
--- the bytes of the value of an expression that binds one variable
-def pkExprW (env : List Int) (v : PkV) (s : PkS) (e : N) : Nat :=
-  if e.op == opLit then pkLit e.a
+def pkExprByte (env : List Int) (bytes : VSet) (wide : List Int) (e : N) : Bool :=
+  if e.op == opLit then e.a >= 0 && e.a <= 255
   else if e.op == opPrim then
     let p := primOp e
-    if p == primLt || p == primGt || p == primEq || p == primNot || p == primStrEq then 1
-    -- `and` and `or` are the wire's, on its Bool: of bytes they are a byte; nothing is said of wider operands
-    else if p == primAnd || p == primOr then (if pkArgs v e.ys == 1 then 1 else 8)
-    -- the wire's modulus has its divisor's sign (lib/lrc/Emit.rsd `emMod`): by a literal above zero it is below it.
-    -- A fixed-width operation of the front end ends in one (rsdc/Compile.rsd). This pass runs before
-    -- lib/lrc/Range.rsd makes such a modulus a mask, so it meets no mask.
-    else if p == primMod && pkLitOf (intAt 1 e.ys) v.lits > 0 then pkLit (pkLitOf (intAt 1 e.ys) v.lits - 1)
-    else 8
+    p == primLt || p == primGt || p == primEq || p == primNot || p == primStrEq
+      || ((p == primAnd || p == primOr) && pkAllBytes bytes e.ys)
   else if e.op == opSProj then
     let c := pkCidx ((sprojVar e : Nat) : Int) env
-    if c >= 0 then pkField s (pkKey c (sprojOff e)) else 8
-  else if e.op == opIsShared then 1
-  else 8
+    c >= 0 && !pkMem (pkKey c (sprojOff e)) wide
+  else e.op == opIsShared
 
--- the binders of a call take the bytes of the types the callee's signature gives its results
-def pkCall (v : PkV) : List Int → List Int → PkV
-  | x :: _ :: binds, ty :: tys => pkCall (if x >= 0 then pkKnow v x.toNat (tyWidth ty) else v) binds tys
-  | _, _ => v
+-- the binders of a call whose result the callee's signature types uint8
+def pkCallBytes (bytes : VSet) : List Int → List Int → VSet
+  | x :: _ :: binds, ty :: tys => pkCallBytes (if ty == tyU8 && x >= 0 then vsInsert bytes x.toNat else bytes) binds tys
+  | _, _ => bytes
 
 def pkRets (f : Nat) (ds : DeclTab) : List Int :=
   match dtFind ds f with
@@ -10040,130 +9460,112 @@ def pkRets (f : Nat) (ds : DeclTab) : List Int :=
   | none => []
 
 mutual
--- one body: `v` is what is known of the variables on this path
-partial def pkGo (ds : DeclTab) (env : List Int) (v : PkV) (s : PkS) (n : N) : PkS :=
+-- one body: `bytes` are the variables known to be bytes on this path
+partial def pkGo (ds : DeclTab) (env : List Int) (bytes : VSet) (s : PkS) (n : N) : PkS :=
   if !s.ok then s
   else if n.op == opVDecl then
     let e := vdeclExpr n
     let env2 := if e.op == opCtor then pkBind n.a (infoOf e) env else env
     let s2 := if e.op == opSProj && pkCidx ((sprojVar e : Nat) : Int) env == -2 then { s with ok := false } else s
-    let v2 :=
-      if e.op == opFap then pkCall v (vdeclBinds n) (pkRets (fapFn e) ds)
-      else if n.ys.isEmpty then
-        let v1 := pkKnow v n.a.toNat (pkExprW env v s e)
-        if e.op == opLit && e.a >= 0 then { v1 with lits := n.a :: e.a :: v1.lits } else v1
-      else v
-    pkGo ds env2 v2 s2 (bodyOf n)
+    let bytes2 :=
+      if e.op == opFap then pkCallBytes bytes (vdeclBinds n) (pkRets (fapFn e) ds)
+      else if n.ys.isEmpty && pkExprByte env bytes s.wide e then vsInsert bytes n.a.toNat
+      else bytes
+    pkGo ds env2 bytes2 s2 (bodyOf n)
   else if n.op == opSSet then
     let c := pkCidx n.a env
+    let key := pkKey c (ssetOff n)
     if c == -2 then { s with ok := false }
-    else if c >= 0 then pkGo ds env v (pkWiden s (pkKey c (ssetOff n)) (pkVar v (ssetArg n))) (bodyOf n)
-    else pkGo ds env v s (bodyOf n)
-  else if n.op == opJDecl then pkGo ds env v (pkGo ds env v s (jdeclBody n)) (bodyOf n)
-  else if n.op == opCase then pkAlts ds env v s n.a (caseAlts n)
+    else if c >= 0 && !vsContains bytes (ssetArg n) && !pkMem key s.wide then
+      pkGo ds env bytes { s with wide := key :: s.wide } (bodyOf n)
+    else pkGo ds env bytes s (bodyOf n)
+  else if n.op == opJDecl then pkGo ds env bytes (pkGo ds env bytes s (jdeclBody n)) (bodyOf n)
+  else if n.op == opCase then pkAlts ds env bytes s n.a (caseAlts n)
   else if n.op == opRet || n.op == opJmp || n.op == opUnreachable then s
-  else pkGo ds env v s (bodyOf n)
-partial def pkAlts (ds : DeclTab) (env : List Int) (v : PkV) (s : PkS) (x : Int) : List N → PkS
+  else pkGo ds env bytes s (bodyOf n)
+partial def pkAlts (ds : DeclTab) (env : List Int) (bytes : VSet) (s : PkS) (x : Int) : List N → PkS
   | [] => s
   | alt :: alts =>
     let env2 := if altIsDefault alt then env else pkBind x (infoOf alt) env
-    pkAlts ds env v (pkGo ds env2 v s (altBody alt)) x alts
+    pkAlts ds env bytes (pkGo ds env2 bytes s (altBody alt)) x alts
 end
 
--- a parameter holds the bytes of its type
-def pkParams : List Param → PkV → PkV
-  | [], v => v
-  | p :: ps, v => pkParams ps (pkKnow v p.x (tyWidth p.ty))
+def pkParamBytes : List Param → VSet → VSet
+  | [], s => s
+  | p :: ps, s => pkParamBytes ps (if p.ty == tyU8 then vsInsert s p.x else s)
 
 def pkDecls (all : DeclTab) : List Decl → PkS → PkS
   | [], s => s
-  | d :: ds, s => pkDecls all ds (if d.ext then s else pkGo all [] (pkParams d.xs pkV0) s d.body)
+  | d :: ds, s => pkDecls all ds (if d.ext then s else pkGo all [] (pkParamBytes d.xs vsEmpty) s d.body)
 
 partial def pkFix (tab : DeclTab) (ds : List Decl) (s : PkS) : PkS :=
   let s2 := pkDecls tab ds s
-  if !s2.ok || pkGrown s2 == pkGrown s then s2 else pkFix tab ds s2
+  if !s2.ok || s2.wide.length == s.wide.length then s2 else pkFix tab ds s2
 
 /-! ## The new layout of constructor c, whose scalar area had k words -/
 
--- how many of the fields 0 .. j-1 hold w bytes
-def pkCount (s : PkS) (c : Int) (w : Nat) : Nat → Nat
+-- how many of the fields 0 .. j-1 are words (w) or bytes (!w)
+def pkCount (wide : List Int) (c : Int) (w : Bool) : Nat → Nat
   | 0 => 0
-  | j + 1 => (if pkField s (pkKey c (8 * j)) == w then 1 else 0) + pkCount s c w j
+  | j + 1 => (if pkMem (pkKey c (8 * j)) wide == w then 1 else 0) + pkCount wide c w j
 
--- The offset of the field that was at `off`: the words first, then the fields of 4 bytes, of 2, of 1, each kind
--- in its order (lean.h's scalar area: by decreasing size, so every field stands at a multiple of its size).
-def pkOff (s : PkS) (c : Int) (k off : Nat) : Nat :=
-  let w := pkField s (pkKey c off)
-  let j := off / 8
-  if w == 8 then 8 * pkCount s c 8 j
-  else if w == 4 then 8 * pkCount s c 8 k + 4 * pkCount s c 4 j
-  else if w == 2 then 8 * pkCount s c 8 k + 4 * pkCount s c 4 k + 2 * pkCount s c 2 j
-  else 8 * pkCount s c 8 k + 4 * pkCount s c 4 k + 2 * pkCount s c 2 k + pkCount s c 1 j
+def pkIsWide (wide : List Int) (c : Int) (off : Nat) : Bool := pkMem (pkKey c off) wide
 
-def pkSize (s : PkS) (c : Int) (k : Nat) : Nat :=
-  8 * pkCount s c 8 k + 4 * pkCount s c 4 k + 2 * pkCount s c 2 k + pkCount s c 1 k
+-- the offset of the field that was at `off`
+def pkOff (wide : List Int) (c : Int) (k off : Nat) : Nat :=
+  if pkIsWide wide c off then 8 * pkCount wide c true (off / 8)
+  else 8 * pkCount wide c true k + pkCount wide c false (off / 8)
 
-def pkInfo (s : PkS) (i : CtorInfo) : CtorInfo :=
-  if i.tid == 1 then { i with ssize := pkSize s ((i.cidx : Nat) : Int) (i.ssize / 8) } else i
+def pkSize (wide : List Int) (c : Int) (k : Nat) : Nat :=
+  8 * pkCount wide c true k + pkCount wide c false k
+
+def pkInfo (wide : List Int) (i : CtorInfo) : CtorInfo :=
+  if i.tid == 1 then { i with ssize := pkSize wide ((i.cidx : Nat) : Int) (i.ssize / 8) } else i
 
 mutual
 -- the body with the new layout; the environment holds the constructors as they were
-partial def pkRw (s : PkS) (env : List Int) (n : N) : N :=
+partial def pkRw (wide : List Int) (env : List Int) (n : N) : N :=
   if n.op == opVDecl then
     let e := vdeclExpr n
     let env2 := if e.op == opCtor then pkBind n.a (infoOf e) env else env
     let c := if e.op == opSProj then pkCidx ((sprojVar e : Nat) : Int) env else -1
     let e2 :=
-      if e.op == opCtor then withInfo e (pkInfo s (infoOf e))
+      if e.op == opCtor then withInfo e (pkInfo wide (infoOf e))
       else if c >= 0 then
         let k := pkSsize ((sprojVar e : Nat) : Int) env / 8
-        let w := pkField s (pkKey c (sprojOff e))
-        { e with b := ((pkOff s c k (sprojOff e) : Nat) : Int), c := (if w == 8 then 0 else (w : Int)) }
+        { e with b := ((pkOff wide c k (sprojOff e) : Nat) : Int), c := (if pkIsWide wide c (sprojOff e) then 0 else 1) }
       else e
-    { n with kids := [e2, pkRw s env2 (bodyOf n)] }
+    { n with kids := [e2, pkRw wide env2 (bodyOf n)] }
   else if n.op == opSSet then
     let c := pkCidx n.a env
     if c >= 0 then
       let k := pkSsize n.a env / 8
-      let w := pkField s (pkKey c (ssetOff n))
-      { n with c := ((pkOff s c k (ssetOff n) : Nat) : Int), d := (if w == 8 then n.d else tyOfWidth w),
-               kids := [pkRw s env (bodyOf n)] }
-    else setBody n (pkRw s env (bodyOf n))
-  else if n.op == opJDecl then { n with kids := [pkRw s env (jdeclBody n), pkRw s env (bodyOf n)] }
-  else if n.op == opCase then { n with kids := pkRwAlts s env n.a (caseAlts n) }
+      { n with c := ((pkOff wide c k (ssetOff n) : Nat) : Int), d := (if pkIsWide wide c (ssetOff n) then n.d else tyU8),
+               kids := [pkRw wide env (bodyOf n)] }
+    else setBody n (pkRw wide env (bodyOf n))
+  else if n.op == opJDecl then { n with kids := [pkRw wide env (jdeclBody n), pkRw wide env (bodyOf n)] }
+  else if n.op == opCase then { n with kids := pkRwAlts wide env n.a (caseAlts n) }
   else if n.op == opRet || n.op == opJmp || n.op == opUnreachable then n
-  else setBody n (pkRw s env (bodyOf n))
-partial def pkRwAlts (s : PkS) (env : List Int) (x : Int) : List N → List N
+  else setBody n (pkRw wide env (bodyOf n))
+partial def pkRwAlts (wide : List Int) (env : List Int) (x : Int) : List N → List N
   | [] => []
   | alt :: alts =>
     let env2 := if altIsDefault alt then env else pkBind x (infoOf alt) env
-    let alt2 := if altIsDefault alt then alt else withInfo alt (pkInfo s (infoOf alt))
-    altSetBody alt2 (pkRw s env2 (altBody alt)) :: pkRwAlts s env x alts
+    let alt2 := if altIsDefault alt then alt else withInfo alt (pkInfo wide (infoOf alt))
+    altSetBody alt2 (pkRw wide env2 (altBody alt)) :: pkRwAlts wide env x alts
 end
 
-def pkRwDecls (s : PkS) : List Decl → List Decl
+def pkRwDecls (wide : List Int) : List Decl → List Decl
   | [] => []
-  | d :: ds => (if d.ext then d else { d with body := pkRw s [] d.body }) :: pkRwDecls s ds
+  | d :: ds => (if d.ext then d else { d with body := pkRw wide [] d.body }) :: pkRwDecls wide ds
 
--- The pass. `wide`: are fields of two and four bytes laid out as such, or do they stay words. They are laid out so
--- under rsc's layer `narrow`, with the object fields of four bytes (lib/lrc/Pipeline.rsd option 2048): together the
--- layout of lean.h's 32-bit target. With object fields of eight bytes only the bytes are packed, as before: there
--- the one measured row whose node the widths change (rbtree in int32: 40 bytes to 32) pays more time than the
--- memory is worth while the heap serves a cell of 32 bytes slower than one of 40
--- (reports/backend-opt-fable/LAND-PACKW.md, "Not taken"). A byte field takes only values that are bytes, and a
--- value read from a field of two or four bytes is none, so making those fields words again leaves every byte
--- field what it is.
-def packScalarsW (wide : Bool) (decls : List Decl) : List Decl :=
-  let s := pkFix (dtOfList decls) decls { ok := true, w2 := [], w4 := [], w8 := [] }
-  let s := if wide then s else { s with w4 := s.w2, w8 := s.w2 }
-  if s.ok then pkRwDecls s decls else decls
-
--- the pass of the layout with object fields of eight bytes: bytes and words
-def packScalars (decls : List Decl) : List Decl := packScalarsW false decls
+def packScalars (decls : List Decl) : List Decl :=
+  let s := pkFix (dtOfList decls) decls { ok := true, wide := [] }
+  if s.ok then pkRwDecls s.wide decls else decls
 
 end Lrc
 
-end RscSourceModule_bc271fe82960e3927b2a15c5f75b6b2211e82e518e3789e028a68fb275eca405
+end RscSourceModule_f31bbee19058914c197f10b5463fdfdef6ce4a34525861f43830a1c854d6e54e
 section RscSourceModule_788204e607757fd66b050ba8245d868e09e93613ab55fa1fc872732db6e044d4
 namespace Lrc
 
@@ -10388,7 +9790,7 @@ def sinkInc : List Decl → List Decl
 end Lrc
 
 end RscSourceModule_aa1f4f9f5abeaa5696f48f5f462104c2e233759fbf608250d12d2240fad48e41
-section RscSourceModule_cb5538bf58d86fd4c26d282833256fe1605176150fd8a17a808f0284e57e6155
+section RscSourceModule_37b9be998a7ecb6d3e898ab4d09dcd3dc22ac544e84fac7d2c9b77b616948fca
 namespace Lrc
 
 -- the literals bound on this path: pairs x, value
@@ -10422,7 +9824,7 @@ def clPut : List Int → Nat → List Int → List Int
 
 -- the scalar area from its fields: triples offset, type, value
 def clImage (img : List Int) : List Int → List Int
-  | off :: ty :: v :: rest => clImage (clPut img off.toNat (clBytes (tyWidth ty) v)) rest
+  | off :: ty :: v :: rest => clImage (clPut img off.toNat (clBytes (if ty == tyU8 then 1 else 8) v)) rest
   | _ => img
 
 -- the `sset`s on x that follow directly: ok when each stores a literal
@@ -10477,8 +9879,8 @@ def closedCells : List Decl → List Decl
 
 end Lrc
 
-end RscSourceModule_cb5538bf58d86fd4c26d282833256fe1605176150fd8a17a808f0284e57e6155
-section RscSourceModule_838553436342bc6503fbe68024efcc7f7983c02e0559a98451d114c5c0a10837
+end RscSourceModule_37b9be998a7ecb6d3e898ab4d09dcd3dc22ac544e84fac7d2c9b77b616948fca
+section RscSourceModule_50769a5a45d0a9ad86218c0ff186c291113cdb33dfadb52a1d765a111b4a6c7b
 namespace Lrc
 
 /-! ## Intervals of i64 -/
@@ -10668,20 +10070,8 @@ structure RgEnv where
 
 def rgIv (env : RgEnv) (y : Int) : Iv := if y < 0 then ivTop else ivmFind env.iv y ivTop
 
--- the numbers of w bytes
-def rgOfWidth (w : Nat) : Iv :=
-  if w == 1 then { lo := 0, hi := 255 } else if w == 2 then { lo := 0, hi := 65535 }
-  else if w == 4 then { lo := 0, hi := 4294967295 } else ivTop
--- What a type says by itself: uint8, the type of `isShared`'s result and of a parameter that the wire types Bool or
--- declares with 8 bits. The wider declared widths (uint16 and uint32 on a parameter, lib/lrc/FromWire.rsd
--- `tysOfWidth`) say nothing here. An image function is entered from outside with any words (above), and a clone
--- has its parameters' facts from the calls inside the program. Read here, the width would clear the body that
--- assumes nothing, so that no clone is made; that was measured and is not taken
--- (reports/backend-opt-fable/LAND-PACKW.md, "Not taken").
-def rgOfType (ty : Int) (a : Iv) : Iv := if ty == tyU8 then ivMeet a (rgOfWidth 1) else a
--- what a store of type `ty` leaves in its field: a number of the bytes it writes (lib/lrc/Pack.rsd gives the
--- `sset` of a narrow field the type uint8, uint16 or uint32)
-def rgOfStore (ty : Int) (a : Iv) : Iv := if tyWidth ty < 8 then ivMeet a (rgOfWidth (tyWidth ty)) else a
+-- what a type says by itself
+def rgOfType (ty : Int) (a : Iv) : Iv := if ty == tyU8 then ivMeet a { lo := 0, hi := 255 } else a
 
 def rgBindIv (env : RgEnv) (x : Nat) (ty : Int) (a : Iv) : RgEnv :=
   if tyIsScalar ty then { env with iv := ivmSet env.iv (x : Int) (rgOfType ty a) } else env
@@ -10727,7 +10117,7 @@ def rgExpr (env : RgEnv) (s : RgS) (e : N) : Iv :=
     ivPrim (primOp e) (rgIv env (intAt 0 e.ys)) (rgIv env (intAt 1 e.ys))
   else if e.op == opSProj then
     let x := (sprojVar e : Int)
-    let of := rgOfWidth (sprojWidth e)
+    let of := if sprojByte e then { lo := 0, hi := 255 } else ivTop
     if s.poison || !ivmHas env.ck x then of
     else
       let c := ivmFind env.ck x ivTop
@@ -10750,14 +10140,6 @@ def rgRewrite (env : RgEnv) (e : N) (r : Iv) : N :=
     else if p == primMod && ivIsConst b && ivPow2 b.lo then
       { e with a := (primMask : Int), b := b.lo - 1, ys := [intAt 0 e.ys] }
     else e
-
--- is e a modulus that gives back its dividend: a word that is not negative and below every divisor it
--- can meet (the wire's modulus has the divisor's sign, lib/lrc/Emit.rsd `emMod`)
-def rgSame (env : RgEnv) (e : N) : Bool :=
-  e.op == opPrim && primOp e == primMod && intAt 0 e.ys >= 0 &&
-    (let a := rgIv env (intAt 0 e.ys)
-     let b := rgIv env (intAt 1 e.ys)
-     !ivIsBot a && !ivIsBot b && a.lo >= 0 && b.lo > a.hi)
 
 -- the alternative a word of value v selects: its body, or the default's
 def rgPick (v : Int) : List N → Option N
@@ -10803,11 +10185,6 @@ partial def rgGo (cx : RgCx) (env : RgEnv) (s : RgS) (n : N) : RgR :=
           { e with a := ((cx.base + (imFind cx.clonedAt f).toNat : Nat) : Int) }
         else e
       { s := r.s, node := { n with kids := [e1, r.node] } }
-    else if cx.rw && rgSame env e then
-      -- the binding goes, and what named it names the operand (NormIds.rsd `replaceVar`). It counts two:
-      -- the body that knows nothing about the operand turns the same modulus into a mask and counts one,
-      -- and a function whose parameters' facts take the masks away is worth its clone (`rgGains`)
-      rgGo cx env { s with used := s.used + 2 } (replaceVar x (intAt 0 e.ys).toNat (bodyOf n))
     else
       let v := rgExpr env s e
       let env1 := if e.op == opCtor || e.op == opReuse then
@@ -10823,7 +10200,7 @@ partial def rgGo (cx : RgCx) (env : RgEnv) (s : RgS) (n : N) : RgR :=
       else
         let c := ivmFind env.ck x ivTop
         let p := ivmJoin s.fs (rgKey { cidx := c.hi.toNat, size := 0, ssize := 0, tid := c.lo.toNat } (ssetN n) (ssetOff n))
-          (rgOfStore n.d (rgIv env (ssetArg n : Int))) cx.wide
+          (rgOfType n.d (rgIv env (ssetArg n : Int))) cx.wide
         { s with fs := p.t, changed := s.changed || p.changed }
     let r := rgGo cx env s1 (bodyOf n)
     { s := r.s, node := setBody n r.node }
@@ -11006,8 +10383,8 @@ def rangeFacts (nImg : Nat) (decls : List Decl) : List Decl :=
 
 end Lrc
 
-end RscSourceModule_838553436342bc6503fbe68024efcc7f7983c02e0559a98451d114c5c0a10837
-section RscSourceModule_22e6dcf740ed8c4269f9efaa25181edd830212ce1aba39bb9e2f1dacc5d5e6cd
+end RscSourceModule_50769a5a45d0a9ad86218c0ff186c291113cdb33dfadb52a1d765a111b4a6c7b
+section RscSourceModule_d0a5a629d553e5ce3d59b30ded160134b46fcf3431cee73cb2a89d372c28e341
 namespace Lrc
 
 mutual
@@ -11066,294 +10443,10 @@ def joinOnce : List Decl → List Decl
   | [] => []
   | d :: ds => declJoinOnce d :: joinOnce ds
 
-/-! ## A small join point at each of its jumps, and what a jump knows
-
-After the short forms of the integer operations are put where they are called (lib/lrc/Inline.rsd
-`inlineDecls`), the value of an operation reaches what follows through a join point with two jumps: the
-machine's result, boxed, and the result of the image's function. What follows asks again whether the
-value is a small number, takes its number out again and counts it down; on the first jump all three are
-known. Two steps, both over the forms the IR has:
-
-1. `joinSmall`: a join point whose body is small is put at each of its jumps that carries a literal or a
-   box, with the parameters replaced by the jump's arguments and its own bindings renamed (lib/lrc/NormIds.rsd `normGo`, as
-   lib/lrc/Inline.rsd `ilGo` copies a callee). Lean's simplifier does this for a small join point
-   (LCNF/Simp/Main.lean `inlineJp?`); lib/lrc/JoinOnce.rsd is the case of one jump.
-2. `foldKnown`: over each body, with what is known of a variable from its binding: a literal, or the box
-   of a number (`primBox`, `primBoxS`). The test for a small number of a box is 1; the number taken out of
-   a box with the same sign rule is the number that went in; `and` with 1 is the other operand and with 0
-   is 0 (its operands are the wire's Bool); a test on a known literal is its alternative; counting a box
-   up or down is nothing. This is constant propagation with the branches that a constant decides (Wegman
-   and Zadeck, Constant Propagation with Conditional Branches, TOPLAS 1991), along the bindings of one
-   body: a join point's parameters are not known.
-
-Sound because the IR's variables are bound once and every rule replaces an expression by one of the same
-value under lib/lrc/Prim.rsd's meaning of the primitives; a box is no heap object, so its count is
-nothing (lean.h `lean_inc`, `lean_dec` test `lean_is_scalar`).
-(This stands in this module and not in one of its own: the lists of the stage's modules are kept by hand in nine
-places until the chain is built by modules.) -/
-
--- a join point's body of at most `jsLimit` instructions goes to its jumps that carry something known; one of
--- at most `jsTiny` goes to every jump (a test's value passed on: the copy costs less than the jump saves)
-def jsLimit : Nat := 16
-def jsTiny : Nat := 4
-
-mutual
-partial def jsSize (n : N) : Nat :=
-  if n.op == opVDecl then 1 + jsSize (bodyOf n)
-  else if n.op == opJDecl then 1 + jsSize (jdeclBody n) + jsSize (bodyOf n)
-  else if n.op == opCase then 1 + jsSizeAlts (caseAlts n)
-  else if isTerminal n then 1
-  else 1 + jsSize (bodyOf n)
-partial def jsSizeAlts : List N → Nat
-  | [] => 0
-  | alt :: alts => jsSize (altBody alt) + jsSizeAlts alts
-end
-
-structure JsAlts where
-  next : Nat
-  alts : List N
-  deriving Inhabited
-
--- is one of the arguments a variable bound to a literal or to a box on the way to the jump
-def jsAnyKnown (known : List Int) : List Int → Bool
-  | [] => false
-  | y :: ys => (y >= 0 && known.contains y) || jsAnyKnown known ys
-
-mutual
--- Every jump to j that carries something known (a variable bound to a literal or to a box on the way to it:
--- `known`), or every jump with `all`, is replaced by a copy of v under the jump's arguments, its bindings
--- renamed from `next` on. Without `all` a jump that knows nothing of its arguments stays a jump: its copy
--- would fold to what the join point already is.
-partial def jsPut (all : Bool) (j : Nat) (ps : List Param) (v : N) (known : List Int) (n : N) (next : Nat) : NormR :=
-  if n.op == opJmp then
-    if jmpId n == j && (all || jsAnyKnown known (jmpArgs n)) then normGo v (joBind ps (jmpArgs n) imEmpty) next else { next := next, node := n }
-  else if n.op == opVDecl then
-    let e := vdeclExpr n
-    let box := e.op == opPrim && (primOp e == primBox || primOp e == primBoxS)
-    let r := jsPut all j ps v (if e.op == opLit || box then (vdeclVar n : Int) :: known else known) (bodyOf n) next
-    { next := r.next, node := { n with kids := [e, r.node] } }
-  else if n.op == opJDecl then
-    let a := jsPut all j ps v known (jdeclBody n) next
-    let b := jsPut all j ps v known (bodyOf n) a.next
-    { next := b.next, node := { n with kids := [a.node, b.node] } }
-  else if n.op == opCase then
-    let r := jsPutAlts all j ps v known (caseAlts n) next
-    { next := r.next, node := { n with kids := r.alts } }
-  else if isTerminal n then { next := next, node := n }
-  else
-    let r := jsPut all j ps v known (bodyOf n) next
-    { next := r.next, node := setBody n r.node }
-partial def jsPutAlts (all : Bool) (j : Nat) (ps : List Param) (v : N) (known : List Int) : List N → Nat → JsAlts
-  | [], next => { next := next, alts := [] }
-  | alt :: alts, next =>
-    let a := jsPut all j ps v known (altBody alt) next
-    let r := jsPutAlts all j ps v known alts a.next
-    { next := r.next, alts := altSetBody alt a.node :: r.alts }
-end
-
-mutual
-partial def jsGo (n : N) (next : Nat) : NormR :=
-  if n.op == opJDecl then
-    let v := jsGo (jdeclBody n) next
-    let b := jsGo (bodyOf n) v.next
-    if joCount (jdeclId n) b.node >= 2 && jsSize v.node <= jsLimit then
-      -- the join point stays for the jumps that know nothing; with no jump left it is gone
-      let r := jsPut (jsSize v.node <= jsTiny) (jdeclId n) (jdeclParams n) v.node [] b.node b.next
-      if joCount (jdeclId n) r.node == 0 then r else { next := r.next, node := { n with kids := [v.node, r.node] } }
-    else { next := b.next, node := { n with kids := [v.node, b.node] } }
-  else if n.op == opVDecl then
-    let r := jsGo (bodyOf n) next
-    { next := r.next, node := { n with kids := [vdeclExpr n, r.node] } }
-  else if n.op == opCase then
-    let r := jsAlts (caseAlts n) next
-    { next := r.next, node := { n with kids := r.alts } }
-  else if isTerminal n then { next := next, node := n }
-  else
-    let r := jsGo (bodyOf n) next
-    { next := r.next, node := setBody n r.node }
-partial def jsAlts : List N → Nat → JsAlts
-  | [], next => { next := next, alts := [] }
-  | alt :: alts, next =>
-    let a := jsGo (altBody alt) next
-    let r := jsAlts alts a.next
-    { next := r.next, alts := altSetBody alt a.node :: r.alts }
-end
-
-def declJoinSmall (d : Decl) : Decl := if d.ext then d else { d with body := (jsGo d.body (declMaxIndex d + 1)).node }
-
-def joinSmall : List Decl → List Decl
-  | [] => []
-  | d :: ds => declJoinSmall d :: joinSmall ds
-
-/-! ## What is known of a variable -/
-
--- what a binding says: x, kind, payload, ...; kind 1 a literal (the payload its value), 2 the box of the
--- number in variable `payload` (`primBox`), 3 the box with its sign (`primBoxS`)
-def knKind (x : Int) : List Int → Int
-  | y :: k :: _ :: rest => if x == y then k else knKind x rest
-  | _ => 0
-
-def knPay (x : Int) : List Int → Int
-  | y :: _ :: p :: rest => if x == y then p else knPay x rest
-  | _ => 0
-
-def knIsBox (x : Int) (env : List Int) : Bool := knKind x env == 2 || knKind x env == 3
-def knIsLit (x : Int) (v : Int) (env : List Int) : Bool := knKind x env == 1 && knPay x env == v
-
--- the alternative of a test on the literal v, when the test has one for it
-def knAlt (v : Int) : List N → Option N
-  | [] => none
-  | alt :: alts => if alt.op == opAltCtor && ((infoOf alt).cidx : Int) == v && (infoOf alt).tid == 0 then some (altBody alt) else knAlt v alts
-
-mutual
-partial def knGo (env : List Int) (n : N) : N :=
-  if n.op == opVDecl && n.ys.isEmpty then
-    let e := vdeclExpr n
-    let x : Int := (vdeclVar n : Int)
-    let rest := bodyOf n
-    let a := intAt 0 e.ys
-    let b := intAt 1 e.ys
-    if e.op == opLit then { n with kids := [e, knGo (x :: 1 :: e.a :: env) rest] }
-    else if e.op != opPrim then { n with kids := [e, knGo env rest] }
-    else if primOp e == primBox && a >= 0 then { n with kids := [e, knGo (x :: 2 :: a :: env) rest] }
-    else if primOp e == primBoxS && a >= 0 then { n with kids := [e, knGo (x :: 3 :: a :: env) rest] }
-    else if primOp e == primIsScalar && knIsBox a env then { n with kids := [mkLit 1, knGo (x :: 1 :: 1 :: env) rest] }
-    else if primOp e == primUnboxS && knKind a env == 3 then knGo env (replaceVar x.toNat (knPay a env).toNat rest)
-    else if primOp e == primUnbox && knKind a env == 2 then knGo env (replaceVar x.toNat (knPay a env).toNat rest)
-    else if primOp e == primAnd && (knIsLit a 0 env || knIsLit b 0 env) then { n with kids := [mkLit 0, knGo (x :: 1 :: 0 :: env) rest] }
-    else if primOp e == primAnd && knIsLit a 1 env && b >= 0 then knGo env (replaceVar x.toNat b.toNat rest)
-    else if primOp e == primAnd && knIsLit b 1 env && a >= 0 then knGo env (replaceVar x.toNat a.toNat rest)
-    else { n with kids := [e, knGo env rest] }
-  else if n.op == opVDecl then { n with kids := [vdeclExpr n, knGo env (bodyOf n)] }
-  else if n.op == opJDecl then { n with kids := [knGo env (jdeclBody n), knGo env (bodyOf n)] }
-  else if n.op == opCase then
-    if knKind (caseVar n : Int) env == 1 then
-      match knAlt (knPay (caseVar n : Int) env) (caseAlts n) with
-      | some body => knGo env body
-      | none => { n with kids := knAlts env (caseAlts n) }
-    else { n with kids := knAlts env (caseAlts n) }
-  else if isTerminal n then n
-  else if (n.op == opInc || n.op == opDec) && knIsBox (rcVar n : Int) env then knGo env (bodyOf n)
-  else setBody n (knGo env (bodyOf n))
-partial def knAlts (env : List Int) : List N → List N
-  | [] => []
-  | alt :: alts => altSetBody alt (knGo env (altBody alt)) :: knAlts env alts
-end
-
-def declFoldKnown (d : Decl) : Decl := if d.ext then d else { d with body := knGo [] d.body }
-
-def foldKnown : List Decl → List Decl
-  | [] => []
-  | d :: ds => declFoldKnown d :: foldKnown ds
-
-/-! ## A test goes down to the case that reads it
-
-EmitC writes `x = a == b; if (x == 0)` and leaves it to the C compiler, which makes it one compare and one
-branch. The wasm this stage writes is run as it is by a wasm engine, and there the word of the comparison is
-made, widened and tested again (V8 on nqueens' inner loop: three such words for each list element; the same
-module is at twice its native time). So the test and its branch are written as one by the emitter
-(lib/lrc/Emit.rsd `emTest`), and for that the binding has to stand directly before its case. Here it is
-brought there:
-
-  * a binding of a test whose one reader is a case further down, with only declarations of join points
-    between, moves down to that case (a `&&` of the source leaves the test above the join point that takes
-    its value);
-  * a case on the negation of a word is the case on the word, its alternatives exchanged.
-
-Only operators on words move (`lt`, `gt`, `eq`, `not`, the test of a small number): they read no memory, so
-nothing between can change them. Instruction selection of this kind is every code generator's (Aho, Sethi,
-Ullman, Compilers, 9.2: a relational operator followed by a conditional jump is one instruction); the
-exchange of the alternatives is `not` pushed into the branch. -/
-
-def cdIsTest (e : N) : Bool :=
-  e.op == opPrim &&
-    (primOp e == primLt || primOp e == primGt || primOp e == primEq || primOp e == primNot || primOp e == primIsScalar)
-
-def cdCountArgs (x : Int) : List Int → Nat
-  | [] => 0
-  | y :: ys => (if y == x then 1 else 0) + cdCountArgs x ys
-
-mutual
--- how many times x is read in a body
-partial def cdCount (x : Int) (n : N) : Nat :=
-  if n.op == opVDecl then cdCountArgs x (exprArgs (vdeclExpr n)) + cdCount x (bodyOf n)
-  else if n.op == opJDecl then cdCount x (jdeclBody n) + cdCount x (bodyOf n)
-  else if n.op == opCase then (if n.a == x then 1 else 0) + cdCountAlts x (caseAlts n)
-  else if n.op == opJmp then cdCountArgs x (jmpArgs n)
-  else if n.op == opRet then cdCountArgs x (retArgs n)
-  else if n.op == opUnreachable then 0
-  else cdCountArgs x (insUses n) + cdCount x (bodyOf n)
-partial def cdCountAlts (x : Int) : List N → Nat
-  | [] => 0
-  | alt :: alts => cdCount x (altBody alt) + cdCountAlts x alts
-end
-
--- is a case on the word x what stands below, past the join points declared on the way
-partial def cdCaseBelow (x : Int) (n : N) : Bool :=
-  if n.op == opJDecl then cdCaseBelow x (bodyOf n)
-  else n.op == opCase && n.a == x && tyIsScalar (caseTy n)
-
--- the body with the binding v directly before what stands below the join points declared on the way
-partial def cdPut (v : N) (n : N) : N :=
-  if n.op == opJDecl then { n with kids := [jdeclBody n, cdPut v (bodyOf n)] }
-  else { v with kids := [vdeclExpr v, n] }
-
--- the two bodies of a case on a truth value: for 0 and for 1
-structure CdTwo where
-  ok : Bool
-  zero : N
-  one : N
-  deriving Inhabited
-
-def cdTwo (alts : List N) : CdTwo :=
-  match alts with
-  | [a, b] =>
-    if !altIsDefault a && !altIsDefault b then
-      (if a.a == 0 && b.a == 1 then { ok := true, zero := altBody a, one := altBody b }
-       else if a.a == 1 && b.a == 0 then { ok := true, zero := altBody b, one := altBody a }
-       else { ok := false, zero := a, one := b })
-    else if !altIsDefault a && altIsDefault b then
-      (if a.a == 0 then { ok := true, zero := altBody a, one := altBody b }
-       else if a.a == 1 then { ok := true, zero := altBody b, one := altBody a }
-       else { ok := false, zero := a, one := b })
-    else if altIsDefault a && !altIsDefault b then
-      (if b.a == 0 then { ok := true, zero := altBody b, one := altBody a }
-       else if b.a == 1 then { ok := true, zero := altBody a, one := altBody b }
-       else { ok := false, zero := a, one := b })
-    else { ok := false, zero := a, one := b }
-  | _ => { ok := false, zero := n0 opUnreachable, one := n0 opUnreachable }
-
-mutual
-partial def cdGo (n : N) : N :=
-  if n.op == opVDecl then
-    let e := vdeclExpr n
-    let k := bodyOf n
-    if n.ys.isEmpty && cdIsTest e && k.op == opJDecl && cdCaseBelow n.a k && cdCount n.a k == 1 then
-      cdGo (cdPut n k)
-    else if n.ys.isEmpty && e.op == opPrim && primOp e == primNot && intAt 0 e.ys >= 0 && k.op == opCase && k.a == n.a
-        && tyIsScalar (caseTy k) && cdCount n.a k == 1 && (cdTwo (caseAlts k)).ok then
-      -- `not z` is 1 for z = 0 and 0 for every other word
-      let two := cdTwo (caseAlts k)
-      cdGo (mkCase (intAt 0 e.ys).toNat (caseTy k) [mkAltCtor (boolInfo 0) two.one, mkAltDefault two.zero])
-    else { n with kids := [e, cdGo k] }
-  else if n.op == opJDecl then { n with kids := [cdGo (jdeclBody n), cdGo (bodyOf n)] }
-  else if n.op == opCase then { n with kids := cdAlts (caseAlts n) }
-  else if isTerminal n then n
-  else setBody n (cdGo (bodyOf n))
-partial def cdAlts : List N → List N
-  | [] => []
-  | alt :: alts => altSetBody alt (cdGo (altBody alt)) :: cdAlts alts
-end
-
--- three rounds: the exchange leaves a case on a word whose own binding is above the join point
-def condDown : List Decl → List Decl
-  | [] => []
-  | d :: ds => (if d.ext then d else { d with body := cdGo (cdGo (cdGo d.body)) }) :: condDown ds
-
 end Lrc
 
-end RscSourceModule_22e6dcf740ed8c4269f9efaa25181edd830212ce1aba39bb9e2f1dacc5d5e6cd
-section RscSourceModule_8451c2a9599ded6f4d6bd25b568c91714ae23dcaf6965cce24215e8324a5f1f9
+end RscSourceModule_d0a5a629d553e5ce3d59b30ded160134b46fcf3431cee73cb2a89d372c28e341
+section RscSourceModule_5d9a8fcf514910e0fe912885b1be80525cd0c648f840e32e121154ee2d4b4134
 namespace Lrc
 
 def plPushProj : List Decl → List Decl
@@ -11427,12 +10520,7 @@ def plDeadResults : List Decl → List Decl
 -- `nImg` is the number of the image's functions.
 def pipelineWith (opts : Nat) (nImg : Nat) (decls : List Decl) : List Decl :=
   let inl := opts % 4
-  -- the six r2 forms become r1 forms before anything reads them (lib/lrc/Closures.rsd); an r1 program is unchanged.
-  -- Option 2048: the module's object fields are four bytes (rsc's layer `narrow`), which is another box for a
-  -- scalar of 32 bits here, and a node's scalar fields of two and four bytes below (lib/lrc/Pack.rsd
-  -- `packScalarsW`); no other pass reads the option.
-  let decls := lowerR2N (opts / 2048 % 2 == 1) decls
-  let decls := if opts / 16 % 2 == 0 then packScalarsW (opts / 2048 % 2 == 1) decls else decls
+  let decls := if opts / 16 % 2 == 0 then packScalars decls else decls
   -- range facts (lib/lrc/Range.rsd) on the declarations as translated: every scalar still goes
   -- into a fresh `ctor`; before the constant cells, whose scalars no store shows
   -- A function called once goes into its caller first: a clone made below would give it a second call.
@@ -11475,20 +10563,11 @@ def pipelineWith (opts : Nat) (nImg : Nat) (decls : List Decl) : List Decl :=
   let ds := plDropSpec ds
   -- Lean's second pushProj, going on past literals and operators (lib/lrc/SinkProj.rsd)
   let ds := sinkProj ds
-  -- after the inlining the reads go down once more: into the code that followed an inlined call. Before that
-  -- a small join point goes to each of its jumps and what a jump knows is folded (lib/lrc/JoinOnce.rsd
-  -- `joinSmall`, `foldKnown`): the short form of an integer operation jumps with a box.
-  -- The three run twice: `a && b && c` is a join point inside a join point, and the outer one is small
-  -- enough for its jumps only when the inner one has gone to its own (nqueens-kk's `safe`: the jump that
-  -- carries `false` then returns at once, and the other jump is the last, so the test it carries is read
-  -- by a case directly below it).
-  let ds := if inl == 2 then
-      sinkProj (guardElim nImg (joinOnce (foldKnown (joinSmall (joinOnce (foldKnown (joinSmall (inlineDecls nImg ds))))))))
-    else ds
+  -- after the inlining the reads go down once more: into the code that followed an inlined call
+  let ds := if inl == 2 then sinkProj (guardElim nImg (joinOnce (inlineDecls nImg ds))) else ds
   let ds := if opts / 8 % 2 == 0 then trmc nImg (opts / 256 % 4) ds else ds
-  -- last: where the fuel is known to be above 1, a self tail call need not test it; and a test stands
-  -- directly before the case that reads it (lib/lrc/JoinOnce.rsd `condDown`)
-  condDown (fuelKnown nImg ds)
+  -- last: where the fuel is known to be above 1, a self tail call need not test it
+  fuelKnown nImg ds
 
 -- The options the stage runs with unless a layer bit says otherwise: inlining after the passes.
 -- Measured on one VM (job fable-bo-native2, the native route): rbtree 2973 ms without it, 2651
@@ -11500,7 +10579,7 @@ def pipeline (nImg : Nat) (decls : List Decl) : List Decl := pipelineWith pipeli
 
 end Lrc
 
-end RscSourceModule_8451c2a9599ded6f4d6bd25b568c91714ae23dcaf6965cce24215e8324a5f1f9
+end RscSourceModule_5d9a8fcf514910e0fe912885b1be80525cd0c648f840e32e121154ee2d4b4134
 section RscSourceModule_bf2473f3c42f6f291b7bdb8dcee426192425f9639d893687b449982273e0ac59
 namespace Lrc
 
@@ -11895,7 +10974,7 @@ def ocTagsOf (c : Oc) (f x : Nat) : List Int := ocListOf c.tags (ocFind c (ocVar
 end Lrc
 
 end RscSourceModule_bf2473f3c42f6f291b7bdb8dcee426192425f9639d893687b449982273e0ac59
-section RscSourceModule_9d4af98ce016c7640170f4a6bea5be5ec0fc81a5aa436d532ba76b8b33b9d5c6
+section RscSourceModule_2a8a4f86fe23b5e2738ad256161b52241465d61c3bcf366c23749f32eb59813a
 namespace Lrc
 
 -- The stage's refusals of an image, one constructor for each cause. `fn` is the function the stage
@@ -12110,13 +11189,6 @@ def fwSlice (g : Dg) (recTy : List Int) (i : Nat) : SliceR :=
     let n := readLeb bs
     if n.ok != profile.cOk || n.n < 0 then sliceFail else fwSliceGo g i 0 n.n.toNat n.rest
   | _ => sliceFail
-
--- the IR type of a parameter or a result whose wire type is a Bool (`bool`) or a scalar of `w` declared bits (the type
--- table's tag 11, contracts/tasks/WIRE-SEQ-0.md revision 2; lib/RscBase.rsd `readSigWs` reads the widths of a
--- signature): lean.h's uint8, uint16, uint32; `ts` for anything else. lib/lrc/Pack.rsd and lib/lrc/Range.rsd read
--- the type there; a value's type inside a body stays the word.
-def tysOfWidth (bool : Bool) (w : Int) (ts : List Int) : List Int :=
-  if bool || w == 8 then [tyU8] else if w == 16 then [tyOfWidth 2] else if w == 32 then [tyOfWidth 4] else ts
 
 -- the types of a function's parameters, one run per parameter, and of its result
 structure SigR where
@@ -12457,13 +11529,6 @@ structure Cx where
   arr : Bool := false
   -- `mag` names the functions that pack numbers into a node ("Numbers in nodes")
   num : Bool := false
-  -- The v1 Nat-to-UInt32 conversion can use the short form for an immediate Nat.
-  shortNatWord : Bool := false
-  -- an object field is four bytes (rsc's layer `narrow`): a small number has the bounds of `magLimsOf true`
-  narrow : Bool := false
-  -- the declared widths of each function's signature, its parameters' and then its result's (lib/RscBase.rsd
-  -- `readSigWs`); none: no width is known
-  ws : List (List Int) := []
 
 structure TV where
   ok : Bool
@@ -13225,41 +12290,19 @@ lists as before); what the stage builds is small whenever it can be. -/
 -- the limbs of the largest magnitude that is written as a small number: below 256^7 = 2^56
 def magLimbs : Nat := 7
 
--- The bounds of a small number. Where an object field is eight bytes they are the ones above. Where it is four
--- (rsc's layer `narrow`, docs/OBJECT-ABI.md "Narrow fields") a word in a field has 32 bits, and the bounds are
--- lean.h's on a target with pointers of four bytes (`LEAN_MAX_SMALL_NAT`, `LEAN_MAX_SMALL_INT`, `LEAN_MIN_SMALL_INT`):
--- a magnitude below `nat` is a small number; an integer whose magnitude is below `int` is a small integer; two
--- factors below `half`, either way, have a product that is both; a list of at most `limbs` limbs may be a small
--- number. `narrow`: these are the narrow bounds, under which `limbs` limbs can hold a number that is not below
--- `nat`, and a small number can be the magnitude of an integer that is not small.
-structure MagLims where
-  nat : Int
-  int : Int
-  half : Int
-  limbs : Nat
-  narrow : Bool
-  deriving Inhabited
-
-def magLimsOf (narrow : Bool) : MagLims :=
-  if narrow then { nat := 2147483648, int := 1073741824, half := 32768, limbs := 4, narrow := true }
-  else { nat := 72057594037927936, int := 72057594037927936, half := 268435456, limbs := magLimbs, narrow := false }
-
 -- natOfGo orig rest acc mul k: `rest` is what is left of the list `orig`, `acc` the value of the k
 -- limbs before it, and mul = 256^k. The small number, or `orig` itself when it has more limbs.
-def declNatOfGo (n : Nat) (lims : MagLims) : Decl :=
+def declNatOfGo (n : Nat) : Decl :=
   let self := hNatOfGo n
   let call := mkVDecl 16 tyTObj (mkFap self [1, 9, 11, 13, 15]) (mkRet [16])
   let count := mkVDecl 14 tyI64 (mkLit 1) (mkVDecl 15 tyI64 (mkPrim primAddW 0 0 [5, 14]) call)
   let scale := mkVDecl 12 tyI64 (mkLit 256) (mkVDecl 13 tyI64 (mkPrim primMulW 0 0 [4, 12]) count)
   let sum := mkVDecl 10 tyI64 (mkPrim primMulW 0 0 [8, 4]) (mkVDecl 11 tyI64 (mkPrim primAddW 0 0 [3, 10]) scale)
   let more := mkVDecl 8 tyI64 (mkSProj 1 0 2) (mkVDecl 9 tyTObj (mkProj 0 2) sum)
-  let cell := mkVDecl 6 tyI64 (mkLit (lims.limbs : Int)) (mkVDecl 7 tyI64 (mkPrim primEq 0 0 [5, 6]) (mkIfW 7 (mkRet [1]) more))
-  let boxed := mkVDecl 17 tyTObj (mkPrim primBox 0 0 [3]) (mkRet [17])
-  -- under the narrow bounds the limbs can hold a number that is no small number: the list stays
-  let done := if lims.narrow then mkVDecl 18 tyI64 (mkLit lims.nat) (mkVDecl 19 tyI64 (mkPrim primLt 0 0 [3, 18]) (mkIfW 19 boxed (mkRet [1])))
-    else boxed
+  let cell := mkVDecl 6 tyI64 (mkLit (magLimbs : Int)) (mkVDecl 7 tyI64 (mkPrim primEq 0 0 [5, 6]) (mkIfW 7 (mkRet [1]) more))
   { f := self, xs := [pT 1, pT 2, pI 3, pI 4, pI 5], rets := [tyTObj], ext := false,
-    body := mkCase 2 tyTObj [mkAltCtor nilInfo done, mkAltCtor (consInfo lsScalar) cell] }
+    body := mkCase 2 tyTObj
+      [mkAltCtor nilInfo (mkVDecl 17 tyTObj (mkPrim primBox 0 0 [3]) (mkRet [17])), mkAltCtor (consInfo lsScalar) cell] }
 
 -- natOf l: the magnitude's word of a limb list
 def declNatOf (n : Nat) : Decl :=
@@ -13336,17 +12379,13 @@ def declIntMag (n : Nat) : Decl :=
 
 -- The word of the integer of sign s (variable 1) and magnitude word m (variable 2): the small integer when m is
 -- a small number and the integer is not the wire's zero below zero; the object otherwise.
-def declIntOf (n : Nat) (lims : MagLims) : Decl :=
+def declIntOf (n : Nat) : Decl :=
   let obj := mkVDecl 20 tyTObj (mkCtor intBoxInfo [2]) (mkSSet 20 1 0 1 tyI64 (mkRet [20]))
   let boxed := mkVDecl 11 tyI64 (mkPrim primMulW 0 0 [3, 10]) (mkVDecl 12 tyTObj (mkPrim primBoxS 0 0 [11]) (mkRet [12]))
   let turn := mkVDecl 9 tyI64 (mkLit 1) (mkVDecl 10 tyI64 (mkPrim primSubW 0 0 [9, 8]) boxed)
   let word := mkVDecl 7 tyI64 (mkLit 2) (mkVDecl 8 tyI64 (mkPrim primMulW 0 0 [1, 7]) turn)
   let below := mkVDecl 6 tyI64 (mkPrim primAnd 0 0 [1, 5]) (mkIfW 6 (mkJmp 30 []) word)
-  let zero := mkVDecl 4 tyI64 (mkLit 0) (mkVDecl 5 tyI64 (mkPrim primEq 0 0 [3, 4]) below)
-  -- under the narrow bounds a small number can be above a small integer's magnitude: the object then
-  let fits := if lims.narrow then mkVDecl 14 tyI64 (mkLit lims.int) (mkVDecl 15 tyI64 (mkPrim primLt 0 0 [3, 14]) (mkIfW 15 zero (mkJmp 30 [])))
-    else zero
-  let small := mkVDecl 3 tyI64 (mkPrim primUnbox 0 0 [2]) fits
+  let small := mkVDecl 3 tyI64 (mkPrim primUnbox 0 0 [2]) (mkVDecl 4 tyI64 (mkLit 0) (mkVDecl 5 tyI64 (mkPrim primEq 0 0 [3, 4]) below))
   -- the sign is a Bool: its parameter has the IR type of one, as an image function's has (lib/lrc/Pack.rsd reads it)
   { f := hIntOf n, xs := [{ x := 1, borrow := false, ty := tyU8 }, pT 2], rets := [tyTObj], ext := false,
     body := mkJDecl 30 [] obj (mkVDecl 13 tyI64 (mkPrim primIsScalar 0 0 [2]) (mkIfW 13 small (mkJmp 30 []))) }
@@ -13373,7 +12412,7 @@ def magField (g : Dg) (ty : List Int) : Int :=
   if v == natRecTy then 0 else if v == intRecTy then 1 else -1
 
 -- An integer's record written out, `bs` at its first field's name: a literal sign, then the magnitude as a literal
--- of at most `lims.limbs` limbs and below `lims.int`, and not the zero below zero. `n` is the integer.
+-- of at most `magLimbs` limbs, and not the zero below zero. `n` is the integer.
 structure IntLit where
   ok : Bool
   n : Int
@@ -13393,7 +12432,7 @@ def litMag : Nat → List Int → Int
     if litLimb e >= 0 && rest >= 0 then litLimb e + 256 * rest else -1
   | _, _ => -1
 
-def intLit (lims : MagLims) (g : Dg) (bs : List Int) : IntLit :=
+def intLit (g : Dg) (bs : List Int) : IntLit :=
   let nm := skipName bs
   if nm.ok != profile.cOk then { ok := false, n := 0 }
   else
@@ -13402,8 +12441,8 @@ def intLit (lims : MagLims) (g : Dg) (bs : List Int) : IntLit :=
       match drE g (skipE g profile.v2Fuel nm.rest).rest with
       | 34 :: bs2 =>
         let nm2 := skipName bs2
-        let v := if nm2.ok == profile.cOk && magNameAt intMagName bs2 then litMag lims.limbs (drE g nm2.rest) else -1
-        if v < 0 || v >= lims.int || (sign != 0 && v == 0) then { ok := false, n := 0 } else { ok := true, n := if sign != 0 then 0 - v else v }
+        let v := if nm2.ok == profile.cOk && magNameAt intMagName bs2 then litMag magLimbs (drE g nm2.rest) else -1
+        if v < 0 || (sign != 0 && v == 0) then { ok := false, n := 0 } else { ok := true, n := if sign != 0 then 0 - v else v }
       | _ => { ok := false, n := 0 }
     | _ => { ok := false, n := 0 }
 
@@ -13641,8 +12680,9 @@ caller's fuel. Signs are the words 0 and 1 (1: below zero). The short form takes
 own, so a program may come to its value on a smaller budget than its limb lists would need; it
 never refuses where they would not. -/
 
--- the bounds the short forms test are `MagLims` ("Magnitudes"): 2^56 for a small number and 2^28 for two factors
--- whose product is one, or the narrow ones
+-- 2^56 and 2^28: the bound of a small number, and a bound on two factors whose product is one
+def magLim : Int := 72057594037927936
+def magHalf : Int := 268435456
 
 def magI (x : Nat) (p : Nat) (ys : List Int) : N := mkVDecl x tyI64 (mkPrim p 0 0 ys) mkUnreachable
 def magL (x : Nat) (v : Int) : N := mkVDecl x tyI64 (mkLit v) mkUnreachable
@@ -13669,18 +12709,18 @@ structure MagWrap where
   deriving Inhabited
 
 -- operations 1 to 5 and 12 to 15: two natural numbers
-def magNat (lims : MagLims) (op : Int) (a b v j : Nat) (rty : Int) : N :=
+def magNat (op : Int) (a b v j : Nat) (rty : Int) : N :=
   let x : Int := ((v + 3 : Nat) : Int)
   let y : Int := ((v + 4 : Nat) : Int)
   if op == 1 then
-    let sum := [magI (v + 5) primAddW [x, y], magL (v + 6) lims.nat, magI (v + 7) primLt [((v + 5 : Nat) : Int), ((v + 6 : Nat) : Int)]]
+    let sum := [magI (v + 5) primAddW [x, y], magL (v + 6) magLim, magI (v + 7) primLt [((v + 5 : Nat) : Int), ((v + 6 : Nat) : Int)]]
     magBoth a b v j (assemble sum (mkIfW (v + 7) (assemble [magBox (v + 8) (v + 5)] (mkRet [((v + 8 : Nat) : Int)])) (mkJmp j [])))
   else if op == 2 then
     let zero := assemble [magL (v + 6) 0, magBox (v + 7) (v + 6)] (mkRet [((v + 7 : Nat) : Int)])
     let diff := assemble [magI (v + 8) primSubW [x, y], magBox (v + 9) (v + 8)] (mkRet [((v + 9 : Nat) : Int)])
     magBoth a b v j (assemble [magI (v + 5) primLt [x, y]] (mkIfW (v + 5) zero diff))
   else if op == 3 then
-    let small := [magL (v + 5) lims.half, magI (v + 6) primLt [x, ((v + 5 : Nat) : Int)], magI (v + 7) primLt [y, ((v + 5 : Nat) : Int)],
+    let small := [magL (v + 5) magHalf, magI (v + 6) primLt [x, ((v + 5 : Nat) : Int)], magI (v + 7) primLt [y, ((v + 5 : Nat) : Int)],
       magI (v + 8) primAnd [((v + 6 : Nat) : Int), ((v + 7 : Nat) : Int)]]
     let prod := assemble [magI (v + 9) primMulW [x, y], magBox (v + 10) (v + 9)] (mkRet [((v + 10 : Nat) : Int)])
     magBoth a b v j (assemble small (mkIfW (v + 8) prod (mkJmp j [])))
@@ -13701,27 +12741,27 @@ def magBothS (a b v j : Nat) (fast : N) : N :=
   let nums := [magI (v + 3) primUnboxS [(a : Int)], magI (v + 4) primUnboxS [(b : Int)]]
   assemble test (mkIfW (v + 2) (assemble nums fast) (mkJmp j []))
 
--- the word of the number in r, returned when its magnitude is a small integer's (below `lims.int` either way: 2^56)
-def magOfS (lims : MagLims) (r v j : Nat) : N :=
+-- the word of the number in r, returned when its magnitude is a small number's (below 2^56 either way)
+def magOfS (r v j : Nat) : N :=
   let w := v + 14
-  let parts := [magL w lims.int, magI (w + 1) primLt [(r : Int), (w : Int)], magL (w + 2) (0 - lims.int),
+  let parts := [magL w magLim, magI (w + 1) primLt [(r : Int), (w : Int)], magL (w + 2) (0 - magLim),
     magI (w + 3) primLt [((w + 2 : Nat) : Int), (r : Int)], magI (w + 4) primAnd [((w + 1 : Nat) : Int), ((w + 3 : Nat) : Int)]]
   assemble parts (mkIfW (w + 4) (assemble [mkVDecl (w + 5) tyTObj (mkPrim primBoxS 0 0 [(r : Int)]) mkUnreachable] (mkRet [((w + 5 : Nat) : Int)])) (mkJmp j []))
 
 -- operations 6 to 10 and 16 to 19: two integers, each one word
-def magInt (lims : MagLims) (op : Int) (a b v j : Nat) (rty : Int) : N :=
+def magInt (op : Int) (a b v j : Nat) (rty : Int) : N :=
   let x : Int := ((v + 3 : Nat) : Int)
   let y : Int := ((v + 4 : Nat) : Int)
   let r := v + 13
-  if op == 6 then magBothS a b v j (assemble [magI r primAddW [x, y]] (magOfS lims r v j))
-  else if op == 7 then magBothS a b v j (assemble [magI r primSubW [x, y]] (magOfS lims r v j))
+  if op == 6 then magBothS a b v j (assemble [magI r primAddW [x, y]] (magOfS r v j))
+  else if op == 7 then magBothS a b v j (assemble [magI r primSubW [x, y]] (magOfS r v j))
   else if op == 8 then
-    -- two factors below `lims.half` either way (2^28): the product is a small integer
-    let small := [magL (v + 30) lims.half, magL (v + 31) (0 - lims.half), magI (v + 32) primLt [x, ((v + 30 : Nat) : Int)],
+    -- two factors below 2^28 either way: the product is a small integer
+    let small := [magL (v + 30) magHalf, magL (v + 31) (0 - magHalf), magI (v + 32) primLt [x, ((v + 30 : Nat) : Int)],
       magI (v + 33) primLt [((v + 31 : Nat) : Int), x], magI (v + 34) primLt [y, ((v + 30 : Nat) : Int)], magI (v + 35) primLt [((v + 31 : Nat) : Int), y],
       magI (v + 36) primAnd [((v + 32 : Nat) : Int), ((v + 33 : Nat) : Int)], magI (v + 37) primAnd [((v + 34 : Nat) : Int), ((v + 35 : Nat) : Int)],
       magI (v + 38) primAnd [((v + 36 : Nat) : Int), ((v + 37 : Nat) : Int)]]
-    magBothS a b v j (assemble small (mkIfW (v + 38) (assemble [magI r primMulW [x, y]] (magOfS lims r v j)) (mkJmp j [])))
+    magBothS a b v j (assemble small (mkIfW (v + 38) (assemble [magI r primMulW [x, y]] (magOfS r v j)) (mkJmp j [])))
   else if op == 9 || op == 10 then
     -- only for two numbers that are not below zero and a divisor that is not zero: every convention of a quotient agrees there
     let test := [magL (v + 5) 0, magI (v + 6) primLt [x, ((v + 5 : Nat) : Int)], magI (v + 7) primLt [y, ((v + 5 : Nat) : Int)],
@@ -13745,17 +12785,13 @@ def magNeg (a v j : Nat) : N :=
     (mkRet [((v + 4 : Nat) : Int)])
   assemble [magI v primIsScalar [(a : Int)]] (mkIfW v small (mkJmp j []))
 
--- An immediate natural is its own word (operation 30), or its low bits (UInt.ofNat).
-def magToWord (m v j : Nat) (mask : Int) : N :=
-  let word := v + 1
-  let finish := if mask < 0 then mkRet [(word : Int)]
-    else mkVDecl (v + 2) tyI64 (mkPrim primMask mask 0 [(word : Int)]) (mkRet [((v + 2 : Nat) : Int)])
-  let small := mkVDecl word tyI64 (mkPrim primUnbox 0 0 [(m : Int)]) finish
-  assemble [magI v primIsScalar [(m : Int)]] (mkIfW v small (mkJmp j []))
+-- operation 30: the word of a natural number (the front end's function gives the largest word for a number above it): a small number's own
+def magToWord (m v j : Nat) : N :=
+  assemble [magI v primIsScalar [(m : Int)]] (mkIfW v (assemble [magI (v + 1) primUnbox [(m : Int)]] (mkRet [((v + 1 : Nat) : Int)])) (mkJmp j []))
 
--- operation 31: the natural number of a word: a word from 0 to below `lims.nat` (2^56) is a small number
-def magOfWord (lims : MagLims) (w v j : Nat) : N :=
-  let test := [magL v 0, magI (v + 1) primLt [(w : Int), (v : Int)], magI (v + 2) primNot [((v + 1 : Nat) : Int)], magL (v + 3) lims.nat,
+-- operation 31: the natural number of a word: a word from 0 to below 2^56 is a small number
+def magOfWord (w v j : Nat) : N :=
+  let test := [magL v 0, magI (v + 1) primLt [(w : Int), (v : Int)], magI (v + 2) primNot [((v + 1 : Nat) : Int)], magL (v + 3) magLim,
     magI (v + 4) primLt [(w : Int), ((v + 3 : Nat) : Int)], magI (v + 5) primAnd [((v + 2 : Nat) : Int), ((v + 4 : Nat) : Int)]]
   assemble test (mkIfW (v + 5) (assemble [magBox (v + 6) w] (mkRet [((v + 6 : Nat) : Int)])) (mkJmp j []))
 
@@ -13763,7 +12799,7 @@ def magOfWord (lims : MagLims) (w v j : Nat) : N :=
 -- not ok when d has not the operation's parameters and results (then d stays as it is). An
 -- operation numbered 100 higher has its right operand as the function's first parameter, which is
 -- how the front end writes a difference, a quotient and a remainder (`magOps` says which, from a run).
-def magWrap (lims : MagLims) (op0 : Int) (d : Decl) (slow : Nat) (mask : Int) : MagWrap :=
+def magWrap (op0 : Int) (d : Decl) (slow : Nat) : MagWrap :=
   let rev := op0 >= 100
   let op := if rev then op0 - 100 else op0
   let v := magTop d.xs + 1
@@ -13786,11 +12822,10 @@ def magWrap (lims : MagLims) (op0 : Int) (d : Decl) (slow : Nat) (mask : Int) : 
   let one := d.xs.length == 1 && d.rets.length == 1
   let pty := (d.xs.headD { x := 0, borrow := false, ty := tyIrr }).ty
   let neg := one && pty == tyTObj && rty == tyTObj && op0 == 11
-  if one && (op0 == 30 || mask >= 0) && pty == tyTObj && rty == tyI64 then
-    { ok := true, body := mkJDecl j [] slowly (magToWord y0 v j mask) }
-  else if one && op0 == 31 && pty == tyI64 && rty == tyTObj then { ok := true, body := mkJDecl j [] slowly (magOfWord lims y0 v j) }
-  else if nat then { ok := true, body := mkJDecl j [] slowly (magNat lims op x0 x1 v j rty) }
-  else if int2 || cmp then { ok := true, body := mkJDecl j [] slowly (magInt lims op x0 x1 v j rty) }
+  if one && op0 == 30 && pty == tyTObj && rty == tyI64 then { ok := true, body := mkJDecl j [] slowly (magToWord y0 v j) }
+  else if one && op0 == 31 && pty == tyI64 && rty == tyTObj then { ok := true, body := mkJDecl j [] slowly (magOfWord y0 v j) }
+  else if nat then { ok := true, body := mkJDecl j [] slowly (magNat op x0 x1 v j rty) }
+  else if int2 || cmp then { ok := true, body := mkJDecl j [] slowly (magInt op x0 x1 v j rty) }
   else if neg then { ok := true, body := mkJDecl j [] slowly (magNeg y0 v j) }
   else { ok := false, body := d.body }
 
@@ -13821,15 +12856,12 @@ def declLenA (n shape : Nat) : Decl :=
   { f := hLenA n shape, xs := [pT 1], rets := [tyI64], ext := false,
     body := mkVDecl 2 tyI64 (mkPrim primIsArr 0 0 [1]) (mkIfW 2 size walk) }
 
--- `narrow`: the bounds of a small number in the module are the narrow ones (`magLimsOf`); the functions that make
--- one from a list read them
-def helperDecls (n : Nat) (narrow : Bool := false) : List Decl :=
-  let lims := magLimsOf narrow
+def helperDecls (n : Nat) : List Decl :=
   [declLen n lsScalar, declLen n lsObject, declDrop n lsScalar, declDrop n lsObject,
    declRev n lsScalar, declRev n lsObject, declApp n lsScalar, declApp n lsObject, declEq n,
-   declNatOf n, declNatOfGo n lims, declNatDigits n, declDigitsGo n, declMagEq n,
+   declNatOf n, declNatOfGo n, declNatDigits n, declDigitsGo n, declMagEq n,
    declLenA n lsScalar, declLenA n lsObject,
-   declIntSign n, declIntMag n, declIntOf n lims, declIntEq n]
+   declIntSign n, declIntMag n, declIntOf n, declIntEq n]
 
 -- The list in word `w` as cells: a fresh word, which takes the place of `w` ("Arrays"). In an
 -- image without arrays, and for the irrelevant word, `w` itself.
@@ -13928,23 +12960,6 @@ def afterPrefix : List Int → List Int → Option (List Int)
   | [], rest => some rest
   | x :: xs, y :: ys => if x == y then afterPrefix xs ys else none
   | _ :: _, [] => none
-
--- The complete v1 body of the Nat-to-UInt32 composition (rsdc/Compile.rsd, magnitudeNatWord*Bound).
--- It reverses the base-256 limbs of v0 and folds from 0 with (acc * 256 + digit) % modulus.
--- For an immediate number this is just unbox and mask, as in Lean 4.14's lean_uint32_of_nat.
--- Check the body, including both fold types, the projection and every variable and constant.
--- Check the UInt32 modulus as well. A different body uses ordinary lowering.
-def natWordMask (body : List Int) : Int :=
-  if body.headD 0 != 50 then -1
-  else
-    let reverseLimbs := [50, 4, 0, 50, 4, 0, 35] ++ natRecTy ++ [0, 3, 0, 22, 26, 23, 3, 0, 3, 1]
-    let zero : List Int := [0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
-    let step : List Int := [11, 6, 8, 3, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 3, 0, 0]
-    match afterPrefix (reverseLimbs ++ zero ++ step) body with
-    | some modulus =>
-      let m := readLeafI64 modulus
-      if m.ok == profile.cOk && m.n == 4294967296 then 4294967295 else -1
-    | none => -1
 
 -- an expression that reads neither of the two innermost variables (the loop's element and its accumulator)
 def fvOuter (g : Dg) (e : List Int) : FvR :=
@@ -14077,9 +13092,7 @@ partial def eqItems (cx : Cx) (ty : List Int) (wa wb : List Int) (next : Nat) : 
         let b := intAt 0 wb
         let j := next + 3
         let r := next + 4
-        -- the numbers with their signs, as the short forms box them: what a jump knows of a box then folds
-        -- (lib/lrc/JoinOnce.rsd `foldKnown`)
-        let small := assemble [magI (next + 5) primUnboxS [a], magI (next + 6) primUnboxS [b], magI (next + 7) primEq [((next + 5 : Nat) : Int), ((next + 6 : Nat) : Int)]]
+        let small := assemble [magI (next + 5) primUnbox [a], magI (next + 6) primUnbox [b], magI (next + 7) primEq [((next + 5 : Nat) : Int), ((next + 6 : Nat) : Int)]]
           (mkJmp j [((next + 7 : Nat) : Int)])
         let other := mkVDecl (next + 8) tyI64 (mkFap (hIntEq cx.n) [a, b]) (mkJmp j [((next + 8 : Nat) : Int)])
         { ok := wa.length == 1 && wb.length == 1, next := next + 9, r := (r : Int),
@@ -14534,9 +13547,9 @@ partial def trValV (cx : Cx) (want : List Int) (env : List Val) (facts : List In
             if !e.ok then tvFail fwType bs
             else { ok := true, err := none, next := e.next, items := a.items ++ b.items ++ e.items, val := valWords [e.r] [tyI64], rest := after }
     else if tag == 33 then { ok := true, err := none, next := next, items := [], val := valNone, rest := after }
-    else if tag == 34 && magNameAt intSgnName bs && (intLit (magLimsOf cx.narrow) cx.g bs).ok then
+    else if tag == 34 && magNameAt intSgnName bs && (intLit cx.g bs).ok then
       -- an integer written out: its word ("An integer is one word")
-      let i := (intLit (magLimsOf cx.narrow) cx.g bs).n
+      let i := (intLit cx.g bs).n
       { ok := true, err := none, next := next + 2,
         items := [mkVDecl next tyI64 (mkLit i) mkUnreachable, mkVDecl (next + 1) tyTObj (mkPrim primBoxS 0 0 [(next : Int)]) mkUnreachable],
         val := valWords [((next + 1 : Nat) : Int)] [tyTObj], rest := after }
@@ -14546,11 +13559,9 @@ partial def trValV (cx : Cx) (want : List Int) (env : List Val) (facts : List In
       else
         -- the field's type and the type of the fields that follow, from the record type of the place
         let rh := wtRecHead cx.g want
-        -- a magnitude: a literal of at most `magLimbs` limbs (and below the bound of a small number, which under the
-        -- narrow bounds the limbs can reach) is its small number; any other list goes through `natOf`
+        -- a magnitude: a literal of at most `magLimbs` limbs is its small number; any other list goes through `natOf`
         let isMag := magNameAt natMagName bs || magNameAt intMagName bs
-        let lit0 := if isMag then litMag (magLimsOf cx.narrow).limbs (drE cx.g nm.rest) else -1
-        let lit := if lit0 >= (magLimsOf cx.narrow).nat then -1 else lit0
+        let lit := if isMag then litMag magLimbs (drE cx.g nm.rest) else -1
         -- the magnitude of another marker record: its word as it is ("A magnitude where no list is needed")
         let pj := if isMag && lit < 0 then magProjOf cx.g nm.rest else magProjNone
         let pr := if pj.ok then trVal cx pj.ty env facts next pj.e else tvFail fwWire bs
@@ -15590,15 +14601,14 @@ structure ParamsR where
 -- the parameters in order: parameter i is variable index i of the body (the innermost `let` is 0
 -- and shifts them up), so the environment lists them first to last
 -- A parameter of the wire's type Bool gets the IR type uint8 in the declaration's parameter list
--- (the value's type inside the body stays the word): lib/lrc/Pack.rsd reads it there. A parameter of a declared
--- width (`ws`, one for each parameter; none given: no width) gets the type of that width the same way.
-def fwParams (g : Dg) : List (List Int) → List (List Int) → Nat → List Int → ParamsR
-  | ts :: rest, wt :: wts, next, ws =>
+-- (the value's type inside the body stays the word): lib/lrc/Pack.rsd reads it there.
+def fwParams (g : Dg) : List (List Int) → List (List Int) → Nat → ParamsR
+  | ts :: rest, wt :: wts, next =>
     let f := freshFor ts next
-    let r := fwParams g rest wts f.next (ws.drop 1)
+    let r := fwParams g rest wts f.next
     { next := r.next, env := valTyped f.vars ts wt :: r.env,
-      ps := paramsOfWords f.vars (tysOfWidth (tyView g wt == [1]) (ws.headD 0) ts) ++ r.ps }
-  | _, _, next, _ => { next := next, env := [], ps := [] }
+      ps := paramsOfWords f.vars (if tyView g wt == [1] then [tyU8] else ts) ++ r.ps }
+  | _, _, next => { next := next, env := [], ps := [] }
 
 structure FnR where
   ok : Bool
@@ -15618,13 +14628,12 @@ def fwFn (cx : Cx) (f : Nat) (body : List Int) : FnR :=
   let sg := fwSig cx.g (sigOf cx.sigs f)
   if !sg.ok then { ok := false, err := some fwType, decl := declNone f, rest := after }
   else
-    let ws := sigOf cx.ws f
-    let ps := fwParams cx.g sg.params sg.ptys 1 ws
+    let ps := fwParams cx.g sg.params sg.ptys 1
     -- a function without a live parameter takes one irrelevant parameter (see trCall)
     let xs := if ps.ps.isEmpty then [{ x := ps.next, borrow := false, ty := tyIrr }] else ps.ps
     let next := if ps.ps.isEmpty then ps.next + 1 else ps.next
     let b := trTail { cx with rty := sg.rty } ps.env [] next body
-    let rets := tysOfWidth (tyView cx.g sg.rty == [1]) (intAt sg.params.length ws) (liveTys sg.result)
+    let rets := if tyView cx.g sg.rty == [1] then [tyU8] else liveTys sg.result
     if !b.ok then { ok := false, err := b.err, decl := declNone f, rest := after }
     else
       let lo := liftsOut (kidAt 0 b.items)
@@ -15787,7 +14796,7 @@ def pubTwin (cx : Cx) (f tmp from1 : Nat) : List Decl :=
   let sgB := fwSigB cx.g (sigOf cx.sigs f)
   if !sg.ok || !sgB.ok || (!boundNeeds cx.g cx.arr sg.rty && sg.params == sgB.params) then []
   else
-    let ps := fwParams cx.g sgB.params sgB.ptys from1 (sigOf cx.ws f)
+    let ps := fwParams cx.g sgB.params sgB.ptys from1
     let xs := if ps.ps.isEmpty then [{ x := ps.next, borrow := false, ty := tyIrr }] else ps.ps
     let next := if ps.ps.isEmpty then ps.next + 1 else ps.next
     let inw := unboundParams cx sgB.ptys ps.env next
@@ -15899,7 +14908,7 @@ def errsAdd (f : Nat) (err : Option Residue) (errs : List Residue) : List Residu
 partial def fwFns (cx : Cx) (helpers : List Nat) (f n : Nat) (bodies : List Int) (acc : List Decl) (errs : List Residue) (lifted : List Decl)
     (pubs : List Int := []) : ImageR :=
   if f >= n then
-    let decls := acc.reverse ++ helperDecls cx.n cx.narrow ++ lifted
+    let decls := acc.reverse ++ helperDecls cx.n ++ lifted
     match badCall (dtOfList decls) decls with
     | [caller, callee] =>
       -- the callee's own refusal when it has one, at the callee; a call of a function without a body, at the caller
@@ -15920,10 +14929,7 @@ partial def fwFns (cx : Cx) (helpers : List Nat) (f n : Nat) (bodies : List Int)
           -- one of the front end's integer operations gets its short form; the function as written follows the lifted loops
           let op := factOf (f : Int) cx.mag
           let tmp := liftBase + declMaxIndex r.decl + 1
-          let mask := if cx.shortNatWord then natWordMask body else -1
-          let mask := if mask >= 0 && sigOf cx.sigs f == (1 :: (natRecTy ++ [0])) then mask else -1
-          let w := if mask >= 0 || (op >= 0 && (op % 100 < 20 || op == 30 || op == 31)) then magWrap (magLimsOf cx.narrow) op r.decl tmp mask
-            else { ok := false, body := r.decl.body }
+          let w := if op >= 0 && (op % 100 < 20 || op == 30 || op == 31) then magWrap op r.decl tmp else { ok := false, body := r.decl.body }
           let lifts := if w.ok then r.lifts ++ [{ r.decl with f := tmp }] else r.lifts
           -- the boundary twin, when the result's forms inside are not the boundary's ("The boundary")
           let twin := pubTwin cx f (tmp + 1) (declMaxIndex r.decl + 3)
@@ -16011,11 +15017,6 @@ def layRawInts : Int := 512
 -- the tag under which a class is marked: its nodes are told apart by their tag somewhere (a match on the tag,
 -- a read of the tag)
 def layMarkTag : Int := 255
--- The tag under which a class is merged: some read of one of its nodes finds no single tag (the image reads a
--- field that every constructor of the type has, without a match before it). Every tag of the class then has one
--- layout, the union of what its tags store, so the read needs no tag: lean.h's `lean_ctor_get` does not ask
--- for one either. The entry's flags are those of the reads that found no tag.
-def layMergeTag : Int := 254
 
 -- what an allocation asks of its layout: 1 the string, 2 the list of integers, 4 a list of
 -- children, 8 times the scalar fields it sets (bit j for f2 + j); 256 that it is an allocation as
@@ -16079,30 +15080,6 @@ def layOf (m : Map) (root : Nat) (t : Int) : Lay :=
     { found := true, kids := hit.val.toNat, minKids := hit.sb.toNat, str := hit.sa % 2 == 1, ints := hit.sa / 2 % 2 == 1,
       list := hit.sa / 4 % 2 == 1, rel := relOfMask (hit.sa / 8), num := num, box := num != 0 && hit.sa / 4 % 2 == 0 && !marked }
 
-def layMerged (m : Map) (root : Nat) : Bool := (mapNode m (layKey root layMergeTag)).tag != 0
-
-structure LayAcc where
-  found : Bool
-  kids : Int
-  minKids : Int
-  sa : Int
-  deriving Inhabited
-
-def layUnionGo (m : Map) (root : Nat) : List Int → LayAcc → LayAcc
-  | [], acc => acc
-  | t :: ts, acc =>
-    let hit := mapNode m (layKey root t)
-    if hit.tag == 0 || intAt 0 hit.extra == 0 then layUnionGo m root ts acc
-    else layUnionGo m root ts { found := true, kids := (if hit.val > acc.kids then hit.val else acc.kids), minKids := (if hit.sb < acc.minKids then hit.sb else acc.minKids), sa := bitsOr 15 acc.sa hit.sa }
-
--- The one layout of a merged class (`layMergeTag`), over the image's tags: the most children any tag has and the
--- fewest, a string, a list of integers, a list of children and each scalar when some tag stores it. A number's
--- node in such a class is written as the image wrote it (`num` 0).
-def layUnion (m : Map) (tags : List Int) (root : Nat) : Lay :=
-  let a := layUnionGo m root tags { found := false, kids := 0, minKids := 1000000, sa := (mapNode m (layKey root layMergeTag)).sa }
-  if !a.found then { found := false, kids := 0, minKids := 0, str := false, ints := false, list := false, rel := [0, 0, 0, 0, 0] }
-  else { found := true, kids := a.kids.toNat, minKids := a.minKids.toNat, str := a.sa % 2 == 1, ints := a.sa / 2 % 2 == 1, list := a.sa / 4 % 2 == 1, rel := relOfMask (a.sa / 8), num := 0, box := false }
-
 -- one allocation with k children (`site`; k = -1 for a list), or one read of the children as a list, entered
 def layAdd (m : Map) (root : Nat) (t : Int) (site : Bool) (k : Int) (flags : Int) : Map :=
   let hit := mapNode m (layKey root t)
@@ -16143,9 +15120,6 @@ structure LayCx where
 
 def layRoot (lx : LayCx) (f : Nat) (x : Int) : Nat := if lx.cl.bad || x < 0 then 0 else ocFind lx.cl (ocVar f x.toNat)
 
--- the layout of class `root` and tag t: the class's one layout when it is merged
-def layAt (lx : LayCx) (root : Nat) (t : Int) : Lay := if layMerged lx.m root then layUnion lx.m lx.tags root else layOf lx.m root t
-
 -- The tag of node h at a read: known from an alternative, or the one candidate of its class. -1
 -- when the class leaves several. -2 when it leaves none: no constructor of the image builds an
 -- object that reaches this place with a tag not yet tested, so the place is never reached with one.
@@ -16166,12 +15140,10 @@ partial def layScan (lx : LayCx) (f : Nat) (known excl : List Int) (m : Map) (n 
     let e := vdeclExpr n
     let h := intAt 0 e.ys
     let rd := nrFlags e
-    let t := if isNodeRead e then layTagOf lx f known excl h else -1
+    let t := if rd != 0 then layTagOf lx f known excl h else -1
     let m1 := if isNodeNew e then layAdd m (layRoot lx f (vdeclVar n : Int)) e.b true e.c (nnFlags e)
-      -- a read that finds no single tag: the class is merged, and what the read asks for is asked of every tag
-      else if isNodeRead e && t == -1 then layAdd m (layRoot lx f h) layMergeTag false (-1) rd
-      else if t >= 0 && rd != 0 then layAdd m (layRoot lx f h) t false (-1) rd
-      -- a read of the tag: the class is marked
+      else if t >= 0 then layAdd m (layRoot lx f h) t false (-1) rd
+      -- a read of the tag: the class is marked (a read of f8 that finds no single tag refuses the image, `layGo`)
       else if e.op == opPrim && primOp e == primTagOf then layMark m (layRoot lx f h)
       else m
     layScan lx f known excl m1 (bodyOf n)
@@ -16302,7 +15274,7 @@ mutual
 partial def layGo (lx : LayCx) (f : Nat) (known excl : List Int) (next : Nat) (n : N) : LyR :=
   if n.op == opVDecl && isNodeNew (vdeclExpr n) then
     let e := vdeclExpr n
-    let l := layAt lx (layRoot lx f (vdeclVar n : Int)) e.b
+    let l := layOf lx.m (layRoot lx f (vdeclVar n : Int)) e.b
     if l.box && numForm e == l.num then
       -- the node is its number (`Lay.box`): no allocation
       let k := layGo lx f known excl next (bodyOf n)
@@ -16319,11 +15291,11 @@ partial def layGo (lx : LayCx) (f : Nat) (known excl : List Int) (next : Nat) (n
     let x := vdeclVar n
     let h := intAt 0 e.ys
     let t := layTagOf lx f known excl h
-    let l := layAt lx (layRoot lx f h) t
+    let l := layOf lx.m (layRoot lx f h) t
     let form := numForm e
     let plain := { e with d := 0 }
     let depth := numDepth e
-    if t == -1 && !layMerged lx.m (layRoot lx f h) then { ok := false, next := next, node := n }
+    if t == -1 then { ok := false, next := next, node := n }
     else if t == -2 || !l.found then
       let k := layGo lx f known excl next (bodyOf n)
       { ok := k.ok, next := k.next, node := { n with kids := [layDummy plain, k.node] } }
@@ -16352,11 +15324,11 @@ partial def layGo (lx : LayCx) (f : Nat) (known excl : List Int) (next : Nat) (n
     let x := vdeclVar n
     let h := intAt 0 e.ys
     let t := layTagOf lx f known excl h
-    let l := layAt lx (layRoot lx f h) t
+    let l := layOf lx.m (layRoot lx f h) t
     let dead := t == -2 || !l.found
     let i := e.b.toNat
     let k := layGo lx f known excl (next + 6) (bodyOf n)
-    if t == -1 && !layMerged lx.m (layRoot lx f h) then { ok := false, next := next, node := n }
+    if t == -1 then { ok := false, next := next, node := n }
     else if dead then { ok := k.ok, next := k.next, node := { n with kids := [layDummy e, k.node] } }
     else if primOp e == primNodeKid && l.list then
       -- child i of a list of children: the first of what `drop i` leaves, the refusal when it leaves nothing
@@ -16395,7 +15367,7 @@ partial def layAlts (lx : LayCx) (f : Nat) (known excl : List Int) (next : Nat) 
       else layGo lx f known excl next (altBody alt)
     let rest := layAlts lx f known excl b.next h tested alts
     { ok := b.ok && rest.ok, next := rest.next,
-      alts := (if t >= 0 then mkAltCtor (layInfo (layAt lx (layRoot lx f h) t) t) b.node else altSetBody alt b.node) :: rest.alts }
+      alts := (if t >= 0 then mkAltCtor (layInfo (layOf lx.m (layRoot lx f h) t) t) b.node else altSetBody alt b.node) :: rest.alts }
 end
 
 structure RsDecls where
@@ -16438,20 +15410,14 @@ def layAnyDecl : List Decl → Bool
 -- image that way too: it is the layout of an image whose classes say nothing).
 -- `plain`: the front end's integer operations as the image wrote them, with no short form ("Magnitudes"):
 -- the host check compares the two.
--- `narrow`: an object field is four bytes in the module (rsc's layer of that name): the bounds of a small number are
--- the narrow ones ("Magnitudes", `magLimsOf`). Nothing else of the translation reads it.
--- `widths`: the declared widths of the signatures (lib/RscBase.rsd `readSigWs`); a parameter and a result of a
--- declared width get the IR type of that width, which is what lib/lrc/Pack.rsd lays a node's fields out by.
-def fromWireWith (oneClass plain : Bool) (g : Dg) (intr : List Int) (sigs : List (List Int)) (n : Nat) (bodies : List Int) (arrays : Bool := true)
-    (narrow : Bool := false) (widths : List (List Int) := []) : ImageR :=
+def fromWireWith (oneClass plain : Bool) (g : Dg) (intr : List Int) (sigs : List (List Int)) (n : Nat) (bodies : List Int) (arrays : Bool := true) : ImageR :=
   let tab := fwScan g intr ctEmpty 0 n bodies
   if !tab.ok then { ok := false, err := tab.err, fn := 0, decls := [], tab := tab }
   else
     let reserved := reservedFns intr 0
     let helpers := (calledClosure g bodies reserved reserved).filter (fun f => !reserved.contains f)
     let cx : Cx := { g := g, intr := intr, sigs := sigs, tab := tab, n := n, inl := fwInl g intr sigs 0 n bodies [],
-                     mag := if plain then [] else magFind g sigs n bodies intr, arr := arrays && arrAny g intr 0 n bodies,
-                     shortNatWord := !plain && !g.on, narrow := narrow, ws := widths }
+                     mag := if plain then [] else magFind g sigs n bodies intr, arr := arrays && arrAny g intr 0 n bodies }
     let cx := { cx with num := numFn numUnpackNat cx.mag >= 0 || numFn numUnpackInt cx.mag >= 0 || numFn numHold cx.mag >= 0 }
     let im := fwFns cx helpers 0 n bodies [] [] []
     -- an image without a node is as it was written; the classes are found only for one that has some
@@ -16488,10 +15454,6 @@ structure Request where
   plainInts : Bool := false
   -- may a list be an array ("Arrays"): asked for where the module has the stage's own heap
   arrays : Bool := true
-  -- the module's object fields are four bytes (rsc's layer `narrow`): the bounds of a small number follow
-  narrow : Bool := false
-  -- the declared widths of the signatures (lib/RscBase.rsd `readSigWs`)
-  widths : List (List Int) := []
 
 structure Class where
   types : Dg
@@ -16502,8 +15464,6 @@ structure Class where
   oneClass : Bool
   plainInts : Bool
   arrays : Bool
-  narrow : Bool
-  widths : List (List Int)
 
 -- what is admitted: the image's functions as IR declarations, the stage's own list functions after
 -- them; `n` is the number of the image's functions
@@ -16521,11 +15481,10 @@ def pubEntry (pubs : List Int) (f : Nat) : Nat :=
 
 def q (r : Request) : Class :=
   { types := { r.types with ranges := [], certs := [], nodeUse := [] }, intr := r.intr, sigs := r.sigs, n := r.n,
-    bodies := r.bodies, oneClass := r.oneClass, plainInts := r.plainInts, arrays := r.arrays, narrow := r.narrow,
-    widths := r.widths }
+    bodies := r.bodies, oneClass := r.oneClass, plainInts := r.plainInts, arrays := r.arrays }
 
 def admit (c : Class) : Except Residue Translated :=
-  let im := fromWireWith c.oneClass c.plainInts c.types c.intr c.sigs c.n c.bodies c.arrays c.narrow c.widths
+  let im := fromWireWith c.oneClass c.plainInts c.types c.intr c.sigs c.n c.bodies c.arrays
   match im.err with
   | some e => Except.error (residueAt im.fn e)
   | none =>
@@ -16534,8 +15493,8 @@ def admit (c : Class) : Except Residue Translated :=
 
 end Lrc
 
-end RscSourceModule_9d4af98ce016c7640170f4a6bea5be5ec0fc81a5aa436d532ba76b8b33b9d5c6
-section RscSourceModule_c63bd6488ada4f490dc472f27f97d1b1c3b74fb976ce7a5218714e73efa668b2
+end RscSourceModule_2a8a4f86fe23b5e2738ad256161b52241465d61c3bcf366c23749f32eb59813a
+section RscSourceModule_d3095ec19e23e584e7e579b21f72e51d19800b8c14a4110870abeca00faa0ff0
 namespace Lrc
 
 -- runtime functions (lib/rt/V1.rsd, in the order rsc/rsc.rsd links them)
@@ -16645,8 +15604,6 @@ structure Em where
   -- scratch: t0 a status or a count, t1 a tag
   t0 : Nat
   t1 : Nat
-  -- the bytes of an object field: 8, or 4 ("The width of an object field" below)
-  fw : Nat := 8
   deriving Inhabited
 
 /-! ## Counting (EmitC:279 emitInc, EmitC:287 emitDec; lean.h `lean_inc_ref_n`, `lean_dec_ref`) -/
@@ -16679,35 +15636,6 @@ def emDec (em : Em) (x : Nat) (check : Bool) : List Int := emDecLoc em.heap em.t
 
 /-! ## Objects -/
 
-/-! ### The width of an object field
-
-An object field is 8 bytes (docs/OBJECT-ABI.md revision 2). Under rsc's layer `narrow` it is 4, lean.h's
-layout on a target whose pointers are 4 bytes (`lean_ctor_object`: the fields are pointers; `lean_box`: a
-boxed number has 31 bits): the field holds the low half of its word, and that is the whole word, because a
-pointer is an offset below 2^32 and a boxed number is below 2^31 (lib/lrc/FromWire.rsd `magLimsOf`). A word
-read from a field is that half with zeros above it, as every pointer is here. The header is the same 8
-bytes, the scalar area follows the fields at byte 8 + fw * n, and an array's elements keep their 8 bytes.
-`fw` is the width in bytes (`Em.fw`); with 8 every instruction below is the one it was. -/
-
-def fldLoad (fw off : Nat) : List Int := if fw == 4 then wLoad32 off else i64LoadAt (off : Int)
-def fldStore (fw off : Nat) : List Int := if fw == 4 then wStore32 off else i64StoreAt (off : Int)
--- the shift that makes a field's index its distance in bytes
-def fldShift (fw : Nat) : Int := if fw == 4 then 2 else 3
--- A word of the scalar area at byte `pos` of its object. After an odd number of narrow fields it stands at an
--- address that is no multiple of 8, and the instruction says so (the alignment it names is a promise).
-def scLoad (fw pos : Nat) : List Int := if fw == 4 && pos % 8 != 0 then [41, 2] ++ lebU pos else i64LoadAt (pos : Int)
-def scStore (fw pos : Nat) : List Int := if fw == 4 && pos % 8 != 0 then [55, 2] ++ lebU pos else i64StoreAt (pos : Int)
--- a scalar of w bytes at byte `pos` of its object: a field lib/lrc/Pack.rsd made narrow is read with zeros above it
--- (lean.h `lean_ctor_get_uint8`, `_uint16`, `_uint32`) and written from the low bytes of its word; 8 is a word
-def scRead (fw w pos : Nat) : List Int :=
-  if w == 1 then wLoad8 pos else if w == 2 then wLoad16 pos else if w == 4 then wLoad32 pos else scLoad fw pos
-def scWrite (fw w pos : Nat) : List Int :=
-  if w == 1 then wStore8 pos else if w == 2 then [61, 1] ++ lebU pos else if w == 4 then wStore32 pos else scStore fw pos
--- the module of narrow fields says so to whoever reads its memory: its last function, exported as `fw`, returns 4
-def narrowFn : WFn := { params := [], results := [vtI64], locals := [], code := i64Const 4 ++ [opEnd] }
--- "fw"
-def narrowName : List Int := [102, 119]
-
 -- the header word of a fresh object (lib/ObjectStorage.rsd `storageHeader`)
 def emHeader (tag other : Nat) : Int :=
   let signedTag : Int := if tag >= 128 then (tag : Int) - 256 else (tag : Int)
@@ -16724,20 +15652,11 @@ word for each size from 8 to 4096 bytes, addressed table + size; a free cell's f
 the next. The block word that holds the runtime allocator's table (lib/rt/ALLOCATOR.md, offset
 344) holds this table instead: with this heap on no object comes from the runtime's allocator.
 Memory comes from the runtime's `bump` (lib/rt/V1.rsd), which grows the memory and keeps the
-installed bound; a chunk of a little over 64 KiB (`hpChunk`) is cut into cells of one size. No statistics are kept. -/
+installed bound; a chunk of 64 KiB is cut into cells of one size. No statistics are kept. -/
 
 def hpTable : Int := 344
 def hpTableBytes : Nat := 4104
--- The chunk: eight times the prime 8219. No cell size divides it, so the cells of a chunk stand shifted against
--- the cells of the chunk before it: by 24 bytes for a cell of 32 or 64, which is three of the four places a cell
--- of 32 can stand at. With chunks of 64 KiB one after the other, the cells of a size that divides the chunk stood
--- on one lattice through the whole heap; a tree built from keys in order then has the nodes of a path a power of
--- two cells apart, and with a cell of 32 or 64 bytes those addresses fall into the same sets of the cache (rbtree
--- in int32 with nodes of 32 bytes: 1.6 times the time of the same code with nodes of 40 under node, 2.1 times
--- native; reports/backend-opt-fable/LAND-NARROW.md, LAND-COLOUR.md). This is the slab allocator's colouring
--- (Bonwick, The Slab Allocator, USENIX Summer 1994, section 4.1: a different offset for each slab), had from the
--- chunk's size.
-def hpChunk : Nat := 65752
+def hpChunk : Nat := 65536
 def rtBump : Nat := 11
 
 -- refill(base, s): a fresh chunk of cells of s bytes; the first is the result, the others are the
@@ -16883,7 +15802,7 @@ def relElems : List Int :=
   ++ wEnd
 
 -- `arr`: the module has arrays, whose elements are released too and whose cells may be large
-def heapReleaseOf (arr : Bool) (fw : Nat := 8) : WFn :=
+def heapReleaseOf (arr : Bool) : WFn :=
   { params := emI64s 2, results := [], locals := emI64s 7,
     code :=
       lg 1 ++ ls 2
@@ -16895,7 +15814,7 @@ def heapReleaseOf (arr : Bool) (fw : Nat := 8) : WFn :=
         ++ i64Const 0 ++ ls 5
         ++ wBlock ++ wLoop
           ++ lg 5 ++ lg 4 ++ wLtU ++ wI32Eqz ++ wBrIf 1
-          ++ lg 3 ++ lg 5 ++ i64Const (fldShift fw) ++ wShl ++ wAdd ++ wWrap ++ fldLoad fw 8 ++ ls 6
+          ++ lg 3 ++ lg 5 ++ i64Const 3 ++ wShl ++ wAdd ++ wWrap ++ i64LoadAt 8 ++ ls 6
           ++ relOne
           ++ lg 5 ++ i64Const 1 ++ wAdd ++ ls 5
           ++ wBr 0
@@ -17018,8 +15937,7 @@ def arrPushFn (heap : Nat) : WFn :=
 -- ofList(base, xs, shape): the array of a list's elements; an array, and the empty list, as it is
 -- locals: 3 the number of cells, 4 a cell, 5 the capacity, 6 the result, 7 an index, 8 a head, 9 a tail,
 -- 10 whether the cell is ours alone so far, 11 scratch
--- (a cell's tail is its field `shape`; its head is the scalar after that one field, or the field before it)
-def arrOfListFn (heap : Nat) (fw : Nat := 8) : WFn :=
+def arrOfListFn (heap : Nat) : WFn :=
   { params := emI64s 3, results := [vtI64], locals := emI64s 9,
     code :=
       lg 1 ++ i64Const 1 ++ wEq ++ wIf ++ i64Const 1 ++ wReturn ++ wEnd
@@ -17028,7 +15946,7 @@ def arrOfListFn (heap : Nat) (fw : Nat := 8) : WFn :=
       ++ wBlock ++ wLoop
         ++ lg 4 ++ i64Const 1 ++ wEq ++ wBrIf 1
         ++ lg 3 ++ i64Const 1 ++ wAdd ++ ls 3
-        ++ lg 4 ++ lg 2 ++ i64Const (fldShift fw) ++ wShl ++ wAdd ++ wWrap ++ fldLoad fw 8 ++ ls 4
+        ++ lg 4 ++ lg 2 ++ i64Const 3 ++ wShl ++ wAdd ++ wWrap ++ i64LoadAt 8 ++ ls 4
         ++ wBr 0
       ++ wEnd ++ wEnd
       ++ i64Const 4 ++ ls 5
@@ -17045,9 +15963,8 @@ def arrOfListFn (heap : Nat) (fw : Nat := 8) : WFn :=
       ++ i64Const 1 ++ ls 10 ++ lg 1 ++ ls 4 ++ i64Const 0 ++ ls 7
       ++ wBlock ++ wLoop
         ++ lg 4 ++ i64Const 1 ++ wEq ++ wBrIf 1
-        ++ lg 4 ++ lg 2 ++ i64Const (fldShift fw) ++ wShl ++ wAdd ++ wWrap ++ fldLoad fw 8 ++ ls 9
-        ++ (if fw == 4 then lg 2 ++ wEqz ++ wIfI64 ++ lg 4 ++ wWrap ++ scLoad fw 12 ++ wElse ++ lg 4 ++ wWrap ++ fldLoad fw 8 ++ wEnd ++ ls 8
-            else lg 4 ++ i64Const 16 ++ wAdd ++ lg 2 ++ i64Const 3 ++ wShl ++ wSub ++ wWrap ++ i64LoadAt 0 ++ ls 8)
+        ++ lg 4 ++ lg 2 ++ i64Const 3 ++ wShl ++ wAdd ++ wWrap ++ i64LoadAt 8 ++ ls 9
+        ++ lg 4 ++ i64Const 16 ++ wAdd ++ lg 2 ++ i64Const 3 ++ wShl ++ wSub ++ wWrap ++ i64LoadAt 0 ++ ls 8
         ++ lg 6 ++ lg 7 ++ i64Const 3 ++ wShl ++ wAdd ++ wWrap ++ lg 8 ++ i64StoreAt 24
         ++ lg 7 ++ i64Const 1 ++ wAdd ++ ls 7
         ++ lg 10 ++ lg 4 ++ wWrap ++ wLoad32 0 ++ i64Const 1 ++ wEq ++ wExtend ++ wAnd ++ wEqz ++ wI32Eqz ++ wIf
@@ -17064,7 +15981,7 @@ def arrOfListFn (heap : Nat) (fw : Nat := 8) : WFn :=
 -- toList(base, a): the list of an array's elements (lean.h `lean_array_to_list`); any other value as it is
 -- locals: 2 the size, 3 whether nothing else holds the array, 4 whether the elements are objects, 5 the list so far,
 -- 6 an index, 7 an element, 8 a cell, 9 the table, 10 scratch
-def arrToListFn (heap : Nat) (fw : Nat := 8) : WFn :=
+def arrToListFn (heap : Nat) : WFn :=
   { params := emI64s 2, results := [vtI64], locals := emI64s 9,
     code :=
       wIsArr 1 ++ wI32Eqz ++ wIf ++ lg 1 ++ wReturn ++ wEnd
@@ -17077,30 +15994,8 @@ def arrToListFn (heap : Nat) (fw : Nat := 8) : WFn :=
         ++ lg 6 ++ i64Const 1 ++ wSub ++ ls 6
         ++ lg 1 ++ lg 6 ++ i64Const 3 ++ wShl ++ wAdd ++ wWrap ++ i64LoadAt 24 ++ ls 7
         ++ lg 3 ++ wEqz ++ wExtend ++ lg 4 ++ wAnd ++ wEqz ++ wI32Eqz ++ wIf ++ wIncLoc 7 10 ++ wEnd
-        ++ (if fw == 4 then
-          -- narrow fields: a cell with a scalar head has 24 bytes (8 + 4 + 8, rounded up), one with an object 16
-          -- (8 + 4 + 4); local 10 is the cell's size, local 9 the word of its list
-          i64Const 24 ++ i64Const 16 ++ lg 4 ++ wEqz ++ wSelect ++ ls 10
-          ++ blkGet hpTable ++ lg 10 ++ wAdd ++ ls 9
-          ++ lg 9 ++ wWrap ++ i64LoadAt 0 ++ ls 8
-          ++ lg 8 ++ wEqz ++ wIf
-            ++ lg 0 ++ lg 10 ++ callFn heap ++ ls 8
-            ++ lg 8 ++ wEqz ++ wIf ++ i64Const 0 ++ wReturn ++ wEnd
-          ++ wElse
-            ++ lg 9 ++ wWrap ++ lg 8 ++ wWrap ++ i64LoadAt 0 ++ i64StoreAt 0
-          ++ wEnd
-          ++ lg 4 ++ wEqz ++ wIf
-            ++ lg 8 ++ wWrap ++ i64Const (emHeader 1 1 + 24 * 4294967296) ++ i64StoreAt 0
-            ++ lg 8 ++ wWrap ++ lg 5 ++ fldStore fw 8
-            ++ lg 8 ++ wWrap ++ lg 7 ++ scStore fw 12
-          ++ wElse
-            ++ lg 8 ++ wWrap ++ i64Const (emHeader 1 2 + 16 * 4294967296) ++ i64StoreAt 0
-            ++ lg 8 ++ wWrap ++ lg 7 ++ fldStore fw 8
-            ++ lg 8 ++ wWrap ++ lg 5 ++ fldStore fw 12
-          ++ wEnd
-        else
         -- a cell of 24 bytes, as `emAllocObj` takes one
-        blkGet hpTable ++ ls 9
+        ++ blkGet hpTable ++ ls 9
         ++ lg 9 ++ wWrap ++ i64LoadAt 24 ++ ls 8
         ++ lg 8 ++ wEqz ++ wIf
           ++ lg 0 ++ i64Const 24 ++ callFn heap ++ ls 8
@@ -17116,7 +16011,7 @@ def arrToListFn (heap : Nat) (fw : Nat := 8) : WFn :=
           ++ lg 8 ++ wWrap ++ i64Const (emHeader 1 2 + 24 * 4294967296) ++ i64StoreAt 0
           ++ lg 8 ++ wWrap ++ lg 7 ++ i64StoreAt 8
           ++ lg 8 ++ wWrap ++ lg 5 ++ i64StoreAt 16
-        ++ wEnd)
+        ++ wEnd
         ++ lg 8 ++ ls 5
         ++ wBr 0
       ++ wEnd ++ wEnd
@@ -17177,11 +16072,9 @@ def arrSliceFn (heap : Nat) : WFn :=
       ++ lg 7 ++ [opEnd] }
 
 -- the heap's functions of a module, the arrays' after them when it has arrays; `heap` is the wasm index of the first
--- (`fw`: the bytes of an object field; the release of an object and the two functions that read or build list cells take it)
-def heapFnsFor (arr : Bool) (heap : Nat) (fw : Nat := 8) : List WFn :=
-  if arr then [heapRefillOf hpTableBytesA, heapReleaseOf true fw, heapFreeA, arrNewFn heap, arrPushFn heap, arrSetFn heap,
-               arrOfListFn heap fw, arrToListFn heap fw, arrSliceFn heap]
-  else if fw == 4 then [heapRefill, heapReleaseOf false fw, heapFree]
+def heapFnsFor (arr : Bool) (heap : Nat) : List WFn :=
+  if arr then [heapRefillOf hpTableBytesA, heapReleaseOf true, heapFreeA, arrNewFn heap, arrPushFn heap, arrSetFn heap,
+               arrOfListFn heap, arrToListFn heap, arrSliceFn heap]
   else heapFns
 
 -- An object of `bytes` bytes with its header into local d; a failed allocation ends the run
@@ -17205,12 +16098,12 @@ def emAllocObj (em : Em) (d : Nat) (bytes tag other : Nat) : List Int :=
       ++ lg d ++ wWrap ++ i64Const (emHeader tag other + (s : Int) * 4294967296) ++ i64StoreAt 0
 
 def emAlloc (em : Em) (d : Nat) (info : CtorInfo) : List Int :=
-  emAllocObj em d (8 + em.fw * info.size + info.ssize) info.cidx info.size
+  emAllocObj em d (8 + 8 * info.size + info.ssize) info.cidx info.size
 
--- the object fields of local d from the arguments, field i at byte 8 + fw * i (lean.h `lean_ctor_set`)
-def emFields (fw d : Nat) : Nat → List Int → List Int
+-- the object fields of local d from the arguments, field i at byte 8 + 8 * i (lean.h `lean_ctor_set`)
+def emFields (d : Nat) : Nat → List Int → List Int
   | _, [] => []
-  | i, y :: ys => lg d ++ wWrap ++ emArg y ++ fldStore fw (8 + fw * i) ++ emFields fw d (i + 1) ys
+  | i, y :: ys => lg d ++ wWrap ++ emArg y ++ i64StoreAt (8 + 8 * (i : Int)) ++ emFields d (i + 1) ys
 
 -- the tag of the value in local x into local t: a boxed scalar is its own tag (lean.h `lean_obj_tag`)
 def emTag (x t : Nat) : List Int :=
@@ -17231,9 +16124,9 @@ def emIsShared (x : Nat) : List Int :=
 def emRelease (em : Em) (p : Nat) : Nat → List Int
   | 0 => []
   | k + 1 => emRelease em p k
-      ++ (if em.heap == 0 then lg 0 ++ lg p ++ wWrap ++ fldLoad em.fw (8 + em.fw * k) ++ callFn 7
-          else lg p ++ wWrap ++ fldLoad em.fw (8 + em.fw * k) ++ ls em.t1 ++ emDecLoc em.heap em.t0 em.t1 true)
-      ++ lg p ++ wWrap ++ i64Const 1 ++ fldStore em.fw (8 + em.fw * k)
+      ++ (if em.heap == 0 then lg 0 ++ lg p ++ wWrap ++ i64LoadAt (8 + 8 * (k : Int)) ++ callFn 7
+          else lg p ++ wWrap ++ i64LoadAt (8 + 8 * (k : Int)) ++ ls em.t1 ++ emDecLoc em.heap em.t0 em.t1 true)
+      ++ lg p ++ wWrap ++ i64Const 1 ++ i64StoreAt (8 + 8 * (k : Int))
 
 -- EmitC:359 emitReset: an exclusive object releases its n fields and is the token; any other is
 -- released and the token is the boxed zero
@@ -17255,7 +16148,7 @@ def emReuse (em : Em) (z x : Nat) (info : CtorInfo) (updt : Bool) (ys : List Int
     ++ wElse
     ++ emAlloc em (loc1 z) info
     ++ wEnd
-    ++ emFields em.fw (loc1 z) 0 ys
+    ++ emFields (loc1 z) 0 ys
 
 /-! ## Primitives (lib/lrc/Prim.rsd): the wire's operators, with the wire's refusals
 
@@ -17457,33 +16350,14 @@ def emStrLit (em : Em) (d : Nat) (bs : List Int) : List Int :=
 
 -- An array primitive that is a function of the module ("Arrays"), into local d; memory refused ends the run with the
 -- capacity status. The list of a value that is no array is the value, without a call.
--- May the write at index i of the value in local a go in place with nothing to release (leaves an i32):
--- it is an array, nothing else holds it, and its elements are scalars or the element written over is a
--- number in a box. Then `arrSetFn` would store the element and return the array, and so does the caller.
-def wArrSetInPlace (a i : Nat) : List Int :=
-  wIsArr a ++ wIfI32
-    ++ lg a ++ wWrap ++ wLoad32 0 ++ i64Const 1 ++ wEq ++ wIfI32
-      ++ lg a ++ wWrap ++ wLoad8 7 ++ i64Const (tagArr : Int) ++ wEq ++ wIfI32
-        ++ lg a ++ lg i ++ i64Const 3 ++ wShl ++ wAdd ++ wWrap ++ i64LoadAt 24 ++ i64Const 1 ++ wAnd ++ wEqz ++ wI32Eqz
-      ++ wElse ++ [65, 1] ++ wEnd
-    ++ wElse ++ [65, 0] ++ wEnd
-  ++ wElse ++ [65, 0] ++ wEnd
-
--- lean.h has `lean_array_fset` and `lean_to_array`'s cases without work inline and the copying forms as
--- calls. The same here: a write that goes in place and releases nothing is one store at the place of the
--- call, and a value that is an array already is itself; every other case is the module's function.
 def emArrCall (em : Em) (p : Nat) (imm : Int) (ys : List Int) (d : Nat) : List Int :=
   let a := loc1 (intAt 0 ys).toNat
   let b := loc1 (intAt 1 ys).toNat
   let c := loc1 (intAt 2 ys).toNat
   let failed := ls d ++ lg d ++ wEqz ++ wIf ++ emCapacity em.conv ++ wEnd
   if p == primArrPush then lg 0 ++ lg a ++ lg b ++ i64Const imm ++ callFn (arrFnPush em.heap) ++ failed
-  else if p == primArrSet then
-    wArrSetInPlace a b ++ wIf
-      ++ lg a ++ lg b ++ i64Const 3 ++ wShl ++ wAdd ++ wWrap ++ lg c ++ i64StoreAt 24 ++ lg a ++ ls d
-    ++ wElse ++ lg 0 ++ lg a ++ lg b ++ lg c ++ i64Const imm ++ callFn (arrFnSet em.heap) ++ failed ++ wEnd
-  else if p == primArrOfList then
-    wIsArr a ++ wIf ++ lg a ++ ls d ++ wElse ++ lg 0 ++ lg a ++ i64Const imm ++ callFn (arrFnOfList em.heap) ++ failed ++ wEnd
+  else if p == primArrSet then lg 0 ++ lg a ++ lg b ++ lg c ++ i64Const imm ++ callFn (arrFnSet em.heap) ++ failed
+  else if p == primArrOfList then lg 0 ++ lg a ++ i64Const imm ++ callFn (arrFnOfList em.heap) ++ failed
   else if p == primArrSlice then lg 0 ++ lg a ++ lg b ++ lg c ++ callFn (arrFnSlice em.heap) ++ failed
   else wIsArr a ++ wIf ++ lg 0 ++ lg a ++ callFn (arrFnToList em.heap) ++ failed ++ wElse ++ lg a ++ ls d ++ wEnd
 
@@ -17516,13 +16390,8 @@ def emPrim (em : Em) (p : Nat) (imm : Int) (ys : List Int) (d : Nat) : Code :=
   else if p == primBox then codeOk (lg a ++ i64Const 1 ++ wShl ++ i64Const 1 ++ wOr ++ ls d)
   else if p == primUnbox then codeOk (lg a ++ i64Const 1 ++ wShrU ++ ls d)
   -- an integer's word (lean.h `lean_box` and `lean_unbox` of a signed number)
-  -- With narrow fields the word is the 32 bits a field keeps, with zeros above them wherever it stands (two words
-  -- of one integer are then equal, as the short forms take it), and the number comes back from those bits with
-  -- its sign (lean.h `lean_scalar_to_int64` on a target of 4-byte pointers).
-  else if p == primBoxS then
-    codeOk (lg a ++ i64Const 1 ++ wShl ++ i64Const 1 ++ wOr ++ (if em.fw == 4 then i64Const 4294967295 ++ wAnd else []) ++ ls d)
-  else if p == primUnboxS then
-    codeOk (if em.fw == 4 then lg a ++ i64Const 32 ++ wShl ++ i64Const 33 ++ wShrS ++ ls d else lg a ++ i64Const 1 ++ wShrS ++ ls d)
+  else if p == primBoxS then codeOk (lg a ++ i64Const 1 ++ wShl ++ i64Const 1 ++ wOr ++ ls d)
+  else if p == primUnboxS then codeOk (lg a ++ i64Const 1 ++ wShrS ++ ls d)
   else if p == primShrW then codeOk (lg a ++ i64Const imm ++ wShrU ++ ls d)
   else if p == primDivU then codeOk (lg a ++ lg b ++ wDivU ++ ls d)
   else if p == primRemU then codeOk (lg a ++ lg b ++ wRemU ++ ls d)
@@ -17566,16 +16435,14 @@ def emExpr (em : Em) (binds : List Int) (e : N) : Code :=
      else if e.s == "" then codeOk (i64Const profile.emptyStr ++ ls z) else codeFail)
   else if e.op == opCtor then
     let info := infoOf e
-    -- with narrow fields a constant constructor's word has to fit a field: one that does not (the code of a
-    -- closure of a function numbered 32768 or more, lib/lrc/Closures.rsd `lwCode`) is not written
-    if info.isScalar then (if em.fw == 4 && 2 * info.cidx + 1 >= 4294967296 then codeFail else codeOk (i64Const (2 * info.cidx + 1 : Nat) ++ ls z))
-    else codeOk (emAlloc em z info ++ emFields em.fw z 0 e.ys)
+    if info.isScalar then codeOk (i64Const (2 * info.cidx + 1 : Nat) ++ ls z)
+    else codeOk (emAlloc em z info ++ emFields z 0 e.ys)
   else if e.op == opReset then codeOk (emReset em (intAt 0 binds).toNat (resetVar e) (resetN e))
   else if e.op == opReuse then codeOk (emReuse em (intAt 0 binds).toNat (reuseVar e) (infoOf e) (reuseUpdt e) (reuseArgs e))
-  else if e.op == opProj then codeOk (lg (loc1 (projVar e)) ++ wWrap ++ fldLoad em.fw (8 + em.fw * projIdx e) ++ ls z)
+  else if e.op == opProj then codeOk (lg (loc1 (projVar e)) ++ wWrap ++ i64LoadAt (8 + 8 * (projIdx e : Int)) ++ ls z)
   else if e.op == opSProj then
     codeOk (lg (loc1 (sprojVar e)) ++ wWrap
-      ++ scRead em.fw (sprojWidth e) (8 + em.fw * sprojN e + sprojOff e)
+      ++ (if sprojByte e then wLoad8 (8 + 8 * sprojN e + sprojOff e) else i64LoadAt (8 + 8 * (sprojN e : Int) + (sprojOff e : Int)))
       ++ ls z)
   else if e.op == opFap then codeOk (emCall em (fapFn e) (fapSame e) (fapDepth e) e.ys ++ (if em.conv == 0 then emResults 0 binds else emPops binds))
   else if e.op == opPrim then emPrim em (primOp e) e.b e.ys z
@@ -17637,61 +16504,6 @@ def liveBinds : List Int → List Int
   | x :: ty :: rest => if tyIsIrr ty then liveBinds rest else x :: ty :: liveBinds rest
   | _ => []
 
-/-! ## A test and the case that reads it are one branch
-
-EmitC writes `x = a == b; if (x == 0)` and the C compiler makes one compare and one branch of it. A wasm engine
-runs what stands here, so the word of the test is not made where only the case that follows reads it
-(lib/lrc/JoinOnce.rsd `condDown` brings the two together): the test is the condition of the `if`. -/
-
--- is e a test whose word is 0 or 1: the comparisons, `not`, the test of a small number, `isShared`
-def emIsTest (e : N) : Bool :=
-  e.op == opIsShared ||
-    (e.op == opPrim &&
-      (primOp e == primLt || primOp e == primGt || primOp e == primEq || primOp e == primNot || primOp e == primIsScalar))
-
--- the test as a wasm condition (an i32 that is not 0 where the word would be 1)
-def emTest (e : N) : List Int :=
-  let a := loc1 (intAt 0 e.ys).toNat
-  let b := loc1 (intAt 1 e.ys).toNat
-  if e.op == opIsShared then lg (loc1 (isSharedVar e)) ++ wWrap ++ wLoad32 0 ++ i64Const 1 ++ wNe
-  else if primOp e == primLt then lg a ++ lg b ++ wLtS
-  else if primOp e == primGt then lg a ++ lg b ++ wGtS
-  else if primOp e == primEq then lg a ++ lg b ++ wEq
-  else if primOp e == primNot then lg a ++ wEqz
-  else lg a ++ i64Const 1 ++ wAnd ++ wWrap
-
--- the two bodies of a case on a truth value, for 0 and for 1 (`ok`: the alternatives are those two)
-structure EmTwo where
-  ok : Bool
-  zero : N
-  one : N
-  deriving Inhabited
-
-def emTwo (alts : List N) : EmTwo :=
-  match alts with
-  | [a, b] =>
-    if !altIsDefault a && !altIsDefault b then
-      (if a.a == 0 && b.a == 1 then { ok := true, zero := altBody a, one := altBody b }
-       else if a.a == 1 && b.a == 0 then { ok := true, zero := altBody b, one := altBody a }
-       else { ok := false, zero := a, one := b })
-    else if !altIsDefault a && altIsDefault b then
-      (if a.a == 0 then { ok := true, zero := altBody a, one := altBody b }
-       else if a.a == 1 then { ok := true, zero := altBody b, one := altBody a }
-       else { ok := false, zero := a, one := b })
-    else if altIsDefault a && !altIsDefault b then
-      (if b.a == 0 then { ok := true, zero := altBody b, one := altBody a }
-       else if b.a == 1 then { ok := true, zero := altBody a, one := altBody b }
-       else { ok := false, zero := a, one := b })
-    else { ok := false, zero := a, one := b }
-  | _ => { ok := false, zero := n0 opUnreachable, one := n0 opUnreachable }
-
--- is the binding n a test that only the case directly below reads
-def emTestCase (n : N) : Bool :=
-  let e := vdeclExpr n
-  let k := bodyOf n
-  n.ys.isEmpty && emIsTest e && k.op == opCase && k.a == n.a && tyIsScalar (caseTy k) && (emTwo (caseAlts k)).ok
-    && !hasFreeVar (emTwo (caseAlts k)).zero n.a.toNat && !hasFreeVar (emTwo (caseAlts k)).one n.a.toNat
-
 mutual
 partial def emBody (em : Em) (labels : List Lbl) (n : N) : Code :=
   if n.op == opVDecl then
@@ -17707,11 +16519,6 @@ partial def emBody (em : Em) (labels : List Lbl) (n : N) : Code :=
           else (if e.c == 1 then [] else lg 1 ++ i64Const 2 ++ wLtU ++ wIf ++ emRefuse em.conv profile.tagFuel profile.detNone ++ wEnd)
             ++ lg 1 ++ i64Const 1 ++ wSub ++ ls 1)
         ++ emArgs e.ys ++ emSetParams em.params ++ wBr (labelDepth (-2) labels))
-    else if emTestCase n then
-      let two := emTwo (caseAlts k)
-      let a := emBody em (lblAnon :: labels) two.one
-      let z := emBody em (lblAnon :: labels) two.zero
-      { ok := a.ok && z.ok, code := emTest e ++ wIf ++ a.code ++ wElse ++ z.code ++ wEnd }
     else
       let c := emExpr em binds e
       let r := emBody em labels k
@@ -17722,19 +16529,19 @@ partial def emBody (em : Em) (labels : List Lbl) (n : N) : Code :=
     { ok := b.ok && v.ok, code := wBlock ++ b.code ++ wEnd ++ v.code }
   else if n.op == opSet then
     let r := emBody em labels (bodyOf n)
-    -- the field's index in a variable: the address is the object's, plus the index times a field's bytes
+    -- the field's index in a variable: the address is the object's, plus eight times the index
     if setIsAt n then
-      { r with code := lg (loc1 (setVar n)) ++ lg (loc1 (setAtVar n)) ++ i64Const (fldShift em.fw) ++ wShl ++ wAdd ++ wWrap
-                         ++ emArg (setArg n) ++ fldStore em.fw 8 ++ r.code }
+      { r with code := lg (loc1 (setVar n)) ++ lg (loc1 (setAtVar n)) ++ i64Const 3 ++ wShl ++ wAdd ++ wWrap
+                         ++ emArg (setArg n) ++ i64StoreAt 8 ++ r.code }
     else
-    { r with code := lg (loc1 (setVar n)) ++ wWrap ++ emArg (setArg n) ++ fldStore em.fw (8 + em.fw * setIdx n) ++ r.code }
+    { r with code := lg (loc1 (setVar n)) ++ wWrap ++ emArg (setArg n) ++ i64StoreAt (8 + 8 * (setIdx n : Int)) ++ r.code }
   else if n.op == opSetTag then
     let r := emBody em labels (bodyOf n)
     { r with code := lg (loc1 n.a.toNat) ++ wWrap ++ i64Const n.b ++ wStore8 7 ++ r.code }
   else if n.op == opSSet then
     let r := emBody em labels (bodyOf n)
-    let pos : Nat := 8 + em.fw * ssetN n + ssetOff n
-    let store := scWrite em.fw (tyWidth n.d) pos
+    let pos : Nat := 8 + 8 * ssetN n + ssetOff n
+    let store := if n.d == tyU8 then wStore8 pos else i64StoreAt ((pos : Nat) : Int)
     { r with code := lg (loc1 (ssetVar n)) ++ wWrap ++ lg (loc1 (ssetArg n)) ++ store ++ r.code }
   else if n.op == opInc then
     let r := emBody em labels (bodyOf n)
@@ -17801,20 +16608,19 @@ def liveCount : List Int → Nat
   | [] => 0
   | t :: ts => (if tyIsIrr t then 0 else 1) + liveCount ts
 
-def emDecl (fnBase nImg heap conv : Nat) (lits : List Int) (d : Decl) (fw : Nat := 8) : Code :=
+def emDecl (fnBase nImg heap conv : Nat) (lits : List Int) (d : Decl) : Code :=
   let nvars := declMaxIndex d
-  let em : Em := { self := d.f, fnBase := fnBase, params := d.xs, nImg := nImg, heap := heap, conv := conv, lits := lits, t0 := nvars + 2, t1 := nvars + 3,
-                   fw := fw }
+  let em : Em := { self := d.f, fnBase := fnBase, params := d.xs, nImg := nImg, heap := heap, conv := conv, lits := lits, t0 := nvars + 2, t1 := nvars + 3 }
   let b := emBody em [{ j := -2, ps := [] }] d.body
   let entry := if isOwnFn nImg d.f then [] else if conv == 0 then fuelPrologue
     else lg 1 ++ wEqz ++ wIf ++ emRefuse conv profile.tagFuel profile.detNone ++ wEnd
   -- every path of the loop returns, jumps to its start or refuses; what follows it is never run
   { ok := b.ok, code := entry ++ wLoop ++ b.code ++ wEnd ++ (if conv == 0 then i64Const 0 else wUnreachable) ++ [opEnd] }
 
-def emDeclFn (fnBase nImg heap conv : Nat) (lits : List Int) (d : Decl) (fw : Nat := 8) : WFn :=
+def emDeclFn (fnBase nImg heap conv : Nat) (lits : List Int) (d : Decl) : WFn :=
   let nvars := declMaxIndex d
   { params := emI64s (2 + d.xs.length), results := (if conv == 0 then [vtI64] else emI64s (liveCount d.rets)),
-    locals := emI64s (nvars - d.xs.length + 2), code := (emDecl fnBase nImg heap conv lits d fw).code }
+    locals := emI64s (nvars - d.xs.length + 2), code := (emDecl fnBase nImg heap conv lits d).code }
 
 /-! ### The public entry of a function
 
@@ -17942,34 +16748,34 @@ def sigWords (g : Dg) (sig : List Int) : Nat :=
 -- The image's functions: n public entries, then the internal functions in the image's order, the
 -- stage's own list functions (index n and up, no entry) after them. `pubs` gives the boundary
 -- twins (pairs: function, twin's place), `all` is the whole list of declarations.
--- `rtBase` is the number of runtime functions before them in the module; `heap` is `Em.heap`, `fw` is `Em.fw`.
-def emitFns (g : Dg) (sigs : List (List Int)) (rtBase n heap conv : Nat) (lits : List Int) (pubs : List Int) (all : List Decl) (fw : Nat) : List Decl → EmitR
+-- `rtBase` is the number of runtime functions before them in the module; `heap` is `Em.heap`.
+def emitFns (g : Dg) (sigs : List (List Int)) (rtBase n heap conv : Nat) (lits : List Int) (pubs : List Int) (all : List Decl) : List Decl → EmitR
   | [] => { ok := true, fn := 0, publics := [], internals := [] }
   | d :: ds =>
-    let r := emitFns g sigs rtBase n heap conv lits pubs all fw ds
+    let r := emitFns g sigs rtBase n heap conv lits pubs all ds
     if !r.ok then r
     else if d.ext then
       { r with publics := emRefusing (sigWords g (sigOf sigs d.f)) :: r.publics, internals := emRefusing 0 :: r.internals }
     else
-      let c := emDecl (rtBase + n) n heap conv lits d fw
+      let c := emDecl (rtBase + n) n heap conv lits d
       if !c.ok then { ok := false, fn := d.f, publics := [], internals := [] }
-      else if d.f >= n then { r with internals := emDeclFn (rtBase + n) n heap conv lits d fw :: r.internals }
+      else if d.f >= n then { r with internals := emDeclFn (rtBase + n) n heap conv lits d :: r.internals }
       -- a sum in the signature: the boundary's words are not the stage's (lib/lrc/FromWire.rsd
       -- `tyHasSumWord`); the function is there for the image's own calls, its public entry refuses
       else if sigHasSumWord g (sigCount (sigOf sigs d.f)) (sigParams (sigOf sigs d.f)) then
-        { r with publics := emRefusing 0 :: r.publics, internals := emDeclFn (rtBase + n) n heap conv lits d fw :: r.internals }
+        { r with publics := emRefusing 0 :: r.publics, internals := emDeclFn (rtBase + n) n heap conv lits d :: r.internals }
       else
         -- the entry runs the function's boundary twin when it has one (lib/lrc/FromWire.rsd "The boundary"):
         -- the entry and the twin have the boundary's words, and the twin its own borrowed parameters. A function
         -- without a twin has the same words inside the stage as at the boundary.
         let t := pubEntry pubs d.f
         { r with publics := emPublic (rtBase + n) heap conv t (fwSigB g (sigOf sigs d.f)) (declXs d.xs t all) :: r.publics,
-                 internals := emDeclFn (rtBase + n) n heap conv lits d fw :: r.internals }
+                 internals := emDeclFn (rtBase + n) n heap conv lits d :: r.internals }
 
 end Lrc
 
-end RscSourceModule_c63bd6488ada4f490dc472f27f97d1b1c3b74fb976ce7a5218714e73efa668b2
-section RscSourceModule_ef1bab63fa23bb820c75121ec5dbc6090b4120bd524e7688ecaeabf06bf5871e
+end RscSourceModule_d3095ec19e23e584e7e579b21f72e51d19800b8c14a4110870abeca00faa0ff0
+section RscSourceModule_7a59b41f231ecd118745b34c0090cf9adb60e5cf8c23c6e733276fd33a296f6f
 structure Ev where
   ok : Int
   v : Int
@@ -24039,38 +22845,30 @@ def lrcModule (lay : Layers) (g : Dg) (sigs : List (List Int)) (n : Nat) (pubs :
   -- under the alloc layer the stage's own heap (lib/lrc/Emit.rsd, "The stage's heap"): its three
   -- functions follow the internal ones, one for each declaration
   let heap := if lay.alloc then rtBase + n + decls.length else 0
-  -- the bytes of an object field: 4 under the layer `narrow`, which is a layout of the stage's own heap
-  -- (docs/OBJECT-ABI.md "Narrow fields"); such a module has one more function, exported as `fw`, that says so
-  let fw := if lay.narrow && lay.alloc then 4 else 8
   -- under the facts bit, which the stage does not use otherwise: internal functions return their
   -- results and a refusal is thrown to the entry (lib/lrc/Emit.rsd "How a function ends")
   let conv := if lay.facts then 1 else 0
   -- string literals as persistent objects in the module's data (lib/lrc/Emit.rsd)
   let lits := Lrc.litPool decls
-  let em := Lrc.emitFns g sigs rtBase n heap conv lits pubs decls fw decls
+  let em := Lrc.emitFns g sigs rtBase n heap conv lits pubs decls decls
   if !em.ok then outFail (lrcRefused (Lrc.Residue.nodeNotWritten em.fn))
   else
-    let fns := (rtFnsOfWithLayers lay) rts ++ em.publics ++ em.internals ++ (if heap == 0 then [] else Lrc.heapFnsFor (Lrc.declsUseArr n decls) heap fw)
-      ++ (if fw == 4 then [Lrc.narrowFn] else [])
+    let fns := (rtFnsOfWithLayers lay) rts ++ em.publics ++ em.internals ++ (if heap == 0 then [] else Lrc.heapFnsFor (Lrc.declsUseArr n decls) heap)
     -- the runtime's dup and drop, where the emitter still calls them (`compileFrom` does the same)
     let fns := runtimeInlineFns lay rtBase fns
-    -- the module's last function is the one that names the width (lib/lrc/Emit.rsd `narrowFn`)
-    let last := fns.length - 1
-    let exps := shiftExps rtBase (expsFor n) ++ (if fw == 4 then [{ name := Lrc.narrowName, idx := last }] else [])
-    outOk (encode { fns := if lay.reg then rgFns fns else fns, exps := exps, tags := conv,
+    outOk (encode { fns := if lay.reg then rgFns fns else fns, exps := shiftExps rtBase (expsFor n), tags := conv,
                     lowData := Lrc.litData lits })
 
 -- LRC: the stage on an image. One gate admits it (lib/lrc/FromWire.rsd `q` and `admit`, an NF
 -- instance); what is admitted goes through the passes under the word's options and is written as
 -- a module. The module's functions read the class's type context, as the translation did.
-def lrcCompile (lay : Layers) (g : Dg) (intr : List Int) (sigs : List (List Int)) (n : Nat) (bodies : List Int) (ws : List (List Int)) : Out :=
+def lrcCompile (lay : Layers) (g : Dg) (intr : List Int) (sigs : List (List Int)) (n : Nat) (bodies : List Int) : Out :=
   -- arrays are cells of the stage's own heap: without it a list stays cells (lib/lrc/FromWire.rsd "Arrays")
-  let c := Lrc.q { types := g, intr := intr, sigs := sigs, n := n, bodies := bodies, arrays := lay.alloc, narrow := lay.narrow && lay.alloc,
-                   widths := ws }
+  let c := Lrc.q { types := g, intr := intr, sigs := sigs, n := n, bodies := bodies, arrays := lay.alloc }
   match Lrc.admit c with
   | Except.error e => outFail (lrcRefused e)
   | Except.ok im =>
-    lrcModule lay c.types sigs n im.pubs (Lrc.pipelineWith ((if lay.cte then 1 else if lay.fuse then 0 else Lrc.pipelineDefault) + (if lay.qbe then 4 else 0) + (if lay.tail then 8 else 0) + (if lay.static then 16 else 0) + (if lay.borrow then 0 else 32) + (if lay.dropSpec then 0 else 256) + (if lay.narrow && lay.alloc then 2048 else 0)) im.n im.decls)
+    lrcModule lay c.types sigs n im.pubs (Lrc.pipelineWith ((if lay.cte then 1 else if lay.fuse then 0 else Lrc.pipelineDefault) + (if lay.qbe then 4 else 0) + (if lay.tail then 8 else 0) + (if lay.static then 16 else 0) + (if lay.borrow then 0 else 32) + (if lay.dropSpec then 0 else 256)) im.n im.decls)
 
 def compileFrom (lay : Layers) (g : Dg) (tbl : List TE) (hrest : List Int) : Out :=
     let g := { g with nodeUse := if g.on then nodeUsed g else [] }
@@ -24087,7 +22885,7 @@ def compileFrom (lay : Layers) (g : Dg) (tbl : List TE) (hrest : List Int) : Out
         let intrinsics := intrinsicKinds lay g 0 ss.ss ss.rest
         -- LRC: under the stage's word the stage compiles the image or refuses it (`lrcCompile`);
         -- with the layer off every image takes the path below.
-        if lrcOn lay then lrcCompile lay g intrinsics ss.ss c.n.toNat ss.rest (readSigWs g c.n.toNat c.rest)
+        if lrcOn lay then lrcCompile lay g intrinsics ss.ss c.n.toNat ss.rest
         else
         let bodies := if lay.rc && g.on then cseBodies g ss.ss intrinsics c.n.toNat 0 ss.rest else ss.rest
         let n := c.n.toNat
@@ -24167,4 +22965,4 @@ def compile (config : Int) (bs : List Int) : Out :=
   | none => outFail profile.cLayerBits
   | some lay => compileWithLayers lay (tableWithLayers lay) bs
 
-end RscSourceModule_ef1bab63fa23bb820c75121ec5dbc6090b4120bd524e7688ecaeabf06bf5871e
+end RscSourceModule_7a59b41f231ecd118745b34c0090cf9adb60e5cf8c23c6e733276fd33a296f6f

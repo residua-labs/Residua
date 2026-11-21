@@ -1,6 +1,0 @@
-# the source table sidecar: the .rscm beside this file was emitted from the .rsd beside this file
-# by the current emitter (emitTyped, the current emitter's lowered form) under stock Lean 4.14.0 on
-# the benchmark source at e1e122c (closure_claim = 0). It names both hashes; edit neither file.
-rscm_file	benchmarks/nqueens.rscm	rscm_sha256	11acd28c72c7190bcac248e0c5c6a11f9f4a5f82346ffd1ed072ee95f320b125	rscm_bytes	537
-rsd_file	benchmarks/nqueens.rsd	rsd_sha256	66e2af0643901e8e58debedbc7e08fda506b4c9e3c4353920e1863877c890fce
-root	queens	entry	4	declared_arity	1	modules	6

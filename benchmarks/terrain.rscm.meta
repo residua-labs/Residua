@@ -1,6 +1,0 @@
-# the source table sidecar: the .rscm beside this file was emitted from the .rsd beside this file
-# by the current emitter (emitTyped, the current emitter lowered form) under stock Lean 4.14.0 on
-# the benchmark source revision 2 (closure_claim = 0). It names both hashes; edit neither file.
-rscm_file	benchmarks/terrain.rscm	rscm_sha256	3500be00311eb084c9a55a0303a48e1efc5a893b24c623e612b35ad93599a010	rscm_bytes	7812
-rsd_file	benchmarks/terrain.rsd	rsd_sha256	b72ae37d31672b346640a08228e1fa4f5c314198a189f5830af1eff42dfcb5f1
-root	terrain	entry	16	declared_arity	2	modules	56

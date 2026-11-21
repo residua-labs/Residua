@@ -1,0 +1,25 @@
+# GLOSSARY
+
+English | [中文](GLOSSARY.zh-CN.md)
+
+- **q** — the content address of an object: SHA-256 over its bytes in
+  0.2, the typed, versioned `q` format v1 of `docs/QFORMAT.md`.
+- **rsd** — Residua's language and toolchain.
+- **rsx** — the canonical syntax tree of rsd terms (dependent type
+  theory).
+- **scm** — the erased functional core every program is lowered to.
+- **lambda-RC** — the functional IR with reference counting and
+  in-place reuse.
+- **wasm0** — the integer-core subset of WebAssembly the compiler
+  emits.
+- **Seed** — the committed wasm modules that rebuild the compiler.
+- **Fixpoint** — the compiler built by itself equals itself byte for
+  byte.
+- **Seal** — a review signature by an independent model family on a
+  release candidate.
+- **Residue** — a named, recorded limitation or open item, never
+  silent.
+- **Stage word** — the identifier of the compiler stage revision that
+  produced an image.
+- **R-CIC** — Residua's kernel checker for Lean-compatible proofs (not
+  in 0.2).

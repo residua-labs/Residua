@@ -1,0 +1,27 @@
+-- Flat Exec9 host entry. Append to the Lib.Exec9 source closure.
+namespace Effect.Exec9Entry
+
+open Lib.Exec9
+
+private def parentComponents (part : List Int) : List Int → List (List Int)
+  | [] => [part.reverse]
+  | b :: rest =>
+    if b == 47 then part.reverse :: parentComponents [] rest
+    else parentComponents (b :: part) rest
+
+private def parentPath (bytes : List Int) : List (List Int) :=
+  if bytes.isEmpty then [] else parentComponents [] bytes
+
+-- Host selector and probe follow host/exec9.cjs. The first parameter is
+-- always the resolved namespace digest, as 32 raw bytes. FS parents use
+-- slash-separated relative components, with the leaf supplied separately.
+def cold (sel : Int) (nsQ arg1 arg2 arg3 st reply : List Int) : StepReply :=
+  if sel == 1 then stepFsRead arg1 st reply nsQ (parentPath arg2)
+  else if sel == 2 then stepFsWrite arg1 arg2 st reply nsQ (parentPath arg3)
+  else if sel == 3 then stepClock st reply nsQ
+  else if sel == 4 then stepCmd arg1 st reply nsQ
+  else if sel == 5 then stepStorePut arg1 st reply nsQ
+  else if sel == 6 then stepStoreGet arg1 st reply nsQ
+  else { st := [], act := ACT_OK, out := [137] }
+
+end Effect.Exec9Entry

@@ -212,8 +212,6 @@ structure Layers where
   static : Bool := false
   alloc : Bool := false
   ctor : Bool := false
-  -- object fields of four bytes in a module of the stage with its own heap (docs/OBJECT-ABI.md "Narrow fields")
-  narrow : Bool := false
   deriving BEq
 
 def layersOff : Layers := { arr := false, reg := false, tail := false, qbe := false, cte := false, fuse := false, facts := false }
@@ -234,14 +232,13 @@ def layersOn : Layers := { arr := true, reg := true, tail := true, qbe := true, 
 -- bit 5 selects fusion, bit 6 certified type facts, bit 7 RC,
 -- bit 8 borrow inference, bit 9 drop specialization, bit 10 reset/reuse,
 -- bit 11 persistent ground objects, bit 12 the batched allocator fast path,
--- bit 13 constructor-object access (BACKEND-OPT-0 T2; opt-in),
--- bit 14 narrow object fields (docs/OBJECT-ABI.md "Narrow fields"; opt-in).
+-- bit 13 constructor-object access (BACKEND-OPT-0 T2; opt-in).
 -- The allocator bit is opt-in until its whole-program gates pass. Existing
 -- configuration words, including the default and `all`, keep their meaning.
 -- Reject unknown bits
 -- before reading input. The environment stays in the native wrapper only.
 def layersFromBits (bits : Int) : Option Layers :=
-  if bits < 0 || bits >= 32768 then none
+  if bits < 0 || bits >= 16384 then none
   else some { arr := bits % 2 == 1
             , reg := (bits / 2) % 2 == 1
             , tail := (bits / 4) % 2 == 1
@@ -255,8 +252,7 @@ def layersFromBits (bits : Int) : Option Layers :=
             , reuse := (bits / 1024) % 2 == 1
             , static := (bits / 2048) % 2 == 1
             , alloc := (bits / 4096) % 2 == 1
-            , ctor := (bits / 8192) % 2 == 1
-            , narrow := (bits / 16384) % 2 == 1 }
+            , ctor := (bits / 8192) % 2 == 1 }
 
 def addLayer (lay : Layers) (n : String) : Option Layers :=
   if n == "" then some lay
@@ -274,7 +270,6 @@ def addLayer (lay : Layers) (n : String) : Option Layers :=
   else if n == "static" then some { lay with static := true }
   else if n == "alloc" then some { lay with alloc := true }
   else if n == "ctor" then some { lay with ctor := true }
-  else if n == "narrow" then some { lay with narrow := true }
   else if n == "all" then some layersOn
   else if n == "off" then some layersOff
   else none
@@ -852,13 +847,6 @@ def readTyIter (g : Dg) (fuel : Nat) (work : List TyWork) (acc : List Int)
               readTyIter g k ws (pushBytes (54 :: lebU id.toNat) acc)
                 (span + 1 + (lebSpan bs).n) (if nd > need then nd else need) r.rest
             | _ => tyFail profile.cRefKind r.rest
-        | 11 :: _ :: bs =>
-          let nd := if w.depth > need then w.depth else need
-          readTyIter g k ws (0 :: acc) (span + 2) nd bs
-        | 10 :: _ :: _ :: bs =>
-          let nd := if w.depth > need then w.depth else need
-          readTyIter g k ({ kind := 0, n := 0, depth := w.depth + 1 } :: ws)
-            (4 :: acc) (span + 3) nd bs
         | t :: bs =>
           let nd := if w.depth > need then w.depth else need
           if t == 0 || t == 1 || t == 2 || t == 3 then
@@ -977,10 +965,6 @@ def tyNeedGo (fuel : Nat) (kind : Nat) (n : Nat) (rest : List Int) : Rd :=
     else
       match rest with
       | [] => rdFail profile.cTrunc []
-      | 11 :: _ :: bs => rdOk 1 bs
-      | 10 :: _ :: _ :: bs =>
-        let a := tyNeedGo k 0 0 bs
-        if a.ok != profile.cOk then a else rdOk (1 + a.n) a.rest
       | t :: bs =>
         if t == 0 || t == 1 || t == 2 || t == 3 then rdOk 1 bs
         else if t == 4 || t == 8 || t == 9 then
@@ -1048,10 +1032,6 @@ def tpRun (g : Dg) (named : Bool) : Nat → List Int → List Int → Tn
 def tyNode (g : Dg) (rest : List Int) : Tn :=
   match rest with
   | [] => tnFail profile.cTrunc []
-  | 11 :: _ :: bs => { ok := profile.cOk, need := 1, acc := [0], rest := bs }
-  | 10 :: _ :: _ :: bs =>
-    let a := tpOne g [4] bs
-    if a.ok != profile.cOk then a else { a with need := 1 + a.need }
   | t :: bs =>
     if t == 0 || t == 1 || t == 2 || t == 3 then { ok := profile.cOk, need := 1, acc := [t], rest := bs }
     else if t == 4 || t == 8 || t == 9 then
@@ -1186,11 +1166,6 @@ def typeDigest (g : Dg) (fuel kind n : Nat) (h : Int) (rest : List Int) : Rd :=
         match dgAt g r.n.toNat with
         | 0 :: _ :: _ :: hash :: _ => rdOk hash r.rest
         | _ => rdFail profile.cRef r.rest
-      | 11 :: _ :: bs => rdOk (typeHash [0] 0) bs
-      | 10 :: _ :: _ :: bs =>
-        let h := typeHash [4] 0
-        let a := typeDigest g k 0 0 0 bs
-        if a.ok != profile.cOk then a else rdOk (typeHash [a.n] h) a.rest
       | t :: bs =>
         let h := typeHash [t] 0
         if t <= 3 then rdOk h bs
@@ -1368,8 +1343,6 @@ def sizeGoWithLayers (tg : Dg) (lay : Layers) (fuel : Nat) (arr : List (List Int
     else
       match rest with
       | [] => szFail profile.cTrunc []
-      | 11 :: _ :: bs => ((sizeGoWithLayers tg) lay) k arr mode eqt 0 0 acc map (0 :: bs)
-      | 10 :: _ :: _ :: bs => ((sizeGoWithLayers tg) lay) k arr mode eqt 0 0 acc map (4 :: bs)
       | t :: bs =>
         if t == 0 || t == 1 then { ok := profile.cOk, n := acc + 1, map := map ++ [0], rest := bs }
         else if t == 2 then { ok := profile.cOk, n := acc + 1, map := map ++ [if mode == 2 || mode == 3 then 0 else 1], rest := bs }
@@ -1466,8 +1439,6 @@ def listTysGo (tg : Dg) (fuel : Nat) (kind : Nat) (n : Nat) (seen : Map) (acc : 
     else
       match rest with
       | [] => ltFail profile.cTrunc []
-      | 11 :: _ :: bs => (listTysGo tg) k 0 0 seen acc (0 :: bs)
-      | 10 :: _ :: _ :: bs => (listTysGo tg) k 0 0 seen acc (4 :: bs)
       | t :: bs =>
         if t == 0 || t == 1 || t == 2 then { ok := profile.cOk, acc := acc, rest := bs, seen := seen }
         else if t == 3 then { ok := profile.cOk, acc := (addT tg) acc [4, 0], rest := bs, seen := seen }
@@ -1621,30 +1592,6 @@ def sigOf : List (List Int) → Nat → List Int
   | [], _ => []
   | s :: _, 0 => s
   | _ :: ss, k + 1 => sigOf ss k
-
--- The declared width in bits of the fixed-width scalar type that a type's stream begins with (tag 11 and its width
--- byte: contracts/tasks/WIRE-SEQ-0.md revision 2), 0 for any other type. `readTyD` gives such a type as the word it
--- means, so whoever wants the width reads it here, beside it.
-def tyRawWidth : List Int → Int
-  | 11 :: w :: _ => w
-  | _ => 0
-
--- the widths of k types in a row
-def readTyWs (g : Dg) : Nat → List Int → List Int
-  | 0, _ => []
-  | k + 1, rest => tyRawWidth rest :: readTyWs g k (readTyD g rest).rest
-
--- For each function its signature's declared widths, the parameters' and then the result's: the stream `readSigs`
--- reads, read beside it (lib/lrc/FromWire.rsd lays a node's fields out by them). Where a signature does not read,
--- the lists end (`readSigs` names the cause).
-def readSigWs (g : Dg) : Nat → List Int → List (List Int)
-  | 0, _ => []
-  | k + 1, rest =>
-    let r := readLeb rest
-    if r.ok != profile.cOk || r.n < 0 || r.n > (profile.arityMax : Int) then []
-    else
-      let t := readTys g (r.n.toNat + 1) [] r.rest
-      if t.ok != profile.cOk then [] else readTyWs g (r.n.toNat + 1) r.rest :: readSigWs g k t.rest
 
 -- The i-th type of a run of types.
 def nthTy (tg : Dg) : Nat → List Int → List Int

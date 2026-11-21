@@ -1,6 +1,0 @@
-# the source table sidecar: the .rscm beside this file was emitted from the .rsd beside this file
-# by the current emitter (emitTyped, the current emitter's lowered form) under stock Lean 4.14.0 on
-# the benchmark source at e1e122c (closure_claim = 0). It names both hashes; edit neither file.
-rscm_file	benchmarks/pidigits.rscm	rscm_sha256	447c3faf61bc7777f4506ab44eeae42969851df2b89f065305a643218b77c6ae	rscm_bytes	1561
-rsd_file	benchmarks/pidigits.rsd	rsd_sha256	7fd127db44d47171b8bc1a5ad465d3cea4e493134feaf819f551e5713829d375
-root	piDigits	entry	2	declared_arity	1	modules	5

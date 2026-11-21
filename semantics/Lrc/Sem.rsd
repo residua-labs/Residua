@@ -76,6 +76,9 @@ structure Obj where
   objs : List V
   usize : List Int
   scalars : List (Nat × Int)
+  -- Revision 3: the bytes each scalar was written with (lib/lrc/Ir.rsd `tyWidth` of the `sset`'s type, instruments/lrc-host/Interp.rsd
+  -- `widths`): a read of another width at the same place is an error, since the module would read other bytes
+  widths : List (Nat × Nat) := []
   freed : Bool
   persistent : Bool
   deriving Inhabited
@@ -117,6 +120,18 @@ theorem listSetAux_eq : ∀ (xs : List α) (i : Nat) (v : α) (acc : List α),
 for clause. -/
 theorem listSet_eq (xs : List α) (i : Nat) (v : α) : listSet xs i v = xs.set i v := by
   simp [listSet, listSetAux_eq]
+
+-- Revision 3: `sset` writes the value and the bytes it was written with (instruments/lrc-host/Interp.rsd).
+def setScalar (o : Obj) (off w : Nat) (v : Int) : Obj :=
+  { o with scalars := (off, v) :: o.scalars.filter (fun p => p.1 != off),
+           widths := (off, w) :: o.widths.filter (fun p => p.1 != off) }
+
+-- Revision 3: a read of other bytes than the slot was written with is an error (instruments/lrc-host/Interp.rsd `sproj`).
+def widthCheck (a : Nat) (o : Obj) (off want : Nat) : M Unit :=
+  match o.widths.lookup off with
+  | some w =>
+    if w != want then throw s!"sproj of {want} bytes at byte {off} of object {a}, written with {w}" else pure ()
+  | none => pure ()
 
 def objAt (a : Nat) : M Obj := do
   let s ← get
@@ -553,6 +568,7 @@ def exec (ds : List Lrc.Decl) (mode : Mode) : Nat → Task → M (List V)
         let o ← objAt a
         if o.tag == Lrc.cloTag then throw s!"sproj of object {a}, which is a closure"
         if Lrc.sprojN e != o.objs.length then throw s!"sproj with a wrong object-field count on object {a}"
+        widthCheck a o (Lrc.sprojOff e) (Lrc.sprojWidth e)
         return [.int ((o.scalars.lookup (Lrc.sprojOff e)).getD 0)]
       | _ => throw "sproj of a value that is not an object"
     else if e.op == Lrc.opFap then
@@ -568,7 +584,8 @@ def exec (ds : List Lrc.Decl) (mode : Mode) : Nat → Task → M (List V)
       let s ← get
       let fields := Lrc.litObjFields e
       let scalars := (List.range (fields.length / 3)).map (fun i => ((fields.getD (3 * i) 0).toNat, fields.getD (3 * i + 2) 0))
-      set { s with heap := s.heap ++ [({ rc := 0, tag := Lrc.litObjTag e, objs := [], usize := [], scalars := scalars, freed := false, persistent := true } : Obj)] }
+      let widths := (List.range (fields.length / 3)).map (fun i => ((fields.getD (3 * i) 0).toNat, Lrc.tyWidth (fields.getD (3 * i + 1) 0)))
+      set { s with heap := s.heap ++ [({ rc := 0, tag := Lrc.litObjTag e, objs := [], usize := [], scalars := scalars, widths := widths, freed := false, persistent := true } : Obj)] }
       return [.ptr s.heap.length]
     else if e.op == Lrc.opLitStr then
       return [.str (if (Lrc.litBytes e).isEmpty then e.s else String.mk ((Lrc.litBytes e).map (fun b => Char.ofNat b.toNat)))]
@@ -664,7 +681,9 @@ def exec (ds : List Lrc.Decl) (mode : Mode) : Nat → Task → M (List V)
         if Lrc.ssetN n != o.objs.length then throw s!"sset with a wrong object-field count on object {a}"
         let v ← asInt (← fr.get (Lrc.ssetArg n))
         if n.d == Lrc.tyU8 && (v < 0 || v > 255) then throw s!"sset of {v} into a byte field of object {a}"
-        setObj a { o with scalars := (Lrc.ssetOff n, v) :: o.scalars.filter (fun p => p.1 != Lrc.ssetOff n) }
+        if Lrc.tyWidth n.d == 2 && (v < 0 || v > 65535) then throw s!"sset of {v} into a field of 2 bytes of object {a}"
+        if Lrc.tyWidth n.d == 4 && (v < 0 || v > 4294967295) then throw s!"sset of {v} into a field of 4 bytes of object {a}"
+        setObj a (setScalar o (Lrc.ssetOff n) (Lrc.tyWidth n.d) v)
         exec ds mode k (.body fuel fr (Lrc.bodyOf n))
       | _ => throw "sset on a value that is not an object"
     else if n.op == Lrc.opInc then
@@ -830,7 +849,7 @@ gives the same observable value.
 
 Revision 2026-11-17 (cc). The unrestricted statement over every program is false; four
 counterexamples are the `#guard`s `cexIsShared`, `cexResetEscape`, `cexReuseTag` and
-`cexUndercount` below (the first three found by swe-semproof, raisin-clean swe/semproof
+`cexUndercount` below (the first three found by swe-semproof, residua swe/semproof
 reports/semproof-swe/QUESTIONS.md). `reset`, `reuse` and `isShared` observe the reference count, so
 their erasure holds only for programs whose counts are sound and that use them in the discipline
 the passes emit (Ullrich and de Moura, "Counting Immutable Beans", section 5: the theorem is about
@@ -1448,6 +1467,33 @@ def uprojOut : N := mkVDecl 1 tyObj (mkUCtor infoU 1 [0]) (mkVDecl 2 tyI64 (mkUP
 -- swe-irsem's eqat7 and rr-append): a write past a hundred thousand cells returns the element
 #guard Sem.listSet ['a', 'b', 'c'] 1 'z' == ['a', 'z', 'c']
 #guard (Sem.listSet (List.replicate 100000 (7 : Int)) 99999 (-1)).get? 99999 == some (-1)
+
+/-! ### Revision 3: the widths of a scalar field (lib/lrc/Ir.rsd `tyWidth`, instruments/lrc-host/Interp.rsd)
+A cell with one scalar word; `sset` of type `ty` writes `v`, `sproj` reads `rw` bytes (0: a word). The semantics refuses what
+the interpreter refuses: a value outside the stored width, and a read of other bytes than were written (the module would read
+other bytes). Counterexamples are the rows that must be refused; the others are the rows the stage emits. -/
+def wInfo : CtorInfo := { cidx := 1, size := 0, ssize := 8, tid := 9 }
+def wBody (ty v rw : Int) : N :=
+  mkVDecl 1 tyObj (mkCtor wInfo []) (mkVDecl 2 tyI64 (mkLit v)
+    (mkSSet 1 0 0 2 ty (mkVDecl 3 tyI64 { mkSProj 0 0 1 with c := rw } (mkRet [3]))))
+def wProg (ty v rw : Int) : List Decl :=
+  [{ f := 0, xs := [{ x := 0, borrow := false, ty := tyI64 }], rets := [tyI64], body := wBody ty v rw, ext := false }]
+def wRefused (ty v rw : Int) (prefix_ : String) : Bool :=
+  match Sem.runEntry (wProg ty v rw) 0 [0] 10 100 .counted with
+  | .stop s => s.startsWith prefix_
+  | _ => false
+#guard Sem.runEntry (wProg 10 255 1) 0 [0] 10 100 .counted == .value "255"
+#guard Sem.runEntry (wProg 11 65535 2) 0 [0] 10 100 .counted == .value "65535"
+#guard Sem.runEntry (wProg 12 4294967295 4) 0 [0] 10 100 .counted == .value "4294967295"
+#guard Sem.runEntry (wProg 0 4294967296 0) 0 [0] 10 100 .counted == .value "4294967296"
+#guard wRefused 10 256 1 "sset of 256 into a byte field"
+#guard wRefused 11 65536 2 "sset of 65536 into a field of 2 bytes"
+#guard wRefused 12 4294967296 4 "sset of 4294967296 into a field of 4 bytes"
+#guard wRefused 11 (-1) 2 "sset of -1 into a field of 2 bytes"
+#guard wRefused 11 7 4 "sproj of 4 bytes at byte 0 of object"
+#guard wRefused 12 7 2 "sproj of 2 bytes at byte 0 of object"
+#guard wRefused 0 7 4 "sproj of 4 bytes at byte 0 of object"
+#guard wRefused 10 7 0 "sproj of 8 bytes at byte 0 of object"
 
 end Lrc.SemControls
 

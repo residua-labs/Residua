@@ -1,6 +1,0 @@
-# the source table sidecar: the .rscm beside this file was emitted from the .rsd beside this file
-# by the current emitter (emitTyped, the current emitter lowered form) under stock Lean 4.14.0 on
-# the benchmark source revision 2 (closure_claim = 0). It names both hashes; edit neither file.
-rscm_file	benchmarks/bfs.rscm	rscm_sha256	8b23f14eae14c643ca367a6adf0bbceccd55ec858d9fac27f280b11c26a6c627	rscm_bytes	5586
-rsd_file	benchmarks/bfs.rsd	rsd_sha256	9710bd0a25ddff44f93f84dc042846327c9c41fc75935e29e7de971ee060b438
-root	bfsMain	entry	18	declared_arity	1	modules	34

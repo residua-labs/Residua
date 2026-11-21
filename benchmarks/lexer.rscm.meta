@@ -1,6 +1,0 @@
-# the source table sidecar: the .rscm beside this file was emitted from the .rsd beside this file
-# by the current emitter (emitTyped, the current emitter lowered form) under stock Lean 4.14.0 on
-# the benchmark source revision 2 (closure_claim = 0). It names both hashes; edit neither file.
-rscm_file	benchmarks/lexer.rscm	rscm_sha256	13c8ed206826e4332169bf731d0194c3b14aa4ba6def9512c3204570cfa401a5	rscm_bytes	4838
-rsd_file	benchmarks/lexer.rsd	rsd_sha256	fbaf3d78a3bad93e1cf4106764c88130e5b6577b9910b2be876df821bb5e58d2
-root	lexer	entry	15	declared_arity	1	modules	37

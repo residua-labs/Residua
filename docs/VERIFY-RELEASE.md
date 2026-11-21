@@ -1,0 +1,200 @@
+# VERIFY-RELEASE — checking a 0.2 release candidate
+
+What a stranger can check with only the release files, `sha256sum`,
+`cmp`, `tar`, `sed`, `awk`, `grep` and `diff`. All digests below are
+sha256 (FIPS 180-4). The shipped digest tables are
+`bootstrap/seed/stage-14274/SHA256SUMS` (seeds and whole-module
+sources), `…/SOURCE-MEMBERS-SHA256SUMS` (the 53 source members),
+`…/EXECUTOR-SHA256SUMS` (the C host bridge), `…/REBUILT-SHA256SUMS`
+(the recipe's four products), `…/WABT-SHA256SUMS` and
+`…/WABT-RUNTIME-SHA256SUMS` (pinned fetches), `…/ASSEMBLY.tsv`
+(member-to-bundle link), `…/CUT.tsv` (cut identity, entries and seed
+digests) and `docs/SPECS.md` (the S/W/B/D rows). Two earlier
+manifests also ship: `bootstrap/seed/manifest.json` and
+`bootstrap/sources.json` are the older pinned seed cut's manifests —
+their `source_commit` (`95e3d9cf7…`) and source `q` fields describe
+that older seed's sources and the older pair still shipped at
+`bootstrap/seed/{rsdc,rsc}.wasm`, not the stage-14274 seed. The
+repository-side artifact, source-role and build-input tables do not
+ship and are named only as citations; `release/BUILD-INPUTS.tsv`
+carries path inventories, not digests. For 0.2 the checkable surface
+is the seed and the scm formats only (the third-party check; `release/MANIFEST.md`). This
+document will change in later versions (0.2+).
+
+## 1. Archive digest and extraction
+
+The archive's sha256 travels beside it:
+
+```sh
+sha256sum -c rsd-src.tar.sha256    # expect: rsd-src.tar: OK
+```
+
+The archive writes its members at the top level (`bootstrap/`,
+`release/`, `lib/`, `rsdc/`, `rsc/`, …) with no leading directory —
+extract into a fresh directory so the tree does not mix with other
+files:
+
+```sh
+mkdir rsd-src && tar -xf rsd-src.tar -C rsd-src && cd rsd-src
+```
+
+All remaining commands run at this extraction root. The shipped member
+list can be cross-checked against the build-input inventory
+(`release/BUILD-INPUTS.tsv`, shipped): the `release-source-archive`
+rows minus the two recipe inputs that stay repository-side
+(`release/SOURCE-ROLES.tsv` and
+`reports/release-readiness-r1/SourceArchive.rsd`), deduplicated
+(`release/SHIP-RULES.tsv` is recorded twice — once as a shipped
+member, once as a recipe input), must equal `tar tf`:
+
+```sh
+awk -F'\t' '$1 == "release-source-archive" { print $2 }' \
+    release/BUILD-INPUTS.tsv \
+  | grep -vx -e release/SOURCE-ROLES.tsv \
+             -e reports/release-readiness-r1/SourceArchive.rsd \
+  | sort -u > /tmp/archive.want
+tar tf ../rsd-src.tar | sort > /tmp/archive.have
+diff /tmp/archive.want /tmp/archive.have   # expect: no output
+```
+
+## 2. Seed digests
+
+```sh
+cd bootstrap/seed/stage-14274
+sha256sum -c SHA256SUMS                  # the two seeds + two whole-module sources
+cd -                                   # back to the extraction root
+sha256sum -c bootstrap/seed/stage-14274/SOURCE-MEMBERS-SHA256SUMS   # all 53 compiler source members
+sha256sum -c bootstrap/seed/stage-14274/EXECUTOR-SHA256SUMS
+```
+
+(`SHA256SUMS` lists seed-directory-relative paths; the member and
+executor manifests list root-relative paths.)
+
+Expected: every line `OK`. The seed pair is `rsdc.wasm`
+`dcd40993dcda…49a32ec` and `rsc.wasm` `ce2cff5b42fd…e139a2`
+(`stage-14274/SHA256SUMS`); the older pinned seed pair at
+`bootstrap/seed/` checks against `bootstrap/seed/manifest.json`'s `q`
+fields.
+
+## 3. Member-to-bundle assembly
+
+The recipe compiles the two whole-module sources
+`bootstrap/seed/stage-14274/sources/{rsdc,rsc}.rsd`, not the 53
+members directly. `ASSEMBLY.tsv` is the link: one row per bundle
+section — `module`, `seq` (position in the bundle), `member_path`,
+`member_sha256`, `section_sha256` (sha256 of the exact
+`section…end` span in the bundle) and `kind` (`raw` or `generated`).
+54 rows cover 53 members — `lib/Tarjan.rsd` is a section of both
+bundles. Each section is named `RscSourceModule_<member sha256>`.
+
+Check the section order first:
+
+```sh
+d=bootstrap/seed/stage-14274
+for m in rsdc rsc; do
+    awk -F'\t' -v m="$m" 'NR > 1 && $1 == m { print $4 }' \
+        "$d/ASSEMBLY.tsv" > /tmp/order.want
+    grep -o 'RscSourceModule_[0-9a-f]\{64\}' "$d/sources/$m.rsd" \
+      | sed 's/.*RscSourceModule_//' | uniq > /tmp/order.have
+    diff /tmp/order.want /tmp/order.have    # expect: no output
+done
+```
+
+Then the member digests and the section spans:
+
+```sh
+awk -F'\t' 'NR > 1 { print $3, $4, $5, $6, $1 }' "$d/ASSEMBLY.tsv" \
+  | while read -r path q sq kind mod; do
+      test "$(sha256sum "$path" | cut -d' ' -f1)" = "$q" \
+          || echo "member mismatch: $path"
+      got=$(sed -n "/^section RscSourceModule_${q}\$/,/^end RscSourceModule_${q}\$/p" \
+            "$d/sources/$mod.rsd" | sha256sum | cut -d' ' -f1)
+      test "$got" = "$sq" || echo "section span mismatch: $mod $q"
+    done    # expect: no output
+```
+
+For the 52 `raw` rows the section body is the member file minus its
+leading prelude (blank, `--` comment and `import` lines up to the
+first declaration), wrapped in the section markers — reconstruct and
+compare digests:
+
+```sh
+awk -F'\t' 'NR > 1 && $6 == "raw" { print $3, $4, $5 }' "$d/ASSEMBLY.tsv" \
+  | while read -r path q sq; do
+      got=$( { printf 'section RscSourceModule_%s\n' "$q"
+               awk 'f { print; next }
+                    /^[[:space:]]*$/ { next }
+                    /^--/ { next }
+                    /^import / { next }
+                    { f = 1; print }' "$path"
+               printf '\nend RscSourceModule_%s\n' "$q"
+             } | sha256sum | cut -d' ' -f1 )
+      test "$got" = "$sq" || echo "assembly mismatch: $path"
+    done    # expect: no output
+```
+
+The 3 `generated` rows (`lib/rt/V1.rsd`, `lib/rt/Reuse.rsd`,
+`lib/rt/AllocFast.rsd`) hold the compiler's wire-encoded runtime
+definitions (`def runtimeSourcePart*` / `runtimeReuseSourcePart*` /
+`runtimeAllocSourcePart*` plus the `…Wire` list): the assembler
+generates those bodies from the members, so no plain command derives
+them. The span check above pins their bytes; their derivation is the
+compiler's own encoding, exercised end-to-end by the seed round-trip
+in the next section — the compilers built from these sources
+reproduce the committed executors byte-for-byte.
+
+## 4. Seed reproduction (the strong check)
+
+Run the stage-14274 recipe in a clean environment (`env -i
+PATH=/usr/bin:/bin`) on Linux x86-64 or macOS arm64 and compare the rebuilt
+`rsdc.wasm`/`rsc.wasm` to the committed seeds — byte-equal is the
+closure (`stage-14274/README.md`; the clean-environment run is
+recorded repository-side; measured 34 minutes on a 4-vCPU Debian 12
+guest — see `docs/PERF-RECORD.tsv` for per-version walls).
+
+## 5. scm formats
+
+The scm layer's binary interface is RSCM: bytes begin
+`52 53 43 4d` + a version byte. The recipe's emitter writes the v1
+header `[82, 83, 67, 77, 1]` (`rsdc/Compile.rsd`, the `EmitResult`
+writer; the shipped `rsc` reads it at `rsc/rsc.rsd`
+`compileWithLayers`/`eatAll`), so the rebuilt `.rscm` products
+(`REBUILT-SHA256SUMS`) are v1:
+
+```sh
+od -A x -t x1 -N 5 "$out/rebuilt/rsc.rscm"   # expect 52 53 43 4d 01 (after §4, in the recipe's output dir)
+```
+
+The older shipped copy `bootstrap/seed/rsc.rscm` is v2
+(`52 53 43 4d 02`), which the shipped `rsc` reads natively —
+`rsc/rsc.rsd` `compileWithLayers` dispatches on the `02` byte and
+decodes the v2 node table (described in `lib/RscBase.rsd`, the
+`RSCM-NF-1` block). Check the shipped copy's magic:
+
+```sh
+od -A x -t x1 -N 5 bootstrap/seed/rsc.rscm    # expect 52 53 43 4d 02
+```
+
+The runtime dialect is a separate extension `52 53 43 4d 127 01`
+(`lib/RuntimeIR.rsd`). The scm language's text surface (`.scm`
+files, the named `printScm`/`parseScm` view) is repository-only in
+0.2.
+
+## 6. What is NOT checkable in 0.2
+
+No dispatcher binary, no modules, no application suite, no proof checking —
+their checks belong to the 0.2 line (`release/MANIFEST.md`; the
+proof-certificate check does not apply: 0.2 ships no proof checking). The `lean/rsd-cert/` specification texts ship as
+pinned Lean 4.14 sources — `theorem` declarations in them are spec text,
+not checked claims.
+
+closure_claim = 0
+
+## 7. 0.2 additions (draft, before the 0.2 candidate)
+
+The typed content address (q format v1) is checkable now:
+`release/checks/qformat/README.md` recomputes six published q vectors and
+two planted controls with `sha256sum` alone — `q(kind, c)` =
+`SHA-256("<kind> <len>\0" ++ c)`, and a digest stays raw `SHA-256` for
+interop. Expected outputs are in `release/checks/qformat/VECTORS.tsv`.
+The specification is `docs/QFORMAT.md` / `QFORMAT.zh-CN`.

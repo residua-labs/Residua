@@ -1,9 +1,0 @@
-# CONTRIBUTING 与 SECURITY — 贡献与安全
-
-[English](CONTRIBUTING-SECURITY) | 中文
-
-在公开仓库上提 issue 与讨论。安全报告通过仓库上 GitHub 的私密
-安全通告（private security advisory）提交。
-
-外部贡献：外部结果的准入路径（按 q 发布、经检查准入）不在 0.1.2；
-在它存在之前，贡献以 issue 形式评审。

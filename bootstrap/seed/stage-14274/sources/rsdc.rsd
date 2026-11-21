@@ -209,7 +209,7 @@ def refusal : Residue -> Int
 end ArrayWireNF
 
 end RscSourceModule_c2915ca8302e0eb158140cd97a97325b1a1b4792b516a77907c5f0ce1f9a7ad0
-section RscSourceModule_476a3b46c73976544bebd6946cc086a9ecd7fb5212c8764dc09874872c3ffffa
+section RscSourceModule_353d56c35f89647f02e29d22de1dcc53b2107ffa93057589292f172a7f75166a
 namespace Rsdc.MatchResultNF
 
 inductive Residue where
@@ -1079,7 +1079,7 @@ def reserved : Nat -> List Int -> Bool
   | 0, bs =>
     let b : Int := hdB 0 bs;
     if b == 100 then isKw 0 bs "def" || isKw 0 bs "do" || isKw 0 bs "deriving" || isKw 0 bs "decreasing_by"
-    else if b == 115 then isKw 0 bs "structure" || isKw 0 bs "section" || isKw 0 bs "set_option"
+    else if b == 115 then isKw 0 bs "structure" || isKw 0 bs "section"
     else if b == 119 then isKw 0 bs "where" || isKw 0 bs "with"
     else if b == 109 then isKw 0 bs "mutual" || isKw 0 bs "match"
     else if b == 101 then isKw 0 bs "end" || isKw 0 bs "else"
@@ -2978,10 +2978,6 @@ partial def parseCmdsGo : St -> List Int -> St
       let st0 : St := skipWs st;
       if atEnd 0 st0 then spine1 (setRet 0 st0 (-1)) 19 acc
       else if isKw 0 st0.cur "end" then spine1 (setRet 0 st0 (-1)) 19 acc
-      else if isKw 0 st0.cur "set_option" then
-        let st1 : St := parseSetOption st0;
-        if st1.err != 0 then st1
-        else parseCmdsGo st1 (if st1.ret < 0 then acc else st1.ret :: acc)
       else if isKw 0 st0.cur "mutual" then
         let pos0 : Nat := st0.pos;
         let st1 : St := parseMutual st0;
@@ -3128,7 +3124,6 @@ partial def parseOpen : St -> St
             if isKw 0 st5.cur "in" then
               let st6 : St := parseOneCmd (advance 0 st5 2);
               if st6.err != 0 then st6
-              else if st6.ret < 0 then alloc 0 st6 36 names (-1) hidden
               else
                 let st7 : St := alloc 0 st6 19 st6.ret (-1) 0;
                 alloc 0 st7 36 names st7.ret hidden
@@ -3142,7 +3137,6 @@ partial def parseOneCmd : St -> St
     else
       let st0 : St := skipWs st;
       if isKw 0 st0.cur "def" then parseDef st0
-      else if isKw 0 st0.cur "set_option" then parseSetOption st0
       else if isKw 0 st0.cur "instance" then parseInstance st0
       else if isKw 0 st0.cur "structure" then parseStruct st0
       else if isKw 0 st0.cur "inductive" then parseInductive st0
@@ -3153,25 +3147,6 @@ partial def parseOneCmd : St -> St
       else if isKw 0 st0.cur "abbrev" then parseAbbrev st0
       else if isKw 0 st0.cur "partial" then parsePartial st0
       else setErr 0 st0 1
-
--- Lean 4.14, Lean/Parser/Command.lean, optionValue and set_option.
--- RSD consumes the option syntax without changing compiler settings.
-partial def parseSetOption (st : St) : St :=
-  let name : St := skipWs (advance 0 st 10);
-  if !(isIdentStart 0 name.cur) || reserved 0 name.cur then setErr 0 name 1
-  else
-    let value : St := skipWs (advance 0 name (identLen 0 name.cur));
-    let next : St :=
-      if isKw 0 value.cur "true" then advance 0 value 4
-      else if isKw 0 value.cur "false" then advance 0 value 5
-      else if hdB 0 value.cur == 34 then parseStrGo (advance 0 value 1) value.pos
-      else if isDigit 0 value.cur then parseNumeral value
-      else setErr 0 value 1;
-    if next.err != 0 then next
-    else
-      let command : St := skipWs next;
-      if isKw 0 command.cur "in" then parseOneCmd (advance 0 command 2)
-      else setRet 0 command (-1)
 end
 
 -- Bounded port of DefView.mkDefViewOfInstance and DeclNameGen.mkInstanceName.
@@ -4074,554 +4049,6 @@ def wordSyntaxNodes : St -> Nat -> Bool
        spanEq 0 st a b "Nat.toUInt8" || spanEq 0 st a b "Nat.toUInt32");
     word || wordSyntaxNodes st nodeCount
 
--- specFun (LRC-REV2-IMPL-0 r2, whole-program defunctionalisation by specialisation: Reynolds 1972; MLton).
--- A top-level definition with a function-typed parameter has no type code in the checker, so it was refused.
--- Here the set of such definitions that the rest of the program reaches is decided on the parse tree
--- after desugarSt and before check; the ones nothing reaches are unlinked from the command chain (dead code,
--- as MLton drops them), and every reached one is left as it is, so the refusal stays where it was.
--- Only a file whose commands are all def, structure, abbrev, inductive or open is looked at; a file with
--- a namespace, a mutual block or any other command is left as it is.
--- Tree reads follow the node layout above: tag a b c at fd slots 0 1 2 3, chains end at -1.
--- a name the pass makes has a span no source line holds: the position of what it replaces is kept beside it
--- (pool key of qa + 1) and an error reported at the name is reported there (specPos, in checkSrcPos)
-def specNote (st : St) (qa : Int) (orig : Int) : St :=
-  setPool 0 st (putSpan 0 st.pool (qa + 1) [orig])
-
-def specHead1 : List Int -> Int -> Int
-  | [], d => d
-  | o :: _, _ => o
-
-def specPos (st : St) (pos : Int) : Int :=
-  if pos < fileLenI 0 st then pos
-  else
-    let g : MR := get st.pool (0 - (pos + 1) - 1);
-    specHead1 g.xs pos
-
-def specA (t : Int) : Bool :=
-  t == 5 || t == 8 || t == 10 || t == 11 || t == 12 || t == 13 || t == 17 || t == 23 || t == 25 || t == 29
-    || t == 30 || t == 31 || t == 47
-
-def specB (t : Int) : Bool :=
-  t == 5 || t == 6 || t == 7 || t == 8 || t == 10 || t == 12 || t == 14 || t == 15 || t == 24 || t == 31 || t == 32
-
-def specC (t : Int) : Bool := t == 6 || t == 8 || t == 9 || t == 15 || t == 24
-
-def specKnown (t : Int) : Bool :=
-  specA t || specB t || specC t || t == 1 || t == 2 || t == 3 || t == 4 || t == 16 || t == 22 || t == 41
-
-def specDotSuffix : List Int -> List Int -> Bool
-  | [], _ => false
-  | b :: rest, name => (b == 46 && eqListI rest name) || specDotSuffix rest name
-
--- does the subtree n hold an identifier that names `name` (or ends in .name); a tag not listed counts as a mention
-partial def specRefers (st : St) (name : List Int) (n : Int) : Bool :=
-  if n < 0 then false
-  else
-    let t : Int := fd 0 st n 0;
-    if t == 1 then
-      let bs : List Int := spanBytes 0 st (fd 0 st n 1) (fd 0 st n 2);
-      eqListI bs name || specDotSuffix bs name
-    else if !(specKnown t) then true
-    else (specA t && specRefers st name (fd 0 st n 1)) || (specB t && specRefers st name (fd 0 st n 2))
-      || (specC t && specRefers st name (fd 0 st n 3))
-
-partial def specArrow (st : St) (t : Int) : Bool :=
-  if t < 0 then false
-  else if fd 0 st t 0 == 16 then true
-  else if fd 0 st t 0 == 13 then specArrow st (fd 0 st t 1)
-  else false
-
--- the domains of a return-type arrow chain
-partial def specDoms (st : St) (t : Int) : Bool :=
-  if t >= 0 && fd 0 st t 0 == 16 then specArrow st (fd 0 st t 1) || specDoms st (fd 0 st t 2)
-  else false
-
-partial def specGrps (st : St) (g : Int) : Bool :=
-  if g < 0 then false else specArrow st (fd 0 st g 2) || specGrps st (fd 0 st g 3)
-
-def specIsHO (st : St) (d : Int) : Bool :=
-  let sig : Int := fd 0 st d 2;
-  specGrps st (fd 0 st sig 1) || specDoms st (fd 0 st sig 2)
-
-def specName (st : St) (d : Int) : List Int :=
-  let nm : Int := fd 0 st d 1;
-  spanBytes 0 st (fd 0 st nm 1) (fd 0 st nm 2)
-
--- every command is one the pass can read
-partial def specSimple (st : St) (c : Int) : Bool :=
-  if c < 0 then true
-  else
-    let d : Int := fd 0 st c 1;
-    let t : Int := fd 0 st d 0;
-    (t == 20 || t == 26 || t == 35 || t == 37 || t == 38 || (t == 36 && specSimple st (fd 0 st d 2)))
-      && specSimple st (fd 0 st c 2)
-
-partial def specDefs (st : St) (c : Int) : List Int :=
-  if c < 0 then []
-  else
-    let d : Int := fd 0 st c 1;
-    (if fd 0 st d 0 == 20 then [d] else if fd 0 st d 0 == 36 then specDefs st (fd 0 st d 2) else []) ++ specDefs st (fd 0 st c 2)
-
-partial def specHOs (st : St) : List Int -> List Int
-  | [] => []
-  | d :: rest => if specIsHO st d then d :: specHOs st rest else specHOs st rest
-
-def specMem (x : Int) : List Int -> Bool
-  | [] => false
-  | y :: ys => x == y || specMem x ys
-
-def specNotIn : List Int -> List Int -> List Int
-  | [], _ => []
-  | x :: xs, ys => if specMem x ys then specNotIn xs ys else x :: specNotIn xs ys
-
--- does a definition of srcs other than h mention h
-partial def specMentioned (st : St) (name : List Int) (h : Int) : List Int -> Bool
-  | [] => false
-  | s :: rest => (s != h && specRefers st name (fd 0 st s 3)) || specMentioned st name h rest
-
--- a structure field's default is an expression that can call a definition
-partial def specStructRef (st : St) (name : List Int) (fl : Int) : Bool :=
-  if fl < 0 then false
-  else
-    let ty : Int := fd 0 st fl 2;
-    (fd 0 st ty 0 == 40 && specRefers st name (fd 0 st ty 2)) || specStructRef st name (fd 0 st fl 3)
-
-partial def specStructs (st : St) (c : Int) : List Int :=
-  if c < 0 then []
-  else
-    let d : Int := fd 0 st c 1;
-    (if fd 0 st d 0 == 26 then [d] else if fd 0 st d 0 == 36 then specStructs st (fd 0 st d 2) else []) ++ specStructs st (fd 0 st c 2)
-
-partial def specStructMention (st : St) (name : List Int) : List Int -> Bool
-  | [] => false
-  | s :: rest => specStructRef st name (fd 0 st s 2) || specStructMention st name rest
-
-partial def specNew (st : St) (srcs : List Int) (live : List Int) (structs : List Int) : List Int -> List Int
-  | [] => []
-  | h :: rest =>
-    if specMem h live then specNew st srcs live structs rest
-    else if specMentioned st (specName st h) h srcs || specStructMention st (specName st h) structs then h :: specNew st srcs live structs rest
-    else specNew st srcs live structs rest
-
-partial def specFix (st : St) (hs : List Int) (others : List Int) (structs : List Int) (live : List Int) : List Int :=
-  let add : List Int := specNew st (others ++ live) live structs hs;
-  if isEmptyI add then live else specFix st hs others structs (live ++ add)
-
-partial def specDrop (st : St) (holder : Int) (slot : Nat) (c : Int) (dead : List Int) : St :=
-  if c < 0 then st
-  else
-    let d : Int := fd 0 st c 1;
-    let nx : Int := fd 0 st c 2;
-    if fd 0 st d 0 == 36 then specDrop (specDrop st d 2 (fd 0 st d 2) dead) c 2 nx dead
-    else if specMem d dead then specDrop (setNodeSlot st holder slot nx) holder slot nx dead
-    else specDrop st c 2 nx dead
-
--- ---- the live case: a definition D with one function-typed parameter, called with a global function g
--- as that argument, is copied as D_spec_g with the parameter removed and its uses replaced by g (MLton's
--- defunctionalisation by specialisation, no captured variables); the call is rewritten to D_spec_g without
--- that argument. A definition or call shape not listed here is left as it is and the refusal stays.
-structure SpR where
-  st : St
-  id : Int
-  deriving Inhabited
-
-def spR (s : St) (i : Int) : SpR := { st := s, id := i : SpR }
-
-def specCpA (t : Int) : Bool :=
-  t == 5 || t == 8 || t == 9 || t == 10 || t == 11 || t == 12 || t == 13 || t == 14 || t == 15 || t == 16 || t == 17
-    || t == 22 || t == 23 || t == 24 || t == 25 || t == 29 || t == 30 || t == 31 || t == 41 || t == 47
-
-def specCpB (t : Int) : Bool :=
-  t == 5 || t == 6 || t == 7 || t == 8 || t == 9 || t == 10 || t == 12 || t == 14 || t == 15 || t == 16 || t == 17
-    || t == 22 || t == 24 || t == 30 || t == 31 || t == 41
-
-def specCpC (t : Int) : Bool := t == 6 || t == 8 || t == 9 || t == 15 || t == 22 || t == 24
-
-def specCpLeaf (t : Int) : Bool := t == 1 || t == 2 || t == 3 || t == 4
-
-partial def specCopyable (st : St) (n : Int) : Bool :=
-  if n < 0 then true
-  else
-    let t : Int := fd 0 st n 0;
-    if specCpLeaf t then true
-    else if !(specCpA t || specCpB t || specCpC t) then false
-    else (!(specCpA t) || specCopyable st (fd 0 st n 1)) && (!(specCpB t) || specCopyable st (fd 0 st n 2))
-      && (!(specCpC t) || specCopyable st (fd 0 st n 3))
-
--- a copy of the subtree n; an identifier spelling `sub` becomes the identifier node g
-partial def specCopy (st : St) (sub : List Int) (g : Int) (n : Int) : SpR :=
-  if n < 0 then spR st n
-  else
-    let t : Int := fd 0 st n 0;
-    if specCpLeaf t then
-      let bs : List Int := spanBytes 0 st (fd 0 st n 1) (fd 0 st n 2);
-      let src : Int := if t == 1 && !(isEmptyI sub) && eqListI bs sub then g else n;
-      let s : St := alloc 0 st t (fd 0 st src 1) (fd 0 st src 2) (fd 0 st src 3);
-      spR s s.ret
-    else
-      let ra : SpR := if specCpA t then specCopy st sub g (fd 0 st n 1) else spR st (fd 0 st n 1);
-      let rb : SpR := if specCpB t then specCopy ra.st sub g (fd 0 st n 2) else spR ra.st (fd 0 st n 2);
-      let rc : SpR := if specCpC t then specCopy rb.st sub g (fd 0 st n 3) else spR rb.st (fd 0 st n 3);
-      let s : St := alloc 0 rc.st t ra.id rb.id rc.id;
-      spR s s.ret
-
-partial def specNth (st : St) (li : Int) (k : Int) : Int :=
-  if li < 0 then -1
-  else if k == 0 then li
-  else specNth st (fd 0 st li 2) (k - 1)
-
-partial def specLen (st : St) (li : Int) : Int :=
-  if li < 0 then 0 else 1 + specLen st (fd 0 st li 2)
-
--- a li chain without its element k
-partial def specCopyLiSkip (st : St) (sub : List Int) (g : Int) (li : Int) (k : Int) : SpR :=
-  if li < 0 then spR st li
-  else if k == 0 then specCopyLiSkip st sub g (fd 0 st li 2) (k - 1)
-  else
-    let rest : SpR := specCopyLiSkip st sub g (fd 0 st li 2) (k - 1);
-    let e : SpR := specCopy rest.st sub g (fd 0 st li 1);
-    let s : St := alloc 0 e.st 12 e.id rest.id 0;
-    spR s s.ret
-
--- the spelling of the k-th pattern of an alternative when it is a plain name
-def specPatName (st : St) (pats : Int) (k : Int) : List Int :=
-  let li : Int := specNth st pats k;
-  let e : Int := fd 0 st li 1;
-  if li < 0 || fd 0 st e 0 != 1 then []
-  else
-    let bs : List Int := spanBytes 0 st (fd 0 st e 1) (fd 0 st e 2);
-    if eqListI bs [95] then [] else bs
-
-partial def specCopyAlts (st : St) (g : Int) (k : Int) (sub0 : List Int) (a : Int) : SpR :=
-  if a < 0 then spR st a
-  else
-    let pats : Int := fd 0 st a 1;
-    let sub : List Int := if k < 0 then sub0 else specPatName st pats k;
-    let rest : SpR := specCopyAlts st g k sub0 (fd 0 st a 3);
-    let ps : SpR := specCopyLiSkip rest.st sub g pats k;
-    let body : SpR := specCopy ps.st sub g (fd 0 st a 2);
-    let s : St := alloc 0 body.st 24 ps.id body.id rest.id;
-    spR s s.ret
-
--- an arrow chain without its domain k
-partial def specCopyArrow (st : St) (t : Int) (k : Int) : SpR :=
-  if fd 0 st t 0 == 16 then
-    if k == 0 then specCopy st [] 0 (fd 0 st t 2)
-    else
-      let rest : SpR := specCopyArrow st (fd 0 st t 2) (k - 1);
-      let dom : SpR := specCopy rest.st [] 0 (fd 0 st t 1);
-      let s : St := alloc 0 dom.st 16 dom.id rest.id 0;
-      spR s s.ret
-  else specCopy st [] 0 t
-
--- binder groups without the group hg
-partial def specCopyGrps (st : St) (gr : Int) (hg : Int) : SpR :=
-  if gr < 0 then spR st gr
-  else
-    let rest : SpR := specCopyGrps st (fd 0 st gr 3) hg;
-    if gr == hg then rest
-    else
-      let nm : SpR := specCopy rest.st [] 0 (fd 0 st gr 1);
-      let ty : SpR := specCopy nm.st [] 0 (fd 0 st gr 2);
-      let s : St := alloc 0 ty.st 22 nm.id ty.id rest.id;
-      spR s s.ret
-
--- binder form: the group of the function-typed parameter, when it is the only one and holds one name
-partial def specHoGrp (st : St) (gr : Int) : Int :=
-  if gr < 0 then -1
-  else if specArrow st (fd 0 st gr 2) then
-    if specLen st (fd 0 st gr 1) == 1 && !(specGrps st (fd 0 st gr 3)) then gr else -1
-  else specHoGrp st (fd 0 st gr 3)
-
-partial def specGrpPos (st : St) (gr : Int) (hg : Int) : Int :=
-  if gr < 0 || gr == hg then 0 else specLen st (fd 0 st gr 1) + specGrpPos st (fd 0 st gr 3) hg
-
--- equation form: the position of the only function-typed domain
-partial def specDomPos (st : St) (t : Int) (acc : Int) : Int :=
-  if fd 0 st t 0 != 16 then -1
-  else if specArrow st (fd 0 st t 1) then (if specDoms st (fd 0 st t 2) then -1 else acc)
-  else specDomPos st (fd 0 st t 2) (acc + 1)
-
--- does the subtree hold an identifier spelled `sub`; a tag not listed counts as a hit
-partial def specIdIn (st : St) (sub : List Int) (n : Int) : Bool :=
-  if n < 0 then false
-  else
-    let t : Int := fd 0 st n 0;
-    if t == 1 then eqListI (spanBytes 0 st (fd 0 st n 1) (fd 0 st n 2)) sub
-    else if !(specKnown t) then true
-    else (specA t && specIdIn st sub (fd 0 st n 1)) || (specB t && specIdIn st sub (fd 0 st n 2))
-      || (specC t && specIdIn st sub (fd 0 st n 3))
-
--- does a let or a match alternative under n bind a name spelled `sub` (the copy would rename its uses)
-partial def specBinds (st : St) (sub : List Int) (n : Int) : Bool :=
-  if n < 0 then false
-  else
-    let t : Int := fd 0 st n 0;
-    if t == 1 then false
-    else if !(specKnown t) then true
-    else
-      let own : Bool := (t == 9 || t == 24) && specIdIn st sub (fd 0 st n 1);
-      own || (specA t && specBinds st sub (fd 0 st n 1)) || (specB t && specBinds st sub (fd 0 st n 2))
-        || (specC t && specBinds st sub (fd 0 st n 3))
-
-partial def specPatsOther (st : St) (sub : List Int) (li : Int) (k : Int) (i : Int) : Bool :=
-  if li < 0 then false
-  else (i != k && specIdIn st sub (fd 0 st li 1)) || specPatsOther st sub (fd 0 st li 2) k (i + 1)
-
-partial def specAltsBind (st : St) (k : Int) (a : Int) : Bool :=
-  if a < 0 then false
-  else
-    let pats : Int := fd 0 st a 1;
-    let sub : List Int := specPatName st pats k;
-    (!(isEmptyI sub) && (specPatsOther st sub pats k 0 || specBinds st sub (fd 0 st a 2)))
-      || specAltsBind st k (fd 0 st a 3)
-
-partial def specAltsBindName (st : St) (sub : List Int) (a : Int) : Bool :=
-  if a < 0 then false
-  else (specPatsOther st sub (fd 0 st a 1) (-1) 0 || specBinds st sub (fd 0 st a 2)) || specAltsBindName st sub (fd 0 st a 3)
-
-def specHoName (st : St) (hg : Int) : List Int :=
-  let e : Int := fd 0 st (fd 0 st hg 1) 1;
-  spanBytes 0 st (fd 0 st e 1) (fd 0 st e 2)
-
--- the position of the function-typed parameter of a definition the pass can copy, else -1
-def specInfo (st : St) (d : Int) : Int :=
-  let sig : Int := fd 0 st d 2;
-  let val : Int := fd 0 st d 3;
-  let grps : Int := fd 0 st sig 1;
-  let ty : Int := fd 0 st sig 2;
-  if fd 0 st val 2 != 0 || fd 0 st val 3 != 0 then -1
-  else if !(specCopyable st val) || !(specCopyable st ty) || !(specCopyable st grps) then -1
-  else if fd 0 st val 0 == 25 then
-    let hg : Int := specHoGrp st grps;
-    if hg < 0 || fd 0 st ty 0 == 16 then -1
-    else if specBinds st (specHoName st hg) (fd 0 st val 1) then -1
-    else specGrpPos st grps hg
-  else if fd 0 st val 0 == 23 && grps < 0 then
-    let k : Int := specDomPos st ty 0;
-    if k < 0 || specAltsBind st k (fd 0 st val 1) then -1 else k
-  else if fd 0 st val 0 == 23 then
-    -- the mixed form: the function-typed parameter is a binder, the equations match the arrows of the type
-    let hg : Int := specHoGrp st grps;
-    if hg < 0 || specDoms st ty || fd 0 st ty 0 != 16 then -1
-    else if specAltsBindName st (specHoName st hg) (fd 0 st val 1) then -1
-    else specGrpPos st grps hg
-  else -1
-
-partial def specDefByName (st : St) (name : List Int) : List Int -> Int
-  | [] => -1
-  | d :: rest => if eqListI (specName st d) name then d else specDefByName st name rest
-
-def specCloneName (st : St) (d : Int) (g : Int) : List Int :=
-  specName st d ++ [64, 115, 112, 101, 99, 64] ++ spanBytes 0 st (fd 0 st g 1) (fd 0 st g 2)
-
-partial def specHasDot : List Int -> Bool
-  | [] => false
-  | b :: rest => b == 46 || specHasDot rest
-
-partial def specCmdOf (st : St) (c : Int) (d : Int) : Int :=
-  if c < 0 then -1
-  else if fd 0 st c 1 == d then c
-  else
-    let dd : Int := fd 0 st c 1;
-    let inner : Int := if fd 0 st dd 0 == 36 then specCmdOf st (fd 0 st dd 2) d else -1;
-    if inner >= 0 then inner else specCmdOf st (fd 0 st c 2) d
-
--- the clone of D for the global named by the identifier node g, inserted after D
-def specMakeClone (st : St) (d : Int) (k : Int) (g : Int) : St :=
-  let sig : Int := fd 0 st d 2;
-  let val : Int := fd 0 st d 3;
-  let grps : Int := fd 0 st sig 1;
-  let ty : Int := fd 0 st sig 2;
-  let synSt : St := synthIdent 0 st (specCloneName st d g);
-  let nameSt : St := specNote synSt (fd 0 synSt synSt.ret 1) (fd 0 synSt (fd 0 synSt d 1) 1);
-  let nameId : Int := nameSt.ret;
-  let dd : St :=
-    if fd 0 nameSt val 0 == 25 then
-      let hg : Int := specHoGrp nameSt grps;
-      let sub : List Int := spanBytes 0 nameSt (fd 0 nameSt (fd 0 nameSt (fd 0 nameSt hg 1) 1) 1) (fd 0 nameSt (fd 0 nameSt (fd 0 nameSt hg 1) 1) 2);
-      let g2 : SpR := specCopyGrps nameSt grps hg;
-      let ty2 : SpR := specCopy g2.st [] 0 ty;
-      let sg : St := alloc 0 ty2.st 21 g2.id ty2.id (fd 0 nameSt sig 3);
-      let e : SpR := specCopy sg sub g (fd 0 nameSt val 1);
-      let v : St := alloc 0 e.st 25 e.id 0 0;
-      alloc 0 v 20 nameId sg.ret v.ret
-    else if grps >= 0 then
-      let hg : Int := specHoGrp nameSt grps;
-      let sub : List Int := specHoName nameSt hg;
-      let g2 : SpR := specCopyGrps nameSt grps hg;
-      let ty2 : SpR := specCopy g2.st [] 0 ty;
-      let alts : SpR := specCopyAlts ty2.st g (-1) sub (fd 0 nameSt val 1);
-      let sg : St := alloc 0 alts.st 21 g2.id ty2.id (fd 0 nameSt sig 3);
-      let v : St := alloc 0 sg 23 alts.id 0 0;
-      alloc 0 v 20 nameId sg.ret v.ret
-    else
-      let alts : SpR := specCopyAlts nameSt g k [] (fd 0 nameSt val 1);
-      let ty2 : SpR := specCopyArrow alts.st ty k;
-      let sg : St := alloc 0 ty2.st 21 (-1) ty2.id (fd 0 nameSt sig 3);
-      let v : St := alloc 0 sg 23 alts.id 0 0;
-      alloc 0 v 20 nameId sg.ret v.ret;
-  let cmd : Int := specCmdOf dd (fd 0 dd dd.root 1) d;
-  let ins : St := alloc 0 dd 19 dd.ret (fd 0 dd cmd 2) 0;
-  setNodeSlot ins cmd 2 ins.ret
-
-partial def specCandByName (st : St) (name : List Int) : List Int -> Int
-  | [] => -1
-  | d :: rest => if eqListI (specName st d) name && specInfo st d >= 0 then d else specCandByName st name rest
-
--- the first call under n of a copyable definition with a global function as its function-typed argument
-partial def specFindCall (st : St) (hs : List Int) (globals : List Int) (n : Int) : Int :=
-  if n < 0 then -1
-  else
-    let t : Int := fd 0 st n 0;
-    if !(specKnown t) then -1
-    else
-      let own : Int :=
-        if t != 5 then -1
-        else
-          let fnode : Int := fd 0 st n 1;
-          if fd 0 st fnode 0 != 1 then -1
-          else
-            let d : Int := specCandByName st (spanBytes 0 st (fd 0 st fnode 1) (fd 0 st fnode 2)) hs;
-            if d < 0 then -1
-            else
-              let k : Int := specInfo st d;
-              let li : Int := specNth st (fd 0 st n 2) k;
-              let arg : Int := fd 0 st li 1;
-              let gname : List Int := spanBytes 0 st (fd 0 st arg 1) (fd 0 st arg 2);
-              if li < 0 || fd 0 st arg 0 != 1 || specHasDot gname || specLen st (fd 0 st n 2) < 2 then -1
-              else if specDefByName st gname globals >= 0 then n else -1;
-      if own >= 0 then own
-      else
-        let ra : Int := if specA t then specFindCall st hs globals (fd 0 st n 1) else -1;
-        if ra >= 0 then ra
-        else
-          let rb : Int := if specB t then specFindCall st hs globals (fd 0 st n 2) else -1;
-          if rb >= 0 then rb
-          else if specC t then specFindCall st hs globals (fd 0 st n 3) else -1
-
-partial def specFirstCall (st : St) (hs : List Int) (globals : List Int) : List Int -> Int
-  | [] => -1
-  | s :: rest =>
-    let r : Int := specFindCall st hs globals (fd 0 st s 3);
-    if r >= 0 then r else specFirstCall st hs globals rest
-
-def specRewrite (st : St) (hs : List Int) (appN : Int) : St :=
-  let fnode : Int := fd 0 st appN 1;
-  let d : Int := specCandByName st (spanBytes 0 st (fd 0 st fnode 1) (fd 0 st fnode 2)) hs;
-  let k : Int := specInfo st d;
-  let arg : Int := fd 0 st (specNth st (fd 0 st appN 2) k) 1;
-  let cname : List Int := specCloneName st d arg;
-  let defs0 : List Int := specDefs st (fd 0 st st.root 1);
-  let st1 : St := if specDefByName st cname defs0 >= 0 then st else specMakeClone st d k arg;
-  let cl : Int := specDefByName st1 cname (specDefs st1 (fd 0 st1 st1.root 1));
-  let cnm : Int := fd 0 st1 cl 1;
-  let syn : St := synthIdent 0 st1 cname;
-  let sa : Int := fd 0 syn syn.ret 1;
-  let sb : Int := fd 0 syn syn.ret 2;
-  let noted : St := specNote syn sa (fd 0 syn fnode 1);
-  let st2 : St := setNodeSlot (setNodeSlot (setNodeSlot noted fnode 1 sa) fnode 2 sb) fnode 3 0;
-  if k == 0 then setNodeSlot st2 appN 2 (fd 0 st2 (fd 0 st2 appN 2) 2)
-  else
-    let prev : Int := specNth st2 (fd 0 st2 appN 2) (k - 1);
-    setNodeSlot st2 prev 2 (fd 0 st2 (fd 0 st2 prev 2) 2)
-
--- `f a b` parses as an application of an application; a call of a higher-order definition is made one application
-partial def specLast (st : St) (li : Int) : Int :=
-  if fd 0 st li 2 < 0 then li else specLast st (fd 0 st li 2)
-
-partial def specHead (st : St) (n : Int) : Int :=
-  if fd 0 st n 0 == 5 then specHead st (fd 0 st n 1) else n
-
-def specIsHOName (st : St) (hs : List Int) (bs : List Int) : Bool :=
-  specMem (specDefByName st bs hs) hs
-
-partial def specMerge (st : St) (n : Int) : St :=
-  let f : Int := fd 0 st n 1;
-  if fd 0 st f 0 != 5 then st
-  else
-    let s1 : St := specMerge st f;
-    let il : Int := fd 0 s1 f 2;
-    let ol : Int := fd 0 s1 n 2;
-    if il < 0 then s1
-    else
-      let s2 : St := setNodeSlot s1 (specLast s1 il) 2 ol;
-      setNodeSlot (setNodeSlot s2 n 1 (fd 0 s2 f 1)) n 2 il
-
-partial def specFlat (st : St) (hs : List Int) (n : Int) : St :=
-  if n < 0 then st
-  else
-    let t : Int := fd 0 st n 0;
-    if !(specKnown t) then st
-    else
-      let h : Int := specHead st n;
-      let s0 : St :=
-        if t == 5 && fd 0 st h 0 == 1 && fd 0 st (fd 0 st n 1) 0 == 5
-            && specIsHOName st hs (spanBytes 0 st (fd 0 st h 1) (fd 0 st h 2))
-        then specMerge st n else st;
-      let s1 : St := if specA t then specFlat s0 hs (fd 0 s0 n 1) else s0;
-      let s2 : St := if specB t then specFlat s1 hs (fd 0 s1 n 2) else s1;
-      if specC t then specFlat s2 hs (fd 0 s2 n 3) else s2
-
-partial def specFlatAll (st : St) (hs : List Int) : List Int -> St
-  | [] => st
-  | d :: rest => specFlatAll (specFlat st hs (fd 0 st d 3)) hs rest
-
-partial def specLoop (st : St) : Nat -> St
-  | 0 => st
-  | k + 1 =>
-    if st.err != 0 then st
-    else
-      let defs : List Int := specDefs st (fd 0 st st.root 1);
-      let hs : List Int := specHOs st defs;
-      let globals : List Int := specNotIn defs hs;
-      let st : St := specFlatAll st hs globals;
-      let call : Int := specFirstCall st hs globals globals;
-      if call < 0 then st else specLoop (specRewrite st hs call) k
-
--- the checker reads `f a b` as an application of an application, one argument each: the flattened calls go back
-partial def specCurryApp (st : St) (n : Int) : St :=
-  let li : Int := fd 0 st n 2;
-  if li < 0 || fd 0 st li 2 < 0 then st
-  else
-    let prev : Int := specNth st li (specLen st li - 2);
-    let lastLi : Int := fd 0 st prev 2;
-    let st1 : St := setNodeSlot st prev 2 (-1);
-    let st2 : St := alloc 0 st1 5 (fd 0 st1 n 1) li 0;
-    let inner : Int := st2.ret;
-    specCurryApp (setNodeSlot (setNodeSlot st2 n 1 inner) n 2 lastLi) inner
-
-partial def specCurry (st : St) (n : Int) : St :=
-  if n < 0 then st
-  else
-    let t : Int := fd 0 st n 0;
-    if !(specKnown t) then st
-    else
-      let s0 : St := if t == 5 then specCurryApp st n else st;
-      let s1 : St := if specA t then specCurry s0 (fd 0 s0 n 1) else s0;
-      let s2 : St := if specB t then specCurry s1 (fd 0 s1 n 2) else s1;
-      if specC t then specCurry s2 (fd 0 s2 n 3) else s2
-
-partial def specCurryAll (st : St) : List Int -> St
-  | [] => st
-  | d :: rest => specCurryAll (specCurry st (fd 0 st d 3)) rest
-
-def specFun (st : St) : St :=
-  if st.err != 0 || st.root < 0 then st
-  else if !(specSimple st (fd 0 st st.root 1)) then st
-  else
-    let defs0 : List Int := specDefs st (fd 0 st st.root 1);
-    if isEmptyI (specHOs st defs0) then st
-    else
-      let st : St := specLoop st 2000;
-      let defs : List Int := specDefs st (fd 0 st st.root 1);
-      let hs : List Int := specHOs st defs;
-      let others : List Int := specNotIn defs hs;
-      let live : List Int := specFix st hs others (specStructs st (fd 0 st st.root 1)) [];
-      let dead : List Int := specNotIn hs live;
-      let st : St := if isEmptyI dead then st else specDrop st st.root 1 (fd 0 st st.root 1) dead;
-      specCurryAll st (specNotIn (specDefs st (fd 0 st st.root 1)) (specHOs st (specDefs st (fd 0 st st.root 1))))
-
 def parseSrc : Nat -> List Int -> St
   | 0, bs =>
     let size := lenAcc bs 0
@@ -4632,9 +4059,9 @@ def parseSrc : Nat -> List Int -> St
       if raw.err != 0 then raw
       else if wordSyntaxNodes raw raw.nxt then
         let bridged := parseFile (initSt 0 (bs ++ wordBridgeBytes))
-        let cut : St := if bridged.err != 0 then bridged else specFun (desugarSt (setNodeSlot bridged bridged.root 2 (Int.ofNat size)));
+        let cut : St := if bridged.err != 0 then bridged else desugarSt (setNodeSlot bridged bridged.root 2 (Int.ofNat size));
         if cut.err != 0 && cut.pos > size then setPos 0 cut size else cut
-      else specFun (desugarSt raw)
+      else desugarSt raw
   | n + 1, bs => parseSrc n bs
 
 -- Codes: 1 Int, 2 Bool, 3 String, 4 Nat, 5 String.Pos, 6 Char, 7 Array Char,
@@ -4811,22 +4238,18 @@ def wordWidth : Int -> Int
 def wordModulus : Int -> Int
   | c => if c == 9 then 256 else if c == 10 then 65536 else 4294967296
 
--- Bitwise operations still use the bridge's closed helper list.
+-- Closed helper allow-list, exactly TypedScmLower.wordGuard.
 def wordHelper : Int -> Int -> Int
   | ty, op =>
     if !(isWordTy ty) then 0
+    else if op == 1 || op == 2 then 1
+    else if op == 3 then (if ty == 11 then 3 else 2)
     else if op == 19 then 4
     else if op == 20 then 5
     else if op == 21 then 6
     else if op == 23 then 7
     else if op == 22 then (if ty == 11 then 8 else 9)
     else 0
-
-def wordScalarOp (ty op : Int) : Bool :=
-  isWordTy ty && ((op >= 1 && op <= 3) || op == 15)
-
-def wordBinAllowed (ty op : Int) : Bool :=
-  wordScalarOp ty op || wordHelper ty op > 0
 
 def wordHelperName : Int -> String
   | h =>
@@ -5327,9 +4750,7 @@ def prim : Nat -> St -> Int -> Int -> Sig
     if spanEq 0 st a b "toString" || spanEq 0 st a b "ToString.toString" then { a := a, b := b, ret := 3, ps := [0] : Sig }
     else if spanEq 0 st a b "Nat.zero" then { a := a, b := b, ret := 4, ps := [] : Sig }
     else if spanEq 0 st a b "Nat.succ" then { a := a, b := b, ret := 4, ps := [4] : Sig }
-    else if spanEq 0 st a b "max" || spanEq 0 st a b "min" then { a := a, b := b, ret := 4, ps := [4, 4] : Sig }
-    else if spanEq 0 st a b "Int.fmod" then { a := a, b := b, ret := 1, ps := [1, 1] : Sig }
-    else if spanEq 0 st a b "decide" then { a := a, b := b, ret := 2, ps := [2] : Sig }
+    else if spanEq 0 st a b "max" then { a := a, b := b, ret := 4, ps := [4, 4] : Sig }
     else if spanEq 0 st a b "List.replicate" then { a := a, b := b, ret := -3, ps := [4, 0] : Sig }
     else if spanEq 0 st a b "List.range" then { a := a, b := b, ret := listTy 0 4, ps := [4] : Sig }
     else if spanEq 0 st a b "String.length" then { a := a, b := b, ret := 4, ps := [3] : Sig }
@@ -5873,7 +5294,6 @@ def dataKnownBytes : List Int -> List String -> Bool
 
 def primL : Nat -> List Int -> Bool
   | 0, bs =>
-    litEq 0 bs "Int.fmod" || litEq 0 bs "decide" || litEq 0 bs "min" ||
     litEq 0 bs "Nat.zero" || litEq 0 bs "Nat.succ" || litEq 0 bs "max" || litEq 0 bs "List.range" || litEq 0 bs "List.getLast?" || litEq 0 bs "List.flatten" || litEq 0 bs "List.flatMap" || litEq 0 bs "List.zip" ||
     litEq 0 bs "List.replicate" || litEq 0 bs "String.split" || litEq 0 bs "toString" || litEq 0 bs "ToString.toString" ||
     litEq 0 bs "String.length" || litEq 0 bs "String.drop" || litEq 0 bs "String.startsWith" || litEq 0 bs "String.extract" ||
@@ -6266,30 +5686,17 @@ def openScopesValid : St -> Int -> List OpenScope -> Bool
 
 -- Distinct declarations from opens are ambiguous. Reopening the same
 -- namespace still denotes one declaration. [-1] is a named refusal marker.
--- Three cells identify a structure constructor. Two cells name a value.
-def resValue (st : St) (e : Env) (bs : List Int) : List Int :=
-  let sg : Sig := findSigBE st e bs;
-  if sg.ret != 0 then [sg.a, sg.b]
-  else
-    let n : Nat := lenI bs;
-    if n < 4 || !(litEq 0 (dropI bs (n - 3)) ".mk") then []
-    else
-      let head : List Int := findHeadBE st e (takeI bs (n - 3));
-      if lenI head == 0 then []
-      else
-        let a : Int := nthI head 0;
-        let b : Int := nthI head 1;
-        let ty : Int := findStruct st e.heads 0 a b;
-        if ty >= 100 && ty < 1000 then [a, b, ty] else []
-
 def resValOpen : St -> Env -> List OpenScope -> List Int -> List Int -> List Int
 
   | _, _, [], _, acc => acc
   | st, e, p :: rest, bs, acc =>
-    let found : List Int := resValue st e (joinDot 0 p.ns bs);
-    if inBss p.excepts bs || lenI found == 0 then resValOpen st e rest bs acc
-    else if lenI acc == 0 || eqListI acc found then resValOpen st e rest bs found
-    else [-1]
+    let sg : Sig := findSigBE st e (joinDot 0 p.ns bs);
+    if inBss p.excepts bs then resValOpen st e rest bs acc
+    else if sg.ret == 0 then resValOpen st e rest bs acc
+    else
+      let found : List Int := [sg.a, sg.b];
+      if lenI acc == 0 || eqListI acc found then resValOpen st e rest bs found
+      else [-1]
 
 def resTyOpen : St -> Env -> List OpenScope -> List Int -> List Int -> List Int
 
@@ -6313,8 +5720,8 @@ def resValGo : St -> Env -> List OpenScope -> List Int -> List Int
       resValOpen st e (p :: rest) bs []
     else
       let cand : List Int := joinDot 0 p.ns bs;
-      let found : List Int := resValue st e cand;
-      if lenI found != 0 then found
+      let sg : Sig := findSigBE st e cand;
+      if sg.ret != 0 then [sg.a, sg.b]
       else if primL 0 cand then []
       else if lenI p.ns == 0 then resValOpen st e rest bs []
       else resValGo st e rest bs
@@ -6800,14 +6207,13 @@ partial def qExC : St -> Env -> Int -> List Int -> List OpenScope -> List (List 
         else
           let r : List Int := resValGo st e (prefsOf 0 ns ops) (spanBytes 0 st na nb);
           if lenI r == 1 then setErr 0 st 5
-          else if lenI r == 3 then setC 0 st id (-10000 - nthI r 2)
           else if lenI r == 0 then
             let dot : Int := lastDot st na nb;
             if dot >= 0 && findLocal st locs na dot >= 0 then setC 0 st id (-9)
             else if dot >= 0 then
               let r2 : List Int := resValGo st e (prefsOf 0 ns ops) (spanBytes 0 st na dot);
               if lenI r2 == 1 then setErr 0 st 5
-              else if lenI r2 != 2 then st
+              else if lenI r2 == 0 then st
               else
                 let qbs : List Int := joinDot 0 (spanBytes 0 st (nthI r2 0) (nthI r2 1)) (spanBytes 0 st (dot + 1) nb);
                 -- Reuse the existing fresh-name allocator and reserve its node.
@@ -6907,7 +6313,7 @@ def ckName : Nat -> St -> Env -> List Int -> Int -> Ans
       else if fd 0 st id 3 != -9 && spanEq 0 st na nb "Nat.zero" && (findSigE st env na nb).ret == 0 then good 0 4
       else
         let pin : Bool := fd 0 st id 3 == -9;
-        let p : Sig := if pin || ((spanEq 0 st na nb "max" || spanEq 0 st na nb "min" || spanEq 0 st na nb "Int.fmod" || spanEq 0 st na nb "decide" || spanEq 0 st na nb "String.singleton" || spanEq 0 st na nb "Nat.zero" || spanEq 0 st na nb "Nat.succ") && (findSigE st env na nb).ret != 0) then miss 0 else prim 0 st na nb;
+        let p : Sig := if pin || ((spanEq 0 st na nb "max" || spanEq 0 st na nb "String.singleton" || spanEq 0 st na nb "Nat.zero" || spanEq 0 st na nb "Nat.succ") && (findSigE st env na nb).ret != 0) then miss 0 else prim 0 st na nb;
         if p.ret != 0 then bad 0 7
         else
           let sg : Sig := if pin then miss 0 else findSigE st env na nb;
@@ -8015,17 +7421,6 @@ partial def ckLet : St -> Env -> List Int -> Int -> Int -> Int -> Int -> Ans
           let locs2 : List Int := fd 0 st name 1 :: fd 0 st name 2 :: tyR :: locs;
           ck st env locs2 (fd 0 st rest 2) exp
 
--- With no expected result, keep the concrete Int context of either operand.
--- ckArgs still checks both operands at the selected type.
-partial def numericChoiceTy (st : St) (e : Env) (locs args : List Int) (exp : Int) : Int :=
-  if exp == 1 || exp == 4 then exp
-  else
-    let left : Ans := ck st e locs (nthF 0 args 0) 0;
-    if left.err == 0 && left.ty == 1 then 1
-    else
-      let right : Ans := ck st e locs (nthF 0 args 1) 0;
-      if right.err == 0 && right.ty == 1 then 1 else 4
-
 partial def ckCall : St -> Env -> List Int -> Int -> Int -> Ans
 
   | st, env, locs, id, exp =>
@@ -8039,7 +7434,7 @@ partial def ckCall : St -> Env -> List Int -> Int -> Int -> Ans
         else if findLocal st locs na nb >= 0 then bad 0 6
         else
           let pin : Bool := fd 0 st fn 3 == -9;
-          let p : Sig := if pin || ((spanEq 0 st na nb "max" || spanEq 0 st na nb "min" || spanEq 0 st na nb "Int.fmod" || spanEq 0 st na nb "decide" || spanEq 0 st na nb "String.singleton" || spanEq 0 st na nb "Nat.zero" || spanEq 0 st na nb "Nat.succ") && (findSigE st env na nb).ret != 0) then miss 0 else prim 0 st na nb;
+          let p : Sig := if pin || ((spanEq 0 st na nb "max" || spanEq 0 st na nb "String.singleton" || spanEq 0 st na nb "Nat.zero" || spanEq 0 st na nb "Nat.succ") && (findSigE st env na nb).ret != 0) then miss 0 else prim 0 st na nb;
           let sg : Sig := if pin then miss 0 else if p.ret != 0 then p else findSigE st env na nb;
           let p2 : Sig :=
             if sg.ret != 0 then miss 0
@@ -8053,12 +7448,6 @@ partial def ckCall : St -> Env -> List Int -> Int -> Int -> Ans
           let recv : Bool := sg.ret == 0 && p2.ret != 0;
           let fin : Sig := if recv then p2 else sg;
           if fin.ret == 0 then bad 0 5
-          else if p.ret != 0 && (spanEq 0 st na nb "max" || spanEq 0 st na nb "min") then
-            if lenI args != 2 then bad 0 7
-            else
-              let use : Int := numericChoiceTy st env locs args exp;
-              let checked : Ans := ckArgs st env locs args [use, use];
-              if checked.err != 0 then checked else fit exp (good 0 use)
           else if !recv && spanEq 0 st na nb "List.replicate" then
             if lenI args != 2 then bad 0 7
             else
@@ -8146,7 +7535,7 @@ partial def ckBin : St -> Env -> List Int -> Int -> Int -> Int -> Int -> Ans
             if rB.err != 0 then rB
             else if rB.ty == 3 || rB.ty == 6 then fit exp (good 0 5) else bad 0 6
           else rA
-      else if isWordTy lA.ty && !(wordBinAllowed lA.ty op) then bad 0 15
+      else if isWordTy lA.ty && wordHelper lA.ty op == 0 then bad 0 15
       else if !(isWordTy lA.ty) && lA.ty != 4 && op >= 19 then bad 0 15
       else if lA.ty != 1 && lA.ty != 4 && !(isWordTy lA.ty) then bad 0 6
       else
@@ -8159,7 +7548,7 @@ partial def ckBin : St -> Env -> List Int -> Int -> Int -> Int -> Int -> Ans
           else
             let lB : Ans := ck st env locs l rB.ty;
             if lB.err != 0 then lB
-            else if isWordTy lB.ty && !(wordBinAllowed lB.ty op) then bad 0 15
+            else if isWordTy lB.ty && wordHelper lB.ty op == 0 then bad 0 15
             -- Pos zero may inherit the right Pos type only for add/sub.
             else if lB.ty == 1 || lB.ty == 4 || isWordTy lB.ty || (lB.ty == 5 && (op == 1 || op == 2)) then fit exp (good 0 lB.ty)
             else bad 0 6
@@ -9393,7 +8782,7 @@ def pipeMethodLast (st : St) (ty exp a b : Int) (args : List Int) : Bool :=
 -- ck still requires a typed Nat variable or a different word width to fit.
 def wordBinTy (st : St) (e : Env) (locs : List Int) (op : Int) (l : Int) (r : Int) (exp : Int) : Int :=
   if isWordTy (op / 100) then op / 100
-  else if wordBinAllowed exp (op % 100) then exp
+  else if wordHelper exp (op % 100) > 0 then exp
   else
     let a : Ans := ck st e locs l 0;
     if a.err == 0 && isWordTy a.ty then a.ty
@@ -9422,56 +8811,6 @@ def structReceiverIndex : List Int -> Int -> Int
       let i : Int := structReceiverIndex ps ty;
       if i < 0 then -1 else i + 1
 
--- Lean 4.14 Init/Data/Int/DivMod.lean Int.fmod (floor remainder), written
--- over the existing Int remainder (Int.emod, `%`): with r = a % b, which is
--- in [0, |b|), the floor remainder is r, except that r + b when r != 0 and
--- b < 0. For b = 0 it is a. Operands are bound once, in source order.
-def intTypeNode (st : St) (ty : Int) : St := alloc 0 st 56 ty 0 0
-
-def lowerFmod (st : St) (a b : Int) : St :=
-  let sa : St := synthIdent 0 st ([36, 102, 97] ++ natBytes st.nxt);
-  let sb : St := synthIdent 0 sa ([36, 102, 98] ++ natBytes sa.nxt);
-  let sr : St := synthIdent 0 sb ([36, 102, 114] ++ natBytes sb.nxt);
-  let fa : Int := sa.ret;
-  let fb : Int := sb.ret;
-  let fr : Int := sr.ret;
-  let rem : St := mkBin sr 15 fa fb;
-  let z1 : St := mkNum rem 0;
-  let ne : St := mkBin z1 6 fr z1.ret;
-  let z2 : St := mkNum ne 0;
-  let lt : St := mkBin z2 7 fb z2.ret;
-  let both : St := mkBin lt 11 ne.ret lt.ret;
-  let sum : St := mkBin both 1 fr fb;
-  let pick : St := mkIf sum both.ret sum.ret fr;
-  let t3 : St := intTypeNode pick 1;
-  let l3 : St := mkLet t3 fr t3.ret rem.ret pick.ret;
-  let t2 : St := intTypeNode l3 1;
-  let l2 : St := mkLet t2 fb t2.ret b l3.ret;
-  let t1 : St := intTypeNode l2 1;
-  mkLet t1 fa t1.ret a l2.ret
-
--- Lean 4.14 Init/Prelude.lean:1140 max x y = if x <= y then y else x, and
--- :1153 min x y = if x <= y then x else y (maxOfLe/minOfLe; Int.Basic:332,334).
--- Operands are bound once at the chosen numeric type ty.
-def lowerMinMax (st : St) (isMax : Bool) (ty a b : Int) : St :=
-  let sa : St := synthIdent 0 st ([36, 109, 97] ++ natBytes st.nxt);
-  let sb : St := synthIdent 0 sa ([36, 109, 98] ++ natBytes sa.nxt);
-  let fa : Int := sa.ret;
-  let fb : Int := sb.ret;
-  let test : St := mkBin sb 9 fa fb;
-  let pick : St := mkIf test test.ret (if isMax then fb else fa) (if isMax then fa else fb);
-  let t2 : St := intTypeNode pick ty;
-  let l2 : St := mkLet t2 fb t2.ret b pick.ret;
-  let t1 : St := intTypeNode l2 ty;
-  mkLet t1 fa t1.ret a l2.ret
-
--- Saturated conditional applications use ordinary statically named calls.
-partial def conditionalCallSig (st : St) (e : Env) (locs : List Int) (id : Int) : Sig :=
-  let a : Int := fd 0 st id 1;
-  let b : Int := fd 0 st id 2;
-  if fd 0 st id 0 != 1 || fd 0 st id 3 != 0 || findLocal st locs a b >= 0 then miss 0
-  else findSigE st e a b
-
 mutual
 partial def desugar : St -> Env -> Int -> Int -> List Int -> Int -> St
 
@@ -9482,37 +8821,6 @@ partial def desugar : St -> Env -> Int -> Int -> List Int -> Int -> St
       if t == 47 then
         let lowered : St := anonymousExprLower st e id exp [];
         if lowered.err != 0 then lowered else desugar lowered e top id locs exp
-      else if (t == 1 || t == 5) && fd 0 st (getFn st id) 3 <= -10100 && fd 0 st (getFn st id) 3 > -11000 then
-        let ty : Int := -10000 - fd 0 st (getFn st id) 3;
-        let i : Nat := Int.toNat (ty - 100);
-        let cnt : Nat := Int.toNat (nthF 0 e.heads (i * 4 + 2));
-        let first : Nat := Int.toNat (nthF 0 e.heads (i * 4 + 3));
-        let fields : List Int := takeI (dropI e.fields (first * 3)) (cnt * 3);
-        let spine : St := spine1 (setRet 0 st (-1)) 12 (revI [] (getArgs st id));
-        let built : St := anonymousFields spine spine.ret fields;
-        if built.err != 0 then built
-        else
-          let body : St := alloc 0 built 14 (-1) built.ret 0;
-          let ann : St := alloc 0 body 56 ty 0 0;
-          desugar (setNode 0 ann id 30 body.ret ann.ret 0) e top id locs exp
-      else if t == 5 && fd 0 st (getFn st id) 0 == 8 then
-        let head : Int := getFn st id;
-        let th : Int := unwrapP st (fd 0 st head 2);
-        let el : Int := unwrapP st (fd 0 st head 3);
-        let left : Sig := conditionalCallSig st e locs th;
-        let right : Sig := conditionalCallSig st e locs el;
-        let args : List Int := getArgs st id;
-        if left.ret == 0 || left.ret != right.ret || !(eqListI left.ps right.ps) then setErr 0 st 6
-        else if lenI args != lenI left.ps then setErr 0 st 7
-        else
-          let test : Int := fd 0 st head 1;
-          let prepared : St := desugar st e top test locs 2;
-          let ready : St := desugarArgs prepared e top args left.ps locs;
-          let yes : St := applyDefaultArgs ready th args;
-          let no : St := applyDefaultArgs yes el args;
-          let body : St := alloc 0 no 8 test yes.ret no.ret;
-          let ann : St := alloc 0 body 56 left.ret 0 0;
-          setNode 0 ann id 30 body.ret ann.ret 0
       else if t == 43 || (t == 5 && fd 0 st (getFn st id) 0 == 43) then
         let fn : Int := getFn st id;
         let args : List Int := getArgs st id;
@@ -9674,36 +8982,6 @@ partial def desugar : St -> Env -> Int -> Int -> List Int -> Int -> St
         let st1 : St := desugarArgs st e top args [4, if isListTy 0 exp then elemTy 0 exp else 0] locs;
         let result : Ans := ck st1 e locs id exp;
         if result.err == 0 then setC 0 st1 id result.ty else st1
-      else if t == 5 && fd 0 st (getFn st id) 0 == 1 && fd 0 st (getFn st id) 3 != -9 &&
-        (spanEq 0 st (fd 0 st (getFn st id) 1) (fd 0 st (getFn st id) 2) "max" ||
-         spanEq 0 st (fd 0 st (getFn st id) 1) (fd 0 st (getFn st id) 2) "min") &&
-        findLocal st locs (fd 0 st (getFn st id) 1) (fd 0 st (getFn st id) 2) < 0 &&
-        (findSigE st e (fd 0 st (getFn st id) 1) (fd 0 st (getFn st id) 2)).ret == 0 then
-        let args : List Int := getArgs st id;
-        if lenI args != 2 then setErr 0 st 7
-        else
-          let use : Int := numericChoiceTy st e locs args exp;
-          let isMax : Bool := spanEq 0 st (fd 0 st (getFn st id) 1) (fd 0 st (getFn st id) 2) "max";
-          if isMax && use != 1 then
-            let ready : St := desugarArgs st e top args [use, use] locs;
-            let result : Ans := ck ready e locs id exp;
-            if result.err == 0 then setC 0 ready id result.ty else ready
-          else
-            let built : St := lowerMinMax st isMax use (nthI args 0) (nthI args 1);
-            let r : Int := built.ret;
-            let rewritten : St := setNode 0 built id 9 (fd 0 built r 1) (fd 0 built r 2) (fd 0 built r 3);
-            desugar rewritten e top id locs exp
-      else if t == 5 && fd 0 st (getFn st id) 0 == 1 && fd 0 st (getFn st id) 3 != -9 &&
-        spanEq 0 st (fd 0 st (getFn st id) 1) (fd 0 st (getFn st id) 2) "Int.fmod" &&
-        findLocal st locs (fd 0 st (getFn st id) 1) (fd 0 st (getFn st id) 2) < 0 &&
-        (findSigE st e (fd 0 st (getFn st id) 1) (fd 0 st (getFn st id) 2)).ret == 0 then
-        let args : List Int := getArgs st id;
-        if lenI args != 2 then setErr 0 st 7
-        else
-          let built : St := lowerFmod st (nthI args 0) (nthI args 1);
-          let r : Int := built.ret;
-          let rewritten : St := setNode 0 built id 9 (fd 0 built r 1) (fd 0 built r 2) (fd 0 built r 3);
-          desugar rewritten e top id locs exp
       else if t == 5 && fd 0 st (getFn st id) 0 == 32 then desugarLocalApp st e top id locs exp
       else if t == 5 then
         let st0 : St := expandDefDefaults st e top id (getFn st id) (getArgs st id) locs;
@@ -10435,19 +9713,13 @@ def intMagnitudeMarker : List Int := [1,8,0,73,110,116,77,97,103,49]
 def natMagnitudeTyW : List Int := [7,1] ++ natMagnitudeMarker ++ [4,0]
 def intMagnitudeTyW : List Int := [7,2] ++ intMagnitudeSignMarker ++ [1] ++ intMagnitudeMarker ++ [4,0]
 
--- WIRE-SEQ-0: element width in bits of a sequence of source element type c: 8, 16, 32 for
--- UInt8, UInt16, UInt32 elements; 0 for every other element (a full word, a magnitude or an object).
-def seqWidth (c : Int) : Int := if isWordTy c then wordWidth c else 0
-
 mutual
 partial def tyW : List Int -> Int -> List Int
 
   | pk, c =>
     if c == 1 then intMagnitudeTyW
     else if c == 4 then natMagnitudeTyW
-    -- WIRE-SEQ-0 rev 2: a fixed-width scalar says its width (tag 11, bits); it still means a word.
-    else if isWordTy c then [11, wordWidth c]
-    else if c == 6 then [0]
+    else if c == 6 || isWordTy c then [0]
     else if c == 2 then [1]
     else if c == 3 then [4, 0]
     else if c == 8 then handleTyW pk
@@ -10477,8 +9749,7 @@ partial def tyW : List Int -> Int -> List Int
     else if basicKind 0 c == 4 then
       -- The typed emitter still gives Array Char a special text lowering.
       -- Preserve that subset boundary rather than emit incompatible bytes.
-      -- WIRE-SEQ-0: tag 10 = sequence with its source kind (4 Array) and element width.
-      if basicFirst 0 c == 6 then [-99] else [10, 4, seqWidth (basicFirst 0 c)] ++ tyW pk (basicFirst 0 c)
+      if basicFirst 0 c == 6 then [-99] else [4] ++ tyW pk (basicFirst 0 c)
     else if basicKind 0 c == 5 then
       -- Bounded extensional adapter, from HashMapCompositions.lean. No
       -- bucket/traversal-order claim; scalar keys and payloads only.
@@ -10487,7 +9758,7 @@ partial def tyW : List Int -> Int -> List Int
     -- Lean 4.14: String.Pos is a Nat wrapper; ByteArray wraps Array UInt8;
     -- Substring stores str/startPos/stopPos. Erase wrappers to existing forms.
     else if c == 5 then natMagnitudeTyW
-    else if basicKind 0 c == 2 then [10, 2, 8, 0]
+    else if basicKind 0 c == 2 then [4,0]
     else if basicKind 0 c == 3 then [7,3] ++ fiName 0 ++ [4,0] ++ fiName 1 ++ natMagnitudeTyW ++ fiName 2 ++ natMagnitudeTyW
     else if isBasicTy 0 c then [-99]
     else if c >= 100 then
@@ -13844,21 +13115,6 @@ def wordArgsW : List (List Int) -> List Int
   | [] => [0]
   | a :: rest => [1] ++ magnitudeMetadataNatW a ++ wordArgsW rest
 
-def wordResidueW (ty : Int) (value : List Int) : List Int :=
-  [11] ++ value ++ litI (wordModulus ty)
-
--- Lean's UInt32.mul is modulo 2^32. Signed representatives of both
--- operands are congruent and their product fits in the wire's signed i64.
-def wordSigned32W (value : List Int) : List Int :=
-  let half : List Int := litI 2147483648;
-  [7] ++ wordResidueW 11 ([6] ++ wordResidueW 11 value ++ half) ++ half
-
-def wordArithW (ty op : Int) (a b : List Int) : List Int :=
-  let prim : Int := if op == 1 then 6 else if op == 2 then 7 else 8;
-  if ty == 11 && op == 3 then
-    wordResidueW ty ([prim] ++ wordSigned32W a ++ wordSigned32W b)
-  else wordResidueW ty ([prim] ++ wordResidueW ty a ++ wordResidueW ty b)
-
 
 -- Lean 4.14 pure Char.ofNat Unicode equation (SEM-ALIGN §6); no general inliner.
 partial def closedCharTransparent (st : St) (hd : List Int) (ty id : Int) : Int :=
@@ -14821,9 +14077,7 @@ partial def lowHeapArgs : St -> List Int -> List Fn -> List Int -> List Int -> I
         let ctx1 : List Int := -1 :: -1 :: w.ty :: shiftTrailer w.ctx 1;
         let r : RecFlds := lowHeapArgs st hd fs ctx1 args ci (j + 1);
         if r.err != 0 then r
-        else
-          let value : List Int := if ty == 11 then wordResidueW 11 w.bs else w.bs;
-          { err := 0, pre := w.pre ++ [4] ++ tyW hd w.ty ++ value ++ r.pre, ctx := r.ctx, moved := w.moved + 1 + r.moved, ks := slot :: r.ks, bs := varB r.moved :: r.bs : RecFlds }
+        else { err := 0, pre := w.pre ++ [4] ++ tyW hd w.ty ++ w.bs ++ r.pre, ctx := r.ctx, moved := w.moved + 1 + r.moved, ks := slot :: r.ks, bs := varB r.moved :: r.bs : RecFlds }
 
 partial def lowArgs : St -> List Int -> List Fn -> List Int -> List Int -> List Int -> Int -> Int -> Bw
 
@@ -14913,10 +14167,6 @@ partial def lowPrim : St -> List Int -> List Fn -> List Int -> Int -> Int -> Bw
       let elem : Int := if isListTy 0 ret then elemTy 0 ret else 0;
       if !(ListReplicateNF.admit { arguments := lenI (getArgs st id), countType := 4, element := elem }) then bwErr 0 6
       else lowContainerArgs st hd fs ctx (getArgs st id) [4, elem] 31 ret ret (-1) []
-    else if callNamed st id "decide" && fd 0 st fn 3 != -9 &&
-      look st ctx (fd 0 st fn 1) (fd 0 st fn 2) < 0 && fnIx st fs (fd 0 st fn 1) (fd 0 st fn 2) < 0 then
-      -- Lean 4.14 Init/Prelude.lean Decidable.decide: a proposition here is its Bool test.
-      low st hd fs ctx (argAt st id 0) 2
     else if callNamed st id "Int.toNat" then
       let x : Bw := low st hd fs ctx (argAt st id 0) 1;
       if x.err != 0 then x
@@ -14951,7 +14201,7 @@ partial def lowBin : St -> List Int -> List Fn -> List Int -> Int -> Int -> Int 
     let base : Int := op0 % 100;
     let hint : Int := if isWordTy (op0 / 100) then op0 / 100 else 0;
     let op : Int := if base == 16 then 6 else if base == 17 then 9 else if base == 18 then 10 else base;
-    if wordBinAllowed hint op then lowWordBin st hd fs ctx hint op l r
+    if wordHelper hint op > 0 then lowWordBin st hd fs ctx hint op l r
     else if op == 11 || op == 12 then
       let a : Bw := low st hd fs ctx l 2;
       if a.err != 0 then a
@@ -15143,14 +14393,13 @@ partial def lowBin : St -> List Int -> List Fn -> List Int -> Int -> Int -> Int 
 partial def lowWordBin : St -> List Int -> List Fn -> List Int -> Int -> Int -> Int -> Int -> Bw
   | st, hd, fs, ctx, ty, op, l, r =>
     let h : Int := wordHelper ty op;
-    let scalar : Bool := wordScalarOp ty op;
-    let ix : Int := if scalar then -1 else wordHelperIx st fs h;
-    if !scalar && (h == 0 || ix < 0) then bwErr 0 15
+    let ix : Int := wordHelperIx st fs h;
+    if h == 0 || ix < 0 then bwErr 0 15
     else
       let a : Bw := low st hd fs ctx l ty;
       if a.err != 0 then a
       else
-        let keep : Bool := a.moved != 0 || op == 15;
+        let keep : Bool := a.moved != 0;
         let nextCtx : List Int := if keep then -1 :: -1 :: a.ty :: shiftTrailer a.ctx 1 else a.ctx;
         let b : Bw := low st hd fs nextCtx r ty;
         if b.err != 0 then b
@@ -15159,26 +14408,17 @@ partial def lowWordBin : St -> List Int -> List Fn -> List Int -> Int -> Int -> 
             if keep then varB b.moved
             else if b.moved == 0 then a.bs
             else (low st hd fs b.ctx l ty).bs;
-          let saved : List Int :=
-            if keep then [4] ++ tyW hd a.ty ++ (if op == 15 then wordResidueW ty a.bs else a.bs)
-            else [];
-          let bs : List Int :=
-            if op == 15 then
-              -- BitVec.umod_zero returns the dividend. Bind each operand once.
-              let dividend : List Int := varB (b.moved + 1);
-              [4,0] ++ wordResidueW ty b.bs ++
-                [5,14,0] ++ varB 0 ++ litI 0 ++ dividend ++ [11] ++ dividend ++ varB 0
-            else if scalar then wordArithW ty op aBs b.bs
-            else
-              let m : List Int := litI (wordModulus ty);
-              let w : List Int := litI (wordWidth ty);
-              let args : List (List Int) :=
-                if h == 7 then [w, aBs, b.bs]
-                else if h == 9 then [m, w, aBs, b.bs]
-                else [aBs, b.bs];
-              [4] ++ natMagnitudeTyW ++ [52] ++ leb (ix + nPreOf hd) ++
-                wordArgsW args ++ magnitudeNatWordBound (wordWidth ty);
-          bwOk 0 (a.pre ++ saved ++ b.pre) b.ctx (a.moved + (if keep then 1 else 0) + b.moved) bs ty
+          let saved : List Int := if keep then [4] ++ tyW hd a.ty ++ a.bs else [];
+          let m : List Int := litI (wordModulus ty);
+          let w : List Int := litI (wordWidth ty);
+          let args : List (List Int) :=
+            if op == 1 then [m, aBs, b.bs]
+            else if op == 2 then [m, aBs, [7] ++ m ++ [11] ++ b.bs ++ m]
+            else if h == 2 then [m, aBs, b.bs]
+            else if h == 7 then [w, aBs, b.bs]
+            else if h == 9 then [m, w, aBs, b.bs]
+            else [aBs, b.bs];
+          bwOk 0 (a.pre ++ saved ++ b.pre) b.ctx (a.moved + (if keep then 1 else 0) + b.moved) ([4] ++ natMagnitudeTyW ++ [52] ++ leb (ix + nPreOf hd) ++ wordArgsW args ++ magnitudeNatWordBound (wordWidth ty)) ty
 
 partial def lowArith : St -> List Int -> List Fn -> List Int -> Int -> Int -> Int -> Int -> Bw -> Bw -> Bw
   | st, hd, fs, ctx, op, l, r, exp, a, b =>
@@ -15309,8 +14549,7 @@ partial def lowRecArenaFlds : St -> List Int -> List Fn -> List Int -> Int -> Na
                 else if r.moved == 0 then w1.bs
                 else (low st hd fs r.ctx eid fty).bs;
               let saved : List Int := if keep then [4] ++ tyW hd w1.ty ++ w1.bs else [];
-              let value : List Int := if fty == 11 then wordResidueW 11 wBs else wBs;
-              { err := 0, pre := w1.pre ++ saved ++ r.pre, ctx := r.ctx, moved := w1.moved + (if keep then 1 else 0) + r.moved, ks := ks :: r.ks, bs := value :: r.bs : RecFlds }
+              { err := 0, pre := w1.pre ++ saved ++ r.pre, ctx := r.ctx, moved := w1.moved + (if keep then 1 else 0) + r.moved, ks := ks :: r.ks, bs := wBs :: r.bs : RecFlds }
 
 partial def lowRec : St -> List Int -> List Fn -> List Int -> Int -> Nat -> Nat -> Int -> Bw
 
@@ -15557,9 +14796,7 @@ def checkPosParsed : Nat -> St -> Int
   | n + 1, st => checkPosParsed n st
 
 def checkSrcPos : Nat -> List Int -> Int
-  | 0, bs =>
-    let st : St := parseSrc 0 bs;
-    specPos st (checkPosParsed 0 st)
+  | 0, bs => checkPosParsed 0 (parseSrc 0 bs)
   | n + 1, bs => checkSrcPos n bs
 
 -- Body-stage refusal position: the first def whose body fails to lower
@@ -16151,4 +15388,4 @@ def emitSrcB : Nat -> Int -> List Int -> List Int
   | 0, bud, bs => emitParsedB 0 bud (parseSrc 0 bs)
   | n + 1, bud, bs => emitSrcB n bud bs
 
-end RscSourceModule_476a3b46c73976544bebd6946cc086a9ecd7fb5212c8764dc09874872c3ffffa
+end RscSourceModule_353d56c35f89647f02e29d22de1dcc53b2107ffa93057589292f172a7f75166a

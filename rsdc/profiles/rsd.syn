@@ -1,0 +1,1937 @@
+# Development grammar; not part of the first profile PR.
+surface rsd
+lexical
+  ws " \t\n\r"
+  comment "--"
+  block-open "/-"
+  block-close "-/"
+  open "(" "[" "{"
+  close ")" "]" "}"
+  # Lean 4.14.0 Basic.lean:882-893,936-970 (410fab7284703f41660ca2454218dcca9b2ec896).
+  # Each escaped component ends at its first U+00BB; preserve raw name spans.
+  token ident (([A-Za-z_]|(\xce[\x91-\x9f\xa1-\xa2\xa4-\xa9\xb1-\xba\xbc-\xbf]|\xcf[\x80-\xbb]|\xe1([\xbc-\xbe][\x80-\xbf]|\xbf[\x80-\xbe])|\xe2(\x84[\x80-\xbf]|\x85[\x80-\x8f])|\xf0\x9d(\x92[\x9c-\xbf]|[\x93-\x95][\x80-\xbf]|\x96[\x80-\x9f])))([A-Za-z_0-9'?!]|(\xce[\x91-\x9f\xa1-\xa2\xa4-\xa9\xb1-\xba\xbc-\xbf]|\xcf[\x80-\xbb]|\xe1([\xbc-\xbe][\x80-\xbf]|\xbf[\x80-\xbe]|\xb5[\xa2-\xaa])|\xe2(\x84[\x80-\xbf]|\x85[\x80-\x8f]|\x82[\x80-\x89\x90-\x9c])|\xf0\x9d(\x92[\x9c-\xbf]|[\x93-\x95][\x80-\xbf]|\x96[\x80-\x9f])))*|\xc2\xab([\x00-\x7f]|\xc2[\x80-\xba\xbc-\xbf]|[\xc3-\xdf][\x80-\xbf]|\xe0[\xa0-\xbf][\x80-\xbf]|[\xe1-\xec\xee-\xef][\x80-\xbf][\x80-\xbf]|\xed[\x80-\x9f][\x80-\xbf]|\xf0[\x90-\xbf][\x80-\xbf][\x80-\xbf]|[\xf1-\xf3][\x80-\xbf][\x80-\xbf][\x80-\xbf]|\xf4[\x80-\x8f][\x80-\xbf][\x80-\xbf])*\xc2\xbb)(\.(([A-Za-z_]|(\xce[\x91-\x9f\xa1-\xa2\xa4-\xa9\xb1-\xba\xbc-\xbf]|\xcf[\x80-\xbb]|\xe1([\xbc-\xbe][\x80-\xbf]|\xbf[\x80-\xbe])|\xe2(\x84[\x80-\xbf]|\x85[\x80-\x8f])|\xf0\x9d(\x92[\x9c-\xbf]|[\x93-\x95][\x80-\xbf]|\x96[\x80-\x9f])))([A-Za-z_0-9'?!]|(\xce[\x91-\x9f\xa1-\xa2\xa4-\xa9\xb1-\xba\xbc-\xbf]|\xcf[\x80-\xbb]|\xe1([\xbc-\xbe][\x80-\xbf]|\xbf[\x80-\xbe]|\xb5[\xa2-\xaa])|\xe2(\x84[\x80-\xbf]|\x85[\x80-\x8f]|\x82[\x80-\x89\x90-\x9c])|\xf0\x9d(\x92[\x9c-\xbf]|[\x93-\x95][\x80-\xbf]|\x96[\x80-\x9f])))*|\xc2\xab([\x00-\x7f]|\xc2[\x80-\xba\xbc-\xbf]|[\xc3-\xdf][\x80-\xbf]|\xe0[\xa0-\xbf][\x80-\xbf]|[\xe1-\xec\xee-\xef][\x80-\xbf][\x80-\xbf]|\xed[\x80-\x9f][\x80-\xbf]|\xf0[\x90-\xbf][\x80-\xbf][\x80-\xbf]|[\xf1-\xf3][\x80-\xbf][\x80-\xbf][\x80-\xbf]|\xf4[\x80-\x8f][\x80-\xbf][\x80-\xbf])*\xc2\xbb))* @keywords @reject-prefix=r#*"
+  # Lean/Parser/Command.lean:173-175 uses rawIdent for constructor names.
+  # Retain identifier bytes and qualified segments, without keyword refusal.
+  token ctorname (([A-Za-z_]|(\xce[\x91-\x9f\xa1-\xa2\xa4-\xa9\xb1-\xba\xbc-\xbf]|\xcf[\x80-\xbb]|\xe1([\xbc-\xbe][\x80-\xbf]|\xbf[\x80-\xbe])|\xe2(\x84[\x80-\xbf]|\x85[\x80-\x8f])|\xf0\x9d(\x92[\x9c-\xbf]|[\x93-\x95][\x80-\xbf]|\x96[\x80-\x9f])))([A-Za-z_0-9'?!]|(\xce[\x91-\x9f\xa1-\xa2\xa4-\xa9\xb1-\xba\xbc-\xbf]|\xcf[\x80-\xbb]|\xe1([\xbc-\xbe][\x80-\xbf]|\xbf[\x80-\xbe]|\xb5[\xa2-\xaa])|\xe2(\x84[\x80-\xbf]|\x85[\x80-\x8f]|\x82[\x80-\x89\x90-\x9c])|\xf0\x9d(\x92[\x9c-\xbf]|[\x93-\x95][\x80-\xbf]|\x96[\x80-\x9f])))*|\xc2\xab([\x00-\x7f]|\xc2[\x80-\xba\xbc-\xbf]|[\xc3-\xdf][\x80-\xbf]|\xe0[\xa0-\xbf][\x80-\xbf]|[\xe1-\xec\xee-\xef][\x80-\xbf][\x80-\xbf]|\xed[\x80-\x9f][\x80-\xbf]|\xf0[\x90-\xbf][\x80-\xbf][\x80-\xbf]|[\xf1-\xf3][\x80-\xbf][\x80-\xbf][\x80-\xbf]|\xf4[\x80-\x8f][\x80-\xbf][\x80-\xbf])*\xc2\xbb)(\.(([A-Za-z_]|(\xce[\x91-\x9f\xa1-\xa2\xa4-\xa9\xb1-\xba\xbc-\xbf]|\xcf[\x80-\xbb]|\xe1([\xbc-\xbe][\x80-\xbf]|\xbf[\x80-\xbe])|\xe2(\x84[\x80-\xbf]|\x85[\x80-\x8f])|\xf0\x9d(\x92[\x9c-\xbf]|[\x93-\x95][\x80-\xbf]|\x96[\x80-\x9f])))([A-Za-z_0-9'?!]|(\xce[\x91-\x9f\xa1-\xa2\xa4-\xa9\xb1-\xba\xbc-\xbf]|\xcf[\x80-\xbb]|\xe1([\xbc-\xbe][\x80-\xbf]|\xbf[\x80-\xbe]|\xb5[\xa2-\xaa])|\xe2(\x84[\x80-\xbf]|\x85[\x80-\x8f]|\x82[\x80-\x89\x90-\x9c])|\xf0\x9d(\x92[\x9c-\xbf]|[\x93-\x95][\x80-\xbf]|\x96[\x80-\x9f])))*|\xc2\xab([\x00-\x7f]|\xc2[\x80-\xba\xbc-\xbf]|[\xc3-\xdf][\x80-\xbf]|\xe0[\xa0-\xbf][\x80-\xbf]|[\xe1-\xec\xee-\xef][\x80-\xbf][\x80-\xbf]|\xed[\x80-\x9f][\x80-\xbf]|\xf0[\x90-\xbf][\x80-\xbf][\x80-\xbf]|[\xf1-\xf3][\x80-\xbf][\x80-\xbf][\x80-\xbf]|\xf4[\x80-\x8f][\x80-\xbf][\x80-\xbf])*\xc2\xbb))* @reject-prefix=r#*"
+  token field (([A-Za-z_]|(\xce[\x91-\x9f\xa1-\xa2\xa4-\xa9\xb1-\xba\xbc-\xbf]|\xcf[\x80-\xbb]|\xe1([\xbc-\xbe][\x80-\xbf]|\xbf[\x80-\xbe])|\xe2(\x84[\x80-\xbf]|\x85[\x80-\x8f])|\xf0\x9d(\x92[\x9c-\xbf]|[\x93-\x95][\x80-\xbf]|\x96[\x80-\x9f])))([A-Za-z_0-9'?!]|(\xce[\x91-\x9f\xa1-\xa2\xa4-\xa9\xb1-\xba\xbc-\xbf]|\xcf[\x80-\xbb]|\xe1([\xbc-\xbe][\x80-\xbf]|\xbf[\x80-\xbe]|\xb5[\xa2-\xaa])|\xe2(\x84[\x80-\xbf]|\x85[\x80-\x8f]|\x82[\x80-\x89\x90-\x9c])|\xf0\x9d(\x92[\x9c-\xbf]|[\x93-\x95][\x80-\xbf]|\x96[\x80-\x9f])))*|\xc2\xab([\x00-\x7f]|\xc2[\x80-\xba\xbc-\xbf]|[\xc3-\xdf][\x80-\xbf]|\xe0[\xa0-\xbf][\x80-\xbf]|[\xe1-\xec\xee-\xef][\x80-\xbf][\x80-\xbf]|\xed[\x80-\x9f][\x80-\xbf]|\xf0[\x90-\xbf][\x80-\xbf][\x80-\xbf]|[\xf1-\xf3][\x80-\xbf][\x80-\xbf][\x80-\xbf]|\xf4[\x80-\x8f][\x80-\xbf][\x80-\xbf])*\xc2\xbb) @reject-prefix=r#*"
+  token number [0-9]+ @reject-prefix=0[xXbBoO]|[0-9]+[.eE]
+  token fieldindex [1-9][0-9]*
+  token tmellipsis [.][.] @reject-prefix=[.][.][.]
+  token bindigits [01]+
+  token octdigits [0-7]+
+  token sciwhole [0-9]+
+  token scidigit [0-9]
+  token sciexp [eE]
+  # Basic.lean:1759-1770 uses nonReservedSymbol for category annotations.
+  # Dedicated tokens avoid reserving ident/str/num in ordinary source.
+  token quoteIdentKind ident @reject-prefix=ident[A-Za-z_0-9.?!'\x80-\xff]
+  token quoteStrKind str @reject-prefix=str[A-Za-z_0-9.?!'\x80-\xff]
+  token quoteNumKind num @reject-prefix=num[A-Za-z_0-9.?!'\x80-\xff]
+  token tactic [^()\[\]{}\x20\t\n\r\x22\x27]+
+  token hex [0-9a-fA-F]+
+  token quoted " @string-literal @incomplete=61
+  # Lean/Parser/StrInterpolation.lean:13-56. These four modes scan one
+  # exact lexical chunk, including its opening and closing delimiters.
+  # Embedded terms remain grammar children, never string payloads.
+  token interpClosed " @interpolation=closed @incomplete=61
+  token interpOpen " @interpolation=open @incomplete=61
+  token interpMiddle } @interpolation=middle @incomplete=61
+  token interpEnd } @interpolation=end @incomplete=61
+  token character \x27(\x5c[\x5c\x22\x27rnt]|\x5cx[0-9a-fA-F][0-9a-fA-F]|\x5cu[0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F]|[\x00-\x26\x28-\x5b\x5d-\x7f]|[\xc2-\xdf][\x80-\xbf]|\xe0[\xa0-\xbf][\x80-\xbf]|[\xe1-\xec\xee-\xef][\x80-\xbf][\x80-\xbf]|\xed[\x80-\x9f][\x80-\xbf]|\xf0[\x90-\xbf][\x80-\xbf][\x80-\xbf]|[\xf1-\xf3][\x80-\xbf][\x80-\xbf][\x80-\xbf]|\xf4[\x80-\x8f][\x80-\xbf][\x80-\xbf])\x27
+grammar
+  # Stock Lean 4.14.0, commit 410fab7284703f41660ca2454218dcca9b2ec896,
+  # Parser/Module.lean:14-22: optional prelude, ordered imports, commands.
+  # Header entries retain order/duplicates in the ordinary list19 spine;
+  # an empty header is the existing Commands tree, with no new wrapper.
+  File := FileHeader @tree=(18,$0,B,0) @template=$0
+  FileHeader := 'prelude Imports @tree=(19,(57,0,0,0),$1,0) @template=prelude\n$1
+  FileHeader := Imports @tree=$0 @template=$0
+  Imports := ImportDecl Imports @tree=(19,$0,$1,0) @template=$0\n$1
+  Imports := TopCommands @tree=$0 @template=$0
+  ImportDecl := 'import ImportRuntime ModuleName @tree=(56,$2,$1,0) @template=import\s$1$2
+  ImportRuntime := 'runtime @tree=1 @template=runtime\s
+  ImportRuntime := eps @tree=0 @template=
+  # A module name is a source span, not an expression identifier: imports
+  # must not activate the existing Except/word expression-helper passes.
+  ModuleName := ident @tree=(58,s0,e0,0) @template=$0
+  # Unclosed section/namespace blocks remain valid only along the EOF root spine.
+  TopCommands := Decl TopCommands @tree=(19,$0,$1,0) @template=$0\n$1
+  TopCommands := eps @tree=-1 @template=
+  TopCommands := 'deriving 'instance CmdCommaIdents 'for CmdCommaIdents TopCommands @tree=$5 @template=$2\n$5
+  TopCommands := 'namespace CmdIdent TopCommands @tree=(19,(362,(12,$1,(12,$2,-1,0),0),0,0),-1,0) @template=namespace\s$1\n$2 @boundary=1:col-gt
+  TopCommands := 'section CmdSectionName TopCommands @tree=(19,(363,(12,$1,(12,$2,-1,0),0),0,0),-1,0) @template=section$1\n$2
+  TopCommands := 'noncomputable 'section CmdSectionName TopCommands @tree=(19,(329,(12,$2,-1,0),0,0),$3,0) @template=noncomputable\ssection$2\n$3
+  Commands := Decl Commands @tree=(19,$0,$1,0) @template=$0\n$1
+  Commands := eps @tree=-1 @template=
+  # Pinned parseSrc Compile.rsd:2778 discards standalone deriving commands.
+  # Project at Commands so the erased command leaves no empty list19 node.
+  # Keep the ordinary list/eps inverse alternatives first.
+  Commands := 'deriving 'instance CmdCommaIdents 'for CmdCommaIdents Commands @tree=$5 @template=$2\n$5
+  DefDecl := Partial 'def CmdDeclId Groups ': Type Body @tree=(20,$2,(21,$3,$5,$0),$6) @template=$0def\s$2\s$3:\s$5$6
+  Decl := DefDecl @tree=$0 @template=$0
+  Decl := TheoremDecl @tree=$0 @template=$0
+  Decl := OtherDecl @tree=$0 @template=$0
+  OneDecl := OneDef @tree=$0 @template=$0
+  OneDecl := TheoremDecl @tree=$0 @template=$0
+  OneDecl := OtherDecl @tree=$0 @template=$0
+  # Stock Lean 4.14.0, commit 410fab7284703f41660ca2454218dcca9b2ec896,
+  # Parser/Command.lean:90-95,133-160: theorem has a required signature
+  # and declaration value. Signature kind 2 retains theorem versus def.
+  TheoremDecl := 'theorem CmdDeclId TheoremGroups ': Expr Body @tree=(20,$1,(21,$2,$4,2),$5) @template=theorem\s$1\s$2:\s$4$5
+  TheoremGroups := '( Names ': Expr ') TheoremGroups @tree=(22,$1,$3,$5) @template=($1\s:\s$3)\s$5 @refuse=1:65
+  TheoremGroups := eps @tree=-1 @template=
+  OneDef := OnePartial 'def CmdDeclId Groups ': Type Body @tree=(20,$2,(21,$3,$5,0),$6) @template=def\s$2\s$3:\s$5$6
+  OnePartial := 'partial @tree=0 @template=
+  OnePartial := eps @tree=0 @template=
+  Partial := 'partial @tree=1 @template=partial\s
+  Partial := eps @tree=0 @template=
+  # Lean/Parser/Command.lean:100-125,133-134: a declaration body
+  # beginning with the whole token `by` is read at leadPrec, so an
+  # outer lower-precedence operator cannot take remnants of the block.
+  # Other bodies keep the full term category and the old tree ABI.
+  Body := ':= DeclBody TermOpt @tree=(25,$1,a1($2),0) @template=\s:=\n${1:2}$2
+  DeclBody := Expr @tree=$0 @template=$0 @not-followed=0:by
+  DeclBody := ByTacticLead @tree=$0 @template=$0
+  Body := Clauses TermOpt @tree=(23,$0,a1($1),0) @template=\n${0:2}$1
+  TermMeta := 'termination_by Expr @tree=(45,-1,$1,0) @template=\ntermination_by\s$1 @layout-root @not-followed=1:structural
+  TermMeta := 'termination_by TermByNames '=> Expr @tree=(45,$1,$3,0) @template=\ntermination_by\s$1\s=>\s$3 @layout-root @not-followed=1:structural
+  TermOpt := 'termination_by 'structural TermByNames '=> Expr @tree=(45,$2,$4,1) @template=\ntermination_by\sstructural\s$2\s=>\s$4 @layout-root
+  TermOpt := 'termination_by 'structural Expr @tree=(45,-1,$2,1) @template=\ntermination_by\sstructural\s$2 @layout-root
+  TermByNames := Name TermByNamesTail @tree=(12,$0,$1,0) @template=$0$1 @boundary=0:col-gt
+  TermByNamesTail := Name TermByNamesTail @tree=(12,$0,$1,0) @template=\s$0$1 @boundary=0:col-gt
+  TermByNamesTail := eps @tree=-1 @template=
+  TermMeta := eps @tree=-1 @template=
+  Groups := '( Names ': Type ') Groups @tree=(22,$1,$3,$5) @template=($1\s:\s$3)\s$5 @refuse=1:65
+  Groups := '( Names ': Type ':= Expr ') Groups @tree=(22,$1,(40,$3,$5,0),$7) @template=($1\s:\s$3\s:=\s$5)\s$7 @refuse=1:65
+  Groups := eps @tree=-1 @template=
+  # Command.lean:94-99: bare binderIdents and every bracketed binder.
+  # The old explicit typed/default22 chain is retained above; these heads
+  # require a previously absent binder shape and cannot overlap it.
+  Groups := CmdNewLegacyBinder Groups @tree=(374,(12,$0,(12,$1,-1,0),0),0,0) @template=$0\s$1
+  Groups := CmdBinderIdent Groups @tree=(375,(12,$0,(12,$1,-1,0),0),0,0) @template=$0\s$1
+  TheoremGroups := CmdNewTheoremBinder TheoremGroups @tree=(374,(12,$0,(12,$1,-1,0),0),0,0) @template=$0\s$1
+  TheoremGroups := CmdBinderIdent TheoremGroups @tree=(375,(12,$0,(12,$1,-1,0),0),0,0) @template=$0\s$1
+  Names := Name NamesTail @tree=(12,$0,$1,0) @template=$0$1
+  NamesTail := Name NamesTail @tree=(12,$0,$1,0) @template=\s$0$1
+  NamesTail := eps @tree=-1 @template=
+  Name := ident @tree=(1,s0,e0,0) @template=$0
+  Name := 'Type @tree=(1,s0,e0,0) @template=$0
+  Name := '_ @tree=(1,s0,e0,0) @template=$0
+  # Header-only keywords remain identifiers in stock command syntax.
+  Name := 'runtime @tree=(1,s0,e0,0) @template=$0
+  Name := 'prelude @tree=(1,s0,e0,0) @template=$0
+  Name := CmdSoftName @tree=$0 @template=$0
+  # Same published Pratt precedences as Init/Notation.lean and the Term
+  # port below. A separate context is necessary: parseSrc's old Type
+  # role uses product41 and underscore-name1, unlike term product6/hole4.
+  Type := TyC0 @tree=$0 @template=$0 @choice-group=4 @choice-rank=0
+  Type := TyO0 @tree=$0 @template=$0 @choice-group=4 @choice-rank=1
+  TyO0 := DoLowTerm @tree=$0 @template=$0
+  TyProd := TyC35 @tree=$0 @template=$0
+  TyApp := TyApp TyArg @tree=(5,$0,(12,$1,-1,0),0) @template=$0\s$1 @scoped-layout=1:argument @boundary=1:ws
+  TyApp := TyProj @tree=$0 @template=$0
+  TyProj := TyAtom @tree=$0 @template=$0
+  TyProj := TyProj '. fieldindex @tree=(17,$0,d2,0) @template=$0.$2 @boundary=1:no-ws,2:no-ws
+  TyProj := TyProj '. field @tree=(29,$0,s2,e2) @template=$0.$2 @boundary=1:no-ws,2:no-ws
+  TyProj := TyProj '[ Expr ']? @tree=(33,$0,$2,0) @template=$0[$2]? @boundary=1:no-ws
+  TyProj := '. field @tree=(43,s1,e1,0) @template=.$1 @boundary=1:no-ws
+  TyArg := TyAtom @tree=$0 @template=$0
+  TyArg := '. field @tree=(43,s1,e1,0) @template=.$1 @boundary=1:no-ws
+  TyArg := TyArg '. fieldindex @tree=(17,$0,d2,0) @template=$0.$2 @boundary=1:no-ws,2:no-ws
+  TyArg := TyArg '. field @tree=(29,$0,s2,e2) @template=$0.$2 @boundary=1:no-ws,2:no-ws
+  TyArg := TyArg '[ Expr ']? @tree=(33,$0,$2,0) @template=$0[$2]? @boundary=1:no-ws
+  TyAtom := Atom @tree=$0 @template=$0 @not-followed=0:_|%28
+  TyAtom := '_ @tree=(1,s0,e0,0) @template=_
+  TyAtom := '( Type ') @tree=(13,$1,0,0) @template=($1)
+  TyAtom := '( ') @tree=(100,-1,0,0) @template=() @layout-clear @forbid-clear
+  TyAtom := '( Expr ': Type ') @tree=(30,$1,$3,0) @template=($1\s:\s$3) @layout-clear @forbid-clear
+  TyAtom := '( Expr ': ') @tree=(103,(12,$1,-1,0),0,0) @template=($1\s:) @layout-clear @forbid-clear
+  TyAtom := '( Expr ', TupleTail ') @tree=(42,$1,$3,0) @template=($1,\s$3) @layout-clear @forbid-clear
+  TyC0 := TyC1 @tree=$0 @template=$0
+  TyO0 := TyO1 @tree=$0 @template=$0 @choice-group=11 @choice-rank=1
+  TyC0 := TyC1 '<| TyC0 @tree=(6,33,$0,$2) @template=$0\s<|\s$2
+  TyO0 := TyC1 '<| TyO0 @tree=(6,33,$0,$2) @template=$0\s<|\s$2 @choice-group=11 @choice-rank=0
+  TyC1 := TyC10 @tree=$0 @template=$0
+  TyO1 := TyO10 @tree=$0 @template=$0 @choice-group=6 @choice-rank=1
+  TyC1 := TyC1 '|> TyC10 @tree=(6,34,$0,$2) @template=$0\s|>\s$2
+  TyO1 := TyC1 '|> TyO10 @tree=(6,34,$0,$2) @template=$0\s|>\s$2 @choice-group=6 @choice-rank=0
+  TyC10 := TyC20 @tree=$0 @template=$0
+  TyO10 := TyO20 @tree=$0 @template=$0
+  TyC10 := TyC10 '|>. field TmPipeArgs @tree=(112,(12,$0,(12,(1,s2,e2,0),(12,$3,-1,0),0),0),0,0) @template=$0\s|>.$2$3 @boundary=2:no-ws
+  TyC10 := TyC10 '|>. fieldindex TmPipeArgs @tree=(113,(12,$0,(12,(2,s2,e2,d2),(12,$3,-1,0),0),0),0,0) @template=$0\s|>.$2$3 @boundary=2:no-ws
+  TyC20 := TyC22 @tree=$0 @template=$0
+  TyO20 := TyO22 @tree=$0 @template=$0 @choice-group=7 @choice-rank=1
+  TyC20 := TyC25 '↔ TyC25 @tree=(6,25,$0,$2) @template=$0\s↔\s$2
+  TyO20 := TyC25 '↔ TyO25 @tree=(6,25,$0,$2) @template=$0\s↔\s$2 @choice-group=7 @choice-rank=0
+  TyC20 := TyC25 '<-> TyC25 @tree=(6,25,$0,$2) @template=$0\s↔\s$2
+  TyO20 := TyC25 '<-> TyO25 @tree=(6,25,$0,$2) @template=$0\s↔\s$2 @choice-group=7 @choice-rank=0
+  TyC22 := TyC25 @tree=$0 @template=$0
+  TyO22 := TyO25 @tree=$0 @template=$0
+  TyC22 := TyC25 '<|> TyC22 @tree=(6,37,$0,$2) @template=$0\s<|>\s$2
+  TyO22 := TyC25 '<|> TyO22 @tree=(6,37,$0,$2) @template=$0\s<|>\s$2
+  TyC25 := TyC30 @tree=$0 @template=$0
+  TyO25 := TyO30 @tree=$0 @template=$0
+  TyC25 := TyC30 '-> TyC25 @tree=(16,$0,$2,0) @template=$0\s->\s$2
+  TyO25 := TyC30 '-> TyO25 @tree=(16,$0,$2,0) @template=$0\s->\s$2 @choice-group=3 @choice-rank=0
+  TyC25 := TyC30 '→ TyC25 @tree=(16,$0,$2,0) @template=$0\s->\s$2
+  TyO25 := TyC30 '→ TyO25 @tree=(16,$0,$2,0) @template=$0\s->\s$2 @choice-group=3 @choice-rank=0
+  TyO25 := TermBinderRequired '-> Expr @tree=(116,(12,$0,(12,$2,-1,0),0),0,0) @template=$0\s->\s$2 @choice-group=3 @choice-rank=1
+  TyO25 := TermBinderRequired '→ Expr @tree=(116,(12,$0,(12,$2,-1,0),0),0,0) @template=$0\s->\s$2 @choice-group=3 @choice-rank=1
+  TyC30 := TyB30 @tree=$0 @template=$0
+  TyO30 := TyOB30 @tree=$0 @template=$0
+  TyC30 := TyB30 '∨ TyC30 @tree=(6,27,$0,$2) @template=$0\s∨\s$2
+  TyO30 := TyB30 '∨ TyO30 @tree=(6,27,$0,$2) @template=$0\s∨\s$2
+  TyB30 := TyC35 @tree=$0 @template=$0
+  TyOB30 := TyO35 @tree=$0 @template=$0
+  TyB30 := TyB30 '|| TyC35 @tree=(6,12,$0,$2) @template=$0\s||\s$2
+  TyOB30 := TyB30 '|| TyO35 @tree=(6,12,$0,$2) @template=$0\s||\s$2
+  TyC35 := TyB35 @tree=$0 @template=$0
+  TyO35 := TyOB35 @tree=$0 @template=$0
+  TyC35 := TyB35 '∧ TyC35 @tree=(6,26,$0,$2) @template=$0\s∧\s$2
+  TyO35 := TyB35 '∧ TyO35 @tree=(6,26,$0,$2) @template=$0\s∧\s$2
+  TyC35 := TyB35 '/\ TyC35 @tree=(6,26,$0,$2) @template=$0\s∧\s$2
+  TyO35 := TyB35 '/\ TyO35 @tree=(6,26,$0,$2) @template=$0\s∧\s$2
+  TyC35 := TyB35 '× TyC35 @tree=(41,$0,$2,0) @template=$0\s×\s$2 @choice-group=2 @choice-rank=0
+  TyO35 := TyB35 '× TyO35 @tree=(41,$0,$2,0) @template=$0\s×\s$2 @choice-group=2 @choice-rank=0
+  TyC35 := NotationBracketBinder '× TyC35 @tree=(405,(12,$0,(12,$2,-1,0),0),0,0) @template=$0\s×\s$2 @choice-group=2 @choice-rank=1
+  TyO35 := NotationBracketBinder '× TyO35 @tree=(405,(12,$0,(12,$2,-1,0),0),0,0) @template=$0\s×\s$2 @choice-group=2 @choice-rank=1
+  TyB35 := TyC40 @tree=$0 @template=$0
+  TyOB35 := TyO40 @tree=$0 @template=$0
+  TyB35 := TyB35 '&& TyC40 @tree=(6,11,$0,$2) @template=$0\s&&\s$2
+  TyOB35 := TyB35 '&& TyO40 @tree=(6,11,$0,$2) @template=$0\s&&\s$2
+  TyC40 := TyC50 @tree=$0 @template=$0
+  TyO40 := TyO50 @tree=$0 @template=$0
+  TyC40 := '! TyC40 @tree=(7,2,$1,0) @template=!$1
+  TyO40 := '! TyO40 @tree=(7,2,$1,0) @template=!$1
+  TyC40 := '¬ TyC40 @tree=(7,4,$1,0) @template=¬\s$1
+  TyO40 := '¬ TyO40 @tree=(7,4,$1,0) @template=¬\s$1
+  TyC40 := TyApp '! TyC40 @tree=(5,$0,(12,(7,2,$2,0),-1,0),0) @template=$0\s!$2 @layout=1:continuation
+  TyO40 := TyApp '! TyO40 @tree=(5,$0,(12,(7,2,$2,0),-1,0),0) @template=$0\s!$2 @layout=1:continuation
+  TyC40 := TyApp '¬ TyC40 @tree=(5,$0,(12,(7,4,$2,0),-1,0),0) @template=$0\s¬\s$2 @layout=1:continuation
+  TyO40 := TyApp '¬ TyO40 @tree=(5,$0,(12,(7,4,$2,0),-1,0),0) @template=$0\s¬\s$2 @layout=1:continuation
+  TyC50 := TyE50 @tree=$0 @template=$0
+  TyO50 := TyOE50 @tree=$0 @template=$0
+  TyC50 := TyE50 '∈ TyC50 @tree=(6,35,$0,$2) @template=$0\s∈\s$2
+  TyO50 := TyE50 '∈ TyO50 @tree=(6,35,$0,$2) @template=$0\s∈\s$2
+  TyE50 := TyC55 @tree=$0 @template=$0
+  TyOE50 := TyO55 @tree=$0 @template=$0
+  TyE50 := TyC55 '= TyC55 @tree=(6,24,$0,$2) @template=$0\s=\s$2
+  TyOE50 := TyC55 '= TyO55 @tree=(6,24,$0,$2) @template=$0\s=\s$2
+  TyE50 := TyC55 '== TyC55 @tree=(6,5,$0,$2) @template=$0\s==\s$2
+  TyOE50 := TyC55 '== TyO55 @tree=(6,5,$0,$2) @template=$0\s==\s$2
+  TyE50 := TyC55 '!= TyC55 @tree=(6,6,$0,$2) @template=$0\s!=\s$2
+  TyOE50 := TyC55 '!= TyO55 @tree=(6,6,$0,$2) @template=$0\s!=\s$2
+  TyE50 := TyC55 '< TyC55 @tree=(6,7,$0,$2) @template=$0\s<\s$2
+  TyOE50 := TyC55 '< TyO55 @tree=(6,7,$0,$2) @template=$0\s<\s$2
+  TyE50 := TyC55 '> TyC55 @tree=(6,8,$0,$2) @template=$0\s>\s$2
+  TyOE50 := TyC55 '> TyO55 @tree=(6,8,$0,$2) @template=$0\s>\s$2
+  TyE50 := TyC55 '<= TyC55 @tree=(6,9,$0,$2) @template=$0\s<=\s$2
+  TyOE50 := TyC55 '<= TyO55 @tree=(6,9,$0,$2) @template=$0\s<=\s$2
+  TyE50 := TyC55 '>= TyC55 @tree=(6,10,$0,$2) @template=$0\s>=\s$2
+  TyOE50 := TyC55 '>= TyO55 @tree=(6,10,$0,$2) @template=$0\s>=\s$2
+  TyE50 := TyC55 '≠ TyC55 @tree=(6,16,$0,$2) @template=$0\s≠\s$2
+  TyOE50 := TyC55 '≠ TyO55 @tree=(6,16,$0,$2) @template=$0\s≠\s$2
+  TyE50 := TyC55 '≤ TyC55 @tree=(6,17,$0,$2) @template=$0\s≤\s$2
+  TyOE50 := TyC55 '≤ TyO55 @tree=(6,17,$0,$2) @template=$0\s≤\s$2
+  TyE50 := TyC55 '≥ TyC55 @tree=(6,18,$0,$2) @template=$0\s≥\s$2
+  TyOE50 := TyC55 '≥ TyO55 @tree=(6,18,$0,$2) @template=$0\s≥\s$2
+  TyC55 := TyC58 @tree=$0 @template=$0
+  TyO55 := TyO58 @tree=$0 @template=$0
+  TyC55 := TyC55 '||| TyC58 @tree=(6,20,$0,$2) @template=$0\s|||\s$2
+  TyO55 := TyC55 '||| TyO58 @tree=(6,20,$0,$2) @template=$0\s|||\s$2
+  TyC55 := TyC55 '>>= TyC58 @tree=(6,30,$0,$2) @template=$0\s>>=\s$2
+  TyO55 := TyC55 '>>= TyO58 @tree=(6,30,$0,$2) @template=$0\s>>=\s$2
+  TyC58 := TyC60 @tree=$0 @template=$0
+  TyO58 := TyO60 @tree=$0 @template=$0
+  TyC58 := TyC58 '^^^ TyC60 @tree=(6,21,$0,$2) @template=$0\s^^^\s$2
+  TyO58 := TyC58 '^^^ TyO60 @tree=(6,21,$0,$2) @template=$0\s^^^\s$2
+  TyC60 := TyB60 @tree=$0 @template=$0
+  TyO60 := TyOB60 @tree=$0 @template=$0
+  TyC60 := TyB60 '>> TyC60 @tree=(6,36,$0,$2) @template=$0\s>>\s$2
+  TyO60 := TyB60 '>> TyO60 @tree=(6,36,$0,$2) @template=$0\s>>\s$2
+  TyB60 := TyC65 @tree=$0 @template=$0
+  TyOB60 := TyO65 @tree=$0 @template=$0
+  TyB60 := TyB60 '&&& TyC65 @tree=(6,19,$0,$2) @template=$0\s&&&\s$2
+  TyOB60 := TyB60 '&&& TyO65 @tree=(6,19,$0,$2) @template=$0\s&&&\s$2
+  TyB60 := TyB60 '*> TyC65 @tree=(6,32,$0,$2) @template=$0\s*>\s$2
+  TyOB60 := TyB60 '*> TyO65 @tree=(6,32,$0,$2) @template=$0\s*>\s$2
+  TyC65 := TyC67 @tree=$0 @template=$0
+  TyO65 := TyO67 @tree=$0 @template=$0
+  TyC65 := TyC65 '+ TyC67 @tree=(6,1,$0,$2) @template=$0\s+\s$2
+  TyO65 := TyC65 '+ TyO67 @tree=(6,1,$0,$2) @template=$0\s+\s$2
+  TyC65 := TyC65 '- TyC67 @tree=(6,2,$0,$2) @template=$0\s-\s$2
+  TyO65 := TyC65 '- TyO67 @tree=(6,2,$0,$2) @template=$0\s-\s$2
+  TyC65 := TyC65 '++ TyC67 @tree=(6,14,$0,$2) @template=$0\s++\s$2
+  TyO65 := TyC65 '++ TyO67 @tree=(6,14,$0,$2) @template=$0\s++\s$2
+  TyC67 := TyC70 @tree=$0 @template=$0
+  TyO67 := TyO70 @tree=$0 @template=$0
+  TyC67 := TyC70 ':: TyC67 @tree=(6,13,$0,$2) @template=$0\s::\s$2
+  TyO67 := TyC70 ':: TyO67 @tree=(6,13,$0,$2) @template=$0\s::\s$2
+  TyC70 := TyC75 @tree=$0 @template=$0
+  TyO70 := TyO75 @tree=$0 @template=$0
+  TyC70 := TyC70 '* TyC75 @tree=(6,3,$0,$2) @template=$0\s*\s$2
+  TyO70 := TyC70 '* TyO75 @tree=(6,3,$0,$2) @template=$0\s*\s$2
+  TyC70 := TyC70 '/ TyC75 @tree=(6,4,$0,$2) @template=$0\s/\s$2
+  TyO70 := TyC70 '/ TyO75 @tree=(6,4,$0,$2) @template=$0\s/\s$2
+  TyC70 := TyC70 '% TyC75 @tree=(6,15,$0,$2) @template=$0\s%\s$2
+  TyO70 := TyC70 '% TyO75 @tree=(6,15,$0,$2) @template=$0\s%\s$2
+  TyC75 := '- TyC75 @tree=(7,1,$1,0) @template=-$1
+  TyO75 := '- TyO75 @tree=(7,1,$1,0) @template=-$1
+  TyC75 := TyC75Shift @tree=$0 @template=$0
+  TyO75 := TyO75Shift @tree=$0 @template=$0
+  TyC75Shift := TyC80 @tree=$0 @template=$0
+  TyO75Shift := TyO80 @tree=$0 @template=$0
+  TyC75Shift := TyC75Shift '<<< TyC80 @tree=(6,22,$0,$2) @template=$0\s<<<\s$2
+  TyO75Shift := TyC75Shift '<<< TyO80 @tree=(6,22,$0,$2) @template=$0\s<<<\s$2
+  TyC75Shift := TyC75Shift '>>> TyC80 @tree=(6,23,$0,$2) @template=$0\s>>>\s$2
+  TyO75Shift := TyC75Shift '>>> TyO80 @tree=(6,23,$0,$2) @template=$0\s>>>\s$2
+  TyC75Shift := TyC80 '▸ TySubstOperands @tree=(114,(12,$0,(12,$2,-1,0),0),0,0) @template=$0\s▸\s$2
+  TyO75Shift := TyC80 '▸ TySubstOpenOperands @tree=(114,(12,$0,(12,$2,-1,0),0),0,0) @template=$0\s▸\s$2
+  TySubstOperands := TyC80 TySubstTail @tree=(12,$0,$1,0) @template=$0$1
+  TySubstTail := '▸ TySubstOperands @tree=$1 @template=\s▸\s$1
+  TySubstTail := eps @tree=-1 @template=
+  TySubstOpenOperands := TyO80 @tree=(12,$0,-1,0) @template=$0
+  TySubstOpenOperands := TyC80 '▸ TySubstOpenOperands @tree=(12,$0,$2,0) @template=$0\s▸\s$2
+  TyC80 := TyC100 @tree=$0 @template=$0
+  TyO80 := TyO100 @tree=$0 @template=$0
+  TyC80 := TyC100 '^ TyC80 @tree=(6,28,$0,$2) @template=$0\s^\s$2
+  TyO80 := TyC100 '^ TyO80 @tree=(6,28,$0,$2) @template=$0\s^\s$2
+  TyC100 := TyC110 @tree=$0 @template=$0
+  TyO100 := TyO110 @tree=$0 @template=$0
+  TyC100 := '~~~ TyC100 @tree=(7,3,$1,0) @template=~~~$1
+  TyO100 := '~~~ TyO100 @tree=(7,3,$1,0) @template=~~~$1
+  TyC100 := TyC110 '<$> TyC100 @tree=(6,31,$0,$2) @template=$0\s<\$>\s$2
+  TyO100 := TyC110 '<$> TyO100 @tree=(6,31,$0,$2) @template=$0\s<\$>\s$2
+  TyC110 := TyApp @tree=$0 @template=$0
+  TyO110 := Control @tree=$0 @template=$0
+  TyO110 := TyApp 'fun LambdaGroups '=> Expr @tree=(5,$0,(12,(32,$2,$4,0),-1,0),0) @template=$0\sfun\s$2\s=>\n${4:2} @layout=1:continuation
+  OtherDecl := CmdLegacyDataDecl @tree=$0 @template=$0
+  CmdLegacyDataDecl := 'structure Name Params DataHead CmdFields Deriving @tree=(26,(1,x1,y1,$5),$4,a1($2)) @template=structure\s$1$2\swhere\n${4:2}$5
+  CmdLegacyDataDecl := 'inductive Name Params IndHead Ctors Deriving @tree=(38,(1,x1,y1,$5),$4,a1($2)) @template=inductive\s$1$2\swhere\n${4:2}$5
+  DataHead := 'where | ':= @tree=0 @template=where
+  DataHead := ': 'Type DataHead @tree=0 @template=where
+  IndHead := DataHead @tree=0 @template=where
+  IndHead := eps @tree=0 @template=
+  # parseSrc's legacy data-name ABI retains deriving's presence as -10,
+  # while erasing the actual class list. Repr is the deterministic legal
+  # representative for that erased list when printing this legacy tree.
+  Deriving := 'deriving Name DeriveTail @tree=-10 @template=\nderiving\sRepr\n @not-followed=1:instance
+  Deriving := eps @tree=0 @template=
+  DeriveTail := ', Name DeriveTail @tree=0 @template=
+  DeriveTail := eps @tree=0 @template=
+  Params := '( ParamList @tree=$1 @template=\s($1
+  Params := '{ ImplicitParamList @tree=$1 @template=\s{$1
+  Params := CmdNewDataBinder Params @tree=(376,(12,$0,(12,$1,-1,0),0),0,0) @template=\s$0$1
+  Params := eps @tree=-1 @template=
+  ParamList := Name ParamList @tree=(12,$0,$1,0) @template=$0\s$1
+  ParamList := ': 'Type ') Params @tree=$3 @template=:\sType)$3
+  ImplicitParamList := Name ImplicitParamList @tree=(12,$0,$1,0) @template=$0\s$1
+  ImplicitParamList := ': 'Type '} Params @tree=$3 @template=:\sType}$3
+  CmdFields := Fields @tree=$0 @template=$0 @layout-root
+  # Stock Lean4.14 Command.lean:209-224 and Extra.lean:171-178:
+  # select a whole typed/default field before its following fields; do not
+  # split an application type into a type prefix and a fresh bare field.
+  # This uses longest productive selection, not stock's local Pratt commit;
+  # the distinction is recorded in the field-commit method report.
+  Fields := LegacyFieldHead Fields @tree=(27,x0,y0,$1) @template=$0\n$1 @scoped-layout=0:not-outdented
+  LegacyFieldHead := Name ': Type @tree=(0,$0,$2,0) @template=$0\s:\s$2
+  LegacyFieldHead := Name ': Type ':= Expr @tree=(0,$0,(40,$2,$4,0),0) @template=$0\s:\s$2\s:=\s$4
+  Fields := CmdNewField Fields @tree=(376,(12,$0,(12,$1,-1,0),0),0,0) @template=$0\n$1 @scoped-layout=0:not-outdented
+  Fields := eps @tree=-1 @template=
+  Ctors := '| CmdCtorName CtorType Ctors @tree=(12,(39,$1,x2,a1(y2)),$3,0) @template=|\s$1$2\n$3 @not-followed=1:private|protected|noncomputable|unsafe|partial|nonrec
+  Ctors := '| CmdNewCtor Ctors @tree=(376,(12,$1,(12,$2,-1,0),0),0,0) @template=|\s$1\n$2
+  Ctors := eps @tree=-1 @template=
+  CtorType := ': CtorArrow @tree=$1 @template=\s:\s$1
+  CtorType := '( CtorGroup @tree=(0,x1,z1,0) @template=\s($1
+  CtorType := eps @tree=(0,-1,-1,0) @template=
+  CtorArrow := TyProd '-> CtorArrow @tree=(0,(12,$0,x2,0),(16,$0,y2,0),0) @template=$0\s->\s$2
+  CtorArrow := TyProd '→ CtorArrow @tree=(0,(12,$0,x2,0),(16,$0,y2,0),0) @template=$0\s->\s$2
+  CtorArrow := TyProd @tree=(0,-1,$0,0) @template=$0
+  CtorGroup := field CtorGroup @tree=(0,(12,y1,x1,0),y1,z1) @template=_\s$1
+  CtorGroup := ': Type ') CtorType @tree=(0,x3,$1,y3) @template=:\s$1)$3
+  CmdLegacyDataDecl := 'abbrev CmdDeclId ':= Type @tree=(37,$1,$3,0) @template=abbrev\s$1\s:=\s$3
+  OtherDecl := 'mutual Commands 'end @tree=(28,$1,0,0) @template=mutual\n${1:2}end
+  OtherDecl := 'namespace Name Commands 'end EndName @tree=(34,$1,$2,0) @template=namespace\s$1\n$2end
+  EndName := Name @tree=0 @template= @boundary=0:col-gt
+  EndName := eps @tree=0 @template=
+  OtherDecl := 'section Commands 'end @tree=(36,-1,$1,-1) @template=section\n$1end
+  OtherDecl := 'section Name Commands 'end EndName @tree=(36,-1,$2,-1) @template=section\n$2end @boundary=1:col-gt
+  OtherDecl := 'open Names Hidden @tree=(35,$1,$2,0) @template=open\s$1$2
+  OtherDecl := 'open Names Hidden 'in OneDecl @tree=(36,$1,(19,$4,-1,0),$2) @template=open\s$1$2\sin\s$4
+  Hidden := 'hiding Names @tree=$1 @template=\shiding\s$1
+  Hidden := eps @tree=-1 @template=
+  # Command/Term/Syntax production port from Lean 4.14.0, source commit
+  # 410fab7284703f41660ca2454218dcca9b2ec896. This is grammar data, not a
+  # second parser. Command.lean:80-171 and Term.lean:333-383 are the source
+  # of the ordered modifiers, signatures and binder alternatives below.
+  CmdSoftName := 'name @tree=(1,s0,e0,0) @template=$0
+  CmdSoftName := 'priority @tree=(1,s0,e0,0) @template=$0
+  CmdSoftName := 'kind @tree=(1,s0,e0,0) @template=$0
+  CmdSoftName := 'simp @tree=(1,s0,e0,0) @template=$0
+  CmdSoftName := 'axioms @tree=(1,s0,e0,0) @template=$0
+  CmdSoftName := 'true @tree=(1,s0,e0,0) @template=$0
+  CmdSoftName := 'false @tree=(1,s0,e0,0) @template=$0
+  CmdSoftName := 'rec @tree=(1,s0,e0,0) @template=$0
+  CmdSoftName := 'generalizing @tree=(1,s0,e0,0) @template=$0
+  CmdSoftName := 'motive @tree=(1,s0,e0,0) @template=$0
+  CmdSoftName := 'structural @tree=(1,s0,e0,0) @template=$0
+  CmdIdent := ident @tree=(1,s0,e0,0) @template=$0
+  CmdCtorName := ctorname @tree=(1,s0,e0,0) @template=$0
+  CmdIdent := CmdSoftName @tree=$0 @template=$0
+  CmdIdent := TacUnreserved @tree=$0 @template=$0
+  CmdIdent := 'runtime @tree=(1,s0,e0,0) @template=$0
+  CmdIdent := 'prelude @tree=(1,s0,e0,0) @template=$0
+  CmdIdents := CmdIdent CmdIdentTail @tree=(12,$0,$1,0) @template=$0$1
+  CmdIdentTail := CmdIdents @tree=$0 @template=\s$0
+  CmdIdentTail := eps @tree=-1 @template=
+  CmdDeclId := Name @tree=$0 @template=$0
+  CmdDeclId := CmdUniverseId @tree=$0 @template=$0
+  CmdUniverseId := CmdIdent '.{ CmdCommaIdents '} @tree=(346,(12,$0,(12,$2,-1,0),0),0,0) @template=$0.{$2} @boundary=1:no-ws
+  CmdCommaIdents := CmdIdent CmdCommaIdentTail @tree=(12,$0,$1,0) @template=$0$1
+  CmdCommaIdentTail := ', CmdCommaIdents @tree=$1 @template=,\s$1
+  CmdCommaIdentTail := eps @tree=-1 @template=
+  CmdBinderIdent := CmdIdent @tree=$0 @template=$0
+  CmdBinderIdent := '_ @tree=(4,0,0,0) @template=_
+  CmdBinderNames := CmdBinderIdent CmdBinderNameTail @tree=(12,$0,$1,0) @template=$0$1
+  CmdBinderNameTail := CmdBinderNames @tree=$0 @template=\s$0
+  CmdBinderNameTail := eps @tree=-1 @template=
+  TermBinder := '( CmdBinderNames CmdTypeOpt CmdDefaultOpt ') @tree=(370,(12,$1,(12,$2,(12,$3,-1,0),0),0),0,0) @template=($1$2$3) @layout-clear
+  TermBinder := '{ CmdBinderNames CmdTypeOpt '} @tree=(371,(12,$1,(12,$2,-1,0),0),0,0) @template={$1$2} @layout-clear
+  TermBinder := '{ '{ CmdBinderNames CmdTypeOpt '} '} @tree=(372,(12,$2,(12,$3,-1,0),0),0,0) @template=⦃$2$3⦄
+  TermBinder := '⦃ CmdBinderNames CmdTypeOpt '⦄ @tree=(372,(12,$1,(12,$2,-1,0),0),0,0) @template=⦃$1$2⦄
+  TermBinder := '[ CmdInstanceName Expr '] @tree=(373,(12,$1,(12,$2,-1,0),0),0,0) @template=[$1$2] @layout-clear
+  TermBinderRequired := '( CmdBinderNames ': Expr CmdDefaultOpt ') @tree=(370,(12,$1,(12,$3,(12,$4,-1,0),0),0),0,0) @template=($1\s:\s$3$4) @layout-clear
+  TermBinderRequired := '{ CmdBinderNames ': Expr '} @tree=(371,(12,$1,(12,$3,-1,0),0),0,0) @template={$1\s:\s$3} @layout-clear
+  TermBinderRequired := '{ '{ CmdBinderNames ': Expr '} '} @tree=(372,(12,$2,(12,$4,-1,0),0),0,0) @template=⦃$2\s:\s$4⦄
+  TermBinderRequired := '⦃ CmdBinderNames ': Expr '⦄ @tree=(372,(12,$1,(12,$3,-1,0),0),0,0) @template=⦃$1\s:\s$3⦄
+  TermBinderRequired := '[ CmdInstanceName Expr '] @tree=(373,(12,$1,(12,$2,-1,0),0),0,0) @template=[$1$2] @layout-clear
+  CmdInstanceName := CmdBinderIdent ': @tree=$0 @template=$0\s:\s
+  CmdInstanceName := eps @tree=-1 @template=
+  CmdTypeOpt := ': Expr @tree=$1 @template=\s:\s$1
+  CmdTypeOpt := eps @tree=-1 @template=
+  CmdDefaultOpt := ':= Expr @tree=$1 @template=\s:=\s$1
+  CmdDefaultOpt := eps @tree=-1 @template=
+  TermBinders := TermBinder TermBinders @tree=(12,$0,$1,0) @template=\s$0$1
+  TermBinders := eps @tree=-1 @template=
+  CmdSigBinders := CmdSigBinder CmdSigBinders @tree=(12,$0,$1,0) @template=\s$0$1
+  CmdSigBinders := eps @tree=-1 @template=
+  CmdSigBindersNonempty := CmdSigBinder CmdSigBinders @tree=(12,$0,$1,0) @template=\s$0$1
+  CmdSigBinder := TermBinder @tree=$0 @template=$0
+  CmdSigBinder := CmdBinderIdent @tree=$0 @template=$0
+  CmdNewLegacyBinder := '( CmdBinderNames ') @tree=(370,(12,$1,(12,-1,(12,-1,-1,0),0),0),0,0) @template=($1) @layout-clear
+  CmdNewLegacyBinder := '( CmdBinderNames ':= Expr ') @tree=(370,(12,$1,(12,-1,(12,$3,-1,0),0),0),0,0) @template=($1\s:=\s$3) @layout-clear
+  CmdNewLegacyBinder := '{ CmdBinderNames CmdTypeOpt '} @tree=(371,(12,$1,(12,$2,-1,0),0),0,0) @template={$1$2} @layout-clear
+  CmdNewLegacyBinder := '{ '{ CmdBinderNames CmdTypeOpt '} '} @tree=(372,(12,$2,(12,$3,-1,0),0),0,0) @template=⦃$2$3⦄
+  CmdNewLegacyBinder := '⦃ CmdBinderNames CmdTypeOpt '⦄ @tree=(372,(12,$1,(12,$2,-1,0),0),0,0) @template=⦃$1$2⦄
+  CmdNewLegacyBinder := '[ CmdInstanceName Expr '] @tree=(373,(12,$1,(12,$2,-1,0),0),0,0) @template=[$1$2] @layout-clear
+  CmdNewTheoremBinder := CmdNewLegacyBinder @tree=$0 @template=$0
+  CmdNewTheoremBinder := '( CmdBinderNames ': Expr ':= Expr ') @tree=(370,(12,$1,(12,$3,(12,$5,-1,0),0),0),0,0) @template=($1\s:\s$3\s:=\s$5) @layout-clear
+  CmdTermRecModifiers := CmdModsOpt @tree=$0 @template=$0
+  CmdTermSuffix := TermOpt @tree=$0 @template=$0
+  Body := ':= DeclBody TermOpt TmWhereDecls @tree=(337,(12,(25,$1,a1($2),0),(12,$3,-1,0),0),0,0) @template=\s:=\n${1:2}$2\n$3
+  Body := Clauses TermOpt TmWhereDecls @tree=(337,(12,(23,$0,a1($1),0),(12,$2,-1,0),0),0,0) @template=\n${0:2}$1\n$2
+  Body := 'where CmdWhereFields TmWhereOpt @tree=(336,(12,$1,(12,$2,-1,0),0),0,0) @template=\swhere\n${1:2}$2
+  CmdWhereFields := CmdWhereItems @tree=$0 @template=$0 @layout-root
+  CmdWhereItems := TmLetDecl CmdWhereTail @tree=(12,$0,$1,0) @template=$0$1 @scoped-layout=0:not-outdented
+  CmdWhereItems := eps @tree=-1 @template=
+  CmdWhereTail := '; CmdWhereItems @tree=$1 @template=;\n$1
+  CmdWhereTail := CmdWhereItemsNonempty @tree=$0 @template=\n$0 @boundary=0:linebreak,0:col-eq
+  CmdWhereTail := eps @tree=-1 @template=
+  CmdWhereItemsNonempty := TmLetDecl CmdWhereTail @tree=(12,$0,$1,0) @template=$0$1 @scoped-layout=0:not-outdented
+  # Command.lean:80 orders the optional modifiers. Empty modifiers do not
+  # create a wrapper, and partial def retains the original signature flag.
+  Decl := CmdModifiedDecl @tree=$0 @template=$0
+  OneDecl := CmdModifiedDecl @tree=$0 @template=$0
+  CmdModifiedDecl := CmdModifiers CmdDeclarationCore @tree=(300,(12,$0,(12,$1,-1,0),0),0,0) @template=$0$1
+  CmdDeclarationCore := DefDecl @tree=$0 @template=$0
+  CmdDeclarationCore := TheoremDecl @tree=$0 @template=$0
+  CmdDeclarationCore := CmdLegacyDataDecl @tree=$0 @template=$0
+  CmdDeclarationCore := CmdFreshDeclaration @tree=$0 @template=$0
+  CmdModifiers := CmdAttributes CmdVisibilityOpt @tree=(12,$0,$1,0) @template=$0\s$1
+  CmdModifiers := CmdVisibility @tree=$0 @template=$0
+  CmdVisibilityOpt := CmdVisibility @tree=$0 @template=$0
+  CmdVisibilityOpt := eps @tree=-1 @template=
+  CmdVisibility := 'private CmdNoncompOpt @tree=(12,(301,-1,0,0),$1,0) @template=private\s$1
+  CmdVisibility := 'protected CmdNoncompOpt @tree=(12,(302,-1,0,0),$1,0) @template=protected\s$1
+  CmdVisibility := CmdNoncomp @tree=$0 @template=$0
+  CmdNoncompOpt := CmdNoncomp @tree=$0 @template=$0
+  CmdNoncompOpt := eps @tree=-1 @template=
+  CmdNoncomp := 'noncomputable CmdUnsafeOpt @tree=(12,(303,-1,0,0),$1,0) @template=noncomputable\s$1
+  CmdNoncomp := CmdUnsafe @tree=$0 @template=$0
+  CmdUnsafeOpt := CmdUnsafe @tree=$0 @template=$0
+  CmdUnsafeOpt := eps @tree=-1 @template=
+  CmdUnsafe := 'unsafe @tree=(12,(304,-1,0,0),-1,0) @template=unsafe\s
+  # Nested declModifiers keep the same source order, including the final
+  # partial/nonrec alternative. Top-level partial def remains legacy21.
+  CmdModsOpt := CmdNestedModifiers @tree=$0 @template=$0
+  CmdModsOpt := eps @tree=-1 @template=
+  CmdNestedModifiers := CmdAttributes CmdNestedVisibilityOpt @tree=(12,$0,$1,0) @template=$0\s$1
+  CmdNestedModifiers := CmdNestedVisibility @tree=$0 @template=$0
+  CmdNestedVisibilityOpt := CmdNestedVisibility @tree=$0 @template=$0
+  CmdNestedVisibilityOpt := eps @tree=-1 @template=
+  CmdNestedVisibility := 'private CmdNestedNoncompOpt @tree=(12,(301,-1,0,0),$1,0) @template=private\s$1
+  CmdNestedVisibility := 'protected CmdNestedNoncompOpt @tree=(12,(302,-1,0,0),$1,0) @template=protected\s$1
+  CmdNestedVisibility := CmdNestedNoncomp @tree=$0 @template=$0
+  CmdNestedNoncompOpt := CmdNestedNoncomp @tree=$0 @template=$0
+  CmdNestedNoncompOpt := eps @tree=-1 @template=
+  CmdNestedNoncomp := 'noncomputable CmdNestedUnsafeOpt @tree=(12,(303,-1,0,0),$1,0) @template=noncomputable\s$1
+  CmdNestedNoncomp := CmdNestedUnsafe @tree=$0 @template=$0
+  CmdNestedUnsafeOpt := CmdNestedUnsafe @tree=$0 @template=$0
+  CmdNestedUnsafeOpt := eps @tree=-1 @template=
+  CmdNestedUnsafe := 'unsafe CmdNestedFinalOpt @tree=(12,(304,-1,0,0),$1,0) @template=unsafe\s$1
+  CmdNestedUnsafe := CmdNestedFinal @tree=$0 @template=$0
+  CmdNestedFinalOpt := CmdNestedFinal @tree=$0 @template=$0
+  CmdNestedFinalOpt := eps @tree=-1 @template=
+  CmdNestedFinal := 'partial @tree=(12,(369,-1,0,0),-1,0) @template=partial\s
+  CmdNestedFinal := 'nonrec @tree=(12,(368,-1,0,0),-1,0) @template=nonrec\s
+  # Term.lean:636-645 and Attr.lean:36: attribute scope and simple attrs.
+  CmdAttrKind := 'local @tree=(307,-1,0,0) @template=local\s
+  CmdAttrKind := 'scoped @tree=(308,-1,0,0) @template=scoped\s
+  CmdAttrKind := eps @tree=-1 @template=
+  CmdAttributes := '@[ CmdAttrInstances '] @tree=(305,(12,$1,-1,0),0,0) @template=@[$1] @layout-clear
+  CmdAttrInstances := CmdAttrInstance CmdAttrTail @tree=(12,$0,$1,0) @template=$0$1
+  CmdAttrTail := ', CmdAttrInstances @tree=$1 @template=,\s$1
+  CmdAttrTail := eps @tree=-1 @template=
+  CmdAttrInstance := CmdAttrKind CmdAttribute @tree=(306,(12,$0,(12,$1,-1,0),0),0,0) @template=$0$1
+  CmdAttribute := CmdIdent CmdAttrArg @tree=(309,(12,$0,(12,$1,-1,0),0),0,0) @template=$0$1 @not-followed=0:simp
+  CmdAttrArg := CmdPriority @tree=$0 @template=\s$0
+  CmdAttrArg := eps @tree=-1 @template=
+  # Init/Notation.lean:89-96,113-141: priority arithmetic is left
+  # associative at65; grouping and literals/named priorities are atoms.
+  CmdPriority := CmdPrioritySum @tree=$0 @template=$0
+  CmdPrioritySum := CmdPrioritySum '+ CmdPriorityAtom @tree=(6,1,$0,$2) @template=$0\s+\s$2
+  CmdPrioritySum := CmdPrioritySum '- CmdPriorityAtom @tree=(6,2,$0,$2) @template=$0\s-\s$2
+  CmdPrioritySum := CmdPriorityAtom @tree=$0 @template=$0
+  CmdPriorityAtom := TmNum @tree=$0 @template=$0
+  CmdPriorityAtom := CmdIdent @tree=$0 @template=$0
+  CmdPriorityAtom := '( CmdPriority ') @tree=(13,$1,0,0) @template=($1) @layout-clear
+  CmdAttribute := 'simp CmdSimpPhase CmdSimpReverse CmdPrioOpt @tree=(310,(12,$1,(12,$2,(12,$3,-1,0),0),0),0,0) @template=simp$1$2$3
+  CmdSimpPhase := '↓ @tree=(311,-1,0,0) @template=↓
+  CmdSimpPhase := '↑ @tree=(312,-1,0,0) @template=↑
+  CmdSimpPhase := eps @tree=-1 @template=
+  CmdSimpReverse := '← @tree=(313,-1,0,0) @template=\s←
+  CmdSimpReverse := '<- @tree=(313,-1,0,0) @template=\s←
+  CmdSimpReverse := eps @tree=-1 @template=
+  CmdPrioOpt := CmdPriority @tree=$0 @template=\s$0
+  CmdPrioOpt := eps @tree=-1 @template=
+  CmdNamedPrio := '( 'priority ':= CmdPriority ') @tree=$3 @template=\s(priority\s:=\s$3) @layout-clear
+  CmdNamedPrioOpt := CmdNamedPrio @tree=$0 @template=$0
+  CmdNamedPrioOpt := eps @tree=-1 @template=
+  OtherDecl := CmdFreshDeclaration @tree=$0 @template=$0
+  OtherDecl := CmdFreshCommand @tree=$0 @template=$0
+  OtherDecl := CmdFreshCommand 'in OneDecl @tree=(317,(12,$0,(12,$2,-1,0),0),0,0) @template=$0\sin\s$2
+  CmdFreshDeclaration := CmdAttrKind 'instance CmdNamedPrioOpt CmdDeclId CmdSigBinders ': Expr Body @tree=(330,(12,$0,(12,$2,(12,$3,(12,$4,(12,$6,(12,$7,-1,0),0),0),0),0),0),0,0) @template=$0instance$2\s$3$4\s:\s$6$7
+  CmdInstanceBinders := CmdNamedPrioOpt TermBinders @tree=(0,$0,$1,0) @template=$0$1
+  CmdFreshDeclaration := CmdAttrKind 'instance CmdInstanceBinders ': Expr Body @tree=(330,(12,$0,(12,x2,(12,-1,(12,y2,(12,$4,(12,$5,-1,0),0),0),0),0),0),0,0) @template=$0instance$2\s:\s$4$5
+  CmdFreshDeclaration := 'opaque CmdDeclId CmdSigBinders ': Expr CmdOpaqueBody @tree=(331,(12,$1,(12,$2,(12,$4,(12,$5,-1,0),0),0),0),0,0) @template=opaque\s$1$2\s:\s$4$5
+  CmdOpaqueBody := ':= DeclBody TermOpt @tree=(25,$1,a1($2),0) @template=\s:=\n${1:2}$2
+  CmdOpaqueBody := ':= DeclBody TermOpt TmWhereDecls @tree=(337,(12,(25,$1,a1($2),0),(12,$3,-1,0),0),0,0) @template=\s:=\n${1:2}$2\n$3
+  CmdOpaqueBody := eps @tree=-1 @template=
+  CmdFreshDeclaration := 'example CmdSigBinders CmdTypeOpt Body @tree=(332,(12,$1,(12,$2,(12,$3,-1,0),0),0),0,0) @template=example$1$2$3
+  CmdFreshDeclaration := 'abbrev CmdDeclId CmdSigBindersNonempty CmdTypeOpt Body @tree=(333,(12,$1,(12,$2,(12,$3,(12,$4,-1,0),0),0),0),0,0) @template=abbrev\s$1$2$3$4
+  CmdFreshDeclaration := 'abbrev CmdDeclId ': Expr Body @tree=(333,(12,$1,(12,-1,(12,$3,(12,$4,-1,0),0),0),0),0,0) @template=abbrev\s$1\s:\s$3$4
+  CmdFreshDeclaration := 'abbrev CmdDeclId CmdNonSimpleBody @tree=(333,(12,$1,(12,-1,(12,-1,(12,$2,-1,0),0),0),0),0,0) @template=abbrev\s$1$2
+  CmdNonSimpleBody := Clauses TermOpt @tree=(23,$0,a1($1),0) @template=\n${0:2}$1
+  CmdNonSimpleBody := 'where CmdWhereFields TmWhereOpt @tree=(336,(12,$1,(12,$2,-1,0),0),0,0) @template=\swhere\n${1:2}$2
+  CmdFreshDeclaration := 'def CmdDeclId Groups Body CmdDeriveOpt @tree=(334,(12,$1,(12,$2,(12,$3,(12,$4,-1,0),0),0),0),0,0) @template=def\s$1\s$2$3$4
+  CmdFreshDeclaration := DefDecl CmdDeriveRequired @tree=(335,(12,$0,(12,$1,-1,0),0),0,0) @template=$0$1
+  CmdDeriveRequired := 'deriving CmdCommaIdents @tree=$1 @template=\nderiving\s$1\n @not-followed=1:instance
+  CmdDeriveOpt := CmdDeriveRequired @tree=$0 @template=$0
+  CmdDeriveOpt := eps @tree=-1 @template=
+  CmdFreshCommand := 'set_option CmdIdent CmdOptionValue @tree=(316,(12,$1,(12,$2,-1,0),0),0,0) @template=set_option\s$1\s$2
+  CmdOptionValue := 'true @tree=(1,s0,e0,0) @template=$0
+  CmdOptionValue := 'false @tree=(1,s0,e0,0) @template=$0
+  CmdOptionValue := quoted @tree=(3,s0,e0,0) @template=$0
+  CmdOptionValue := TmNum @tree=$0 @template=$0
+  CmdFreshCommand := 'open CmdIdent '( CmdIdents ') @tree=(318,(12,$1,(12,$3,-1,0),0),0,0) @template=open\s$1\s($3) @layout-clear
+  CmdFreshCommand := 'open 'scoped CmdIdents @tree=(319,(12,$2,-1,0),0,0) @template=open\sscoped\s$2
+  CmdFreshCommand := 'variable CmdVariableBinders @tree=(320,(12,$1,-1,0),0,0) @template=variable$1
+  CmdVariableBinders := TermBinder CmdVariableTail @tree=(12,$0,$1,0) @template=\s$0$1 @boundary=0:col-gt
+  CmdVariableTail := CmdVariableBinders @tree=$0 @template=$0
+  CmdVariableTail := eps @tree=-1 @template=
+  CmdFreshCommand := 'universe CmdColGtIdents @tree=(321,(12,$1,-1,0),0,0) @template=universe\s$1
+  CmdColGtIdents := CmdIdent CmdColGtTail @tree=(12,$0,$1,0) @template=$0$1 @boundary=0:col-gt
+  CmdColGtTail := CmdColGtIdents @tree=$0 @template=\s$0
+  CmdColGtTail := eps @tree=-1 @template=
+  CmdFreshCommand := '#check Expr @tree=(322,(12,$1,-1,0),0,0) @template=#check\s$1
+  CmdFreshCommand := '#eval Expr @tree=(323,(12,$1,-1,0),0,0) @template=#eval\s$1
+  CmdFreshCommand := '#print 'axioms CmdIdent @tree=(324,(12,$2,-1,0),0,0) @template=#print\saxioms\s$2
+  CmdFreshCommand := '#guard Expr @tree=(325,(12,$1,-1,0),0,0) @template=#guard\s$1
+  CmdFreshCommand := 'run_cmd GenDoFallback @tree=(326,(12,$1,-1,0),0,0) @template=run_cmd\n${1:2}
+  CmdFreshCommand := 'run_elab GenDoFallback @tree=(327,(12,$1,-1,0),0,0) @template=run_elab\n${1:2}
+  CmdFreshCommand := 'attribute '[ CmdAttrCommandInstances '] CmdIdents @tree=(314,(12,$2,(12,$4,-1,0),0),0,0) @template=attribute\s[$2]\s$4 @layout-clear
+  CmdAttrCommandInstances := CmdAttrCommandInstance CmdAttrCommandTail @tree=(12,$0,$1,0) @template=$0$1
+  CmdAttrCommandTail := ', CmdAttrCommandInstances @tree=$1 @template=,\s$1
+  CmdAttrCommandTail := eps @tree=-1 @template=
+  CmdAttrCommandInstance := CmdAttrInstance @tree=$0 @template=$0
+  CmdAttrCommandInstance := '- CmdIdent @tree=(315,(12,$1,-1,0),0,0) @template=-$1
+  OtherDecl := 'noncomputable 'section Commands 'end @tree=(328,(12,-1,(12,$2,(12,-1,-1,0),0),0),0,0) @template=noncomputable\ssection\n$2end
+  OtherDecl := 'noncomputable 'section CmdIdent Commands 'end CmdEndLabel @tree=(328,(12,$2,(12,$3,(12,$5,-1,0),0),0),0,0) @template=noncomputable\ssection\s$2\n$3end$5 @boundary=2:col-gt
+  CmdSectionName := CmdIdent @tree=$0 @template=\s$0 @boundary=0:col-gt
+  CmdSectionName := eps @tree=-1 @template=
+  CmdEndLabel := CmdIdent @tree=$0 @template=\s$0 @boundary=0:col-gt
+  CmdEndLabel := eps @tree=-1 @template=
+  CmdFreshDeclaration := 'initialize CmdInitBody @tree=(360,$1,0,0) @template=initialize$1
+  CmdFreshDeclaration := 'builtin_initialize CmdInitBody @tree=(361,$1,0,0) @template=builtin_initialize$1
+  CmdInitBody := CmdInitBinding GenDoFallback @tree=(12,x0,(12,y0,(12,$1,-1,0),0),0) @template=$0\s$1
+  CmdInitBinding := CmdIdent ': Expr '← @tree=(0,$0,$2,0) @template=\s$0\s:\s$2\s←
+  CmdInitBinding := CmdIdent ': Expr '<- @tree=(0,$0,$2,0) @template=\s$0\s:\s$2\s←
+  CmdInitBinding := eps @tree=(0,-1,-1,0) @template=
+  # Parser/Syntax.lean:26-111: the census contains Syntax.atom and
+  # Syntax.cat. Other syntax-parser constructors are outside this finite
+  # selected-kind port; precedence/name/priority are retained children.
+  CmdAttrsOpt := CmdAttributes @tree=$0 @template=$0\s
+  CmdAttrsOpt := eps @tree=-1 @template=
+  CmdSyntaxPrec := ': CmdPriorityAtom @tree=$1 @template=:$1 @boundary=0:no-ws
+  CmdSyntaxPrecOpt := CmdSyntaxPrec @tree=$0 @template=$0
+  CmdSyntaxPrecOpt := eps @tree=-1 @template=
+  CmdNamedNameOpt := '( 'name ':= CmdIdent ') @tree=$3 @template=\s(name\s:=\s$3) @layout-clear
+  CmdNamedNameOpt := eps @tree=-1 @template=
+  CmdKindOpt := '( 'kind ':= CmdIdent ') @tree=$3 @template=\s(kind\s:=\s$3) @layout-clear
+  CmdKindOpt := eps @tree=-1 @template=
+  CmdSyntaxArg := quoted @tree=(348,(12,(3,s0,e0,0),-1,0),0,0) @template=$0
+  CmdSyntaxArg := CmdIdent CmdSyntaxPrecOpt @tree=(349,(12,$0,(12,$1,-1,0),0),0,0) @template=$0$1
+  CmdSyntaxArgs := CmdSyntaxArg CmdSyntaxArgTail @tree=(12,$0,$1,0) @template=$0$1
+  CmdSyntaxArgTail := CmdSyntaxArgs @tree=$0 @template=\s$0
+  CmdSyntaxArgTail := eps @tree=-1 @template=
+  CmdFreshCommand := CmdAttrsOpt CmdAttrKind 'syntax CmdSyntaxPrecOpt CmdNamedNameOpt CmdNamedPrioOpt CmdSyntaxArgs ': CmdIdent @tree=(347,(12,$0,(12,$1,(12,$3,(12,$4,(12,$5,(12,$6,(12,$8,-1,0),0),0),0),0),0),0),0,0) @template=$0$1syntax$3$4$5\s$6\s:\s$8
+  CmdMixfixKind := 'infix @tree=(351,-1,0,0) @template=infix
+  CmdMixfixKind := 'prefix @tree=(352,-1,0,0) @template=prefix
+  CmdMixfixKind := 'infixl @tree=(353,-1,0,0) @template=infixl
+  CmdMixfixKind := 'infixr @tree=(354,-1,0,0) @template=infixr
+  CmdMixfixKind := 'postfix @tree=(355,-1,0,0) @template=postfix
+  CmdFreshCommand := CmdAttrsOpt CmdAttrKind CmdMixfixKind CmdSyntaxPrec CmdNamedNameOpt CmdNamedPrioOpt quoted '=> Expr @tree=(350,(12,$0,(12,$1,(12,$2,(12,$3,(12,$4,(12,$5,(12,(3,s6,e6,0),(12,$8,-1,0),0),0),0),0),0),0),0),0,0) @template=$0$1$2$3$4$5\s$6\s=>\s$8
+  CmdMacroArg := CmdIdent ': CmdSyntaxArg @tree=(357,(12,$0,(12,$2,-1,0),0),0,0) @template=$0:$2 @boundary=1:no-ws
+  CmdMacroArg := CmdSyntaxArg @tree=(357,(12,-1,(12,$0,-1,0),0),0,0) @template=$0
+  CmdMacroArgs := CmdMacroArg CmdMacroArgTail @tree=(12,$0,$1,0) @template=$0$1
+  CmdMacroArgTail := CmdMacroArgs @tree=$0 @template=\s$0
+  CmdMacroArgTail := eps @tree=-1 @template=
+  CmdExpectedCategory := '<= CmdIdent @tree=$1 @template=\s<=\s$1
+  CmdExpectedCategory := eps @tree=-1 @template=
+  CmdFreshCommand := CmdAttrsOpt CmdAttrKind 'elab CmdSyntaxPrecOpt CmdNamedNameOpt CmdNamedPrioOpt CmdMacroArgs ': CmdIdent CmdExpectedCategory '=> Expr @tree=(356,(12,$0,(12,$1,(12,$3,(12,$4,(12,$5,(12,$6,(12,$8,(12,$9,(12,$11,-1,0),0),0),0),0),0),0),0),0),0,0) @template=$0$1elab$3$4$5\s$6\s:\s$8$9\s=>\s$11
+  CmdFreshCommand := CmdAttrsOpt CmdAttrKind 'macro_rules CmdKindOpt Clauses @tree=(358,(12,$0,(12,$1,(12,$3,(12,$4,-1,0),0),0),0),0,0) @template=$0$1macro_rules$3\n${4:2}
+  # Data declarations retain their original root/field/constructor ABI
+  # on the old forms. A new binder/field/constructor is a finite helper376
+  # link at precisely the corresponding legacy slot, not an erased list.
+  # A bare `Type` parameter remains the old flat Params spine; the new
+  # type helper requires a positive nonlegacy term continuation.
+  CmdParamExpr := Expr @tree=$0 @template=$0 @not-followed=0:Type
+  CmdParamExpr := CmdTypeHeadApp @tree=$0 @template=$0
+  CmdParamExpr := CmdTypeHeadApp '-> Expr @tree=(16,$0,$2,0) @template=$0\s->\s$2
+  CmdParamExpr := CmdTypeHeadApp '→ Expr @tree=(16,$0,$2,0) @template=$0\s->\s$2
+  CmdParamExpr := 'Type '-> Expr @tree=(16,(1,s0,e0,0),$2,0) @template=Type\s->\s$2
+  CmdParamExpr := 'Type '→ Expr @tree=(16,(1,s0,e0,0),$2,0) @template=Type\s->\s$2
+  CmdTypeHeadApp := 'Type TyArg @tree=(5,(1,s0,e0,0),(12,$1,-1,0),0) @template=Type\s$1
+  CmdTypeHeadApp := CmdTypeHeadApp TyArg @tree=(5,$0,(12,$1,-1,0),0) @template=$0\s$1 @layout=1:continuation
+  CmdNewDataBinder := '( CmdBinderNames ') @tree=(370,(12,$1,(12,-1,(12,-1,-1,0),0),0),0,0) @template=($1) @layout-clear
+  CmdNewDataBinder := '( CmdBinderNames ': CmdParamExpr CmdDefaultOpt ') @tree=(370,(12,$1,(12,$3,(12,$4,-1,0),0),0),0,0) @template=($1\s:\s$3$4) @layout-clear
+  CmdNewDataBinder := '( CmdBinderNames ': 'Type ':= Expr ') @tree=(370,(12,$1,(12,(1,s3,e3,0),(12,$5,-1,0),0),0),0,0) @template=($1\s:\sType\s:=\s$5) @layout-clear
+  CmdNewDataBinder := '( CmdBinderNames ':= Expr ') @tree=(370,(12,$1,(12,-1,(12,$3,-1,0),0),0),0,0) @template=($1\s:=\s$3) @layout-clear
+  CmdNewDataBinder := '{ CmdBinderNames '} @tree=(371,(12,$1,(12,-1,-1,0),0),0,0) @template={$1} @layout-clear
+  CmdNewDataBinder := '{ CmdBinderNames ': CmdParamExpr '} @tree=(371,(12,$1,(12,$3,-1,0),0),0,0) @template={$1\s:\s$3} @layout-clear
+  CmdNewDataBinder := '{ '{ CmdBinderNames CmdTypeOpt '} '} @tree=(372,(12,$2,(12,$3,-1,0),0),0,0) @template=⦃$2$3⦄
+  CmdNewDataBinder := '⦃ CmdBinderNames CmdTypeOpt '⦄ @tree=(372,(12,$1,(12,$2,-1,0),0),0,0) @template=⦃$1$2⦄
+  CmdNewDataBinder := '[ CmdInstanceName Expr '] @tree=(373,(12,$1,(12,$2,-1,0),0),0,0) @template=[$1$2] @layout-clear
+  CmdNewField := CmdNestedModifiers CmdIdent CmdSigBinders CmdTypeOpt CmdDefaultOpt @tree=(341,(12,$0,(12,(12,$1,-1,0),(12,$2,(12,$3,(12,$4,-1,0),0),0),0),0),0,0) @template=$0$1$2$3$4
+  CmdNewField := CmdIdent CmdSigBindersNonempty CmdTypeOpt CmdDefaultOpt @tree=(341,(12,-1,(12,(12,$0,-1,0),(12,$1,(12,$2,(12,$3,-1,0),0),0),0),0),0,0) @template=$0$1$2$3
+  CmdNewField := CmdIdent @tree=(341,(12,-1,(12,(12,$0,-1,0),(12,-1,(12,-1,(12,-1,-1,0),0),0),0),0),0,0) @template=$0
+  CmdNewField := CmdIdent ':= Expr @tree=(341,(12,-1,(12,(12,$0,-1,0),(12,-1,(12,-1,(12,$2,-1,0),0),0),0),0),0,0) @template=$0\s:=\s$2
+  CmdNewField := CmdModsOpt '( CmdIdents TermBinders CmdTypeOpt CmdDefaultOpt ') @tree=(342,(12,$0,(12,$2,(12,$3,(12,$4,(12,$5,-1,0),0),0),0),0),0,0) @template=$0($2$3$4$5) @layout-clear
+  CmdNewField := CmdModsOpt '{ CmdIdents TermBinders ': Expr '} @tree=(343,(12,$0,(12,$2,(12,$3,(12,$5,(12,-1,-1,0),0),0),0),0),0,0) @template=$0{$2$3\s:\s$5} @layout-clear
+  CmdNewField := CmdModsOpt '[ CmdIdents TermBinders ': Expr '] @tree=(344,(12,$0,(12,$2,(12,$3,(12,$5,(12,-1,-1,0),0),0),0),0),0,0) @template=$0[$2$3\s:\s$5] @layout-clear
+  CmdNewCtor := CmdNestedModifiers CmdCtorName CmdSigBinders CmdTypeOpt @tree=(345,(12,$0,(12,$1,(12,$2,(12,$3,-1,0),0),0),0),0,0) @template=$0$1$2$3
+  CmdNewCtor := CmdCtorName CmdNewCtorBinders CmdTypeOpt @tree=(345,(12,-1,(12,$0,(12,$1,(12,$2,-1,0),0),0),0),0,0) @template=$0$1$2 @not-followed=0:private|protected|noncomputable|unsafe|partial|nonrec
+  CmdNewCtorBinders := CmdNewLegacyBinder CmdSigBinders @tree=(12,$0,$1,0) @template=\s$0$1
+  CmdNewCtorBinders := CmdBinderIdent CmdSigBinders @tree=(12,$0,$1,0) @template=\s$0$1
+  CmdNewCtorBinders := CmdOldExplicitBinder CmdNewCtorBinders @tree=(12,$0,$1,0) @template=\s$0$1
+  CmdOldExplicitBinder := '( CmdBinderNames ': Expr CmdDefaultOpt ') @tree=(370,(12,$1,(12,$3,(12,$4,-1,0),0),0),0,0) @template=($1\s:\s$3$4) @layout-clear
+  CmdAllFields := CmdAllFieldItems @tree=$0 @template=$0 @layout-root
+  CmdAllFieldItems := CmdAllField CmdAllFieldItems @tree=(12,$0,$1,0) @template=$0\n$1 @scoped-layout=0:not-outdented
+  CmdAllFieldItems := eps @tree=-1 @template=
+  CmdAllField := CmdNewField @tree=$0 @template=$0
+  CmdAllField := Name ': Type @tree=(27,$0,$2,-1) @template=$0\s:\s$2
+  CmdAllField := Name ': Type ':= Expr @tree=(27,$0,(40,$2,$4,0),-1) @template=$0\s:\s$2\s:=\s$4
+  CmdAllCtors := '| CmdAllCtor CmdAllCtors @tree=(12,$1,$2,0) @template=|\s$1\n$2
+  CmdAllCtors := eps @tree=-1 @template=
+  CmdAllCtor := CmdNewCtor @tree=$0 @template=$0
+  CmdAllCtor := CmdCtorName CtorType @tree=(39,$0,x1,a1(y1)) @template=$0$1 @not-followed=0:private|protected|noncomputable|unsafe|partial|nonrec
+  CmdExtends := 'extends CmdCommaExprs @tree=$1 @template=\sextends\s$1
+  CmdExtendsOpt := CmdExtends @tree=$0 @template=$0
+  CmdExtendsOpt := eps @tree=-1 @template=
+  CmdCommaExprs := Expr CmdCommaExprTail @tree=(12,$0,$1,0) @template=$0$1
+  CmdCommaExprTail := ', CmdCommaExprs @tree=$1 @template=,\s$1
+  CmdCommaExprTail := eps @tree=-1 @template=
+  CmdStructCtor := CmdModsOpt CmdIdent ':: @tree=(364,(12,$0,(12,$1,-1,0),0),0,0) @template=$0$1\s::\n
+  CmdStructCtorOpt := CmdStructCtor @tree=$0 @template=$0
+  CmdStructCtorOpt := eps @tree=-1 @template=
+  CmdStructBody := 'where CmdStructCtorOpt CmdAllFields @tree=(0,$1,$2,0) @template=\swhere\n${1:2}${2:2}
+  CmdStructBody := ':= CmdStructCtorOpt CmdAllFields @tree=(0,$1,$2,0) @template=\swhere\n${1:2}${2:2}
+  CmdStructBodyOpt := CmdStructBody @tree=$0 @template=$0
+  CmdStructBodyOpt := eps @tree=(0,-1,-1,0) @template=
+  CmdForcedCtorBody := 'where CmdStructCtor CmdAllFields @tree=(0,$1,$2,0) @template=\swhere\n${1:2}${2:2}
+  CmdForcedCtorBody := ':= CmdStructCtor CmdAllFields @tree=(0,$1,$2,0) @template=\swhere\n${1:2}${2:2}
+  CmdOldDataTypeOpt := ': 'Type @tree=(1,s1,e1,0) @template=\s:\sType
+  CmdOldDataTypeOpt := eps @tree=-1 @template=
+  CmdFreshDeclaration := 'structure CmdUniverseId TermBinders CmdExtendsOpt CmdTypeOpt CmdStructBodyOpt CmdDeriveOpt @tree=(338,(12,$1,(12,$2,(12,$3,(12,$4,(12,x5,(12,y5,(12,$6,-1,0),0),0),0),0),0),0),0,0) @template=structure\s$1$2$3$4$5$6
+  CmdFreshDeclaration := 'structure Name TermBinders CmdExtends CmdTypeOpt CmdStructBodyOpt CmdDeriveOpt @tree=(338,(12,$1,(12,$2,(12,$3,(12,$4,(12,x5,(12,y5,(12,$6,-1,0),0),0),0),0),0),0),0,0) @template=structure\s$1$2$3$4$5$6
+  CmdFreshDeclaration := 'structure Name TermBinders ': CmdParamExpr CmdStructBodyOpt CmdDeriveOpt @tree=(338,(12,$1,(12,$2,(12,-1,(12,$4,(12,x5,(12,y5,(12,$6,-1,0),0),0),0),0),0),0),0,0) @template=structure\s$1$2\s:\s$4$5$6
+  CmdFreshDeclaration := 'structure Name TermBinders CmdOldDataTypeOpt CmdForcedCtorBody CmdDeriveOpt @tree=(338,(12,$1,(12,$2,(12,-1,(12,$3,(12,x4,(12,y4,(12,$5,-1,0),0),0),0),0),0),0),0,0) @template=structure\s$1$2$3$4$5
+  CmdFreshDeclaration := 'structure Name TermBinders CmdOldDataTypeOpt CmdDeriveOpt @tree=(338,(12,$1,(12,$2,(12,-1,(12,$3,(12,-1,(12,-1,(12,$4,-1,0),0),0),0),0),0),0),0,0) @template=structure\s$1$2$3$4
+  CmdFreshDeclaration := 'class CmdDeclId TermBinders CmdExtendsOpt CmdTypeOpt CmdStructBodyOpt CmdDeriveOpt @tree=(340,(12,$1,(12,$2,(12,$3,(12,$4,(12,x5,(12,y5,(12,$6,-1,0),0),0),0),0),0),0),0,0) @template=class\s$1$2$3$4$5$6
+  CmdIndKeywordOpt := 'where @tree=0 @template=\swhere
+  CmdIndKeywordOpt := ':= @tree=0 @template=\swhere
+  CmdIndKeywordOpt := eps @tree=0 @template=
+  CmdFreshDeclaration := 'inductive CmdUniverseId CmdSigBinders CmdTypeOpt CmdIndKeywordOpt CmdAllCtors CmdDeriveOpt @tree=(339,(12,$1,(12,$2,(12,$3,(12,$5,(12,-1,(12,$6,-1,0),0),0),0),0),0),0,0) @template=inductive\s$1$2$3\swhere\n${5:2}$6
+  CmdFreshDeclaration := 'inductive Name TermBinders ': CmdParamExpr CmdIndKeywordOpt CmdAllCtors CmdDeriveOpt @tree=(339,(12,$1,(12,$2,(12,$4,(12,$6,(12,-1,(12,$7,-1,0),0),0),0),0),0),0,0) @template=inductive\s$1$2\s:\s$4\swhere\n${6:2}$7
+  CmdFreshDeclaration := 'inductive Name TermBinders ': 'Type CmdAllCtors CmdDeriveOpt @tree=(339,(12,$1,(12,$2,(12,(1,s4,e4,0),(12,$5,(12,-1,(12,$6,-1,0),0),0),0),0),0),0,0) @template=inductive\s$1$2\s:\sType\n${5:2}$6
+  CmdFreshDeclaration := 'inductive Name CmdBareSigBinders CmdTypeOpt CmdIndKeywordOpt CmdAllCtors CmdDeriveOpt @tree=(339,(12,$1,(12,$2,(12,$3,(12,$5,(12,-1,(12,$6,-1,0),0),0),0),0),0),0,0) @template=inductive\s$1$2$3\swhere\n${5:2}$6
+  CmdBareSigBinders := CmdBinderIdent CmdSigBinders @tree=(12,$0,$1,0) @template=\s$0$1
+  CmdBareSigBinders := TermBinder CmdBareSigBinders @tree=(12,$0,$1,0) @template=\s$0$1
+  CmdFreshDeclaration := 'class 'abbrev CmdDeclId TermBinders CmdTypeOpt ':= CmdClassParents @tree=(359,(12,$2,(12,$3,(12,$4,(12,$6,-1,0),0),0),0),0,0) @template=class\sabbrev\s$2$3$4\s:=\n${6:2}
+  CmdClassParents := CmdClassParentItemsOpt @tree=$0 @template=$0 @layout-root
+  CmdClassParentItemsOpt := CmdClassParentItems @tree=$0 @template=$0
+  CmdClassParentItemsOpt := eps @tree=-1 @template=
+  CmdClassParentItems := Expr CmdClassParentTail @tree=(12,$0,$1,0) @template=$0$1 @scoped-layout=0:not-outdented
+  CmdClassParentTail := ', CmdClassParentItemsOpt @tree=$1 @template=,\n$1
+  CmdClassParentTail := CmdClassParentItems @tree=$0 @template=\n$0
+  CmdClassParentTail := eps @tree=-1 @template=
+  CmdFreshDeclaration := 'partial 'def CmdDeclId Groups Body CmdDeriveOpt @tree=(378,(12,$2,(12,$3,(12,$4,(12,$5,-1,0),0),0),0),0,0) @template=partial\sdef\s$2\s$3$4$5
+  # Stock Term.lean:408-423: all alternatives share the first '|'
+  # position, and both a later alternative and its RHS satisfy ColGe.
+  Clauses := TmClauseList @tree=$0 @template=$0 @layout-root
+  TmClauseHead := '| Elems '=> Expr @tree=(0,$1,$3,0) @template=|\s$1\s=>\n${3:2} @scoped-layout=0:not-outdented,3:not-outdented
+  TmClauseMultiHead := '| Elems '| TmClauseGroups '=> Expr @tree=(0,(12,$1,$3,0),$5,0) @template=|\s$1\s|\s$3\s=>\n${5:2} @scoped-layout=0:not-outdented,5:not-outdented
+  TmClauseList := TmClauseHead ClauseTail @tree=(24,x0,y0,$1) @template=$0$1
+  TmClauseList := TmClauseMultiHead ClauseTail @tree=(154,(12,x0,(12,y0,(12,$1,-1,0),0),0),0,0) @template=$0$1
+  TmClauseGroups := Elems TmClauseGroupTail @tree=(12,$0,$1,0) @template=$0$1
+  TmClauseGroupTail := '| TmClauseGroups @tree=$1 @template=\s|\s$1
+  TmClauseGroupTail := eps @tree=-1 @template=
+  ClauseTail := TmClauseList @tree=$0 @template=\n$0
+  ClauseTail := eps @tree=-1 @template=
+  Annotation := ': Type @tree=$1 @template=\s:\s$1
+  Annotation := eps @tree=-1 @template=
+  LambdaGroups := Name LambdaTail @tree=(22,(12,$0,-1,0),-1,$1) @template=$0\s$1
+  LambdaGroups := '( Names ': Type ') LambdaTail @tree=(22,$1,$3,$5) @template=($1\s:\s$3)\s$5
+  LambdaGroups := '( Names ': Type ':= Expr ') LambdaTail @tree=(22,$1,(40,$3,$5,0),$7) @template=($1\s:\s$3\s:=\s$5)\s$7 @layout-clear
+  # Stock Lean 4.14.0@410fab728470, src/Lean/Parser/Term.lean:492-500, and
+  # rsdc/Compile.rsd:1845-1850 / rsdc/syntax/Tree.rsd:438-445: tuple lambda
+  # binders lower directly to group22 with inner pattern node 55.
+  LambdaGroups := TmFunTuple LambdaTail @tree=(22,(55,$0,0,0),-1,$1) @template=$0\s$1
+  LambdaGroups := '( TmFunTuple ': Type ') LambdaTail @tree=(22,(55,$1,1,0),$3,$5) @template=($1\s:\s$3)\s$5 @layout-clear @forbid-clear
+  LambdaGroups := CmdNewLegacyBinder LambdaTail @tree=(155,(12,$0,(12,$1,-1,0),0),0,0) @template=$0\s$1
+  LambdaGroups := TmFunPattern LambdaTail @tree=(155,(12,$0,(12,$1,-1,0),0),0,0) @template=$0\s$1
+  LambdaTail := LambdaGroups @tree=$0 @template=$0
+  LambdaTail := eps @tree=-1 @template=
+  App := App Arg @tree=(5,$0,(12,$1,-1,0),0) @template=$0\s$1 @scoped-layout=1:argument @boundary=1:ws
+  App := Proj @tree=$0 @template=$0
+  # Term.lean:846-847 and pinned parseSrc:1914-1937 require adjacency
+  # on both sides of a suffix dot; dotIdent also occurs as an argument.
+  Proj := Proj '. fieldindex @tree=(17,$0,d2,0) @template=$0.$2 @boundary=1:no-ws,2:no-ws
+  Proj := Proj '. field @tree=(29,$0,s2,e2) @template=$0.$2 @boundary=1:no-ws,2:no-ws
+  Proj := Proj '[ Expr ']? @tree=(33,$0,$2,0) @template=$0[$2]? @layout=1:adjacent
+  Proj := Atom @tree=$0 @template=$0
+  Proj := '. field @tree=(43,s1,e1,0) @template=.$1 @layout=1:adjacent
+  # Term.lean:820-828: namedArgument and ellipsis are not termParser
+  # results. Only ordinary term arguments take their own term suffixes.
+  Arg := TermArg @tree=$0 @template=$0
+  TermArg := Atom @tree=$0 @template=$0
+  TermArg := '. field @tree=(43,s1,e1,0) @template=.$1 @boundary=1:no-ws
+  TermArg := TermArg '. fieldindex @tree=(17,$0,d2,0) @template=$0.$2 @boundary=1:no-ws,2:no-ws
+  TermArg := TermArg '. field @tree=(29,$0,s2,e2) @template=$0.$2 @boundary=1:no-ws,2:no-ws
+  TermArg := TermArg '[ Expr ']? @tree=(33,$0,$2,0) @template=$0[$2]? @layout=1:adjacent
+  Atom := ident @tree=(1,s0,e0,0) @template=$0
+  Atom := 'Type @tree=(1,s0,e0,0) @template=$0
+  Atom := 'runtime @tree=(1,s0,e0,0) @template=$0
+  Atom := 'prelude @tree=(1,s0,e0,0) @template=$0
+  Atom := 'Prop @tree=(1,s0,e0,0) @template=$0
+  Atom := 'Sort @tree=(1,s0,e0,0) @template=$0
+  Atom := CmdSoftName @tree=$0 @template=$0
+  Atom := '_ @tree=(4,0,0,0) @template=_
+  Atom := TmNum @tree=$0 @template=$0
+  TmNum := number @tree=(2,s0,e0,d0) @template=$0
+  TmNum := '0x hex @tree=(2,s0,e1,h1) @template=0x$1 @layout=1:adjacent
+  TmNum := '0X hex @tree=(2,s0,e1,h1) @template=0x$1 @layout=1:adjacent
+  TmNum := '0b bindigits @tree=(2,s0,e1,b1) @template=0b$1 @layout=1:adjacent
+  TmNum := '0B bindigits @tree=(2,s0,e1,b1) @template=0b$1 @layout=1:adjacent
+  TmNum := '0o octdigits @tree=(2,s0,e1,o1) @template=0o$1 @layout=1:adjacent
+  TmNum := '0O octdigits @tree=(2,s0,e1,o1) @template=0o$1 @layout=1:adjacent
+  Atom := quoted @tree=(3,s0,e0,0) @template=$0
+  Atom := character @tree=(2,-1,-1,u0) @template=$0
+  Atom := '( Expr ') @tree=(13,$1,0,0) @template=($1) @layout-clear @forbid-clear
+  Atom := '( Expr ': Type ') @tree=(30,$1,$3,0) @template=($1\s:\s$3) @layout-clear @forbid-clear
+  Atom := '( Expr ': ') @tree=(103,(12,$1,-1,0),0,0) @template=($1\s:) @layout-clear @forbid-clear
+  Atom := '( Expr ', TupleTail ') @tree=(42,$1,$3,0) @template=($1,\s$3) @layout-clear @forbid-clear
+  TupleTail := Expr ', TupleTail @tree=(42,$0,$2,0) @template=$0,\s$2
+  TupleTail := Expr @tree=$0 @template=$0
+  TupleTail := Expr ', @tree=$0 @template=$0
+  Atom := '[ NotationListOpt '] @tree=(11,$1,0,0) @template=[$1] @layout-clear
+  # Lean 4.14 Init/Data/Array/Basic.lean:19: #[ withoutPosition(sepBy(term, comma)) ].
+  # Flag 1 distinguishes arrays from the established flag-0 list tree.
+  Atom := '# '[ ElemOpt '] @tree=(11,$2,1,0) @template=#[$2] @layout=1:adjacent @layout-clear @choice-group=1 @choice-rank=1
+  Atom := '# '[ ElemOpt '] @tree=(5,(1,s0,e0,0),(12,(11,$2,0,0),-1,0),0) @template=#[$2] @layout=1:adjacent @layout-clear @choice-group=1 @choice-rank=0
+  Atom := '⟨ ElemOpt '⟩ @tree=(47,$1,0,0) @template=⟨$1⟩ @layout-clear @forbid-clear
+  ElemOpt := Elems @tree=$0 @template=$0
+  ElemOpt := eps @tree=-1 @template=
+  Elems := Expr ElemTail @tree=(12,$0,$1,0) @template=$0$1
+  ElemTail := ', Elems @tree=$1 @template=,\s$1
+  ElemTail := eps @tree=-1 @template=
+  Atom := '{ RecFieldsStart Annotation '} @tree=(14,$2,$1,0) @template={\n${1:2}$2\n} @choice-group=1 @choice-rank=1
+  Atom := '{ RecFieldsStart '.. '} @tree=(14,-1,$1,-1) @template={\n${1:2}\n..\n}
+  Atom := '{ Expr 'with RecFieldsStart Annotation '} @tree=(14,$4,$3,a1($1)) @template={\s${1:2}\swith\n${3:2}$4\n}
+  # Term.lean:293-297 / Extra.lean:180-182: sepByIndent saves the
+  # first field's position once. A comma permits colGe; an omitted comma
+  # requires colEq and a physical linebreak. Recursive tails inherit that
+  # same position, so an application cannot split into same-line pun fields.
+  RecFieldsStart := RecFields @tree=$0 @template=$0 @layout-root
+  RecFields := RecNonEmpty @tree=$0 @template=$0
+  RecFields := eps @tree=-1 @template=
+  RecNonEmpty := Name ':= Expr RecTail @tree=(15,$0,$2,$3) @template=$0\s:=\s${2:2}$3 @boundary=0:col-ge
+  RecNonEmpty := Name ':= Expr RecNonEmpty @tree=(15,$0,$2,$3) @template=$0\s:=\s$2\n$3 @boundary=0:col-ge,3:col-eq,3:linebreak
+  RecNonEmpty := Name RecTail @tree=(125,(12,$0,(12,$1,-1,0),0),0,0) @template=$0$1 @not-followed=1:.|:=|[ @boundary=0:col-ge
+  RecNonEmpty := Name RecNonEmpty @tree=(125,(12,$0,(12,$1,-1,0),0),0,0) @template=$0\n$1 @not-followed=1:.|:=|[ @boundary=0:col-ge,1:col-eq,1:linebreak
+  RecNonEmpty := TmIndexedLval ':= Expr RecTail @tree=(128,(12,$0,(12,$2,(12,$3,-1,0),0),0),0,0) @template=$0\s:=\s${2:2}$3 @boundary=0:col-ge
+  RecNonEmpty := TmIndexedLval ':= Expr RecNonEmpty @tree=(128,(12,$0,(12,$2,(12,$3,-1,0),0),0),0,0) @template=$0\s:=\s$2\n$3 @boundary=0:col-ge,3:col-eq,3:linebreak
+  RecTail := ', RecFields @tree=$1 @template=,\n$1
+  RecTail := eps @tree=-1 @template=
+  # Lean 4.14.0@410fab7284703f41660ca2454218dcca9b2ec896,
+  # Command.lean:13-15 and Basic.lean:1722-1723,1759-1779.
+  # A quotation is a delimited structural term context. Identifier leaves
+  # are wrapped span58 values, so ordinary expression-helper discovery
+  # cannot interpret quoted names as executable references. The finite
+  # antiquotation variants preserve category, splice and dollar escapes.
+  Atom := TmQuote @tree=$0 @template=$0
+  TmQuote := '`( QExpr ') @tree=(162,(12,$1,-1,0),0,0) @template=`($1) @layout-clear @forbid-clear
+  QName := QIdent @tree=$0 @template=$0
+  QName := 'Type @tree=(163,(12,(58,s0,e0,0),-1,0),0,0) @template=$0
+  QName := 'Prop @tree=(163,(12,(58,s0,e0,0),-1,0),0,0) @template=$0
+  QName := 'Sort @tree=(163,(12,(58,s0,e0,0),-1,0),0,0) @template=$0
+  # Basic.lean:1723 requires an identifier for a splice. Term keywords
+  # Type/Prop/Sort stay available only through QName, not binder/field/splice.
+  QIdent := ident @tree=(163,(12,(58,s0,e0,0),-1,0),0,0) @template=$0
+  QIdent := 'runtime @tree=(163,(12,(58,s0,e0,0),-1,0),0,0) @template=$0
+  QIdent := 'prelude @tree=(163,(12,(58,s0,e0,0),-1,0),0,0) @template=$0
+  # Restore the same finite nonreserved words with literal token operands.
+  # A semantic Name helper would discard its tag1 child under span58 and
+  # leave no child tree for the derived inverse to reconstruct.
+  QIdent := 'name @tree=(163,(12,(58,s0,e0,0),-1,0),0,0) @template=$0
+  QIdent := 'priority @tree=(163,(12,(58,s0,e0,0),-1,0),0,0) @template=$0
+  QIdent := 'kind @tree=(163,(12,(58,s0,e0,0),-1,0),0,0) @template=$0
+  QIdent := 'simp @tree=(163,(12,(58,s0,e0,0),-1,0),0,0) @template=$0
+  QIdent := 'axioms @tree=(163,(12,(58,s0,e0,0),-1,0),0,0) @template=$0
+  QIdent := 'true @tree=(163,(12,(58,s0,e0,0),-1,0),0,0) @template=$0
+  QIdent := 'false @tree=(163,(12,(58,s0,e0,0),-1,0),0,0) @template=$0
+  QIdent := 'rec @tree=(163,(12,(58,s0,e0,0),-1,0),0,0) @template=$0
+  QIdent := 'generalizing @tree=(163,(12,(58,s0,e0,0),-1,0),0,0) @template=$0
+  QIdent := 'motive @tree=(163,(12,(58,s0,e0,0),-1,0),0,0) @template=$0
+  QIdent := 'rfl @tree=(163,(12,(58,s0,e0,0),-1,0),0,0) @template=$0
+  QIdent := 'exact @tree=(163,(12,(58,s0,e0,0),-1,0),0,0) @template=$0
+  QIdent := 'intro @tree=(163,(12,(58,s0,e0,0),-1,0),0,0) @template=$0
+  QIdent := 'contradiction @tree=(163,(12,(58,s0,e0,0),-1,0),0,0) @template=$0
+  QIdent := 'subst @tree=(163,(12,(58,s0,e0,0),-1,0),0,0) @template=$0
+  QIdent := 'constructor @tree=(163,(12,(58,s0,e0,0),-1,0),0,0) @template=$0
+  QIdent := 'apply @tree=(163,(12,(58,s0,e0,0),-1,0),0,0) @template=$0
+  QIdent := 'all_goals @tree=(163,(12,(58,s0,e0,0),-1,0),0,0) @template=$0
+  QIdent := 'next @tree=(163,(12,(58,s0,e0,0),-1,0),0,0) @template=$0
+  QIdent := 'first @tree=(163,(12,(58,s0,e0,0),-1,0),0,0) @template=$0
+  QIdent := 'change @tree=(163,(12,(58,s0,e0,0),-1,0),0,0) @template=$0
+  QIdent := 'rw @tree=(163,(12,(58,s0,e0,0),-1,0),0,0) @template=$0
+  QIdent := 'simp_all @tree=(163,(12,(58,s0,e0,0),-1,0),0,0) @template=$0
+  QIdent := 'simpa @tree=(163,(12,(58,s0,e0,0),-1,0),0,0) @template=$0
+  QIdent := 'unfold @tree=(163,(12,(58,s0,e0,0),-1,0),0,0) @template=$0
+  QIdent := 'induction @tree=(163,(12,(58,s0,e0,0),-1,0),0,0) @template=$0
+  QIdent := 'cases @tree=(163,(12,(58,s0,e0,0),-1,0),0,0) @template=$0
+  QIdent := 'rename_i @tree=(163,(12,(58,s0,e0,0),-1,0),0,0) @template=$0
+  QIdent := 'generalize @tree=(163,(12,(58,s0,e0,0),-1,0),0,0) @template=$0
+  QIdent := 'split @tree=(163,(12,(58,s0,e0,0),-1,0),0,0) @template=$0
+  QIdent := 'congr @tree=(163,(12,(58,s0,e0,0),-1,0),0,0) @template=$0
+  QIdent := 'omega @tree=(163,(12,(58,s0,e0,0),-1,0),0,0) @template=$0
+  QIdent := 'decide @tree=(163,(12,(58,s0,e0,0),-1,0),0,0) @template=$0
+  QIdent := 'trivial @tree=(163,(12,(58,s0,e0,0),-1,0),0,0) @template=$0
+  QIdent := 'assumption @tree=(163,(12,(58,s0,e0,0),-1,0),0,0) @template=$0
+  QIdent := 'refine @tree=(163,(12,(58,s0,e0,0),-1,0),0,0) @template=$0
+  QIdent := 'rcases @tree=(163,(12,(58,s0,e0,0),-1,0),0,0) @template=$0
+  QIdent := 'obtain @tree=(163,(12,(58,s0,e0,0),-1,0),0,0) @template=$0
+  QIdent := 'decreasing_tactic @tree=(163,(12,(58,s0,e0,0),-1,0),0,0) @template=$0
+  QIdent := 'simp_arith @tree=(163,(12,(58,s0,e0,0),-1,0),0,0) @template=$0
+  QIdent := 'by_cases @tree=(163,(12,(58,s0,e0,0),-1,0),0,0) @template=$0
+  QIdent := 'only @tree=(163,(12,(58,s0,e0,0),-1,0),0,0) @template=$0
+  QIdent := 'config @tree=(163,(12,(58,s0,e0,0),-1,0),0,0) @template=$0
+  QIdent := 'discharger @tree=(163,(12,(58,s0,e0,0),-1,0),0,0) @template=$0
+  QIdent := 'disch @tree=(163,(12,(58,s0,e0,0),-1,0),0,0) @template=$0
+  QSplice := QIdent @tree=$0 @template=$0
+  QSplice := '_ @tree=(163,(12,(58,s0,e0,0),-1,0),0,0) @template=$0
+  QSplice := '( Expr ') @tree=(168,(12,$1,-1,0),0,0) @template=($1) @layout-clear @forbid-clear
+  QAnti := '$ QSplice @tree=(167,(12,$1,-1,0),0,0) @template=\$$1 @boundary=1:no-ws @not-followed=2::
+  QAnti := '$ QSplice ': quoteIdentKind @tree=(164,(12,$1,-1,0),0,0) @template=\$$1:ident @boundary=1:no-ws,2:no-ws
+  QAnti := '$ QSplice ': quoteStrKind @tree=(165,(12,$1,-1,0),0,0) @template=\$$1:str @boundary=1:no-ws,2:no-ws
+  QAnti := '$ QSplice ': quoteNumKind @tree=(166,(12,$1,-1,0),0,0) @template=\$$1:num @boundary=1:no-ws,2:no-ws
+  QAnti := '$ QAnti @tree=(169,(12,$1,-1,0),0,0) @template=\$$1 @boundary=1:no-ws
+  QAtom := QName @tree=$0 @template=$0
+  QAtom := QAnti @tree=$0 @template=$0
+  QAtom := TmNum @tree=$0 @template=$0
+  QAtom := quoted @tree=(3,s0,e0,0) @template=$0
+  QAtom := character @tree=(2,-1,-1,u0) @template=$0
+  QAtom := '_ @tree=(4,0,0,0) @template=_
+  QAtom := TmQuote @tree=$0 @template=$0
+  QAtom := '( QExpr ') @tree=(13,$1,0,0) @template=($1) @layout-clear @forbid-clear
+  QAtom := '( QExpr ': QExpr ') @tree=(30,$1,$3,0) @template=($1\s:\s$3) @layout-clear @forbid-clear
+  QAtom := '( QExpr ', QTupleTail ') @tree=(42,$1,$3,0) @template=($1,\s$3) @layout-clear @forbid-clear
+  QTupleTail := QExpr ', QTupleTail @tree=(42,$0,$2,0) @template=$0,\s$2
+  QTupleTail := QExpr @tree=$0 @template=$0
+  QTupleTail := QExpr ', @tree=$0 @template=$0
+  QAtom := '[ QElemsOpt '] @tree=(11,$1,0,0) @template=[$1] @layout-clear
+  QAtom := '⟨ QElemsOpt '⟩ @tree=(47,$1,0,0) @template=⟨$1⟩ @layout-clear @forbid-clear
+  QElemsOpt := QElems @tree=$0 @template=$0
+  QElemsOpt := eps @tree=-1 @template=
+  QElems := QExpr QElemTail @tree=(12,$0,$1,0) @template=$0$1
+  QElemTail := ', QElemsOpt @tree=$1 @template=,\s$1
+  QElemTail := eps @tree=-1 @template=
+  QAtom := '{ QRecStart QAnnotation '} @tree=(14,$2,$1,0) @template={\s$1$2\s}
+  QRecStart := QRecFields @tree=$0 @template=$0 @layout-root
+  QRecFields := QRecNonEmpty @tree=$0 @template=$0
+  QRecFields := eps @tree=-1 @template=
+  QRecNonEmpty := QIdent ':= QExpr QRecTail @tree=(15,$0,$2,$3) @template=$0\s:=\s$2$3 @boundary=0:col-ge
+  QRecNonEmpty := QIdent ':= QExpr QRecNonEmpty @tree=(15,$0,$2,$3) @template=$0\s:=\s$2\n$3 @boundary=0:col-ge,3:col-eq,3:linebreak
+  QRecTail := ', QRecFields @tree=$1 @template=,\s$1
+  QRecTail := eps @tree=-1 @template=
+  QAnnotation := ': QExpr @tree=$1 @template=\s:\s$1
+  QAnnotation := eps @tree=-1 @template=
+  QApp := QApp QArg @tree=(5,$0,(12,$1,-1,0),0) @template=$0\s$1 @scoped-layout=1:argument @boundary=1:ws
+  QApp := QProj @tree=$0 @template=$0
+  QProj := QAtom @tree=$0 @template=$0
+  QProj := QProj '. field @tree=(29,$0,s2,e2) @template=$0.$2 @boundary=1:no-ws,2:no-ws
+  QProj := QProj '. fieldindex @tree=(17,$0,d2,0) @template=$0.$2 @boundary=1:no-ws,2:no-ws
+  QArg := QAtom @tree=$0 @template=$0
+  QArg := QArg '. field @tree=(29,$0,s2,e2) @template=$0.$2 @boundary=1:no-ws,2:no-ws
+  QArg := QArg '. fieldindex @tree=(17,$0,d2,0) @template=$0.$2 @boundary=1:no-ws,2:no-ws
+  QNames := QIdent QNamesTail @tree=(12,$0,$1,0) @template=$0$1
+  QNamesTail := QNames @tree=$0 @template=\s$0
+  QNamesTail := eps @tree=-1 @template=
+  QLambdaGroups := QIdent QLambdaTail @tree=(22,(12,$0,-1,0),-1,$1) @template=$0\s$1
+  QLambdaGroups := '( QNames ': QExpr ') QLambdaTail @tree=(22,$1,$3,$5) @template=($1\s:\s$3)\s$5 @layout-clear
+  QLambdaTail := QLambdaGroups @tree=$0 @template=$0
+  QLambdaTail := eps @tree=-1 @template=
+  QControl := 'fun QLambdaGroups '=> QExpr @tree=(32,$1,$3,0) @template=fun\s$1=>\s$3
+  QControl := 'if QExpr 'then QExpr 'else QExpr @tree=(8,$1,$3,$5) @template=if\s$1\sthen\s$3\selse\s$5
+  QExpr := QC25 @tree=$0 @template=$0
+  QExpr := QO25 @tree=$0 @template=$0
+  QC25 := QC40 @tree=$0 @template=$0
+  QO25 := QO40 @tree=$0 @template=$0
+  QC25 := QC40 '-> QC25 @tree=(16,$0,$2,0) @template=$0\s→\s$2
+  QO25 := QC40 '-> QO25 @tree=(16,$0,$2,0) @template=$0\s→\s$2
+  QC25 := QC40 '→ QC25 @tree=(16,$0,$2,0) @template=$0\s→\s$2
+  QO25 := QC40 '→ QO25 @tree=(16,$0,$2,0) @template=$0\s→\s$2
+  QC40 := QC50 @tree=$0 @template=$0
+  QO40 := QO50 @tree=$0 @template=$0
+  QC40 := '! QC40 @tree=(7,2,$1,0) @template=!$1
+  QO40 := '! QO40 @tree=(7,2,$1,0) @template=!$1
+  QC50 := QC55 @tree=$0 @template=$0
+  QO50 := QO55 @tree=$0 @template=$0
+  QC50 := QC55 '= QC55 @tree=(6,24,$0,$2) @template=$0\s=\s$2
+  QO50 := QC55 '= QO55 @tree=(6,24,$0,$2) @template=$0\s=\s$2
+  QC50 := QC55 '== QC55 @tree=(6,5,$0,$2) @template=$0\s==\s$2
+  QO50 := QC55 '== QO55 @tree=(6,5,$0,$2) @template=$0\s==\s$2
+  QC50 := QC55 '!= QC55 @tree=(6,6,$0,$2) @template=$0\s!=\s$2
+  QO50 := QC55 '!= QO55 @tree=(6,6,$0,$2) @template=$0\s!=\s$2
+  QC50 := QC55 '< QC55 @tree=(6,7,$0,$2) @template=$0\s<\s$2
+  QO50 := QC55 '< QO55 @tree=(6,7,$0,$2) @template=$0\s<\s$2
+  QC50 := QC55 '> QC55 @tree=(6,8,$0,$2) @template=$0\s>\s$2
+  QO50 := QC55 '> QO55 @tree=(6,8,$0,$2) @template=$0\s>\s$2
+  QC50 := QC55 '≤ QC55 @tree=(6,17,$0,$2) @template=$0\s≤\s$2
+  QO50 := QC55 '≤ QO55 @tree=(6,17,$0,$2) @template=$0\s≤\s$2
+  QC50 := QC55 '≥ QC55 @tree=(6,18,$0,$2) @template=$0\s≥\s$2
+  QO50 := QC55 '≥ QO55 @tree=(6,18,$0,$2) @template=$0\s≥\s$2
+  QC55 := QC58 @tree=$0 @template=$0
+  QO55 := QO58 @tree=$0 @template=$0
+  QC55 := QC55 '||| QC58 @tree=(6,20,$0,$2) @template=$0\s|||\s$2
+  QO55 := QC55 '||| QO58 @tree=(6,20,$0,$2) @template=$0\s|||\s$2
+  QC58 := QC60 @tree=$0 @template=$0
+  QO58 := QO60 @tree=$0 @template=$0
+  QC58 := QC58 '^^^ QC60 @tree=(6,21,$0,$2) @template=$0\s^^^\s$2
+  QO58 := QC58 '^^^ QO60 @tree=(6,21,$0,$2) @template=$0\s^^^\s$2
+  QC60 := QC65 @tree=$0 @template=$0
+  QO60 := QO65 @tree=$0 @template=$0
+  QC60 := QC60 '&&& QC65 @tree=(6,19,$0,$2) @template=$0\s&&&\s$2
+  QO60 := QC60 '&&& QO65 @tree=(6,19,$0,$2) @template=$0\s&&&\s$2
+  QC65 := QC70 @tree=$0 @template=$0
+  QO65 := QO70 @tree=$0 @template=$0
+  QC65 := QC65 '+ QC70 @tree=(6,1,$0,$2) @template=$0\s+\s$2
+  QO65 := QC65 '+ QO70 @tree=(6,1,$0,$2) @template=$0\s+\s$2
+  QC65 := QC65 '- QC70 @tree=(6,2,$0,$2) @template=$0\s-\s$2
+  QO65 := QC65 '- QO70 @tree=(6,2,$0,$2) @template=$0\s-\s$2
+  QC70 := QC75 @tree=$0 @template=$0
+  QO70 := QO75 @tree=$0 @template=$0
+  QC70 := QC70 '* QC75 @tree=(6,3,$0,$2) @template=$0\s*\s$2
+  QO70 := QC70 '* QO75 @tree=(6,3,$0,$2) @template=$0\s*\s$2
+  QC70 := QC70 '/ QC75 @tree=(6,4,$0,$2) @template=$0\s/\s$2
+  QO70 := QC70 '/ QO75 @tree=(6,4,$0,$2) @template=$0\s/\s$2
+  QC70 := QC70 '% QC75 @tree=(6,15,$0,$2) @template=$0\s%\s$2
+  QO70 := QC70 '% QO75 @tree=(6,15,$0,$2) @template=$0\s%\s$2
+  QC75 := '- QC75 @tree=(7,1,$1,0) @template=-$1
+  QO75 := '- QO75 @tree=(7,1,$1,0) @template=-$1
+  QC75 := QC75Shift @tree=$0 @template=$0
+  QO75 := QO75Shift @tree=$0 @template=$0
+  QC75Shift := QC100 @tree=$0 @template=$0
+  QO75Shift := QO100 @tree=$0 @template=$0
+  QC75Shift := QC75Shift '<<< QC100 @tree=(6,22,$0,$2) @template=$0\s<<<\s$2
+  QO75Shift := QC75Shift '<<< QO100 @tree=(6,22,$0,$2) @template=$0\s<<<\s$2
+  QC75Shift := QC75Shift '>>> QC100 @tree=(6,23,$0,$2) @template=$0\s>>>\s$2
+  QO75Shift := QC75Shift '>>> QO100 @tree=(6,23,$0,$2) @template=$0\s>>>\s$2
+  QC75Shift := QC100 '▸ QSubstOperands @tree=(114,(12,$0,(12,$2,-1,0),0),0,0) @template=$0\s▸\s$2
+  QO75Shift := QC100 '▸ QSubstOpenOperands @tree=(114,(12,$0,(12,$2,-1,0),0),0,0) @template=$0\s▸\s$2
+  QSubstOperands := QC100 QSubstTail @tree=(12,$0,$1,0) @template=$0$1
+  QSubstTail := '▸ QSubstOperands @tree=$1 @template=\s▸\s$1
+  QSubstTail := eps @tree=-1 @template=
+  QSubstOpenOperands := QO100 @tree=(12,$0,-1,0) @template=$0
+  QSubstOpenOperands := QC100 '▸ QSubstOpenOperands @tree=(12,$0,$2,0) @template=$0\s▸\s$2
+  QC100 := QApp @tree=$0 @template=$0
+  QO100 := QControl @tree=$0 @template=$0
+  QC100 := '~~~ QC100 @tree=(7,3,$1,0) @template=~~~$1
+  QO100 := '~~~ QO100 @tree=(7,3,$1,0) @template=~~~$1
+  # Basic.lean:651-709,993: character covers direct scalars and stock escapes.
+  # The six legacy escaped-literal aliases are subsumed without changing node2.
+
+  # Census-selected stock Lean4.14.0@410fab7284703f41660ca2454218dcca9b2ec896
+  # Term.lean:159-261,304-311,520-531,820-878,942-943. New finite
+  # constructors use an ordered list12 child spine, never a source blob.
+  # Type delegates only disjoint heads here: its old name/paren/_ trees,
+  # Type applications, and product41 are owned by the signature adapter.
+  Atom := TermExtraAtom @tree=$0 @template=$0
+  TermExtraAtom := TypeExtraAtom @tree=$0 @template=$0
+  TypeExtraAtom := '( ') @tree=(100,-1,0,0) @template=() @layout-clear @forbid-clear
+  TypeExtraAtom := '· @tree=(101,-1,0,0) @template=·
+  TypeExtraAtom := '. @tree=(101,-1,0,0) @template=·
+  TypeExtraAtom := TmSyntheticHole @tree=$0 @template=$0
+  TmSyntheticHole := '? ident @tree=(102,(12,(1,s1,e1,0),-1,0),0,0) @template=?$1
+  TmSyntheticHole := '? '_ @tree=(102,(12,(4,0,0,0),-1,0),0,0) @template=?_
+  TmSyntheticHole := '? CmdSoftName @tree=(102,(12,$1,-1,0),0,0) @template=?$1
+  TmSyntheticHole := '? TacUnreserved @tree=(102,(12,$1,-1,0),0,0) @template=?$1
+  TypeExtraAtom := '@ Proj @tree=(105,(12,$1,-1,0),0,0) @template=@$1
+  TypeExtraAtom := '` TmRawName @tree=(106,(12,$1,-1,0),0,0) @template=`$1 @boundary=1:no-ws
+  TypeExtraAtom := '` '` TmRawName @tree=(107,(12,$2,-1,0),0,0) @template=``$2 @boundary=1:no-ws,2:no-ws
+  TypeExtraAtom := TmExplicitUniv @tree=$0 @template=$0
+  TypeExtraAtom := TmNamedPattern @tree=$0 @template=$0
+  TypeExtraAtom := TmScientific @tree=$0 @template=$0
+  # Basic.lean:807-844 creates a scientific token whenever a decimal is
+  # immediately followed by dot/e/E, including an empty fractional part.
+  # The digit list retains fraction zeros and length without raw payload.
+  TmScientific := sciwhole '. TmSciFraction TmSciExponentOpt @tree=(158,(12,(2,s0,e0,d0),(12,$2,(12,$3,-1,0),0),0),0,0) @template=$0.$2$3 @boundary=1:no-ws
+  TmScientific := sciwhole TmSciExponent @tree=(158,(12,(2,s0,e0,d0),(12,-1,(12,$1,-1,0),0),0),0,0) @template=$0$1 @boundary=1:no-ws
+  TmSciFraction := scidigit TmSciFraction @tree=(12,(2,s0,e0,d0),$1,0) @template=$0$1 @boundary=0:no-ws
+  TmSciFraction := eps @tree=-1 @template=
+  TmSciExponentOpt := TmSciExponent @tree=$0 @template=$0
+  TmSciExponentOpt := eps @tree=-1 @template=
+  TmSciExponent := sciexp TmSciSign sciwhole @tree=(159,(12,$1,(12,(2,s2,e2,d2),-1,0),0),0,0) @template=e$1$2 @boundary=0:no-ws,1:no-ws,2:no-ws
+  TmSciSign := '+ @tree=(160,-1,0,0) @template=+
+  TmSciSign := '- @tree=(161,-1,0,0) @template=-
+  TmSciSign := eps @tree=-1 @template=
+  # Lean 4.14 Basic.lean:975-1001: contiguous raw-name bytes are one leaf.
+  # Keep both token endpoints; there is no erased tail for the printer.
+  # Escaped names and double-backtick keyword restrictions remain gaps.
+  TmRawName := ctorname @tree=(1,s0,e0,0) @template=$0
+  TmExplicitUniv := Name '.{ TermLevels '} @tree=(110,(12,$0,(12,$2,-1,0),0),0,0) @template=$0.{$2} @boundary=1:no-ws @not-followed=0:Type|Prop|Sort|_
+  TmNamedPattern := Name '@ TmHypNameOpt Proj @tree=(111,(12,$0,(12,$2,(12,$3,-1,0),0),0),0,0) @template=$0@$2$3 @boundary=1:no-ws
+  TmHypNameOpt := Name ': @tree=$0 @template=$0:
+  TmHypNameOpt := eps @tree=-1 @template=
+  # Term.lean:820-828: these are application arguments, not atom heads.
+  Arg := '( Name ':= Expr ') @tree=(108,(12,$1,(12,$3,-1,0),0),0,0) @template=($1\s:=\s$3) @layout-clear
+  Arg := tmellipsis @tree=(109,-1,0,0) @template=..
+  # Transparent macro-argument group for Compile.rsd:desugarSt's unparenthesized
+  # mkApp ASTs; placed after TermArg so synPrint (forward file order via
+  # rulesForRev/printRulesByTag) uses it only when TermArg has no inverse.
+  Arg := '⟮ Expr '⟯ @tree=$1 @template=⟮$1⟯ @layout-clear @forbid-clear
+  # Term.lean:492-500. Existing typed and bare name groups keep22;
+  # fresh binder kinds and genuine patterns retain their own children.
+  TmFunPattern := TmNum @tree=$0 @template=$0
+  TmFunPattern := quoted @tree=(3,s0,e0,0) @template=$0
+  TmFunPattern := '⟨ ElemOpt '⟩ @tree=(47,$1,0,0) @template=⟨$1⟩ @layout-clear @forbid-clear
+  TmFunTuple := '( Expr ', TupleTail ') @tree=(42,$1,$3,0) @template=($1,\s$3) @layout-clear @forbid-clear
+  TmFunPattern := TermExtraAtom @tree=$0 @template=$0
+  # Level.lean:20-33. Identifiers/numerals/parens retain their existing
+  # leaves; addLit124 retains the left level and the literal numeral.
+  TermLevel := TmLevelAtom @tree=$0 @template=$0
+  TermLevel := TermLevel '+ TmNum @tree=(124,(12,$0,(12,$2,-1,0),0),0,0) @template=$0\s+\s$2
+  TmLevelAtom := Name @tree=$0 @template=$0
+  TmLevelAtom := TmNum @tree=$0 @template=$0
+  TmLevelAtom := '( TermLevel ') @tree=(13,$1,0,0) @template=($1) @layout-clear
+  TermLevels := TermLevel TmLevelTail @tree=(12,$0,$1,0) @template=$0$1
+  TmLevelTail := ', TermLevels @tree=$1 @template=,\s$1
+  TmLevelTail := eps @tree=-1 @template=
+  # Indexed/numerical structure lvalues extend the old field-name15
+  # chain only after '[' or a numeric component is seen, so old
+  # simple/dotted identifier fields keep exact q (Term.lean:274-276).
+  TmIndexedLval := TmStructArrayRef TmLvalTail @tree=(126,(12,(12,$0,$1,0),-1,0),0,0) @template=$0$1
+  TmIndexedLval := Name TmStructArrayRef TmLvalTail @tree=(126,(12,(12,$0,(12,$1,$2,0),0),-1,0),0,0) @template=$0$1$2
+  TmIndexedLval := fieldindex TmLvalTail @tree=(126,(12,(12,(2,s0,e0,d0),$1,0),-1,0),0,0) @template=$0$1
+  TmIndexedLval := Name '. fieldindex TmLvalTail @tree=(126,(12,(12,$0,(12,(2,s2,e2,d2),$3,0),0),-1,0),0,0) @template=$0.$2$3
+  TmStructArrayRef := '[ Expr '] @tree=(127,(12,$1,-1,0),0,0) @template=[$1] @layout-clear
+  TmLvalTail := '. field TmLvalTail @tree=(12,(1,s1,e1,0),$2,0) @template=.$1$2
+  TmLvalTail := '. fieldindex TmLvalTail @tree=(12,(2,s1,e1,d1),$2,0) @template=.$1$2
+  TmLvalTail := TmStructArrayRef TmLvalTail @tree=(12,$0,$1,0) @template=$0$1
+  TmLvalTail := eps @tree=-1 @template=
+  Atom := '{ Expr ', TmStructSources 'with RecFieldsStart TmStructEllipsis Annotation '} @tree=(129,(12,(12,$1,$3,0),(12,$5,(12,$6,(12,$7,-1,0),0),0),0),0,0) @template={\s${1:2},\s${3:2}\swith\n${5:2}$6$7\n} @layout-clear
+  TmStructSources := Expr TmStructSourcesTail @tree=(12,$0,$1,0) @template=$0$1
+  TmStructSourcesTail := ', TmStructSources @tree=$1 @template=,\s$1
+  TmStructSourcesTail := eps @tree=-1 @template=
+  TmStructEllipsis := '.. @tree=(109,-1,0,0) @template=\s..
+  TmStructEllipsis := eps @tree=-1 @template=
+  Atom := '{ Expr 'with RecFieldsStart '.. Annotation '} @tree=(129,(12,(12,$1,-1,0),(12,$3,(12,(109,-1,0,0),(12,$5,-1,0),0),0),0),0,0) @template={\s${1:2}\swith\n${3:2}\n..$5\n} @layout-clear
+  Atom := '{ RecFieldsStart '.. ': Type '} @tree=(129,(12,-1,(12,$1,(12,(109,-1,0,0),(12,$4,-1,0),0),0),0),0,0) @template={\n${1:2}\n..\s:\s$4\n} @layout-clear
+
+  # Term.lean:399-406,427-438,473-500. The same discriminator and
+  # binder helper is used by every caller; options have explicit nodes.
+  TmForallBinder := Name @tree=$0 @template=$0
+  TmForallBinder := TermBinder @tree=$0 @template=$0
+  TmForallBinders := TmForallBinder TmForallBinderTail @tree=(12,$0,$1,0) @template=$0$1
+  TmForallBinderTail := TmForallBinders @tree=$0 @template=\s$0
+  TmForallBinderTail := eps @tree=-1 @template=
+  TmExprTypeOpt := ': Expr @tree=$1 @template=\s:\s$1
+  TmExprTypeOpt := eps @tree=-1 @template=
+  TmMatchDiscr := Name ': Expr @tree=(119,(12,$0,(12,$2,-1,0),0),0,0) @template=$0\s:\s$2
+  TmMatchDiscr := Expr @tree=$0 @template=$0
+  TmMatchDiscrs := TmMatchDiscr TmMatchDiscrTail @tree=(12,$0,$1,0) @template=$0$1
+  TmMatchDiscrTail := ', TmMatchDiscrs @tree=$1 @template=,\s$1
+  TmMatchDiscrTail := eps @tree=-1 @template=
+  TmGeneralizing := '( 'generalizing ':= 'true ') @tree=(121,-1,0,0) @template=(generalizing\s:=\strue)
+  TmGeneralizing := '( 'generalizing ':= 'false ') @tree=(122,-1,0,0) @template=(generalizing\s:=\sfalse)
+  TmMotive := '( 'motive ':= Expr ') @tree=$3 @template=(motive\s:=\s$3) @layout-clear
+  TmMotiveOpt := TmMotive @tree=$0 @template=$0\s
+  TmMotiveOpt := eps @tree=-1 @template=
+
+  # Term.lean:533-627: factor the overlapping id/pattern declaration
+  # alternatives through their complete LHS term. The ordinary let
+  # projection below still produces exactly the pre-port9/10 tree.
+  TmLetParts := Expr Annotation ':= Expr @tree=(0,$0,$1,$3) @template=${0:2}${1:2}\s:=\s${3:2}
+  # withPosition in Term.lean:594/629/718 covers the declaration prefix,
+  # not the following body after semicolonOrLinebreak.
+  TmLetHead := 'let TmLetParts @tree=$1 @template=let\s$1 @layout-root @not-followed=1:rec
+  TmLetEqnsHead := 'let TmLetEqns @tree=$1 @template=let\s$1 @layout-root @not-followed=1:rec
+  TmHaveHead := 'have TmHaveDecl @tree=$1 @template=have\s$1 @layout-root
+  TmLetRecHead := 'let 'rec TmLetRecDecls @tree=$2 @template=let\srec\s$2 @layout-root
+  TmLetDecl := TmLetParts @tree=(134,(12,x0,(12,y0,(12,z0,-1,0),0),0),0,0) @template=$0
+  TmLetDecl := TmLetEqns @tree=$0 @template=$0
+  TmLetEqns := Expr Annotation Clauses @tree=(135,(12,$0,(12,-1,(12,$1,(12,$2,-1,0),0),0),0),0,0) @template=$0$1\n${2:2}
+  TmHaveDecl := TmLetParts @tree=(138,(12,x0,(12,-1,(12,y0,(12,z0,-1,0),0),0),0),0,0) @template=$0
+  TmHaveDecl := Annotation ':= Expr @tree=(138,(12,-1,(12,-1,(12,$0,(12,$2,-1,0),0),0),0),0,0) @template=${0:2}\s:=\s${2:2}
+  TmHaveDecl := TmLetEqns @tree=$0 @template=$0
+  TmHaveDecl := Annotation Clauses @tree=(135,(12,-1,(12,-1,(12,$0,(12,$1,-1,0),0),0),0),0,0) @template=$0\n${1:2}
+  TmLetRecDecl := CmdTermRecModifiers TmLetDecl CmdTermSuffix @tree=(140,(12,$0,(12,$1,(12,$2,-1,0),0),0),0,0) @template=$0$1$2
+  TmLetRecDecls := TmLetRecDecl TmLetRecTail @tree=(12,$0,$1,0) @template=$0$1
+  TmLetRecTail := ', TmLetRecDecls @tree=$1 @template=,\n$1
+  TmLetRecTail := eps @tree=-1 @template=
+  TmWhereDecls := 'where TmWhereList @tree=(141,(12,$1,-1,0),0,0) @template=where\n${1:2}
+  TmWhereList := TmWhereItems @tree=$0 @template=$0 @layout-root
+  TmWhereItems := TmLetRecDecl TmWhereTail @tree=(12,$0,$1,0) @template=$0$1 @scoped-layout=0:not-outdented
+  TmWhereTail := '; TmWhereRest @tree=$1 @template=;\n$1
+  TmWhereTail := TmWhereItems @tree=$0 @template=\n$0 @boundary=0:linebreak,0:col-eq
+  TmWhereTail := eps @tree=-1 @template=
+  TmWhereRest := TmWhereItems @tree=$0 @template=$0
+  TmWhereRest := eps @tree=-1 @template=
+  TmMatchAltsWhere := Clauses CmdTermSuffix TmWhereOpt @tree=(142,(12,$0,(12,$1,(12,$2,-1,0),0),0),0,0) @template=$0$1$2
+  TmWhereOpt := TmWhereDecls @tree=$0 @template=\n$0
+  TmWhereOpt := eps @tree=-1 @template=
+  TmFromTerm := 'from Expr @tree=(145,(12,$1,-1,0),0,0) @template=from\s$1
+  TmShowRhs := TmFromTerm @tree=$0 @template=$0
+  TmShowRhs := ByTactic @tree=$0 @template=$0
+  # Term.lean:884-885. pipeProj has minPrec10 and a closed receiver;
+  # fields follow the '|>.' token without whitespace. Arguments reuse
+  # the stock application whitespace/column contract.
+  C10 := C20 @tree=$0 @template=$0
+  O10 := O20 @tree=$0 @template=$0 @choice-group=8 @choice-rank=1
+  C10 := C10 '|>. field TmPipeArgs @tree=(112,(12,$0,(12,(1,s2,e2,0),(12,$3,-1,0),0),0),0,0) @template=$0\s|>.$2$3 @boundary=2:no-ws
+  C10 := C10 '|>. fieldindex TmPipeArgs @tree=(113,(12,$0,(12,(2,s2,e2,d2),(12,$3,-1,0),0),0),0,0) @template=$0\s|>.$2$3 @boundary=2:no-ws
+  # Term.lean:499-500,825-828 permits a final maxPrec fun argument;
+  # keep its full body open, as in the ordinary App TmFun production.
+  O10 := C10 '|>. field TmPipeOpenArgs @tree=(112,(12,$0,(12,(1,s2,e2,0),(12,$3,-1,0),0),0),0,0) @template=$0\s|>.$2$3 @boundary=2:no-ws @choice-group=8 @choice-rank=0
+  O10 := C10 '|>. fieldindex TmPipeOpenArgs @tree=(113,(12,$0,(12,(2,s2,e2,d2),(12,$3,-1,0),0),0),0,0) @template=$0\s|>.$2$3 @boundary=2:no-ws @choice-group=8 @choice-rank=0
+  TmPipeArgs := Arg TmPipeArgs @tree=(12,$0,$1,0) @template=\s$0$1 @boundary=0:ws @scoped-layout=0:argument
+  TmPipeArgs := eps @tree=-1 @template=
+  TmPipeOpenArgs := Arg TmPipeOpenArgs @tree=(12,$0,$1,0) @template=\s$0$1 @boundary=0:ws @scoped-layout=0:argument
+  TmPipeOpenArgs := TmFun @tree=(12,$0,-1,0) @template=\s$0 @boundary=0:ws @scoped-layout=0:argument
+  # Term.lean:901-902: the first operand has minPrec76. A finite
+  # right-spine represents the nonempty sequence without a second
+  # nested/list derivation for the same unparenthesized separator.
+  C75Shift := C80 '▸ TmSubstOperands @tree=(114,(12,$0,(12,$2,-1,0),0),0,0) @template=$0\s▸\s$2
+  O75Shift := C80 '▸ TmSubstOpenOperands @tree=(114,(12,$0,(12,$2,-1,0),0),0,0) @template=$0\s▸\s$2
+  TmSubstOperands := C80 TmSubstTail @tree=(12,$0,$1,0) @template=$0$1
+  TmSubstTail := '▸ TmSubstOperands @tree=$1 @template=\s▸\s$1
+  TmSubstTail := eps @tree=-1 @template=
+  TmSubstOpenOperands := O80 @tree=(12,$0,-1,0) @template=$0
+  TmSubstOpenOperands := C80 '▸ TmSubstOpenOperands @tree=(12,$0,$2,0) @template=$0\s▸\s$2
+
+  DoStmts := DoStmt DoTail @tree=(12,$0,$1,0) @template=$0$1
+  DoStmts := eps @tree=-1 @template=
+  DoTail := '; DoStmts @tree=$1 @template=;\n$1
+  DoTail := DoStmts @tree=$0 @template=\n$0
+  DoStmt := 'let Name '<- Expr @tree=(43,$1,$3,0) @template=let\s$1\s<-\s$3
+  DoStmt := Name '<- Expr @tree=(43,$0,$2,0) @template=$0\s<-\s$2
+  DoStmt := 'let Name Annotation ':= Expr @tree=(45,$1,$2,$4) @template=let\s$1$2\s:=\s$4
+  DoStmt := App @tree=(44,$0,0,0) @template=$0
+  # Port of Lean 4.14.0@410fab7284703f41660ca2454218dcca9b2ec896,
+  # Lean/Parser/Do.lean:19-247; Init/While.lean:31,41. Apache-2.0.
+  # Copyright (c) 2020 Microsoft Corporation. All rights reserved.
+  # Authors: Leonardo de Moura. License: upstream LICENSE (Apache 2.0).
+  # The selected stock kinds and exact normalized child roles are data in
+  # reports/surface-close0-codex6/grammar-pass/do-port.tsv. pp* combinators
+  # are recognition identities. Ordered-choice/atomic commitment has no
+  # equivalent engine API; the exact affected alternatives remain gaps.
+  # Do.lean:23-35: both sequence forms are nonempty. Indented items share
+  # the first item's saved column; braces clear the saved position.
+  GenDoIndent := GenDoNonEmpty @tree=$0 @template=$0 @layout-root @not-start=123
+  GenDoStmts := GenDoNonEmpty @tree=$0 @template=$0
+  GenDoStmts := eps @tree=-1 @template=
+  GenDoNonEmpty := GenDoStmt GenDoTail @tree=(12,$0,$1,0) @template=$0$1 @scoped-layout=0:not-outdented
+  GenDoTail := '; GenDoStmts @tree=$1 @template=;\n$1
+  GenDoTail := GenDoStmts @tree=$0 @template=\n$0
+  GenDoFallback := '{ GenDoBraced '} @tree=(46,$1,1,0) @template={\n${1:2}} @layout-clear
+  GenDoFallback := GenDoNonEmpty @tree=(46,$0,1,0) @template=$0 @layout-root @not-start=123
+  GenDoBraced := GenDoStmt GenDoBracedTail @tree=(12,$0,$1,0) @template=$0$1
+  GenDoBracedTail := '; GenDoBracedRest @tree=$1 @template=;\n$1
+  GenDoBracedTail := GenDoBracedRest @tree=$0 @template=\n$0
+  GenDoBracedRest := GenDoBraced @tree=$0 @template=$0
+  GenDoBracedRest := eps @tree=-1 @template=
+  # Do.lean:48-55,220-223: the token guards consume nothing. In particular
+  # a refused do-if cannot reenter through the ordinary term-if parser.
+  GenDoExprTerm := Expr @tree=$0 @template=$0 @not-followed=0:set_option|open|if|match|match_expr|let|let_expr|have|do|dbg_trace|assert!|for|unless|return|try;1::=|←|<-
+  GenDoStmt := GenDoExprTerm @tree=(44,$0,0,0) @template=$0
+  GenDoStmt := GenDoNonExpr @tree=$0 @template=$0
+  GenDoRhs := GenDoExprTerm @tree=$0 @template=$0
+  GenDoRhs := GenDoNonExpr @tree=(60,$0,0,0) @template=$0
+  GenDoArrow := '<- @tree=0 @template=\s<-\s
+  GenDoArrow := '← @tree=0 @template=\s<-\s
+  GenDoIdent := ident @tree=(1,s0,e0,0) @template=$0
+  GenDoIdent := CmdSoftName @tree=$0 @template=$0
+  GenDoIdent := TacUnreserved @tree=$0 @template=$0
+  GenDoBinderIdent := GenDoIdent @tree=$0 @template=$0
+  GenDoBinderIdent := '_ @tree=(1,s0,e0,0) @template=_
+  GenDoTermTypeOpt := ': Expr @tree=$1 @template=\s:\s$1
+  GenDoTermTypeOpt := eps @tree=-1 @template=
+  # Do.lean:73-90: a recursive RHS that is not doExpr is wrapped60; its
+  # child is a raw step in context2. Pure RHS and legacy43 stay unchanged.
+  # The temporary tuple0 carries (pattern,RHS) only inside these actions.
+  GenDoBinding := GenDoIdent ': Expr GenDoArrow GenDoRhs @tree=(0,(30,$0,$2,0),$4,0) @template=$0\s:\s$2\s<-\s$4
+  GenDoBinding := Expr GenDoArrow GenDoBindTail @tree=(0,$0,$2,0) @template=$0\s<-\s$2
+  GenDoBindTail := GenDoRhs '| GenDoFallback @tree=(59,$0,$2,0) @template=$0\s|\n${2:2} @boundary=1:col-gt
+  GenDoBindTail := GenDoRhs @tree=$0 @template=$0
+  GenDoNonExpr := 'let GenDoBinding @tree=(43,x1,y1,0) @template=let\s$1 @layout-root @not-followed=1:rec
+  GenDoNonExpr := 'let 'mut GenDoBinding @tree=(222,(12,x2,(12,y2,-1,0),0),0,0) @template=let\smut\s$2 @layout-root
+  GenDoNonExpr := GenDoBinding @tree=(43,x0,y0,0) @template=$0 @not-followed=0:set_option|open|if|match|match_expr|let|let_expr|have|do|dbg_trace|assert!|for|unless|return|try
+  # Do.lean:57-61,87-92: simple immutable lets retain45; complex and mut
+  # declarations share the exact Term helper ABI. Assignment is distinct.
+  GenDoNonExpr := 'let Expr ':= Expr '| GenDoFallback @tree=(45,$1,-1,(59,$3,$5,0)) @template=let\s$1\s:=\s$3\s|\n${5:2} @boundary=4:col-gt @not-followed=1:rec
+  GenDoNonExpr := 'let 'mut Expr ':= Expr '| GenDoFallback @tree=(221,(12,$2,(12,$4,(12,$6,-1,0),0),0),0,0) @template=let\smut\s$2\s:=\s$4\s|\n${6:2} @boundary=5:col-gt
+  GenDoNonExpr := 'let Expr GenDoTermTypeOpt ':= Expr @tree=(45,$1,$2,$4) @template=let\s${1:2}${2:2}\s:=\s${4:2} @not-followed=1:rec
+  GenDoLetEqns := Expr GenDoTermTypeOpt Clauses @tree=(135,(12,$0,(12,-1,(12,$1,(12,$2,-1,0),0),0),0),0,0) @template=$0$1\n${2:2}
+  GenDoNonExpr := 'let GenDoLetEqns @tree=(224,(12,$1,-1,0),0,0) @template=let\s$1 @not-followed=1:rec
+  GenDoNonExpr := 'let 'mut TmLetDecl @tree=(225,(12,$2,-1,0),0,0) @template=let\smut\s$2
+  GenDoNonExpr := Expr ':= Expr @tree=(223,(12,$0,(12,-1,(12,$2,-1,0),0),0),0,0) @template=${0:2}\s:=\s${2:2} @not-followed=0:set_option|open|if|match|match_expr|let|let_expr|have|do|dbg_trace|assert!|for|unless|return|try
+  GenDoNonExpr := GenDoIdent ': Expr ':= Expr @tree=(223,(12,$0,(12,$2,(12,$4,-1,0),0),0),0,0) @template=${0:2}\s:\s${2:2}\s:=\s${4:2} @boundary=1:line-eq
+  GenDoNonExpr := 'have TmHaveDecl @tree=(229,(12,$1,-1,0),0,0) @template=have\s$1
+  GenDoNonExpr := 'let 'rec TmLetRecDecls @tree=(232,(12,$2,-1,0),0,0) @template=let\srec\s$2
+  # Do.lean:123-141: retain pure/bind let conditions and optional proof
+  # names. Only an actual previous-tail linebreak resets do-if's column.
+  GenDoIfCond := 'let Expr ':= Expr @tree=(202,(12,$1,(12,$3,-1,0),0),0,0) @template=let\s$1\s:=\s$3
+  GenDoIfCond := 'let Expr '← Expr @tree=(203,(12,$1,(12,$3,-1,0),0),0,0) @template=let\s$1\s←\s$3
+  GenDoIfCond := GenDoIdent ': Expr @tree=(201,(12,$0,(12,$2,-1,0),0),0,0) @template=$0\s:\s$2
+  GenDoIfCond := Expr @tree=(201,(12,-1,(12,$0,-1,0),0),0,0) @template=$0
+  GenDoIf := 'if GenDoIfCond 'then GenDoFallback GenDoElseIfs GenDoElseOpt @tree=(200,(12,$1,(12,$3,(12,$4,(12,$5,-1,0),0),0),0),0,0) @template=if\s$1\sthen\n${3:2}$4$5 @position-after-linebreak
+  GenDoNonExpr := GenDoIf @tree=$0 @template=$0
+  GenDoElseIfHead := 'else 'if @tree=0 @template=else\sif @layout-root @boundary=1:line-eq
+  GenDoElseIf := GenDoElseIfHead GenDoIfCond 'then GenDoFallback @tree=(204,(12,$1,(12,$3,-1,0),0),0,0) @template=else\sif\s$1\sthen\n${3:2} @boundary=0:col-ge
+  GenDoElseIfs := GenDoElseIf GenDoElseIfs @tree=(12,$0,$1,0) @template=\n$0$1
+  GenDoElseIfs := eps @tree=-1 @template=
+  GenDoElseOpt := 'else GenDoFallback @tree=$1 @template=\nelse\n${1:2} @boundary=0:col-ge @not-followed=1:if
+  GenDoElseOpt := 'else GenDoElseLineIf @tree=$1 @template=\nelse\n${1:2} @boundary=0:col-ge,1:linebreak
+  GenDoElseOpt := eps @tree=-1 @template=
+  GenDoElseLineIf := GenDoIf GenDoTail @tree=(46,(12,$0,$1,0),1,0) @template=$0$1 @layout-root @scoped-layout=0:not-outdented
+  # Do.lean:142-159: only collection/condition terms carry forbidden-do.
+  # Match proof names, generalizing/motive, OR groups, and patterns persist.
+  GenDoBeforeDo := Expr @tree=$0 @template=$0 @forbid=do
+  GenDoNonExpr := 'unless GenDoBeforeDo 'do GenDoFallback @tree=(205,(12,$1,(12,$3,-1,0),0),0,0) @template=unless\s$1\sdo\n${3:2}
+  GenDoForBinding := GenDoIdent ': Expr 'in GenDoBeforeDo @tree=(207,(12,$0,(12,$2,(12,$4,-1,0),0),0),0,0) @template=$0\s:\s$2\sin\s$4
+  GenDoForBinding := Expr 'in GenDoBeforeDo @tree=(207,(12,-1,(12,$0,(12,$2,-1,0),0),0),0,0) @template=$0\sin\s$2
+  GenDoForBindings := GenDoForBinding GenDoForBindingTail @tree=(12,$0,$1,0) @template=$0$1
+  GenDoForBindingTail := ', GenDoForBindings @tree=$1 @template=,\s$1
+  GenDoForBindingTail := eps @tree=-1 @template=
+  GenDoNonExpr := 'for GenDoForBindings 'do GenDoFallback @tree=(206,(12,$1,(12,$3,-1,0),0),0,0) @template=for\s$1\sdo\n${3:2}
+  GenDoBool := 'true @tree=(1,s0,e0,0) @template=$0
+  GenDoBool := 'false @tree=(1,s0,e0,0) @template=$0
+  GenDoGeneralizing := '( 'generalizing ':= GenDoBool ') @tree=$3 @template=(generalizing\s:=\s$3)
+  GenDoGeneralizing := eps @tree=-1 @template=
+  GenDoMotive := '( 'motive ':= Expr ') @tree=$3 @template=(motive\s:=\s$3) @layout-clear
+  GenDoMotive := eps @tree=-1 @template=
+  GenDoDiscr := GenDoIdent ': Expr @tree=(209,(12,$0,(12,$2,-1,0),0),0,0) @template=$0\s:\s$2
+  GenDoDiscr := Expr @tree=(209,(12,-1,(12,$0,-1,0),0),0,0) @template=$0
+  GenDoDiscrs := GenDoDiscr GenDoDiscrTail @tree=(12,$0,$1,0) @template=$0$1
+  GenDoDiscrTail := ', GenDoDiscrs @tree=$1 @template=,\s$1
+  GenDoDiscrTail := eps @tree=-1 @template=
+  GenDoPatternGroups := Elems GenDoPatternGroupTail @tree=(12,$0,$1,0) @template=$0$1
+  GenDoPatternGroupTail := '| GenDoPatternGroups @tree=$1 @template=\s|\s$1
+  GenDoPatternGroupTail := eps @tree=-1 @template=
+  GenDoMatchAlt := '| GenDoPatternGroups '=> GenDoFallback @tree=(210,(12,$1,(12,$3,-1,0),0),0,0) @template=|\s$1\s=>\n${3:2} @boundary=3:col-ge
+  GenDoMatchAlts := GenDoMatchAlt GenDoMatchAltTail @tree=(12,$0,$1,0) @template=$0$1 @layout-root
+  GenDoMatchAltTail := GenDoMatchAlt GenDoMatchAltTail @tree=(12,$0,$1,0) @template=\n$0$1 @boundary=0:col-ge
+  GenDoMatchAltTail := eps @tree=-1 @template=
+  GenDoNonExpr := 'match GenDoGeneralizing GenDoMotive GenDoDiscrs 'with GenDoMatchAlts @tree=(208,(12,$1,(12,$2,(12,$3,(12,$5,-1,0),0),0),0),0,0) @template=match\s$1$2$3\swith\n$5
+  # Do.lean:167-179: catches and finally do not require physical newlines.
+  # The grammar, like stock, admits try with no catch and no finally.
+  GenDoCatch := 'catch GenDoBinderIdent GenDoTermTypeOpt '=> GenDoFallback @tree=(212,(12,$1,(12,$2,(12,$4,-1,0),0),0),0,0) @template=catch\s$1$2\s=>\n${4:2}
+  GenDoCatch := 'catch GenDoMatchAlts @tree=(213,(12,$1,-1,0),0,0) @template=catch\n$1
+  GenDoCatches := GenDoCatch GenDoCatches @tree=(12,$0,$1,0) @template=\n$0$1
+  GenDoCatches := eps @tree=-1 @template=
+  GenDoFinallyOpt := 'finally GenDoFallback @tree=(214,(12,$1,-1,0),0,0) @template=\nfinally\n${1:2}
+  GenDoFinallyOpt := eps @tree=-1 @template=
+  GenDoNonExpr := 'try GenDoFallback GenDoCatches GenDoFinallyOpt @tree=(211,(12,$1,(12,$2,(12,$3,-1,0),0),0),0,0) @template=try\n${1:2}$2$3
+  GenDoNonExpr := 'break @tree=(215,-1,0,0) @template=break
+  GenDoNonExpr := 'continue @tree=(216,-1,0,0) @template=continue
+  GenDoNonExpr := GenDoReturn @tree=$0 @template=$0
+  GenDoReturn := 'return ReturnValue @tree=(44,$1,1,0) @template=return$1 @layout-root
+  ReturnValue := Expr @tree=$0 @template=\s${0:8} @boundary=0:line-eq
+  ReturnValue := eps @tree=-1 @template=
+  GenDoNonExpr := 'assert! Expr @tree=(217,(12,$1,-1,0),0,0) @template=assert!\s$1
+  GenDoNonExpr := 'do GenDoFallback @tree=(218,(12,$1,-1,0),0,0) @template=do\n${1:2}
+  GenDoNonExpr := 'while GenDoBeforeDo 'do GenDoFallback @tree=(219,(12,$1,(12,$3,-1,0),0),0,0) @template=while\s$1\sdo\n${3:2}
+  GenDoNonExpr := 'repeat GenDoFallback @tree=(220,(12,$1,-1,0),0,0) @template=repeat\n${1:2}
+  # Do.lean:227-247: term-level macros retain their own pre-macro kinds.
+  # Only high-precedence forms can occur as application arguments.
+  DoTerm := 'do '{ GenDoBraced '} @tree=(46,$2,0,0) @template=do\s{\n${2:2}} @layout-clear
+  DoTerm := 'do GenDoIndent @tree=(46,$1,1,0) @template=do\n${1:2}
+  DoHighTerm := DoTerm @tree=$0 @template=$0
+  DoHighTerm := 'unless GenDoBeforeDo 'do GenDoFallback @tree=(235,(12,$1,(12,$3,-1,0),0),0,0) @template=unless\s$1\sdo\n${3:2}
+  DoHighTerm := 'try GenDoFallback GenDoCatches GenDoFinallyOpt @tree=(236,(12,$1,(12,$2,(12,$3,-1,0),0),0),0,0) @template=try\n${1:2}$2$3
+  TermArg := DoHighTerm @tree=$0 @template=$0
+  Control := DoHighTerm @tree=$0 @template=$0
+  Control := TermReturn @tree=$0 @template=$0
+  TermReturn := 'return ReturnValue @tree=(234,(12,$1,-1,0),0,0) @template=return$1 @layout-root
+  O0 := DoLowTerm @tree=$0 @template=$0
+  DoLowTerm := GenDoArrow Expr @tree=(237,(12,$1,-1,0),0,0) @template=<-\s$1
+  Control := 'if Expr 'then Expr 'else Expr @tree=(8,$1,$3,$5) @template=if\s${1:2}\sthen\n${3:2}\nelse\n${5:2}
+  # Term.lean:533-627: sharing the parsed LHS/RHS keeps the old9/10
+  # constructor for every old local let. The upstream ordered binder
+  # choice that cannot be factored is a named port gap, not a tier rule.
+  Control := TmLetHead '; Expr @tree=(9,x0,y0,(10,z0,$2,0)) @template=\n${0:2};\n${2:2}
+  Control := TmLetHead Expr @tree=(9,x0,y0,(10,z0,$1,0)) @template=\n${0:2};\n${1:2} @boundary=1:linebreak
+  Control := TmLetEqnsHead '; Expr @tree=(136,(12,$0,(12,$2,-1,0),0),0,0) @template=\n${0:2};\n${2:2}
+  Control := TmLetEqnsHead Expr @tree=(136,(12,$0,(12,$1,-1,0),0),0,0) @template=\n${0:2};\n${1:2} @boundary=1:linebreak
+  Control := TmHaveHead '; Expr @tree=(137,(12,$0,(12,$2,-1,0),0),0,0) @template=\n${0:2};\n${2:2}
+  Control := TmHaveHead Expr @tree=(137,(12,$0,(12,$1,-1,0),0),0,0) @template=\n${0:2};\n${1:2} @boundary=1:linebreak
+  Control := TmLetRecHead '; Expr @tree=(139,(12,$0,(12,$2,-1,0),0),0,0) @template=\n${0:2};\n${2:2}
+  Control := TmLetRecHead Expr @tree=(139,(12,$0,(12,$1,-1,0),0),0,0) @template=\n${0:2};\n${1:2} @boundary=1:linebreak
+  Control := 'match TmMatchDiscrs 'with Clauses @tree=(31,$1,$3,0) @template=match\s$1\swith\n${3:2}
+  Control := 'match TmGeneralizing TmMotiveOpt TmMatchDiscrs 'with Clauses @tree=(123,(12,$1,(12,$2,(12,$3,(12,$5,-1,0),0),0),0),0,0) @template=match\s$1$2$3\swith\n${5:2}
+  Control := 'match TmMotive TmMatchDiscrs 'with Clauses @tree=(123,(12,-1,(12,$1,(12,$2,(12,$4,-1,0),0),0),0),0,0) @template=match\s(motive\s:=\s$1)\s$2\swith\n${4:2}
+  Control := TmFun @tree=$0 @template=$0
+  TmFun := 'fun LambdaGroups '=> Expr @tree=(32,$1,$3,0) @template=fun\s$1\s=>\n${3:2}
+  TmFun := 'λ LambdaGroups '=> Expr @tree=(32,$1,$3,0) @template=fun\s$1\s=>\n${3:2}
+  TmFun := 'fun LambdaGroups '↦ Expr @tree=(32,$1,$3,0) @template=fun\s$1\s=>\n${3:2}
+  TmFun := 'λ LambdaGroups '↦ Expr @tree=(32,$1,$3,0) @template=fun\s$1\s=>\n${3:2}
+  TmFun := 'fun LambdaGroups ': Expr '=> Expr @tree=(118,(12,$1,(12,$3,(12,$5,-1,0),0),0),0,0) @template=fun\s$1\s:\s${3:2}\s=>\n${5:2}
+  TmFun := 'λ LambdaGroups ': Expr '=> Expr @tree=(118,(12,$1,(12,$3,(12,$5,-1,0),0),0),0,0) @template=fun\s$1\s:\s${3:2}\s=>\n${5:2}
+  TmFun := 'fun LambdaGroups ': Expr '↦ Expr @tree=(118,(12,$1,(12,$3,(12,$5,-1,0),0),0),0,0) @template=fun\s$1\s:\s${3:2}\s=>\n${5:2}
+  TmFun := 'λ LambdaGroups ': Expr '↦ Expr @tree=(118,(12,$1,(12,$3,(12,$5,-1,0),0),0),0,0) @template=fun\s$1\s:\s${3:2}\s=>\n${5:2}
+  TmFun := 'fun Clauses @tree=(117,(12,$1,-1,0),0,0) @template=fun\n${1:2}
+  TmFun := 'λ Clauses @tree=(117,(12,$1,-1,0),0,0) @template=fun\n${1:2}
+  Control := '∀ TmForallBinders TmExprTypeOpt ', Expr @tree=(115,(12,$1,(12,$2,(12,$4,-1,0),0),0),0,0) @template=∀\s$1$2,\s$4
+  Control := 'forall TmForallBinders TmExprTypeOpt ', Expr @tree=(115,(12,$1,(12,$2,(12,$4,-1,0),0),0),0,0) @template=∀\s$1$2,\s$4
+  Control := 'nomatch Elems @tree=(143,(12,$1,-1,0),0,0) @template=nomatch\s$1
+  Control := 'show Expr TmShowRhs @tree=(144,(12,$1,(12,$2,-1,0),0),0,0) @template=show\s$1\s$2
+  Control := 'panic! Expr @tree=(146,(12,$1,-1,0),0,0) @template=panic!\s$1
+  Control := 'unreachable! @tree=(147,-1,0,0) @template=unreachable!
+  Control := 'if Name ': Expr 'then Expr 'else Expr @tree=(156,(12,$1,(12,$3,(12,$5,(12,$7,-1,0),0),0),0),0,0) @template=if\s$1\s:\s${3:2}\sthen\n${5:2}\nelse\n${7:2}
+  Control := 'if 'let Expr ':= Expr 'then Expr 'else Expr @tree=(157,(12,$2,(12,$4,(12,$6,(12,$8,-1,0),0),0),0),0,0) @template=if\slet\s${2:2}\s:=\s${4:2}\sthen\n${6:2}\nelse\n${8:2}
+  O25 := TermBinderRequired '-> Expr @tree=(116,(12,$0,(12,$2,-1,0),0),0,0) @template=$0\s->\s$2 @choice-group=3 @choice-rank=1
+  O25 := TermBinderRequired '→ Expr @tree=(116,(12,$0,(12,$2,-1,0),0),0,0) @template=$0\s->\s$2 @choice-group=3 @choice-rank=1
+  # Id.run is an ordinary identifier/application, as in stock Lean's
+  # Parser/Do.lean:227-228. Tree.synNormalizePureId preserves parseSrc's
+  # restricted pure tree ABI after the common general-do route has parsed.
+  TermOpt := TermMeta DecreasingOpt @tree=$0 @template=$0
+  DecreasingOpt := eps @tree=0 @template=
+  DecreasingOpt := Decreasing @tree=0 @template=
+  # Source port: Lean 4.14.0@410fab7284703f41660ca2454218dcca9b2ec896.
+  # Parser/Term.lean:45-90,107-108; Parser/Extra.lean:182-189:
+  # sepByIndent saves the first tactic position. Newline separators
+  # require colEq; every item, including after ';', requires colGe.
+  # ppSpace/ppLine are skip and ppIndent/ppDedent are id (Extra:218-234).
+  # The old parseSrc ABI drops decreasing_by, but byTactic itself retains
+  # its complete production tree in finite tags500..571 and599.
+  Decreasing := 'decreasing_by TacSeqGt @tree=0 @template=
+  # Term.lean:107-108,825-832 and Init/Notation.lean:113-117:
+  # byTactic has leadPrec, not Atom/maxPrec. It is neither a bare
+  # application argument nor a bare application left operand.
+  # The body call takes its longest successful completion before any
+  # surrounding operator, preserving every equal-end forest family.
+  C110 := ByTacticLead @tree=$0 @template=$0
+  ByTactic := 'by TacSeqGt @tree=(500,(12,$1,-1,0),0,0) @template=by\n${1:2}
+  # Term.lean:846-847 and Init/GetElem.lean:74,109,115: these
+  # max-precedence suffixes promote an initial lead term, but the
+  # initial by still fails a maxPrec call. Keep its complete chain
+  # behind the lead entry; do not export it as generic Proj or Arg.
+  ByTacticLead := ByTactic @tree=$0 @template=$0
+  ByTacticLead := ByTacticHigh @tree=$0 @template=$0
+  ByTacticLead := ByTacticApp @tree=$0 @template=$0
+  ByTacticSuffixBase := ByTactic @tree=$0 @template=$0
+  ByTacticSuffixBase := ByTacticHigh @tree=$0 @template=$0
+  ByTacticSuffixBase := ByTacticApp @tree=$0 @template=$0
+  ByTacticHigh := ByTacticSuffixBase '. fieldindex @tree=(17,$0,d2,0) @template=$0.$2 @boundary=1:no-ws,2:no-ws
+  ByTacticHigh := ByTacticSuffixBase '. field @tree=(29,$0,s2,e2) @template=$0.$2 @boundary=1:no-ws,2:no-ws
+  ByTacticHigh := ByTacticSuffixBase '[ Expr ']? @tree=(33,$0,$2,0) @template=$0[$2]? @boundary=1:no-ws
+  ByTacticHigh := ByTacticSuffixBase '[ Expr '] '! @tree=(411,(12,$0,(12,$2,-1,0),0),0,0) @template=$0[$2]! @boundary=1:no-ws,4:no-ws
+  ByTacticHigh := ByTacticSuffixBase '[ NotationIndex '] @tree=(412,(12,$0,(12,$2,-1,0),0),0,0) @template=$0[$2] @boundary=1:no-ws
+  ByTacticAppBase := ByTacticHigh @tree=$0 @template=$0
+  ByTacticAppBase := ByTacticApp @tree=$0 @template=$0
+  # The stock argument parser finishes before app can take a suffix.
+  # Largest successful argument completion retains all equal-end ties;
+  # it does not emulate stock's consuming-error commitments.
+  ByTacticApp := ByTacticAppBase Arg @tree=(5,$0,(12,$1,-1,0),0) @template=$0\s$1 @scoped-layout=1:argument @boundary=1:ws
+  # Term.lean:499-500 gives fun maxPrec, as in the common App TmFun route.
+  ByTacticApp := ByTacticAppBase TmFun @tree=(5,$0,(12,$1,-1,0),0) @template=$0\s$1 @scoped-layout=1:argument @boundary=1:ws
+  # As in the common App !/not bridge, the prefix argument requires
+  # stock argument whitespace (Term.lean:825-828), not a postfix suffix.
+  ByTacticApp := ByTacticAppBase '! C40 @tree=(5,$0,(12,(7,2,$2,0),-1,0),0) @template=$0\s!$2 @layout=1:continuation @boundary=1:ws
+  ByTacticApp := ByTacticAppBase '! O40 @tree=(5,$0,(12,(7,2,$2,0),-1,0),0) @template=$0\s!$2 @layout=1:continuation @boundary=1:ws
+  ByTacticApp := ByTacticAppBase '¬ C40 @tree=(5,$0,(12,(7,4,$2,0),-1,0),0) @template=$0\s¬\s$2 @layout=1:continuation @boundary=1:ws
+  ByTacticApp := ByTacticAppBase '¬ O40 @tree=(5,$0,(12,(7,4,$2,0),-1,0),0) @template=$0\s¬\s$2 @layout=1:continuation @boundary=1:ws
+  TacSeqGt := TacSeqBracketed @tree=(501,(12,$0,-1,0),0,0) @template=$0
+  TacSeqGt := TacSeqIndented @tree=(501,(12,$0,-1,0),0,0) @template=$0 @boundary=0:col-gt
+  TacSeq := TacSeqBracketed @tree=(501,(12,$0,-1,0),0,0) @template=$0
+  TacSeq := TacSeqIndented @tree=(501,(12,$0,-1,0),0,0) @template=$0
+  TacSeqIndented := TacItems @tree=(502,(12,$0,-1,0),0,0) @template=$0 @layout-root
+  TacSeqBracketed := '{ TacItemsStart '} @tree=(503,(12,$1,-1,0),0,0) @template={\n${1:2}}
+  TacItemsStart := TacItemsOpt @tree=$0 @template=$0 @layout-root
+  TacItemsOpt := TacItems @tree=$0 @template=$0
+  TacItemsOpt := eps @tree=-1 @template=
+  TacItems := Tactic TacItemsTail @tree=(12,$0,$1,0) @template=$0$1 @boundary=0:col-ge
+  TacItemsTail := '; TacItemsOpt @tree=$1 @template=;\n$1
+  TacItemsTail := TacItems @tree=$0 @template=\n$0 @boundary=0:col-eq,0:linebreak
+  TacItemsTail := eps @tree=-1 @template=
+  # Init/Tactics.lean:350-362: <;> has precedence1, rhs binding power2.
+  Tactic := TacLead @tree=$0 @template=$0
+  Tactic := Tactic '<;> TacLead @tree=(508,(12,$0,(12,$2,-1,0),0),0,0) @template=$0\s<;>\s$2
+  # Init/Tactics.lean:39,137,174,198,203,225,271,276,310,331,350,374.
+  TacLead := 'rfl @tree=(504,-1,0,0) @template=rfl
+  TacLead := 'exact Expr @tree=(515,(12,$1,-1,0),0,0) @template=exact\s$1
+  TacLead := 'intro TacMaxTermsOpt @tree=(516,(12,$1,-1,0),0,0) @template=intro$1 @not-followed=1:%7C
+  TacLead := 'contradiction @tree=(520,-1,0,0) @template=contradiction
+  TacLead := 'subst TacMaxTerms @tree=(528,(12,$1,-1,0),0,0) @template=subst$1
+  TacLead := 'constructor @tree=(531,-1,0,0) @template=constructor
+  TacLead := 'apply Expr @tree=(538,(12,$1,-1,0),0,0) @template=apply\s$1
+  TacLead := 'all_goals TacSeq @tree=(543,(12,$1,-1,0),0,0) @template=all_goals\n${1:2}
+  TacLead := '( TacSeqClear ') @tree=(544,(12,$1,-1,0),0,0) @template=($1)
+  TacSeqClear := TacSeq @tree=$0 @template=$0 @layout-clear
+  TacLead := 'try TacSeq @tree=(545,(12,$1,-1,0),0,0) @template=try\n${1:2}
+  TacLead := 'next TacBinderIdentsOpt '=> TacSeq @tree=(550,(12,$1,(12,$3,-1,0),0),0,0) @template=next$1\s=>\n${3:2}
+  TacLead := 'first TacFirstBranches @tree=(552,(12,$1,-1,0),0,0) @template=first\n${1:2}
+  TacFirstBranches := TacFirstBranchList @tree=$0 @template=$0 @layout-root
+  TacFirstBranch := '| TacSeq @tree=$1 @template=|\n${1:2} @boundary=0:col-ge
+  TacFirstBranchList := TacFirstBranch TacFirstBranchTail @tree=(12,$0,$1,0) @template=$0$1
+  TacFirstBranchTail := TacFirstBranchList @tree=$0 @template=\n$0
+  TacFirstBranchTail := eps @tree=-1 @template=
+  TacMaxTermsOpt := TacMaxTerms @tree=$0 @template=$0
+  TacMaxTermsOpt := eps @tree=-1 @template=
+  TacMaxTerms := Proj TacMaxTermsOpt @tree=(12,$0,$1,0) @template=\s$0$1 @boundary=0:col-gt
+  TacIdent := ident @tree=(1,s0,e0,0) @template=$0
+  TacIdent := 'simp @tree=(1,s0,e0,0) @template=$0
+  TacIdent := CmdSoftName @tree=$0 @template=$0
+  # Elab/Syntax.lean:247-251 and Parser/Basic.lean:1587-1589:
+  # tactic leading identifiers are nonReservedSymbol. Restore these
+  # finite spellings on ordinary identifier routes, disjoint from the
+  # @keywords ident token. 'have'/'if' and Do.lean:174 'try' stay reserved.
+  # &only/&config/&disch/&discharger are explicitly nonreserved below.
+  Name := TacUnreserved @tree=$0 @template=$0
+  Atom := TacUnreserved @tree=$0 @template=$0
+  TacIdent := TacUnreserved @tree=$0 @template=$0
+  TacUnreserved := 'rfl @tree=(1,s0,e0,0) @template=$0
+  TacUnreserved := 'exact @tree=(1,s0,e0,0) @template=$0
+  TacUnreserved := 'intro @tree=(1,s0,e0,0) @template=$0
+  TacUnreserved := 'contradiction @tree=(1,s0,e0,0) @template=$0
+  TacUnreserved := 'subst @tree=(1,s0,e0,0) @template=$0
+  TacUnreserved := 'constructor @tree=(1,s0,e0,0) @template=$0
+  TacUnreserved := 'apply @tree=(1,s0,e0,0) @template=$0
+  TacUnreserved := 'all_goals @tree=(1,s0,e0,0) @template=$0
+  TacUnreserved := 'next @tree=(1,s0,e0,0) @template=$0
+  TacUnreserved := 'first @tree=(1,s0,e0,0) @template=$0
+  TacUnreserved := 'change @tree=(1,s0,e0,0) @template=$0
+  TacUnreserved := 'rw @tree=(1,s0,e0,0) @template=$0
+  TacUnreserved := 'simp_all @tree=(1,s0,e0,0) @template=$0
+  TacUnreserved := 'simpa @tree=(1,s0,e0,0) @template=$0
+  TacUnreserved := 'unfold @tree=(1,s0,e0,0) @template=$0
+  TacUnreserved := 'induction @tree=(1,s0,e0,0) @template=$0
+  TacUnreserved := 'cases @tree=(1,s0,e0,0) @template=$0
+  TacUnreserved := 'rename_i @tree=(1,s0,e0,0) @template=$0
+  TacUnreserved := 'generalize @tree=(1,s0,e0,0) @template=$0
+  TacUnreserved := 'split @tree=(1,s0,e0,0) @template=$0
+  TacUnreserved := 'congr @tree=(1,s0,e0,0) @template=$0
+  TacUnreserved := 'omega @tree=(1,s0,e0,0) @template=$0
+  TacUnreserved := 'decide @tree=(1,s0,e0,0) @template=$0
+  TacUnreserved := 'trivial @tree=(1,s0,e0,0) @template=$0
+  TacUnreserved := 'assumption @tree=(1,s0,e0,0) @template=$0
+  TacUnreserved := 'refine @tree=(1,s0,e0,0) @template=$0
+  TacUnreserved := 'rcases @tree=(1,s0,e0,0) @template=$0
+  TacUnreserved := 'obtain @tree=(1,s0,e0,0) @template=$0
+  TacUnreserved := 'decreasing_tactic @tree=(1,s0,e0,0) @template=$0
+  TacUnreserved := 'simp_arith @tree=(1,s0,e0,0) @template=$0
+  TacUnreserved := 'by_cases @tree=(1,s0,e0,0) @template=$0
+  TacUnreserved := 'only @tree=(1,s0,e0,0) @template=$0
+  TacUnreserved := 'config @tree=(1,s0,e0,0) @template=$0
+  TacUnreserved := 'discharger @tree=(1,s0,e0,0) @template=$0
+  TacUnreserved := 'disch @tree=(1,s0,e0,0) @template=$0
+  TacBinderIdent := TacIdent @tree=$0 @template=$0
+  TacBinderIdent := '_ @tree=(4,0,0,0) @template=_
+  TacBinderIdentsOpt := TacBinderIdent TacBinderIdentsOpt @tree=(12,$0,$1,0) @template=\s$0$1
+  TacBinderIdentsOpt := eps @tree=-1 @template=
+  TacBinderIdents := TacBinderIdent TacBinderIdentsTail @tree=(12,$0,$1,0) @template=\s$0$1 @boundary=0:col-gt
+  TacBinderIdentsTail := TacBinderIdents @tree=$0 @template=$0
+  TacBinderIdentsTail := eps @tree=-1 @template=
+  # Init/Tactics.lean:423-461: config and locations retain every option.
+  TacConfig := TacConfigItems @tree=(506,(12,$0,-1,0),0,0) @template=$0
+  TacConfigItems := TacConfigItem TacConfigItems @tree=(12,$0,$1,0) @template=\s$0$1 @boundary=0:col-gt
+  TacConfigItems := eps @tree=-1 @template=
+  TacConfigItem := '+ TacIdent @tree=(555,(12,$1,-1,0),0,0) @template=+$1 @boundary=1:no-ws
+  TacConfigItem := '- TacIdent @tree=(556,(12,$1,-1,0),0,0) @template=-$1 @boundary=1:no-ws
+  TacConfigItem := '( TacConfigName ':= TacTermClear ') @tree=(557,(12,$1,(12,$3,-1,0),0),0,0) @template=($1\s:=\s$3) @not-followed=1:discharger|disch
+  TacConfigName := TacIdent @tree=$0 @template=$0
+  TacTermClear := Expr @tree=$0 @template=$0 @layout-clear
+  TacLocationOpt := TacLocation @tree=$0 @template=$0
+  TacLocationOpt := eps @tree=-1 @template=
+  TacLocation := 'at TacLocationTarget @tree=(526,(12,$1,-1,0),0,0) @template=\sat\s$1 @layout-root
+  TacLocationTarget := '* @tree=(563,-1,0,0) @template=*
+  TacLocationTarget := TacLocationTerms TacGoalOpt @tree=(527,(12,$0,(12,$1,-1,0),0),0,0) @template=$0$1
+  TacLocationTerms := Proj TacLocationTermsTail @tree=(12,$0,$1,0) @template=$0$1 @boundary=0:col-gt
+  TacLocationTermsTail := TacLocationTerms @tree=$0 @template=\s$0
+  TacLocationTermsTail := eps @tree=-1 @template=
+  TacGoalOpt := '⊢ @tree=(564,-1,0,0) @template=\s⊢
+  TacGoalOpt := '| '- @tree=(564,-1,0,0) @template=\s⊢ @boundary=1:no-ws
+  TacGoalOpt := eps @tree=-1 @template=
+  # Init/Tactics.lean:469,483-485,511,547-563,584-610,658-674.
+  TacLead := 'change Expr TacLocationOpt @tree=(521,(12,$1,(12,$2,-1,0),0),0,0) @template=change\s$1$2
+  TacLead := 'rw TacConfig TacRwRules TacLocationOpt @tree=(523,(12,$1,(12,$2,(12,$3,-1,0),0),0),0,0) @template=rw$1\s$2$3
+  TacRwRules := '[ TacRwRulesClear '] @tree=(524,(12,$1,-1,0),0,0) @template=[$1]
+  TacRwRulesClear := TacRwRuleListOpt @tree=$0 @template=$0 @layout-clear
+  TacRwRuleListOpt := TacRwRuleList @tree=$0 @template=$0
+  TacRwRuleListOpt := eps @tree=-1 @template=
+  TacRwRuleList := TacReverseOpt Expr TacRwRuleTail @tree=(12,(525,(12,$0,(12,$1,-1,0),0),0,0),$2,0) @template=$0$1$2
+  TacRwRuleTail := ', TacRwRuleListOpt @tree=$1 @template=,\s$1
+  TacRwRuleTail := eps @tree=-1 @template=
+  TacReverseOpt := '← @tree=(599,-1,0,0) @template=←\s
+  TacReverseOpt := '<- @tree=(599,-1,0,0) @template=←\s
+  TacReverseOpt := eps @tree=-1 @template= @not-followed=0:←|<-
+  TacDischargerOpt := '( TacDischargerWord ':= TacSeqClear ') @tree=(558,(12,$3,-1,0),0,0) @template=\s(discharger\s:=\s$3)
+  TacDischargerOpt := eps @tree=-1 @template=
+  TacDischargerWord := 'discharger @tree=-1 @template=discharger
+  TacDischargerWord := 'disch @tree=-1 @template=discharger
+  TacOnlyOpt := 'only @tree=(599,-1,0,0) @template=\sonly
+  TacOnlyOpt := eps @tree=-1 @template=
+  TacSimpPhaseOpt := '↓ @tree=(559,-1,0,0) @template=↓
+  TacSimpPhaseOpt := '↑ @tree=(560,-1,0,0) @template=↑
+  TacSimpPhaseOpt := eps @tree=-1 @template=
+  TacSimpArg := TacSimpPhaseOpt TacReverseOpt Expr @tree=(507,(12,$0,(12,$1,(12,$2,-1,0),0),0),0,0) @template=$0$1$2
+  TacSimpArg := '- Proj @tree=(561,(12,$1,-1,0),0,0) @template=-$1
+  TacSimpArg := '* @tree=(562,-1,0,0) @template=*
+  TacSimpNonStarArg := TacSimpPhaseOpt TacReverseOpt Expr @tree=(507,(12,$0,(12,$1,(12,$2,-1,0),0),0),0,0) @template=$0$1$2
+  TacSimpNonStarArg := '- Proj @tree=(561,(12,$1,-1,0),0,0) @template=-$1
+  TacSimpArgsOpt := '[ TacSimpArgsClear '] @tree=(514,(12,$1,-1,0),0,0) @template=\s[$1]
+  TacSimpArgsOpt := eps @tree=-1 @template=
+  TacSimpArgsClear := TacSimpArgListOpt @tree=$0 @template=$0 @layout-clear
+  TacSimpArgListOpt := TacSimpArgList @tree=$0 @template=$0
+  TacSimpArgListOpt := eps @tree=-1 @template=
+  TacSimpArgList := TacSimpArg TacSimpArgTail @tree=(12,$0,$1,0) @template=$0$1
+  TacSimpArgTail := ', TacSimpArgListOpt @tree=$1 @template=,\s$1
+  TacSimpArgTail := eps @tree=-1 @template=
+  TacSimpAllArgsOpt := '[ TacSimpAllArgsClear '] @tree=(514,(12,$1,-1,0),0,0) @template=\s[$1]
+  TacSimpAllArgsOpt := eps @tree=-1 @template=
+  TacSimpAllArgsClear := TacSimpNonStarListOpt @tree=$0 @template=$0 @layout-clear
+  TacSimpNonStarListOpt := TacSimpNonStarList @tree=$0 @template=$0
+  TacSimpNonStarListOpt := eps @tree=-1 @template=
+  TacSimpNonStarList := TacSimpNonStarArg TacSimpNonStarTail @tree=(12,$0,$1,0) @template=$0$1
+  TacSimpNonStarTail := ', TacSimpNonStarListOpt @tree=$1 @template=,\s$1
+  TacSimpNonStarTail := eps @tree=-1 @template=
+  TacLead := 'simp TacConfig TacDischargerOpt TacOnlyOpt TacSimpArgsOpt TacLocationOpt @tree=(505,(12,$1,(12,$2,(12,$3,(12,$4,(12,$5,-1,0),0),0),0),0),0,0) @template=simp$1$2$3$4$5
+  TacLead := 'simp_all TacConfig TacDischargerOpt TacOnlyOpt TacSimpAllArgsOpt @tree=(540,(12,$1,(12,$2,(12,$3,(12,$4,-1,0),0),0),0),0,0) @template=simp_all$1$2$3$4
+  TacLead := 'simpa TacQueryOpt TacBangOpt TacSimpaArgs @tree=(512,(12,$1,(12,$2,(12,$3,-1,0),0),0),0,0) @template=simpa$1$2$3
+  TacQueryOpt := '? @tree=(599,-1,0,0) @template=\s?
+  TacQueryOpt := eps @tree=-1 @template=
+  TacBangOpt := '! @tree=(599,-1,0,0) @template=\s!
+  TacBangOpt := eps @tree=-1 @template=
+  TacSimpaArgs := TacConfig TacDischargerOpt TacOnlyOpt TacSimpaSimpArgsOpt TacUsingOpt @tree=(513,(12,$0,(12,$1,(12,$2,(12,$3,(12,$4,-1,0),0),0),0),0),0,0) @template=$0$1$2$3$4
+  TacSimpaSimpArgsOpt := '[ TacSimpaSimpArgsClear '] @tree=(514,(12,$1,-1,0),0,0) @template=\s[$1]
+  TacSimpaSimpArgsOpt := eps @tree=-1 @template=
+  TacSimpaSimpArgsClear := TacSimpaSimpListOpt @tree=$0 @template=$0 @layout-clear
+  TacSimpaSimpListOpt := TacSimpaSimpList @tree=$0 @template=$0
+  TacSimpaSimpListOpt := eps @tree=-1 @template=
+  TacSimpaSimpList := TacSimpArg TacSimpaSimpTail @tree=(12,$0,$1,0) @template=$0$1
+  TacSimpaSimpTail := ', TacSimpaSimpList @tree=$1 @template=,\s$1
+  TacSimpaSimpTail := eps @tree=-1 @template=
+  TacUsingOpt := 'using Expr @tree=$1 @template=\susing\s$1
+  TacUsingOpt := eps @tree=-1 @template=
+  # Init/Tactics.lean:704,723,801-811,839-885,954,1052,1068-1070,1181.
+  TacLead := 'unfold TacIdentList TacLocationOpt @tree=(529,(12,$1,(12,$2,-1,0),0),0,0) @template=unfold$1$2
+  TacIdentList := TacIdent TacIdentListTail @tree=(12,$0,$1,0) @template=\s$0$1 @boundary=0:col-gt
+  TacIdentListTail := TacIdentList @tree=$0 @template=$0
+  TacIdentListTail := eps @tree=-1 @template=
+  TacLead := 'have TmHaveDecl @tree=(522,(12,$1,-1,0),0,0) @template=have\s$1
+  TacLead := 'induction TacIndTargets TacIndUsingOpt TacGeneralizingOpt TacInductionAltsOpt @tree=(530,(12,$1,(12,$2,(12,$3,(12,$4,-1,0),0),0),0),0,0) @template=induction\s$1$2$3$4
+  TacIndTargets := TacExprList @tree=$0 @template=$0 @forbid=generalizing
+  TacIndUsingOpt := TacUsingOpt @tree=$0 @template=$0 @forbid=generalizing
+  TacLead := 'cases TacCasesTargets TacUsingOpt TacInductionAltsOpt @tree=(509,(12,$1,(12,$2,(12,$3,-1,0),0),0),0,0) @template=cases\s$1$2$3
+  TacCasesTargets := TacCasesTarget TacCasesTargetTail @tree=(12,$0,$1,0) @template=$0$1
+  TacCasesTargetTail := ', TacCasesTargets @tree=$1 @template=,\s$1
+  TacCasesTargetTail := eps @tree=-1 @template=
+  TacCasesTarget := TacTargetNameOpt Expr @tree=(510,(12,$0,(12,$1,-1,0),0),0,0) @template=$0$1
+  TacTargetNameOpt := TacIdent ': @tree=$0 @template=$0\s:\s
+  TacTargetNameOpt := eps @tree=-1 @template=
+  TacExprList := Expr TacExprListTail @tree=(12,$0,$1,0) @template=$0$1
+  TacExprListTail := ', TacExprList @tree=$1 @template=,\s$1
+  TacExprListTail := eps @tree=-1 @template=
+  TacGeneralizingOpt := 'generalizing TacMaxTerms @tree=$1 @template=\sgeneralizing$1
+  TacGeneralizingOpt := eps @tree=-1 @template=
+  TacInductionAltsOpt := 'with TacAltPreambleOpt TacInductionAltListStart @tree=(517,(12,$1,(12,$2,-1,0),0),0,0) @template=\swith$1\n${2:2}
+  TacInductionAltsOpt := eps @tree=-1 @template=
+  TacAltPreambleOpt := Tactic @tree=$0 @template=\s$0 @boundary=0:col-gt
+  TacAltPreambleOpt := eps @tree=-1 @template=
+  TacInductionAltListStart := TacInductionAltList @tree=$0 @template=$0 @layout-root
+  TacInductionAltList := TacInductionAlt TacInductionAltTail @tree=(12,$0,$1,0) @template=$0$1 @boundary=0:col-ge
+  TacInductionAltTail := TacInductionAltList @tree=$0 @template=\n$0
+  TacInductionAltTail := eps @tree=-1 @template=
+  TacInductionAlt := TacAltLhsList '=> TacBranchRhs @tree=(518,(12,$0,(12,$2,-1,0),0),0,0) @template=$0\s=>\n${2:2}
+  TacAltLhsList := TacAltLhs TacAltLhsTail @tree=(12,$0,$1,0) @template=$0$1
+  TacAltLhsTail := TacAltLhsList @tree=$0 @template=\n$0
+  TacAltLhsTail := eps @tree=-1 @template=
+  TacAltLhs := '| TacAltHead TacBinderIdentsOpt @tree=(519,(12,$1,(12,$2,-1,0),0),0,0) @template=|\s$1$2
+  TacAltHead := TacBinderIdent @tree=$0 @template=$0
+  TacAltHead := '@ TacIdent @tree=(569,(12,$1,-1,0),0,0) @template=@$1
+  TacBranchRhs := '_ @tree=(4,0,0,0) @template=_
+  TacBranchRhs := TmSyntheticHole @tree=$0 @template=$0
+  TacBranchRhs := TacSeq @tree=$0 @template=$0
+  TacLead := 'rename_i TacBinderIdents @tree=(547,(12,$1,-1,0),0,0) @template=rename_i$1
+  TacLead := 'generalize TacGeneralizeArgs TacLocationOpt @tree=(548,(12,$1,(12,$2,-1,0),0),0,0) @template=generalize\s$1$2
+  TacGeneralizeArgs := TacGeneralizeArg TacGeneralizeTail @tree=(12,$0,$1,0) @template=$0$1
+  TacGeneralizeTail := ', TacGeneralizeArgs @tree=$1 @template=,\s$1
+  TacGeneralizeTail := eps @tree=-1 @template=
+  TacGeneralizeArg := TacTargetNameOpt TacTerm51 '= TacIdent @tree=(549,(12,$0,(12,$1,(12,$3,-1,0),0),0),0,0) @template=$0$1\s=\s$3
+  TacTerm51 := C55 @tree=$0 @template=$0
+  TacTerm51 := O55 @tree=$0 @template=$0
+  TacLead := 'split TacSplitTermOpt TacLocationOpt @tree=(539,(12,$1,(12,$2,-1,0),0),0,0) @template=split$1$2
+  TacSplitTermOpt := Expr @tree=$0 @template=\s$0 @boundary=0:col-gt
+  TacSplitTermOpt := eps @tree=-1 @template=
+  TacLead := 'congr TacNumOpt @tree=(551,(12,$1,-1,0),0,0) @template=congr$1
+  TacNumOpt := TmNum @tree=$0 @template=\s$0
+  TacNumOpt := eps @tree=-1 @template=
+  TacLead := 'if TacBinderIdent ': Expr 'then TacBranchRhs 'else TacBranchRhs @tree=(542,(12,$1,(12,$3,(12,$5,(12,$7,-1,0),0),0),0),0,0) @template=if\s$1\s:\s$3\sthen\n${5:2}else\n${7:2}
+  TacLead := 'omega TacConfig @tree=(541,(12,$1,-1,0),0,0) @template=omega$1
+  TacLead := 'decide @tree=(511,-1,0,0) @template=decide
+  # Init/Tactics.lean:931: syntax "trivial" : tactic (a non-reserved leading word, as decide).
+  TacLead := 'trivial @tree=(565,-1,0,0) @template=trivial
+  TacLead := 'assumption @tree=(565,(12,-1,-1,0),0,0) @template=assumption
+  TacLead := 'show Expr @tree=(565,(12,(599,-1,0,0),(12,$1,-1,0),0),0,0) @template=show\s$1
+  TacLead := 'refine Expr @tree=(565,(12,(599,-1,0,0),(12,(599,-1,0,0),(12,$1,-1,0),0),0),0,0) @template=refine\s$1
+  TacLead := 'let TmLetDecl @tree=(565,(12,(599,-1,0,0),(12,(599,-1,0,0),(12,(599,-1,0,0),(12,$1,-1,0),0),0),0),0,0) @template=let\s$1 @not-followed=1:rec
+  # Init/RCases.lean:65-85,150,169: retain medium/low precedence nodes.
+  TacLead := 'rcases TacCasesTargetsOpt TacRcasesWithOpt @tree=(546,(12,$1,(12,$2,-1,0),0),0,0) @template=rcases\s$1$2
+  TacCasesTargetsOpt := TacCasesTargets @tree=$0 @template=$0
+  TacCasesTargetsOpt := eps @tree=-1 @template=
+  TacRcasesWithOpt := 'with TacRcasesLo @tree=$1 @template=\swith\s$1
+  TacRcasesWithOpt := eps @tree=-1 @template=
+  TacLead := 'obtain TacObtainPatOpt TacTypeOpt TacObtainValuesOpt @tree=(532,(12,$1,(12,$2,(12,$3,-1,0),0),0),0,0) @template=obtain$1$2$3
+  TacObtainPatOpt := TacRcasesMed @tree=$0 @template=\s$0
+  TacObtainPatOpt := eps @tree=-1 @template=
+  TacTypeOpt := ': Expr @tree=$1 @template=\s:\s$1
+  TacTypeOpt := eps @tree=-1 @template=
+  TacObtainValuesOpt := ':= TacExprList @tree=$1 @template=\s:=\s$1
+  TacObtainValuesOpt := eps @tree=-1 @template=
+  TacRcasesMed := TacRcasesPat TacRcasesBarTail @tree=(533,(12,(12,$0,$1,0),-1,0),0,0) @template=$0$1
+  TacRcasesBarTail := '| TacRcasesPat TacRcasesBarTail @tree=(12,$1,$2,0) @template=\s|\s$1$2
+  TacRcasesBarTail := eps @tree=-1 @template=
+  TacRcasesLo := TacRcasesMed TacTypeOpt @tree=(535,(12,$0,(12,$1,-1,0),0),0,0) @template=$0$1
+  TacRcasesPat := TacIdent @tree=(536,(12,$0,-1,0),0,0) @template=$0
+  TacRcasesPat := '_ @tree=(537,-1,0,0) @template=_
+  TacRcasesPat := '- @tree=(566,-1,0,0) @template=-
+  TacRcasesPat := '@ TacRcasesPat @tree=(567,(12,$1,-1,0),0,0) @template=@$1 @boundary=1:no-ws
+  TacRcasesPat := '⟨ TacRcasesTupleOpt '⟩ @tree=(534,(12,$1,-1,0),0,0) @template=⟨$1⟩
+  TacRcasesPat := '( TacRcasesLo ') @tree=(568,(12,$1,-1,0),0,0) @template=($1)
+  TacRcasesTupleOpt := TacRcasesLo TacRcasesTupleTail @tree=(12,$0,$1,0) @template=$0$1
+  TacRcasesTupleOpt := eps @tree=-1 @template=
+  TacRcasesTupleTail := ', TacRcasesLo TacRcasesTupleTail @tree=(12,$1,$2,0) @template=,\s$1$2
+  TacRcasesTupleTail := eps @tree=-1 @template=
+  # Init/WFTactics.lean:76 and Init/Meta.lean:1449-1455,1474.
+  TacLead := 'decreasing_tactic @tree=(553,-1,0,0) @template=decreasing_tactic
+  TacLead := 'simp_arith TacConfig TacDischargerOpt TacOnlyOpt TacSimpaSimpArgsOpt TacLocationOpt @tree=(554,(12,$1,(12,$2,(12,$3,(12,$4,(12,$5,-1,0),0),0),0),0),0,0) @template=simp_arith$1$2$3$4$5
+  # Init/ByCases.lean:14; Init/NotationExtra.lean:336-338.
+  TacLead := 'by_cases TacTargetNameOpt Expr @tree=(570,(12,$1,(12,$2,-1,0),0),0,0) @template=by_cases\s$1$2
+  TacLead := TacFocusToken TacSeqGt @tree=(571,(12,$1,-1,0),0,0) @template=·\n${1:2}
+  TacFocusToken := '· @tree=-1 @template=·
+  TacFocusToken := '. @tree=-1 @template=·
+  # Stock Init/Core.lean:133-134: iff is nonassociative at precedence 20.
+  # Parser/Term.lean:850-851: arrow has right binding power 25.
+  # Init/Notation.lean:428,438: reverse pipe takes term:0 on the right;
+  # forward pipe takes term:1. Separate levels retain the greedy right
+  # operand of <| and the left-associated |> chain.
+  Expr := C0 @tree=$0 @template=$0 @choice-group=5 @choice-rank=0
+  Expr := O0 @tree=$0 @template=$0 @choice-group=5 @choice-rank=1
+  C0 := C1 @tree=$0 @template=$0
+  O0 := O1 @tree=$0 @template=$0 @choice-group=12 @choice-rank=1
+  C0 := C1 '<| C0 @tree=(6,33,$0,$2) @template=$0\s<|\s$2
+  O0 := C1 '<| O0 @tree=(6,33,$0,$2) @template=$0\s<|\s$2 @choice-group=12 @choice-rank=0
+  C1 := C10 @tree=$0 @template=$0
+  O1 := O10 @tree=$0 @template=$0 @choice-group=9 @choice-rank=1
+  C1 := C1 '|> C10 @tree=(6,34,$0,$2) @template=$0\s|>\s$2
+  O1 := C1 '|> O10 @tree=(6,34,$0,$2) @template=$0\s|>\s$2 @choice-group=9 @choice-rank=0
+  C20 := C22 @tree=$0 @template=$0
+  O20 := O22 @tree=$0 @template=$0 @choice-group=10 @choice-rank=1
+  C20 := C25 '↔ C25 @tree=(6,25,$0,$2) @template=$0\s↔\s$2
+  O20 := C25 '↔ O25 @tree=(6,25,$0,$2) @template=$0\s↔\s$2 @choice-group=10 @choice-rank=0
+  C20 := C25 '<-> C25 @tree=(6,25,$0,$2) @template=$0\s↔\s$2
+  O20 := C25 '<-> O25 @tree=(6,25,$0,$2) @template=$0\s↔\s$2 @choice-group=10 @choice-rank=0
+  C22 := C25 @tree=$0 @template=$0
+  O22 := O25 @tree=$0 @template=$0
+  C22 := C25 '<|> C22 @tree=(6,37,$0,$2) @template=$0\s<|>\s$2
+  O22 := C25 '<|> O22 @tree=(6,37,$0,$2) @template=$0\s<|>\s$2
+  C25 := C30 @tree=$0 @template=$0
+  O25 := O30 @tree=$0 @template=$0
+  C25 := C30 '→ C25 @tree=(16,$0,$2,0) @template=$0\s→\s$2
+  O25 := C30 '→ O25 @tree=(16,$0,$2,0) @template=$0\s→\s$2 @choice-group=3 @choice-rank=0
+  C25 := C30 '-> C25 @tree=(16,$0,$2,0) @template=$0\s→\s$2
+  O25 := C30 '-> O25 @tree=(16,$0,$2,0) @template=$0\s→\s$2 @choice-group=3 @choice-rank=0
+  # Stock Init/Notation.lean:328-336: Prop Or/And associate right;
+  # Bool ||/&& associate left at the same respective precedences.
+  C30 := B30 @tree=$0 @template=$0
+  O30 := OB30 @tree=$0 @template=$0
+  C30 := B30 '∨ C30 @tree=(6,27,$0,$2) @template=$0\s∨\s$2
+  O30 := B30 '∨ O30 @tree=(6,27,$0,$2) @template=$0\s∨\s$2
+  B30 := C35 @tree=$0 @template=$0
+  OB30 := O35 @tree=$0 @template=$0
+  B30 := B30 '|| C35 @tree=(6,12,$0,$2) @template=$0\s||\s$2
+  OB30 := B30 '|| O35 @tree=(6,12,$0,$2) @template=$0\s||\s$2
+  C35 := B35 @tree=$0 @template=$0
+  O35 := OB35 @tree=$0 @template=$0
+  C35 := B35 '∧ C35 @tree=(6,26,$0,$2) @template=$0\s∧\s$2
+  O35 := B35 '∧ O35 @tree=(6,26,$0,$2) @template=$0\s∧\s$2
+  C35 := B35 '/\ C35 @tree=(6,26,$0,$2) @template=$0\s∧\s$2
+  O35 := B35 '/\ O35 @tree=(6,26,$0,$2) @template=$0\s∧\s$2
+  C35 := B35 '× C35 @tree=(6,29,$0,$2) @template=$0\s×\s$2 @choice-group=2 @choice-rank=0
+  O35 := B35 '× O35 @tree=(6,29,$0,$2) @template=$0\s×\s$2 @choice-group=2 @choice-rank=0
+  C35 := NotationBracketBinder '× C35 @tree=(405,(12,$0,(12,$2,-1,0),0),0,0) @template=$0\s×\s$2 @choice-group=2 @choice-rank=1
+  O35 := NotationBracketBinder '× O35 @tree=(405,(12,$0,(12,$2,-1,0),0),0,0) @template=$0\s×\s$2 @choice-group=2 @choice-rank=1
+  B35 := C40 @tree=$0 @template=$0
+  OB35 := O40 @tree=$0 @template=$0
+  B35 := B35 '&& C40 @tree=(6,11,$0,$2) @template=$0\s&&\s$2
+  OB35 := B35 '&& O40 @tree=(6,11,$0,$2) @template=$0\s&&\s$2
+  C40 := C50 @tree=$0 @template=$0
+  O40 := O50 @tree=$0 @template=$0
+  # Init/Notation.lean:333,337: result max, operand term:40. These
+  # suffix-absorbing forms stay at their operand tier; the App-prefix
+  # rules below admit them as arguments without a second, shorter parse.
+  C40 := '! C40 @tree=(7,2,$1,0) @template=!$1
+  O40 := '! O40 @tree=(7,2,$1,0) @template=!$1
+  C40 := '¬ C40 @tree=(7,4,$1,0) @template=¬\s$1
+  O40 := '¬ O40 @tree=(7,4,$1,0) @template=¬\s$1
+  C50 := E50 @tree=$0 @template=$0
+  O50 := OE50 @tree=$0 @template=$0
+  # Init/Notation.lean:339: membership explicitly admits precedence 50
+  # on both sides; its right operand consumes another membership.
+  C50 := E50 '∈ C50 @tree=(6,35,$0,$2) @template=$0\s∈\s$2
+  O50 := E50 '∈ O50 @tree=(6,35,$0,$2) @template=$0\s∈\s$2
+  E50 := C55 @tree=$0 @template=$0
+  OE50 := O55 @tree=$0 @template=$0
+  # Stock Init/Notation.lean:312: equality is nonassociative at 50.
+  E50 := C55 '= C55 @tree=(6,24,$0,$2) @template=$0\s=\s$2
+  OE50 := C55 '= O55 @tree=(6,24,$0,$2) @template=$0\s=\s$2
+  E50 := C55 '== C55 @tree=(6,5,$0,$2) @template=$0\s==\s$2
+  OE50 := C55 '== O55 @tree=(6,5,$0,$2) @template=$0\s==\s$2
+  E50 := C55 '!= C55 @tree=(6,6,$0,$2) @template=$0\s!=\s$2
+  OE50 := C55 '!= O55 @tree=(6,6,$0,$2) @template=$0\s!=\s$2
+  E50 := C55 '< C55 @tree=(6,7,$0,$2) @template=$0\s<\s$2
+  OE50 := C55 '< O55 @tree=(6,7,$0,$2) @template=$0\s<\s$2
+  E50 := C55 '> C55 @tree=(6,8,$0,$2) @template=$0\s>\s$2
+  OE50 := C55 '> O55 @tree=(6,8,$0,$2) @template=$0\s>\s$2
+  E50 := C55 '<= C55 @tree=(6,9,$0,$2) @template=$0\s<=\s$2
+  OE50 := C55 '<= O55 @tree=(6,9,$0,$2) @template=$0\s<=\s$2
+  E50 := C55 '>= C55 @tree=(6,10,$0,$2) @template=$0\s>=\s$2
+  OE50 := C55 '>= O55 @tree=(6,10,$0,$2) @template=$0\s>=\s$2
+  E50 := C55 '≠ C55 @tree=(6,16,$0,$2) @template=$0\s≠\s$2
+  OE50 := C55 '≠ O55 @tree=(6,16,$0,$2) @template=$0\s≠\s$2
+  E50 := C55 '≤ C55 @tree=(6,17,$0,$2) @template=$0\s≤\s$2
+  OE50 := C55 '≤ O55 @tree=(6,17,$0,$2) @template=$0\s≤\s$2
+  E50 := C55 '≥ C55 @tree=(6,18,$0,$2) @template=$0\s≥\s$2
+  OE50 := C55 '≥ O55 @tree=(6,18,$0,$2) @template=$0\s≥\s$2
+  C55 := C58 @tree=$0 @template=$0
+  O55 := O58 @tree=$0 @template=$0
+  C55 := C55 '||| C58 @tree=(6,20,$0,$2) @template=$0\s|||\s$2
+  O55 := C55 '||| O58 @tree=(6,20,$0,$2) @template=$0\s|||\s$2
+  C55 := C55 '>>= C58 @tree=(6,30,$0,$2) @template=$0\s>>=\s$2
+  O55 := C55 '>>= O58 @tree=(6,30,$0,$2) @template=$0\s>>=\s$2
+  C58 := C60 @tree=$0 @template=$0
+  O58 := O60 @tree=$0 @template=$0
+  C58 := C58 '^^^ C60 @tree=(6,21,$0,$2) @template=$0\s^^^\s$2
+  O58 := C58 '^^^ O60 @tree=(6,21,$0,$2) @template=$0\s^^^\s$2
+  C60 := B60 @tree=$0 @template=$0
+  O60 := OB60 @tree=$0 @template=$0
+  C60 := B60 '>> C60 @tree=(6,36,$0,$2) @template=$0\s>>\s$2
+  O60 := B60 '>> O60 @tree=(6,36,$0,$2) @template=$0\s>>\s$2
+  B60 := C65 @tree=$0 @template=$0
+  OB60 := O65 @tree=$0 @template=$0
+  B60 := B60 '&&& C65 @tree=(6,19,$0,$2) @template=$0\s&&&\s$2
+  OB60 := B60 '&&& O65 @tree=(6,19,$0,$2) @template=$0\s&&&\s$2
+  B60 := B60 '*> C65 @tree=(6,32,$0,$2) @template=$0\s*>\s$2
+  OB60 := B60 '*> O65 @tree=(6,32,$0,$2) @template=$0\s*>\s$2
+  C65 := C67 @tree=$0 @template=$0
+  O65 := O67 @tree=$0 @template=$0
+  C65 := C65 '+ C67 @tree=(6,1,$0,$2) @template=$0\s+\s$2
+  O65 := C65 '+ O67 @tree=(6,1,$0,$2) @template=$0\s+\s$2
+  C65 := C65 '- C67 @tree=(6,2,$0,$2) @template=$0\s-\s$2
+  O65 := C65 '- O67 @tree=(6,2,$0,$2) @template=$0\s-\s$2
+  C65 := C65 '++ C67 @tree=(6,14,$0,$2) @template=$0\s++\s$2
+  O65 := C65 '++ O67 @tree=(6,14,$0,$2) @template=$0\s++\s$2
+  C67 := C70 @tree=$0 @template=$0
+  O67 := O70 @tree=$0 @template=$0
+  C67 := C70 ':: C67 @tree=(6,13,$0,$2) @template=$0\s::\s$2
+  O67 := C70 ':: O67 @tree=(6,13,$0,$2) @template=$0\s::\s$2
+  C70 := C75 @tree=$0 @template=$0
+  O70 := O75 @tree=$0 @template=$0
+  C70 := C70 '* C75 @tree=(6,3,$0,$2) @template=$0\s*\s$2
+  O70 := C70 '* O75 @tree=(6,3,$0,$2) @template=$0\s*\s$2
+  C70 := C70 '/ C75 @tree=(6,4,$0,$2) @template=$0\s/\s$2
+  O70 := C70 '/ O75 @tree=(6,4,$0,$2) @template=$0\s/\s$2
+  C70 := C70 '% C75 @tree=(6,15,$0,$2) @template=$0\s%\s$2
+  O70 := C70 '% O75 @tree=(6,15,$0,$2) @template=$0\s%\s$2
+  C75 := '- C75 @tree=(7,1,$1,0) @template=-$1
+  O75 := '- O75 @tree=(7,1,$1,0) @template=-$1
+  C75 := C75Shift @tree=$0 @template=$0
+  O75 := O75Shift @tree=$0 @template=$0
+  C75Shift := C80 @tree=$0 @template=$0
+  O75Shift := O80 @tree=$0 @template=$0
+  C75Shift := C75Shift '<<< C80 @tree=(6,22,$0,$2) @template=$0\s<<<\s$2
+  O75Shift := C75Shift '<<< O80 @tree=(6,22,$0,$2) @template=$0\s<<<\s$2
+  C75Shift := C75Shift '>>> C80 @tree=(6,23,$0,$2) @template=$0\s>>>\s$2
+  O75Shift := C75Shift '>>> O80 @tree=(6,23,$0,$2) @template=$0\s>>>\s$2
+  C80 := C100 @tree=$0 @template=$0
+  O80 := O100 @tree=$0 @template=$0
+  C80 := C100 '^ C80 @tree=(6,28,$0,$2) @template=$0\s^\s$2
+  O80 := C100 '^ O80 @tree=(6,28,$0,$2) @template=$0\s^\s$2
+  C100 := C110 @tree=$0 @template=$0
+  O100 := O110 @tree=$0 @template=$0
+  C100 := '~~~ C100 @tree=(7,3,$1,0) @template=~~~$1
+  O100 := '~~~ O100 @tree=(7,3,$1,0) @template=~~~$1
+  C100 := C110 '<$> C100 @tree=(6,31,$0,$2) @template=$0\s<\$>\s$2
+  O100 := C110 '<$> O100 @tree=(6,31,$0,$2) @template=$0\s<\$>\s$2
+  C110 := App @tree=$0 @template=$0
+  O110 := Control @tree=$0 @template=$0
+  O110 := App TmFun @tree=(5,$0,(12,$1,-1,0),0) @template=$0\s$1 @scoped-layout=1:argument @boundary=1:ws
+  # Lean/Parser/Term.lean:825-832 requires whitespace before an argument;
+  # adjacent index bangs belong to Init/GetElem.lean:115 postfix syntax.
+  C40 := App '! C40 @tree=(5,$0,(12,(7,2,$2,0),-1,0),0) @template=$0\s!$2 @layout=1:continuation @boundary=1:ws
+  O40 := App '! O40 @tree=(5,$0,(12,(7,2,$2,0),-1,0),0) @template=$0\s!$2 @layout=1:continuation @boundary=1:ws
+  C40 := App '¬ C40 @tree=(5,$0,(12,(7,4,$2,0),-1,0),0) @template=$0\s¬\s$2 @layout=1:continuation @boundary=1:ws
+  O40 := App '¬ O40 @tree=(5,$0,(12,(7,4,$2,0),-1,0),0) @template=$0\s¬\s$2 @layout=1:continuation @boundary=1:ws
+
+  # BEGIN census-selected Init notation, Lean 4.14.0
+  # Fresh nodes use only (tag, children-list12, 0, 0). Every list entry
+  # is a tree or the explicit absent child -1; no source span payloads.
+  # Init/Data/List/Notation.lean:27 permits trailing commas; array and
+  # collection notation retain their separate, non-trailing Elems helper.
+  NotationListOpt := NotationList @tree=$0 @template=$0
+  NotationListOpt := eps @tree=-1 @template=
+  NotationList := Expr NotationListTail @tree=(12,$0,$1,0) @template=$0$1
+  NotationListTail := ', NotationListOpt @tree=$1 @template=,\s$1
+  NotationListTail := eps @tree=-1 @template=
+  # Init/NotationExtra.lean:353 is nonempty and has no withoutPosition.
+  Atom := '{ Elems '} @tree=(400,$1,0,0) @template={$1} @choice-group=1 @choice-rank=0
+  # Init/Core.lean:474. Empty braces keep the prior record tree14.
+  Atom := '∅ @tree=(401,-1,0,0) @template=∅
+  # Init/Notation.lean:456: withoutPosition around binder, type and body.
+  Atom := '{ NotationSubtypeName NotationTypeOpt '// Expr '} @tree=(402,(12,$1,(12,$2,(12,$4,-1,0),0),0),0,0) @template={$1$2\s//\s$4} @layout-clear
+  NotationSubtypeName := ident @tree=(1,s0,e0,0) @template=$0
+  NotationSubtypeName := CmdSoftName @tree=$0 @template=$0
+  NotationSubtypeName := TacUnreserved @tree=$0 @template=$0
+  NotationTypeOpt := ': Expr @tree=$1 @template=\s:\s$1
+  NotationTypeOpt := eps @tree=-1 @template=
+  # Init/NotationExtra.lean:19-21,83,87: one unbracketed group or one
+  # or more bracketed groups; only bracket contents clear saved position.
+  NotationBinderIdent := ident @tree=(1,s0,e0,0) @template=$0
+  NotationBinderIdent := CmdSoftName @tree=$0 @template=$0
+  NotationBinderIdent := TacUnreserved @tree=$0 @template=$0
+  NotationBinderIdent := '_ @tree=(4,0,0,0) @template=_
+  NotationNames := NotationBinderIdent NotationNamesTail @tree=(12,$0,$1,0) @template=$0$1
+  NotationNamesTail := NotationNames @tree=$0 @template=\s$0
+  NotationNamesTail := eps @tree=-1 @template=
+  NotationBinder := NotationNames NotationTypeOpt @tree=(404,(12,$0,(12,$1,-1,0),0),0,0) @template=$0$1
+  NotationBracketBinder := '( NotationNames ': Expr ') @tree=(404,(12,$1,(12,$3,-1,0),0),0,0) @template=($1\s:\s$3) @layout-clear
+  NotationExplicitBinders := NotationBracketBinders @tree=$0 @template=$0
+  NotationExplicitBinders := NotationBinder @tree=(12,$0,-1,0) @template=$0
+  NotationBracketBinders := NotationBracketBinder NotationBracketTail @tree=(12,$0,$1,0) @template=$0$1
+  NotationBracketTail := NotationBracketBinders @tree=$0 @template=\s$0
+  NotationBracketTail := eps @tree=-1 @template=
+  Control := '∃ NotationExplicitBinders ', Expr @tree=(403,(12,$1,(12,$3,-1,0),0),0,0) @template=∃\s$1,\s$3
+  # Init/BinderPredicates.lean:33,60: ∈ and < binder predicates.
+  NotationBinderPred := '∈ Expr @tree=(407,(12,$1,-1,0),0,0) @template=∈\s$1
+  NotationBinderPred := '< Expr @tree=(525,(12,(599,-1,0,0),(12,$1,-1,0),0),0,0) @template=<\s$1
+  Control := '∀ NotationBinderIdent NotationBinderPred ', Expr @tree=(406,(12,$1,(12,$2,(12,$4,-1,0),0),0),0,0) @template=∀\s$1\s$2,\s$4
+  # Init/GetElem.lean:74,115. ! has no withoutPosition around the index;
+  # the plain form clears position only in the bracketed index helper.
+  Proj := Proj '[ Expr '] '! @tree=(411,(12,$0,(12,$2,-1,0),0),0,0) @template=$0[$2]! @boundary=1:no-ws,4:no-ws
+  TermArg := TermArg '[ Expr '] '! @tree=(411,(12,$0,(12,$2,-1,0),0),0,0) @template=$0[$2]! @boundary=1:no-ws,4:no-ws
+  Proj := Proj '[ NotationIndex '] @tree=(412,(12,$0,(12,$2,-1,0),0),0,0) @template=$0[$2] @boundary=1:no-ws
+  TermArg := TermArg '[ NotationIndex '] @tree=(412,(12,$0,(12,$2,-1,0),0),0,0) @template=$0[$2] @boundary=1:no-ws
+  NotationIndex := Expr @tree=$0 @template=$0 @layout-clear
+  # Init/Data/Range.lean:52-53 clear position inside the brackets.
+  Atom := '[ ': NotationIndex '] @tree=(413,(12,$2,-1,0),0,0) @template=[:$2] @layout-clear
+  Atom := '[ NotationIndex ': NotationIndex '] @tree=(414,(12,$1,(12,$3,-1,0),0),0,0) @template=[$1:$3] @layout-clear
+  # Lean/Parser/StrInterpolation.lean:13-56: the odd alternating list is
+  # literal chunk, parsed term, literal chunk, ... . The chunk3 leaves
+  # retain only their lexical spans; braces and quotes belong to chunks.
+  NotationInterp := interpClosed @tree=(408,(12,(3,s0,e0,0),-1,0),0,0) @template=$0
+  NotationInterp := interpOpen NotationInterpTerm NotationInterpTail @tree=(408,(12,(3,s0,e0,0),(12,$1,$2,0),0),0,0) @template=$0$1$2
+  NotationInterpTail := interpEnd @tree=(12,(3,s0,e0,0),-1,0) @template=$0
+  NotationInterpTail := interpMiddle NotationInterpTerm NotationInterpTail @tree=(12,(3,s0,e0,0),(12,$1,$2,0),0) @template=$0$1$2
+  NotationInterpTerm := Expr @tree=$0 @template=$0 @layout-clear
+  # Init/Data/ToString/Macro.lean:10; Lean/Message.lean:508.
+  Atom := 's! NotationInterp @tree=(409,(12,$1,-1,0),0,0) @template=s!$1
+  Atom := 'm! NotationInterp @tree=(410,(12,$1,-1,0),0,0) @template=m!$1
+  # Lean/Exception.lean:153. The interpolation branch precedes term.
+  # The generic term branch excludes a quote start to keep the valid
+  # interpolation tree unique; malformed-quote fallback is a named gap.
+  C110 := 'throwError NotationInterp @tree=(415,(12,$1,-1,0),0,0) @template=throwError\s$1
+  Control := 'throwError NotationErrorTerm @tree=(415,(12,$1,-1,0),0,0) @template=throwError\s$1
+  NotationErrorTerm := Expr @tree=$0 @template=$0 @not-start=34
+  # END census-selected Init notation
+residues
+  6 desugar
+  17 do_expansion
+  60 header
+  61 unclosed
+  62 syntax
+  63 unknown_form
+  64 arity
+  65 bad_binder
+  66 input_cap
+  67 grammar
+  68 grammar_cap
+  69 item_cap
+  70 forest_cap
+  71 budget
+  72 ambiguity
+  73 constructor_pattern
+  74 constructor_operand
+  75 no_inverse
+  76 template
+  77 lexical_regex
+  78 layout_constraint
+  79 longest_cycle
+
+probes
+  pair "authored-binder" "def f (x : Int) : Int := x + 1\n" "def f (x : Int) : Int := x + 1\n"
+  pair "fresh-word-bridge" "def f (x : UInt32) : UInt32 := x + 1\n" "def f (x : UInt32) : UInt32 := x + 1\n"
+  pair "paren-let-app" "def add2 (x : Int) (y : Int) : Int := x + y\ndef plet (x : Int) : Bool := x > 0 && (let a : Int := add2 x 1; let b : Int := add2 a 2; b > 0)\n" "def add2 (x : Int) (y : Int) : Int := x + y\ndef plet (x : Int) : Bool := x > 0 && (let a : Int := add2 x 1; let b : Int := add2 a 2; b > 0)\n"
+  treepair "tuple-lambda-untyped-tree" "def tupleFirst (xs : List (Prod Nat Nat)) : List Nat := xs.map (fun (x, y) => x)\n" "def tupleFirst (xs : List (Prod Nat Nat)) : List Nat := xs.map (fun (x, y) => x)\n"
+  treepair "tuple-lambda-typed-tree" "def tupleTyped (xs : List (Prod Nat Nat)) : List Nat := xs.map (fun ((x, y) : Prod Nat Nat) => x)\n" "def tupleTyped (xs : List (Prod Nat Nat)) : List Nat := xs.map (fun ((x, y) : Prod Nat Nat) => x)\n"
+  treepair "tuple-lambda-nested-tree" "def tupleNested (xs : List (Prod Nat (Prod Nat Nat))) : List Nat := xs.map (fun (x, (y, z)) => z)\n" "def tupleNested (xs : List (Prod Nat (Prod Nat Nat))) : List Nat := xs.map (fun (x, (y, z)) => z)\n"
+  treepair "tuple-lambda-mixed-tree" "def tupleMixed (xs : List (Prod Nat Nat)) : Nat := xs.foldl (fun z (x, y) => z + x) 0\n" "def tupleMixed (xs : List (Prod Nat Nat)) : Nat := xs.foldl (fun z (x, y) => z + x) 0\n"
+  treepair "array-lit-arg-tree" "def arrLen (f : Array Nat -> Nat) : Nat := f #[1, 2]\n" "def arrLen (f : Array Nat -> Nat) : Nat := f #[1, 2]\n"
+  treepair "nested-let-if-tree" "def nlet : List Nat -> Nat -> Nat\n  | [], b => b\n  | x :: xs, b =>\n    let b := if x == 0 then b else\n      let y := x + 1\n      y + b\n    nlet xs b\n" "def nlet : List Nat -> Nat -> Nat\n  | [], b => b\n  | x :: xs, b =>\n    let b := if x == 0 then b else\n      let y := x + 1\n      y + b\n    nlet xs b\n"
+  treepair "grouped-arg-tree" "def g (h : Nat -> Nat) (x : Nat) : Nat := h x\n" "def g (h : Nat -> Nat) (x : Nat) : Nat := h ⟮x⟯\n"
+  mutant "swapped-binary-forms" "def f (x : Int) : Int := x + 1\n" "(6,1,$0,$2)" "MUTANT_SLOT" "(6,2,$0,$2)" "(6,1,$0,$2)" "MUTANT_SLOT" "(6,2,$0,$2)"
+  mutant "dropped-binder-type" "def f (x : Int) : Int := x + 1\n" "@template=($1\\s:\\s$3)\\s$5" "@template=($1)\\s$5"
+  mutant "swapped-add-mul-prec" "def g (x : Int) (y : Int) : Int := x + y * 2\n" "C65 := C65 '+ C67 @tree=(6,1,$0,$2) @template=$0\\s+\\s$2" "C65 := C65 '* C67 @tree=(6,3,$0,$2) @template=$0\\s*\\s$2" "O65 := C65 '+ O67 @tree=(6,1,$0,$2) @template=$0\\s+\\s$2" "O65 := C65 '* O67 @tree=(6,3,$0,$2) @template=$0\\s*\\s$2" "C70 := C70 '* C75 @tree=(6,3,$0,$2) @template=$0\\s*\\s$2" "C70 := C70 '+ C75 @tree=(6,1,$0,$2) @template=$0\\s+\\s$2" "O70 := C70 '* O75 @tree=(6,3,$0,$2) @template=$0\\s*\\s$2" "O70 := C70 '+ O75 @tree=(6,1,$0,$2) @template=$0\\s+\\s$2"
+  refuse "unclosed-comment" "def f : Int := 1 /- open" "61" "16"
+  refuse "unclosed-string" "def f : String := \"open" "61" "18"
+  refuse "syntax-dangling-op" "def f (x : Int) : Int := x +\n" "62" "29"
+  refuse "forall-lt-dangling" "def p (n : Nat) : Prop := ∀ i <\n" "62" "34"

@@ -1,6 +1,0 @@
-# the source table sidecar: the .rscm beside this file was emitted from the .rsd beside this file
-# by the current emitter (emitTyped, the current emitter's lowered form) under stock Lean 4.14.0 on
-# the benchmark source at e1e122c (closure_claim = 0). It names both hashes; edit neither file.
-rscm_file	benchmarks/fannkuch.rscm	rscm_sha256	725fbaac405c027fb56dc04e5ddb10f85037488ccd7580168de755ceb231d5a8	rscm_bytes	2516
-rsd_file	benchmarks/fannkuchredux.rsd	rsd_sha256	3ac5801a3675b986ad20d305eea35d0f01bbe6771ee26c067dd879eaf81f4bdb
-root	fannkuch	entry	4	declared_arity	1	modules	15

@@ -1,6 +1,0 @@
-# the source table sidecar: the .rscm beside this file was emitted from the .rsd beside this file
-# by the current emitter (emitTyped, the current emitter lowered form) under stock Lean 4.14.0 on
-# the benchmark source revision 2 (closure_claim = 0). It names both hashes; edit neither file.
-rscm_file	benchmarks/treebitonic.rscm	rscm_sha256	be08f9f4de1b6f72b7aa802cfbb3bdb42719ef1a392f02ece198f2fffb3827b1	rscm_bytes	18279
-rsd_file	benchmarks/treebitonic.rsd	rsd_sha256	71e5870f899d995f0f0233d6af2c67709ad7fede9436cae2eaee22c3e994f18b
-root	treeBitonic	entry	29	declared_arity	2	modules	32

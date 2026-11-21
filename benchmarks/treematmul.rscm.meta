@@ -1,6 +1,0 @@
-# the source table sidecar: the .rscm beside this file was emitted from the .rsd beside this file
-# by the current emitter (emitTyped, the current emitter lowered form) under stock Lean 4.14.0 on
-# the benchmark source revision 2 (closure_claim = 0). It names both hashes; edit neither file.
-rscm_file	benchmarks/treematmul.rscm	rscm_sha256	4fa8d1df283cb3353dadc617e2fde02b9fcb12ee82c59a753731eef72253e4cf	rscm_bytes	31831
-rsd_file	benchmarks/treematmul.rsd	rsd_sha256	eb1805a7efb8c0095a4105fbe57efbd0ad94775fd1d83b89590103a2028320c7
-root	treeMatmul	entry	26	declared_arity	4	modules	31

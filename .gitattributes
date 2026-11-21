@@ -1,2 +1,0 @@
-# rsd source uses Lean 4 surface syntax (a Lean 4.14 syntax subset), so GitHub highlights it as Lean.
-*.rsd linguist-language=Lean

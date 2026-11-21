@@ -19,7 +19,6 @@
 -- fuel guards an earlier test already decided are removed (lib/lrc/GuardElim.rsd).
 -- After expandResetReuse, drop specialization (lib/lrc/DropSpec.rsd), which Lean 4.14 does not have.
 -- A declaration without a body goes through every pass as it is.
-import Lib.Lrc.Closures
 import Lib.Lrc.Inline
 import Lib.Lrc.Cse
 import Lib.Lrc.GuardElim
@@ -114,12 +113,7 @@ def plDeadResults : List Decl → List Decl
 -- `nImg` is the number of the image's functions.
 def pipelineWith (opts : Nat) (nImg : Nat) (decls : List Decl) : List Decl :=
   let inl := opts % 4
-  -- the six r2 forms become r1 forms before anything reads them (lib/lrc/Closures.rsd); an r1 program is unchanged.
-  -- Option 2048: the module's object fields are four bytes (rsc's layer `narrow`), which is another box for a
-  -- scalar of 32 bits here, and a node's scalar fields of two and four bytes below (lib/lrc/Pack.rsd
-  -- `packScalarsW`); no other pass reads the option.
-  let decls := lowerR2N (opts / 2048 % 2 == 1) decls
-  let decls := if opts / 16 % 2 == 0 then packScalarsW (opts / 2048 % 2 == 1) decls else decls
+  let decls := if opts / 16 % 2 == 0 then packScalars decls else decls
   -- range facts (lib/lrc/Range.rsd) on the declarations as translated: every scalar still goes
   -- into a fresh `ctor`; before the constant cells, whose scalars no store shows
   -- A function called once goes into its caller first: a clone made below would give it a second call.
@@ -162,20 +156,11 @@ def pipelineWith (opts : Nat) (nImg : Nat) (decls : List Decl) : List Decl :=
   let ds := plDropSpec ds
   -- Lean's second pushProj, going on past literals and operators (lib/lrc/SinkProj.rsd)
   let ds := sinkProj ds
-  -- after the inlining the reads go down once more: into the code that followed an inlined call. Before that
-  -- a small join point goes to each of its jumps and what a jump knows is folded (lib/lrc/JoinOnce.rsd
-  -- `joinSmall`, `foldKnown`): the short form of an integer operation jumps with a box.
-  -- The three run twice: `a && b && c` is a join point inside a join point, and the outer one is small
-  -- enough for its jumps only when the inner one has gone to its own (nqueens-kk's `safe`: the jump that
-  -- carries `false` then returns at once, and the other jump is the last, so the test it carries is read
-  -- by a case directly below it).
-  let ds := if inl == 2 then
-      sinkProj (guardElim nImg (joinOnce (foldKnown (joinSmall (joinOnce (foldKnown (joinSmall (inlineDecls nImg ds))))))))
-    else ds
+  -- after the inlining the reads go down once more: into the code that followed an inlined call
+  let ds := if inl == 2 then sinkProj (guardElim nImg (joinOnce (inlineDecls nImg ds))) else ds
   let ds := if opts / 8 % 2 == 0 then trmc nImg (opts / 256 % 4) ds else ds
-  -- last: where the fuel is known to be above 1, a self tail call need not test it; and a test stands
-  -- directly before the case that reads it (lib/lrc/JoinOnce.rsd `condDown`)
-  condDown (fuelKnown nImg ds)
+  -- last: where the fuel is known to be above 1, a self tail call need not test it
+  fuelKnown nImg ds
 
 -- The options the stage runs with unless a layer bit says otherwise: inlining after the passes.
 -- Measured on one VM (job fable-bo-native2, the native route): rbtree 2973 ms without it, 2651

@@ -1,0 +1,10 @@
+# CONTRIBUTING and SECURITY
+
+English | [中文](CONTRIBUTING-SECURITY.zh-CN.md)
+
+Issues and discussions on the public repository. Security reports
+through GitHub's private security advisory on the repository.
+
+External contributions: the admission path for outside results (publish
+by q, checked admission) is not in 0.2; until it exists, contributions
+are reviewed as issues.
