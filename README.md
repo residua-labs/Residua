@@ -66,40 +66,49 @@ Then compile a program to WebAssembly (paths as the recipe leaves them):
 
 ## Example
 
+```rust
+enum Tree<T> { leaf, node(Tree<T>, T, Tree<T>) }
+
+fn sum(t: Tree<Nat>) -> Nat {
+  match t {
+    Tree::leaf => 0,
+    Tree::node(l, x, r) => sum(l) + x + sum(r)
+  }
+}
+
+fn mirror<T>(t: Tree<T>) -> Tree<T> {
+  match t {
+    Tree::leaf => Tree::leaf,
+    Tree::node(l, x, r) => Tree::node(mirror(r), x, mirror(l))
+  }
+}
+
+theorem sum_mirror(t: Tree<Nat>): sum(mirror(t)) = sum(t) by {
+  induction t with
+  | leaf => rfl
+  | node l x r hl hr => simp [sum, mirror, hl, hr]; omega
+}
+```
+
+A program and a theorem about it, in one language: `sum_mirror` holds for every tree, and its proof is checked by the kernel. The spelling is Rust's; the meaning is the type theory's. Values do not change, every `match` covers all cases, and every function terminates.
+
+A Rust form that would mean something else here is refused by name, with the form to write:
+
+| Written | Refused as | Write instead |
+|---|---|---|
+| `let mut x = 1;` | `closed_mut` | `let x = 1;` |
+| `f(&x)` | `closed_borrow` | `f(x)` |
+| `return x` | `closed_return` | `x`, as the last expression of the block |
+| `for y in xs { … }` | `closed_loop` | recursion or a fold |
+| `if b { 1 }` | `if_without_else` | `if b { 1 } else { 0 }` |
+| `a - b` on `Nat` | `nat_subtraction` | `Nat::sub(a, b)`, which stops at 0 |
+| `a / b` on `Int` | `int_division` | `Int::tdiv(a, b)` (truncating) or `Int::ediv(a, b)` (Euclidean) |
+
+**Status.** This surface is in development and not in the 0.3 archive. Today it is a syntax extension of Lean 4.14: stock Lean elaborates it, and the example above has the same kernel terms as its Lean spelling. The compiler in 0.3 reads the bootstrap surface, a subset of Lean 4.14 ([docs/LANGUAGE.md](docs/LANGUAGE.md)); its own sources are written in it, and so is the program of the quick start:
+
 ```lean
 -- rsd/examples/answer.rsd
 def main : Int := 42
-```
-
-One program, three surface spellings — the round-trip check in
-`docs/surfaces/` parses each to the same tree:
-
-```lean
--- examples/surfaces/do.rsd  (the .rsd surface)
-def sumList (xs : List Nat) : Nat := Id.run do
-  let mut total := 0
-  for x in xs do
-    total := total + x
-  return total
-```
-
-```js
-// examples/surfaces/do.rsj  (the .rsj surface)
-let sumList = (xs: List(Nat), ): Nat => Id.run(do: {
-  syntax_225(syntax_134(tree_name(total), tree_none, tree_num(0)))
-  syntax_206(tree_12(syntax_207(tree_none, tree_name(x), tree_name(xs)), tree_none), tree_46_general(syntax_223(tree_name(total), tree_none, binary_1(tree_name(total), tree_name(x))), ))
-  return total;
-});
-```
-
-```racket
-;; examples/surfaces/do.rsm  (the .rsm surface)
-#lang rsd
-(define (sumList [xs : (List Nat)] ) : Nat (Id.run (do:
-  (#:syntax225 (#:syntax134 (#:tree-name total) #:none (#:tree-num 0)))
-  (#:syntax206 (#:tree12 (#:syntax207 #:none (#:tree-name x) (#:tree-name xs)) #:none) (#:tree46-general (#:syntax223 (#:tree-name total) #:none (#:binary1 (#:tree-name total) (#:tree-name x))) ))
-  (return total)
-)))
 ```
 
 ## Documentation
@@ -118,7 +127,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md). Development happens in the project's pri
 | [0.1.1](https://github.com/residua-labs/Residua/releases/tag/rsd-0.1.1) | 2026-11-19 | `165690af…` | patch: performance record ships, attribution completed |
 | [0.1.2](https://github.com/residua-labs/Residua/releases/tag/rsd-0.1.2) | 2026-11-19 | `a3185221…` | patch: benchmark and differential test suites shipped |
 | [0.2](https://github.com/residua-labs/Residua/releases/tag/rsd-0.2) | 2026-11-20 | `151bfd4f…` | q format v1, syntax engine, effect semantics |
-| [0.3](https://github.com/residua-labs/Residua/releases/tag/rsd-0.3) | 2026-11-24 | see the release page | rsd build tool, UInt64, recut seed, restored suites, open-source docs |
+| [0.3](https://github.com/residua-labs/Residua/releases/tag/rsd-0.3) | 2026-11-24 | `b07ae731…` | rsd build tool, UInt64, recut seed, restored suites, open-source docs |
 
 Full history: [CHANGELOG.md](CHANGELOG.md).
 

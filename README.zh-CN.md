@@ -64,39 +64,49 @@ env -i PATH=/usr/bin:/bin bash --noprofile --norc
 
 ## 示例
 
+```rust
+enum Tree<T> { leaf, node(Tree<T>, T, Tree<T>) }
+
+fn sum(t: Tree<Nat>) -> Nat {
+  match t {
+    Tree::leaf => 0,
+    Tree::node(l, x, r) => sum(l) + x + sum(r)
+  }
+}
+
+fn mirror<T>(t: Tree<T>) -> Tree<T> {
+  match t {
+    Tree::leaf => Tree::leaf,
+    Tree::node(l, x, r) => Tree::node(mirror(r), x, mirror(l))
+  }
+}
+
+theorem sum_mirror(t: Tree<Nat>): sum(mirror(t)) = sum(t) by {
+  induction t with
+  | leaf => rfl
+  | node l x r hl hr => simp [sum, mirror, hl, hr]; omega
+}
+```
+
+程序和关于它的定理写在同一种语言里：`sum_mirror` 对每一棵树都成立，证明由内核检查。写法是 Rust 的，含义是类型论的：值不可变，每个 `match` 覆盖所有情形，每个函数都终止。
+
+在这里含义会不同的 Rust 写法，一律按名拒绝，并给出该写的形式：
+
+| 写下的形式 | 拒绝名 | 改写为 |
+|---|---|---|
+| `let mut x = 1;` | `closed_mut` | `let x = 1;` |
+| `f(&x)` | `closed_borrow` | `f(x)` |
+| `return x` | `closed_return` | `x`，作为块的最后一个表达式 |
+| `for y in xs { … }` | `closed_loop` | 递归或折叠 |
+| `if b { 1 }` | `if_without_else` | `if b { 1 } else { 0 }` |
+| `Nat` 上的 `a - b` | `nat_subtraction` | `Nat::sub(a, b)`，到 0 为止 |
+| `Int` 上的 `a / b` | `int_division` | `Int::tdiv(a, b)`（截断）或 `Int::ediv(a, b)`（欧几里得） |
+
+**状态。** 这套表面语法还在开发中，不在 0.3 归档里。目前它是 Lean 4.14 的语法扩展：由原版 Lean 繁饰，上面的例子与其 Lean 写法的内核项相同。0.3 的编译器读的是自举表面，即 Lean 4.14 的一个子集（[docs/LANGUAGE.md](docs/LANGUAGE.md)）；它自己的源码用它写成，快速开始里的程序也是：
+
 ```lean
 -- rsd/examples/answer.rsd
 def main : Int := 42
-```
-
-同一个程序的三种表面写法——`docs/surfaces/` 中的往返检查把每种写法解析到同一棵树：
-
-```lean
--- examples/surfaces/do.rsd（.rsd 表面）
-def sumList (xs : List Nat) : Nat := Id.run do
-  let mut total := 0
-  for x in xs do
-    total := total + x
-  return total
-```
-
-```js
-// examples/surfaces/do.rsj（.rsj 表面）
-let sumList = (xs: List(Nat), ): Nat => Id.run(do: {
-  syntax_225(syntax_134(tree_name(total), tree_none, tree_num(0)))
-  syntax_206(tree_12(syntax_207(tree_none, tree_name(x), tree_name(xs)), tree_none), tree_46_general(syntax_223(tree_name(total), tree_none, binary_1(tree_name(total), tree_name(x))), ))
-  return total;
-});
-```
-
-```racket
-;; examples/surfaces/do.rsm（.rsm 表面）
-#lang rsd
-(define (sumList [xs : (List Nat)] ) : Nat (Id.run (do:
-  (#:syntax225 (#:syntax134 (#:tree-name total) #:none (#:tree-num 0)))
-  (#:syntax206 (#:tree12 (#:syntax207 #:none (#:tree-name x) (#:tree-name xs)) #:none) (#:tree46-general (#:syntax223 (#:tree-name total) #:none (#:binary1 (#:tree-name total) (#:tree-name x))) ))
-  (return total)
-)))
 ```
 
 ## 文档
@@ -115,7 +125,7 @@ let sumList = (xs: List(Nat), ): Nat => Id.run(do: {
 | [0.1.1](https://github.com/residua-labs/Residua/releases/tag/rsd-0.1.1) | 2026-11-19 | `165690af…` | 补丁：性能记录随附，署名补全 |
 | [0.1.2](https://github.com/residua-labs/Residua/releases/tag/rsd-0.1.2) | 2026-11-19 | `a3185221…` | 补丁：基准与差分测试套件随附 |
 | [0.2](https://github.com/residua-labs/Residua/releases/tag/rsd-0.2) | 2026-11-20 | `151bfd4f…` | q 格式 v1、语法引擎、效应语义 |
-| [0.3](https://github.com/residua-labs/Residua/releases/tag/rsd-0.3) | 2026-11-24 | 见发布页 | rsd 构建工具、UInt64、重切 seed、恢复套件、开源文档 |
+| [0.3](https://github.com/residua-labs/Residua/releases/tag/rsd-0.3) | 2026-11-24 | `b07ae731…` | rsd 构建工具、UInt64、重切 seed、恢复套件、开源文档 |
 
 完整历史：[CHANGELOG.zh-CN.md](CHANGELOG.zh-CN.md)。
 
