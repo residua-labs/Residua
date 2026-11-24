@@ -1,0 +1,65 @@
+-- Pure JSONL byte boundary. UTF-8 validation reuses the Rsd RVAL codec;
+-- framing preserves blank records, as Rust BufRead.lines does. No host IO.
+namespace Lib.Rsd.QFloorBytes
+
+inductive Residue where
+  | readRefused
+
+def residueName : Residue -> String
+  | Residue.readRefused => "nf_scm_q_read"
+
+structure Request where
+  bytes : List Int
+structure State where
+  code : Int
+  bytes : List Int
+  deriving BEq
+structure Result where
+  state : State
+  residue : Option Residue
+
+def frames : List Int -> List Int -> List (List Int)
+  | [], acc => if acc.isEmpty then [] else [acc.reverse]
+  | 10 :: rest, acc => acc.reverse :: frames rest []
+  | b :: rest, acc => frames rest (b :: acc)
+
+def outputBytes (replies : List String) : List Int :=
+  Lib.Rsd.Codec.utf8 (if replies.isEmpty then "" else String.intercalate "\n" replies ++ "\n").toList
+
+-- BufRead.lines refuses the first invalid UTF-8 line and keeps replies to
+-- earlier lines. It does not silently discard an interior blank record.
+def runLines : List (List Int) -> List String -> Result
+  | [], replies => { state := { code := 0, bytes := outputBytes replies.reverse }, residue := none }
+  | line :: rest, replies =>
+    match Lib.Rsd.Codec.decodeUtf8 line with
+    | none => { state := { code := 2, bytes := outputBytes replies.reverse }, residue := some .readRefused }
+    | some source => runLines rest ((Lib.Rsd.QFloor.decision { source }).state.reply :: replies)
+
+def decision (r : Request) : Result :=
+  runLines (frames r.bytes []) []
+
+
+
+def residue? (r : Request) (_s : State) : Option Residue := (decision r).residue
+def admissible (r : Request) (s : State) : Bool := (residue? r (id s)).isNone
+def runNF (r : Request) (_s : State) : Result := decision r
+
+-- NF-CORRECT-0 r2: the checked decision; runNF retains the original
+-- transition and its failure-state observations for existing callers.
+def decide (r : Request) (_s : State) : Except Residue State :=
+  let answer := runNF r _s
+  match answer.residue with
+  | some residue => .error residue
+  | none => .ok answer.state
+
+
+
+def rowsBytes (oracle actual : List Int) : State :=
+  match Lib.Rsd.Codec.decodeUtf8 oracle, Lib.Rsd.Codec.decodeUtf8 actual with
+  | some oracle, some actual =>
+    let r : Lib.Rsd.QFloorRows.Request := { oracle, actual }
+    { code := if (Lib.Rsd.QFloorRows.decision r).residue.isNone then 0 else 1,
+      bytes := Lib.Rsd.Codec.utf8 (Lib.Rsd.QFloorRows.report r).toList }
+  | _, _ => { code := 1, bytes := Lib.Rsd.Codec.utf8 "nf_qfloor_utf8\n".toList }
+
+end Lib.Rsd.QFloorBytes

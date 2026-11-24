@@ -1,0 +1,188 @@
+-- Rsd scheduler as a consumer of incrNF. docs/RSD.md 2c.
+-- incrNF's memo class is (bodyQ, fuel, inputQs). sigma is the complete outcome.
+-- residue? is the outcome residue. Cutoff is exact equality of that class.
+-- There is no user predicate and no second stabilizer in this file.
+--
+-- The spec's dynamic dependencies are the inputQs. They are recorded in
+-- discovery order, duplicates kept, and they become a key only when the
+-- read ledger is closed. Until then the node is suspended. An older read
+-- list is a hint, and only when its control q matches; the hint is not a key.
+-- A changed control q requires a new discovery (the spec's M23).
+--
+-- The shared SCM engine is lib/incr. This file is its consumer key,
+-- domain check and cutoff interface. EngineQuotation links the same engine.
+-- closure_claim = 0.
+namespace Lib.Rsd.Schedule
+
+def byteOk (n : Int) : Bool :=
+  n >= 0 && n < 256
+
+def qBytesOk : List Int -> Bool
+  | [] => true
+  | x :: xs => byteOk x && qBytesOk xs
+
+def qOk (bytes : List Int) : Bool :=
+  bytes.length == 32 && qBytesOk bytes
+
+def eqQ : (List Int) -> (List Int) -> Bool
+  | [], [] => true
+  | x :: xs, y :: ys => x == y && eqQ xs ys
+  | _, _ => false
+
+def eqQs : List (List Int) -> List (List Int) -> Bool
+  | [], [] => true
+  | x :: xs, y :: ys => eqQ x y && eqQs xs ys
+  | _, _ => false
+
+def qsOk : List (List Int) -> Bool
+  | [] => true
+  | q :: qs => qOk q && qsOk qs
+
+/-- Complete memo class. Fuel is in the key because exhaustion is an outcome. -/
+structure MemoKey where
+  bodyQ : (List Int)
+  fuel : Int
+  inputQs : List (List Int)
+
+structure Outcome where
+  valueQ : (List Int)
+  residue : String
+  fuelUsed : Int
+
+/-- Reads discovered while the node ran. `controlQ` is the raw source plus
+    the declared control inputs. `reads` is the ordered observation list. -/
+structure Discovered where
+  controlQ : (List Int)
+  reads : List (List Int)
+
+structure Sched where
+  ready : Bool
+  key : MemoKey
+
+-- Memo fuel crosses the shared engine's checked i64 wire boundary.
+def fuelOk (fuel : Int) : Bool :=
+  fuel >= 0 && fuel <= 9223372036854775807
+
+def keyOk (k : MemoKey) : Bool :=
+  qOk k.bodyQ && fuelOk k.fuel && qsOk k.inputQs
+
+def sameKey (a b : MemoKey) : Bool :=
+  eqQ a.bodyQ b.bodyQ && a.fuel == b.fuel && eqQs a.inputQs b.inputQs
+
+def closeDiscovery (bodyQ : (List Int)) (fuel : Int) (d : Discovered) (closed : Bool) : Sched :=
+  if closed then
+    { ready := true, key := { bodyQ := bodyQ, fuel := fuel, inputQs := d.reads } }
+  else
+    { ready := false, key := { bodyQ := [], fuel := 0, inputQs := [] } }
+
+/-- A previous read list may be used as a hint only for the same control q.
+    It is not admitted as a key by this function. -/
+def hintAdmissible (old new : Discovered) : Bool :=
+  eqQ old.controlQ new.controlQ
+
+structure Lookup where
+  hit : Bool
+  outcome : Outcome
+
+def miss (residue : String) : Lookup :=
+  { hit := false, outcome := { valueQ := [], residue := residue, fuelUsed := 0 } }
+
+inductive Residue where
+  | readLedgerOpen
+  | discoveryControlChanged
+  | consumerDomainRefused
+  | unobservedMissing
+
+def residueName : Residue -> String
+  | Residue.readLedgerOpen => "nf_rsd_read_ledger_open"
+  | Residue.discoveryControlChanged => "nf_rsd_discovery_control_changed"
+  | Residue.consumerDomainRefused => "nf_rsd_consumer_domain_refused"
+  | Residue.unobservedMissing => "nf_rsd_unobserved_missing"
+
+/-- A request contains both complete memo classes and the whole stored outcome.
+    Discovery produces a request only after its ordered read ledger closes. -/
+structure Request where
+  storedKey : MemoKey
+  stored : Outcome
+  request : MemoKey
+  ledgerClosed : Bool
+  controlQ : List Int
+  discoveredControlQ : List Int
+
+structure Result where
+  state : Lookup
+  residue : Option Residue
+
+-- q is a complete identity preimage. Hashing is the caller's codec.
+
+
+
+
+def refusalLookup : Residue -> Lookup
+  | Residue.readLedgerOpen => miss "nf_rsd_read_ledger_open"
+  | Residue.discoveryControlChanged => miss "nf_rsd_discovery_control_changed"
+  | Residue.consumerDomainRefused => miss "incr_consumer_domain_refused"
+  | Residue.unobservedMissing => miss "incr_unobserved_missing"
+
+def refused (cause : Residue) : Result :=
+  { state := refusalLookup cause, residue := some cause }
+
+/-- Admission and the returned state share this one decision. The complete
+    stored outcome is copied only in the admitted branch. -/
+def decision (r : Request) : Result :=
+  if !r.ledgerClosed then refused Residue.readLedgerOpen
+  else if !keyOk r.storedKey || !keyOk r.request || !qOk r.controlQ || !qOk r.discoveredControlQ then refused Residue.consumerDomainRefused
+  else if !eqQ r.controlQ r.discoveredControlQ then refused Residue.discoveryControlChanged
+  else if !sameKey r.storedKey r.request then refused Residue.unobservedMissing
+  else { state := { hit := true, outcome := r.stored }, residue := none }
+
+def residue? (r : Request) (s : Lookup) : Option Residue := (decision r).residue
+
+def admissible (r : Request) (s : Lookup) : Bool := (residue? r (id s)).isNone
+
+def runNF (r : Request) (s : Lookup) : Result := decision r
+
+-- NF-CORRECT-0 r2: the checked decision; runNF retains the original
+-- transition and its failure-state observations for existing callers.
+def decide (r : Request) (s : Lookup) : Except Residue Lookup :=
+  let answer := runNF r s
+  match answer.residue with
+  | some residue => .error residue
+  | none => .ok answer.state
+
+
+/-- Compatibility surface for an already closed complete memo class. It goes
+    through the same NF admission; the existing outcome names stay unchanged. -/
+def lookup (storedKey : MemoKey) (stored : Outcome) (request : MemoKey) : Lookup :=
+  let r : Request :=
+    { storedKey := storedKey, stored := stored, request := request,
+      ledgerClosed := true, controlQ := request.bodyQ, discoveredControlQ := request.bodyQ }
+  (runNF r (miss "incr_unobserved_missing")).state
+
+/-- Reads retain their discovery order and duplicates. An open ledger cannot
+    be used as a memo class, even when its current prefix matches a cache. -/
+def discoveryRequest (storedKey : MemoKey) (stored : Outcome) (bodyQ controlQ : (List Int))
+    (fuel : Int) (d : Discovered) (closed : Bool) : Request :=
+  { storedKey := storedKey, stored := stored,
+    request := { bodyQ := bodyQ, fuel := fuel, inputQs := d.reads },
+    ledgerClosed := closed, controlQ := controlQ, discoveredControlQ := d.controlQ }
+
+def lookupDiscovered (storedKey : MemoKey) (stored : Outcome) (bodyQ controlQ : (List Int))
+    (fuel : Int) (d : Discovered) (closed : Bool) : Result :=
+  runNF (discoveryRequest storedKey stored bodyQ controlQ fuel d closed)
+    (miss "incr_unobserved_missing")
+
+-- n is the requested output length, not a traversal resource bound.
+def repByte : Nat -> Int -> List Int
+  | 0, _ => []
+  | n + 1, b => b :: repByte n b
+
+def qA : (List Int) := repByte 32 1
+def qB : (List Int) := repByte 32 2
+def qC : (List Int) := repByte 32 3
+
+def key1 : MemoKey := { bodyQ := qA, fuel := 10, inputQs := [qB] }
+def out1 : Outcome := { valueQ := qC, residue := "incr_fuel_exhausted", fuelUsed := 10 }
+def disc : Discovered := { controlQ := qA, reads := [qB, qC] }
+
+end Lib.Rsd.Schedule

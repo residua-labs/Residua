@@ -1,0 +1,4 @@
+import Init.Data.Nat.Basic;
+module Answer = {
+  let value = (): Nat => 41 + 1;
+};

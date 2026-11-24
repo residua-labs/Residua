@@ -1,0 +1,8 @@
+type U =
+  | wrap(U): U -> U
+  | leaf: U
+;
+let build = (): Nat -> U => function {
+  | 0 => U.leaf;
+  | n + 1 => U.wrap((build(n)));
+};

@@ -1,0 +1,23 @@
+-- C6.1 read class. A path outside the declared list is nonhermetic_tool.
+-- The sandbox profile uses real paths. Those paths are not a cache key.
+-- The named bootstrap is B-SANDBOX-LEAN. closure_claim = 0.
+namespace Lib.Rsd.Sandbox
+
+def bootstrap : String := "B-SANDBOX-LEAN"
+def undeclaredResidue : String := "nonhermetic_tool"
+
+def allows (declared : List String) (path : String) : Bool :=
+  match declared with
+  | [] => false
+  | d :: rest => d == path || allows rest path
+
+def classifyRead (declared : List String) (path : String) : String :=
+  if allows declared path then "" else undeclaredResidue
+
+end Lib.Rsd.Sandbox
+
+#guard Lib.Rsd.Sandbox.bootstrap == "B-SANDBOX-LEAN"
+#guard Lib.Rsd.Sandbox.undeclaredResidue == "nonhermetic_tool"
+#guard Lib.Rsd.Sandbox.classifyRead ["src"] "src" == ""
+#guard Lib.Rsd.Sandbox.classifyRead ["src"] "other" == "nonhermetic_tool"
+#guard Lib.Rsd.Sandbox.classifyRead [] "src" == "nonhermetic_tool"

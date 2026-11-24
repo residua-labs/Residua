@@ -2,14 +2,13 @@
 
 [English](effect-sem.md) | 中文
 
-状态：**随 0.2 版发货**；摘要另见 `docs/RELEASE-NOTES.zh-CN.md`。
-`closure_claim = 0`。
+状态：**随 0.3 版发货**；摘要另见 `docs/RELEASE-NOTES.zh-CN.md`。
 
 ## 提供的内容
 
 `semantics/Effect/` 是执行层边界的 Lean 4.14 形式语义——当
-运行时提供文件与会话时，程序所遇到的宿主机契约，对照
-`EFFECT-ABI-0` 接口陈述：
+运行时提供文件与会话时，程序所遇到的宿主机契约，对照执行层 ABI 接口
+陈述：
 
 - **E0** 轨迹语义：执行的重放，以及观测量决定完整轨迹与前沿。
 - **E1** 线格式与判断：完整的 T/R 帧清单、发送/接收/封签迁移、
@@ -26,9 +25,8 @@
 
 - 源码修订：`3ed96aec8109cf10f0a2b3433eb5693e7c9ac1ff`（在开发
   `main` 分支上）；陈述集第 3 修订，Lean 4.14。
-- 独立审核：在该 sha 上判定 **SIGN**；记录
-  `reports/release-02/evidence/AUDIT-EFFECT-CLOSE.r1.md`（由开发
-  合同仓库复制入包）。审核的全部检查在对象 sha 的干净工作树上
+- 独立审核：在该 sha 上判定 an independent audit passed；记录
+  `reports/release-02/evidence/AUDIT-EFFECT-CLOSE.r1.md`（仓库侧保存，不在本归档）。审核的全部检查在对象 sha 的干净工作树上
   运行。
 - E3 一致性：40/40 种子、258/258 义务（boundary 103、format 7、
   grammar 27、mutant 6、precedence 17、prewire 33、receipt 21、

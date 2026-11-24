@@ -1,0 +1,28 @@
+-- Local byte-boundary checks; decisions and reporting stay pure rsd.
+namespace Lib.Rsd.QFloorByteRows
+open Lib.Rsd.QFloorBytes
+
+def input : List Int := Lib.Rsd.Codec.utf8 "{\"op\":\"num\",\"n\":7}".toList
+def checked (bs : List Int) : Result := decision { bytes := bs }
+def refused (bs : List Int) : Bool :=
+  let r := checked bs
+  r.state.code == 2 && r.residue == some .readRefused
+
+def checks : List (String × Bool) := [
+  ("empty", (checked []).state == { code := 0, bytes := [] }),
+  ("terminal-newline", (checked input).state == (checked (input ++ [10])).state),
+  ("crlf", (checked (input ++ [13, 10])).state == (checked input).state),
+  ("blank-records", (frames [10, 10] []).length == 2 &&
+    (checked [10, 10]).state.bytes == (checked [10]).state.bytes ++ (checked [10]).state.bytes),
+  ("valid-prefix-before-refusal", (checked (input ++ [10, 255, 10])).state.bytes == (checked input).state.bytes &&
+    refused (input ++ [10, 255, 10])),
+  ("invalid-byte", refused [255]),
+  ("overlong", refused [192, 128]),
+  ("truncated", refused [226, 130]),
+  ("surrogate", refused [237, 160, 128]),
+  ("past-unicode-limit", refused [244, 144, 128, 128]),
+  ("negative-byte", refused [-1]),
+  ("past-byte-limit", refused [256])
+]
+
+end Lib.Rsd.QFloorByteRows

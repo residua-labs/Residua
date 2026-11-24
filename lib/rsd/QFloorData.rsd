@@ -1,0 +1,242 @@
+-- Reachable SCM expression-q API ported from qfloor/src/{wire,content_hash}.rs.
+-- The schema records the frozen constructor names and declared field order.
+-- Hashing reuses Rsd.Store.fastSha256List; no second SHA implementation.
+-- Concatenate after QFloorJson and the existing Store closure. closure_claim = 0.
+namespace Lib.Rsd.QFloor
+open Lib.Rsd.QFloorJson
+
+inductive Kind where
+  | expr | text | boolean | integer | natural | number
+  | exprs | integers | textPairs | intPairs
+  deriving BEq, Repr
+
+structure Shape where
+  op : String
+  tag : String
+  fields : List (String × Kind)
+  deriving Repr
+
+-- A data port, rather than a new operator family. Source mapping is checked
+-- by differential rows for every ported constructor against the frozen Rust decoder.
+def shapes : List Shape := [
+  { op := "num", tag := "Num", fields := [("n", .number)] },
+  { op := "boollit", tag := "BoolLit", fields := [("b", .boolean)] },
+  { op := "var", tag := "Var", fields := [("x", .text)] },
+  { op := "strLit", tag := "StrLit", fields := [("s", .text)] },
+  { op := "add", tag := "Add", fields := [("a", .expr), ("b", .expr)] },
+  { op := "sub", tag := "Sub", fields := [("a", .expr), ("b", .expr)] },
+  { op := "mul", tag := "Mul", fields := [("a", .expr), ("b", .expr)] },
+  { op := "div", tag := "Div", fields := [("a", .expr), ("b", .expr)] },
+  { op := "mod", tag := "Mod", fields := [("a", .expr), ("b", .expr)] },
+  { op := "minE", tag := "MinE", fields := [("a", .expr), ("b", .expr)] },
+  { op := "maxE", tag := "MaxE", fields := [("a", .expr), ("b", .expr)] },
+  { op := "lt", tag := "Lt", fields := [("a", .expr), ("b", .expr)] },
+  { op := "lte", tag := "Lte", fields := [("a", .expr), ("b", .expr)] },
+  { op := "gt", tag := "Gt", fields := [("a", .expr), ("b", .expr)] },
+  { op := "gte", tag := "Gte", fields := [("a", .expr), ("b", .expr)] },
+  { op := "eqE", tag := "EqE", fields := [("a", .expr), ("b", .expr)] },
+  { op := "andE", tag := "AndE", fields := [("a", .expr), ("b", .expr)] },
+  { op := "orE", tag := "OrE", fields := [("a", .expr), ("b", .expr)] },
+  { op := "strConcat", tag := "StrConcat", fields := [("a", .expr), ("b", .expr)] },
+  { op := "strEq", tag := "StrEq", fields := [("a", .expr), ("b", .expr)] },
+  { op := "strCharAt", tag := "StrCharAt", fields := [("a", .expr), ("b", .expr)] },
+  { op := "strCodeAt", tag := "StrCodeAt", fields := [("a", .expr), ("b", .expr)] },
+  { op := "strSplit", tag := "StrSplit", fields := [("a", .expr), ("b", .expr)] },
+  { op := "neg", tag := "Neg", fields := [("a", .expr)] },
+  { op := "absE", tag := "AbsE", fields := [("a", .expr)] },
+  { op := "notE", tag := "NotE", fields := [("a", .expr)] },
+  { op := "strLen", tag := "StrLen", fields := [("a", .expr)] },
+  { op := "intToStr", tag := "IntToStr", fields := [("a", .expr)] },
+  { op := "contentHash", tag := "ContentHash", fields := [("a", .expr)] },
+  { op := "strToInt", tag := "StrToInt", fields := [("a", .expr)] },
+  { op := "someE", tag := "SomeE", fields := [("e", .expr)] },
+  { op := "isNoneE", tag := "IsNoneE", fields := [("e", .expr)] },
+  { op := "isSomeE", tag := "IsSomeE", fields := [("e", .expr)] },
+  { op := "unwrapSome", tag := "UnwrapSome", fields := [("e", .expr)] },
+  { op := "okE", tag := "OkE", fields := [("e", .expr)] },
+  { op := "errE", tag := "ErrE", fields := [("e", .expr)] },
+  { op := "isOkE", tag := "IsOkE", fields := [("e", .expr)] },
+  { op := "getOk", tag := "GetOk", fields := [("e", .expr)] },
+  { op := "residueE", tag := "ResidueE", fields := [("e", .expr)] },
+  { op := "isResidueE", tag := "IsResidueE", fields := [("e", .expr)] },
+  { op := "getResidue", tag := "GetResidue", fields := [("e", .expr)] },
+  { op := "reflect", tag := "Reflect", fields := [("e", .expr)] },
+  { op := "reifyExpr", tag := "ReifyExpr", fields := [("e", .expr)] },
+  { op := "listSingleton", tag := "ListSingleton", fields := [("e", .expr)] },
+  { op := "listLen", tag := "ListLen", fields := [("l", .expr)] },
+  { op := "listFirst", tag := "ListFirst", fields := [("l", .expr)] },
+  { op := "listLast", tag := "ListLast", fields := [("l", .expr)] },
+  { op := "listIndexed", tag := "ListIndexed", fields := [("l", .expr)] },
+  { op := "emptyList", tag := "EmptyListE", fields := [] },
+  { op := "noneLit", tag := "NoneLit", fields := [] },
+  { op := "ifE", tag := "IfE", fields := [("c", .expr), ("t", .expr), ("e", .expr)] },
+  { op := "letE", tag := "Let", fields := [("x", .text), ("e", .expr), ("b", .expr)] },
+  { op := "listAppend", tag := "ListAppend", fields := [("l", .expr), ("r", .expr)] },
+  { op := "listDrop", tag := "ListDrop", fields := [("l", .expr), ("n", .expr)] },
+  { op := "listTake", tag := "ListTake", fields := [("l", .expr), ("n", .expr)] },
+  { op := "listWindow", tag := "ListWindow", fields := [("l", .expr), ("k", .natural)] },
+  { op := "makeRecord", tag := "MakeRecord", fields := [("flds", .textPairs)] },
+  { op := "fieldAccess", tag := "FieldAccess", fields := [("r", .expr), ("f", .text)] },
+  { op := "boundedFold", tag := "BoundedFold", fields := [("lst", .expr), ("init", .expr), ("av", .text), ("iv", .text), ("body", .expr)] },
+  { op := "groupBy", tag := "GroupBy", fields := [("list", .expr), ("itemVar", .text), ("keyBody", .expr)] },
+  { op := "orderBy", tag := "OrderBy", fields := [("list", .expr), ("itemVar", .text), ("keyBody", .expr), ("descending", .boolean)] },
+  { op := "findFirst", tag := "FindFirst", fields := [("lst", .expr), ("iv", .text), ("it", .text), ("pred", .expr), ("mp", .expr)] },
+  { op := "alwaysUntil", tag := "AlwaysUntil", fields := [("lst", .expr), ("ft", .expr), ("it", .text), ("pred", .expr), ("stop", .expr)] },
+  { op := "eventuallyAfter", tag := "EventuallyAfter", fields := [("lst", .expr), ("ft", .expr), ("it", .text), ("pred", .expr)] },
+  { op := "boundedFix", tag := "BoundedFix", fields := [("state0", .expr), ("stepVar", .text), ("stepBody", .expr), ("stopPred", .expr), ("fuel", .natural)] },
+  { op := "glue", tag := "Glue", fields := [("sections", .expr)] },
+  { op := "dischargeProp", tag := "DischargeProp", fields := [("residues", .expr), ("edges", .expr)] },
+  { op := "useCountCheck", tag := "UseCountCheck", fields := [("usages", .expr)] },
+  { op := "call", tag := "Call", fields := [("name", .text), ("args", .exprs)] },
+  { op := "matchTag", tag := "MatchTag", fields := [("scrut", .expr), ("universe", .integers), ("branches", .intPairs), ("default", .expr)] },
+  { op := "strSubstring", tag := "StrSubstring", fields := [("a", .expr), ("b", .expr), ("c", .expr)] }
+]
+
+def leafText (s : String) : String := s!"str:{s.length}:{s}"
+def leafBool (b : Bool) : String := if b then "bool:True" else "bool:False"
+def leafInt (n : Int) : String := "int:" ++ toString n
+
+def boundedInt (v : Value) : Except String Int :=
+  match v with
+  | .int n =>
+    if n < -9223372036854775808 || n > 9223372036854775807 then .error "nf_qfloor_int64_range" else .ok n
+  | _ => .error "nf_qfloor_expected_integer"
+
+def numberLeaf (v : Value) : Except String String := do
+  match v with
+  | .int _ =>
+    let n ← boundedInt v
+    if n.natAbs <= 9007199254740992 then return "float:" ++ toString n ++ ".0"
+    else return leafInt n
+  | .str s =>
+    let decimalPart := String.mk (s.toList.take (s.length - 2))
+    let alias := s.endsWith ".0" && match decimalPart.toInt? with
+      | some n => n.natAbs <= 9007199254740992 && toString n == decimalPart
+      | none => false
+    if alias then throw ("[wire_num_float_repr_aliases_int] num.n " ++ debugQuote s ++
+      " is an integral float repr; send it as a JSON integer")
+    throw ("[wire_num_string_n] num.n " ++ debugQuote s ++
+      " is a string; send n as a JSON integer (exact-int core)")
+  | _ => throw "num.n not an int or float repr (integer-core)"
+
+def tupleRepr (xs : List String) : String := "[" ++ String.intercalate "," xs ++ "]"
+def nodeRepr (tag : String) (xs : List String) : String := tag ++ "(" ++ String.intercalate "," xs ++ ")"
+
+def array (v : Value) : Except String (List Value) :=
+  match v with | .arr xs => .ok xs | _ => .error "nf_qfloor_expected_array"
+def text (v : Value) : Except String String :=
+  match v with | .str s => .ok s | _ => .error "nf_qfloor_expected_string"
+
+-- Canonical hash field order remains Shape.fields. These four Rust arms
+-- validate fields in a different order; preserve their first failure too.
+def decodeFields (shape : Shape) : List (String × Kind) :=
+  let names := if shape.op == "listWindow" then ["k", "l"]
+    else if shape.op == "boundedFix" then ["fuel", "state0", "stepVar", "stepBody", "stopPred"]
+    else if shape.op == "call" then ["args", "name"]
+    else if shape.op == "matchTag" then ["universe", "branches", "scrut", "default"]
+    else shape.fields.map Prod.fst
+  names.filterMap fun name => shape.fields.find? (fun p => p.1 == name)
+
+def fieldError (op name : String) (kind : Kind) : String :=
+  match kind with
+  | .text => "op " ++ debugQuote op ++ " missing string field " ++ debugQuote name
+  | .boolean => op ++ "." ++ name ++ " not bool"
+  | .natural | .integer => op ++ "." ++ name ++ " not an int"
+  | .number => "num.n missing"
+  | .exprs | .integers | .textPairs | .intPairs => op ++ "." ++ name ++ " not an array"
+  | .expr =>
+    if ["boundedFold", "groupBy", "orderBy", "findFirst", "alwaysUntil", "eventuallyAfter", "boundedFix"].contains op then
+      op ++ " missing " ++ name
+    else if ["add", "sub", "mul", "div", "mod", "minE", "maxE", "lt", "lte", "gt", "gte", "eqE", "andE", "orE",
+        "listAppend", "listDrop", "listTake", "dischargeProp", "strConcat", "strEq", "strCharAt", "strCodeAt", "strSplit"].contains op then
+      "op " ++ debugQuote op ++ " missing " ++ debugQuote name
+    else "op " ++ debugQuote op ++ " missing field " ++ debugQuote name
+
+mutual
+  def repr : Nat → Nat → Value → Except String String
+    | 0, _, _ => .error "nf_qfloor_repr_fuel"
+    | f + 1, depth, j => do
+      if depth > maxDepth then
+        throw "[evalr_decode_depth_exceeded] wire Expr nesting deeper than MAX_DEPTH=512"
+      let op ← match get j "op" >>= str? with
+        | none => throw "expr missing string 'op'"
+        | some s => pure s
+      let shape ← match shapes.find? (fun x => x.op == op) with
+        | none => throw ("evalR: unrecognised op " ++ debugQuote op ++ " (not a slot AST constructor)")
+        | some s => pure s
+      let fs ← (decodeFields shape).mapM fun (name, kind) => do
+        let v ← match get j name with
+          | some v => pure v
+          | none => throw (fieldError op name kind)
+        let rendered ← field f depth op name kind v
+        return (name, rendered)
+      return nodeRepr shape.tag (shape.fields.map fun p => ((fs.find? (fun x => x.1 == p.1)).map Prod.snd).getD "")
+  def field : Nat → Nat → String → String → Kind → Value → Except String String
+    | 0, _, _, _, _, _ => .error "nf_qfloor_repr_fuel"
+    | f + 1, depth, op, name, kind, v => do
+      let err := fieldError op name kind
+      match kind with
+      | .expr => repr f (depth + 1) v
+      | .text => match v with
+        | .str s => return leafText s
+        | _ => throw err
+      | .boolean => match v with
+        | .bool b => return leafBool b
+        | _ => throw err
+      | .integer => match v with
+        | .int _ => return leafInt (← boundedInt v)
+        | _ => throw err
+      | .natural =>
+        let n ← match v with
+          | .int _ => boundedInt v
+          | _ => throw err
+        if n < 0 then throw (op ++ "." ++ name ++ " must be a Nat")
+        return leafInt n
+      | .number => numberLeaf v
+      | .exprs =>
+        let xs ← match v with | .arr xs => pure xs | _ => throw err
+        return tupleRepr (← xs.mapM (repr f (depth + 1)))
+      | .integers =>
+        let xs ← match v with | .arr xs => pure xs | _ => throw err
+        return tupleRepr (← xs.mapM (fun v => do
+          match v with
+          | .int _ => return leafInt (← boundedInt v)
+          | _ => throw "matchTag.universe element not an int"))
+      | .textPairs =>
+        let xs ← match v with | .arr xs => pure xs | _ => throw err
+        let ys ← xs.mapM fun pair => do
+          match pair with
+          | .arr [k, body] =>
+            let key ← match k with | .str s => pure s | _ => throw "makeRecord field name not a string"
+            return tupleRepr [leafText key, ← repr f (depth + 1) body]
+          | .arr _ => throw "makeRecord field pair must have length 2"
+          | _ => throw "makeRecord field not a [name, expr] pair"
+        return tupleRepr ys
+      | .intPairs =>
+        let xs ← match v with | .arr xs => pure xs | _ => throw err
+        let ys ← xs.mapM fun pair => do
+          match pair with
+          | .arr [code, body] =>
+            let n ← match code with | .int _ => boundedInt code | _ => throw "matchTag branch code not an int"
+            return tupleRepr [leafInt n, ← repr f (depth + 1) body]
+          | .arr _ => throw "matchTag branch pair must have length 2"
+          | _ => throw "matchTag branch not a [code, body] pair"
+        return tupleRepr ys
+end
+
+def canonical (v : Value) : Except String String := repr (4 * maxDepth + 8) 0 v
+
+def hex (bs : List Int) : String := String.join (bs.map fun b =>
+  String.mk [hexChar (b.toNat / 16), hexChar (b.toNat % 16)])
+
+def contentQ (v : Value) : Except String String := do
+  let bytes := (← canonical v).toUTF8.data.toList.map (fun b => Int.ofNat b.toNat)
+  let h := Lib.Rsd.Store.qFast "blob" bytes
+  if !h.ok then throw ("nf_qfloor_hash_" ++ h.residue)
+  return hex h.bytes
+
+def evaluate (input : String) : Except String String := do
+  let j ← parse input
+  contentQ ((get j "expr").getD j)
+
+end Lib.Rsd.QFloor

@@ -1,0 +1,294 @@
+-- Pure registered-command client; EFFECT-ABI-0 section 7 CMD vocabulary.
+-- A complete raw event prefix determines the next T or final outcome.
+-- The actuator sends only the newly returned pending T, once; it never
+-- reexecutes the replayed prefix. No shell text is constructed here.
+namespace Lib.Rsd.CommandDevice
+
+inductive Residue where
+  | plan
+  | arguments
+  | steps
+  | extraReply
+  | event
+  | wire
+  | version
+  | device
+  | walk
+  | qid
+  | atomic
+  | shortWrite
+  | outputLimit
+  | statusLimit
+  | status
+  | timeout
+  | closed
+
+def residueName : Residue -> String
+  | Residue.plan => "nf_rsd_cmd_plan"
+  | Residue.arguments => "nf_rsd_cmd_arguments"
+  | Residue.steps => "nf_rsd_cmd_steps"
+  | Residue.extraReply => "nf_rsd_cmd_extra_reply"
+  | Residue.event => "nf_rsd_cmd_event"
+  | Residue.wire => "nf_rsd_cmd_wire"
+  | Residue.version => "nf_rsd_cmd_version"
+  | Residue.device => "nf_rsd_cmd_device"
+  | Residue.walk => "nf_rsd_cmd_walk"
+  | Residue.qid => "nf_rsd_cmd_qid"
+  | Residue.atomic => "nf_rsd_cmd_atomic"
+  | Residue.shortWrite => "nf_rsd_cmd_short_write"
+  | Residue.outputLimit => "nf_rsd_cmd_output_limit"
+  | Residue.statusLimit => "nf_rsd_cmd_status_limit"
+  | Residue.status => "nf_rsd_cmd_status"
+  | Residue.timeout => "nf_rsd_cmd_timeout"
+  | Residue.closed => "nf_rsd_cmd_closed"
+
+structure Plan where
+  name : String
+  argv : List String
+  namespaceQ : List Int
+  configQ : List Int
+  executableQ : List Int
+  inputQs : List (List Int)
+  environment : List (Prod String String)
+  cwd : String
+  msize : Nat := 8192
+  maxArgs : Nat := 4096
+  maxOutput : Nat := 1048576
+  maxStatus : Nat := 18
+  maxSteps : Nat := 4096
+  timeoutMs : Nat := 60000
+  deriving BEq, Repr
+
+-- kind 0 = complete raw R; 1 = transport timeout; 2 = disconnect.
+-- Transport events are not synthetic Rerror or exit statuses.
+structure Event where
+  kind : Nat := 0
+  bytes : List Int := []
+  deriving BEq, Repr
+
+structure Request where
+  plan : Plan
+  events : List Event
+  deriving BEq, Repr
+
+structure State where
+  phase : Nat := 0
+  msize : Nat := 0
+  iounit : Nat := 0
+  fileQid : Lib.Rsd.Ninep.Qid := default
+  steps : Nat := 0
+  output : List Int := []
+  statusBytes : List Int := []
+  exit : Option Int := none
+  signal : Option Int := none
+  execSent : Bool := false
+  unknown : Bool := false
+  pending : List Int := []
+  done : Bool := false
+  replayNoise : Nat := 0
+  deriving BEq, Repr
+
+structure Key where
+  request : Request
+  observations : State
+  deriving BEq, Repr
+
+structure Result where
+  state : State
+  residue : Option Residue
+
+def text (s : String) : List Int := Lib.Rsd.Codec.utf8 s.toList
+
+def bytesOk (bs : List Int) : Bool := Lib.Rsd.Codec.bytesOk bs
+
+-- Q-FORMAT 1: the expected kind is part of the check. A bare 32-byte value
+-- cannot reveal its tag, so planOk names the kind each field's producer must
+-- have used (all Plan q fields here are `blob`).
+def qOk (kind : String) (bs : List Int) : Bool :=
+  Lib.Sha256.kindOk kind && bs.length == 32 && bytesOk bs
+
+def noNul (s : String) : Bool := !s.toList.any (fun c => c.toNat == 0)
+
+def nameOk (s : String) : Bool :=
+  !s.isEmpty && s.length <= 128 && s.toList.all (fun c =>
+    (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+    (c >= '0' && c <= '9') || c == '_' || c == '-')
+
+def argsBytes (p : Plan) : Lib.Rsd.Codec.Out :=
+  Lib.Rsd.Codec.encodeRVal
+    { ty := .list .bytes, val := .list (p.argv.map (fun a => .bytes (text a))) }
+    { maxBytes := p.maxArgs, maxDepth := 64, fuel := 1000000 }
+
+def planOk (p : Plan) : Bool :=
+  nameOk p.name && qOk "blob" p.namespaceQ && qOk "blob" p.configQ && qOk "blob" p.executableQ &&
+  p.inputQs.all (qOk "blob") && p.environment.all (fun e => !e.1.isEmpty && noNul e.1 && noNul e.2) &&
+  noNul p.cwd && !p.cwd.isEmpty && p.msize >= 256 && p.msize <= 8192 &&
+  p.maxArgs >= 1 && p.maxArgs <= 8168 && p.maxOutput <= 1048576 &&
+  p.maxStatus >= 1 && p.maxStatus <= 128 && p.maxSteps <= 4096 &&
+  p.timeoutMs >= 1 && p.timeoutMs <= 300000
+
+def failed (s : State) (e : Residue) : Result :=
+  { state := { s with pending := [], unknown := s.execSent && s.exit.isNone && s.signal.isNone },
+    residue := some e }
+
+def good (s : State) : Result := { state := s, residue := none }
+
+def transfer (s : State) : Nat :=
+  let n := s.msize - 24
+  if s.iounit == 0 then n else min n s.iounit
+
+def leaf (phase : Nat) : String :=
+  if phase == 2 then "args" else if phase == 6 then "ctl"
+  else if phase == 10 then "stdout" else "status"
+
+def outgoing (p : Plan) (s : State) : Lib.Rsd.Ninep.TMsg :=
+  if s.phase == 0 then .version Lib.Rsd.Ninep.NOTAG p.msize Lib.Rsd.Ninep.W9P2000
+  else if s.phase == 1 then .attach 0 0 Lib.Rsd.Ninep.NOFID [] (Lib.Rsd.Ninep.bytesToHex p.namespaceQ)
+  else if s.phase == 2 || s.phase == 6 || s.phase == 10 || s.phase == 14 then
+    .walk 0 0 1 [text p.name, text (leaf s.phase)]
+  else if s.phase == 3 || s.phase == 7 then .open_ 0 1 1
+  else if s.phase == 11 || s.phase == 15 then .open_ 0 1 0
+  else if s.phase == 4 then .write 0 1 0 (argsBytes p).bytes
+  else if s.phase == 8 then .write 0 1 0 (text "exec\n")
+  else if s.phase == 12 then
+    .read 0 1 s.output.length (min (transfer s) (p.maxOutput - s.output.length + 1))
+  else if s.phase == 16 then
+    .read 0 1 s.statusBytes.length (min (transfer s) (p.maxStatus - s.statusBytes.length + 1))
+  else if s.phase == 18 then .clunk 0 0
+  else .clunk 0 1
+
+-- Only the returned pending frame may be sent; a cap miss returns none.
+def next (p : Plan) (s : State) : Result :=
+  if s.phase == 19 then good { s with pending := [], done := true, unknown := false }
+  else if s.steps >= p.maxSteps then failed s Residue.steps
+  else
+    let t := outgoing p s
+    let b := Lib.Rsd.Ninep.encodeT t
+    if b.length > (if s.phase == 0 then p.msize else s.msize) then failed s Residue.atomic
+    else if (s.phase == 4 || s.phase == 8) && (Lib.Rsd.Ninep.tMaxCount t).toNat > transfer s then failed s Residue.atomic
+    else good { s with pending := b, steps := s.steps + 1, execSent := s.execSent || s.phase == 8 }
+
+-- Complete-record parser: no CR, aliases, whitespace, leading zeros or wrap.
+def decimal (cs : List Char) : Option Nat :=
+  if cs.isEmpty || !cs.all (fun c => c >= '0' && c <= '9') then none
+  else if cs.length > 1 && cs.head? == some '0' then none
+  else some (cs.foldl (fun n c => n * 10 + c.toNat - 48) 0)
+
+def signed (cs : List Char) : Option Int :=
+  match cs with
+  | '-' :: rest => do
+    let n <- decimal rest
+    if n == 0 || n > 2147483648 then none else some (-(Int.ofNat n))
+  | _ => do
+    let n <- decimal cs
+    if n > 2147483647 then none else some (Int.ofNat n)
+
+def parseStatus (bs : List Int) : Option (Prod (Option Int) (Option Int)) :=
+  if !bs.all (fun b => b >= 0 && b < 128) then none
+  else
+    let chars := bs.map (fun b => Char.ofNat b.toNat)
+    match chars.reverse with
+    | '\n' :: tail =>
+      let line := String.mk tail.reverse
+      match line.splitOn " " with
+      | ["exit", n] => do
+        let i <- signed n.toList
+        some (some i, none)
+      | ["signal", n] => do
+        let i <- decimal n.toList
+        if i > 4294967295 then none else some (none, some (Int.ofNat i))
+      | _ => none
+    | _ => none
+
+-- EFFECT-ABI-0 section 3.1 constrains the directory bit, not the other
+-- observed qid flags. Ropen may change flags/version while preserving kind.
+def directory (qid : Lib.Rsd.Ninep.Qid) : Bool := (qid.qtype / 128) % 2 == 1
+
+def acceptReply (p : Plan) (s : State) (r : Lib.Rsd.Ninep.RMsg) : Result :=
+  match r with
+  | .error _ name =>
+    if s.phase == 0 then failed s Residue.version
+    else match Lib.Rsd.Codec.decodeUtf8 name with
+      | some message => if noNul message then failed s Residue.device else failed s Residue.wire
+      | none => failed s Residue.wire
+  | .version _ ms ver =>
+    if s.phase != 0 || ms < 256 || ms > p.msize || ver != Lib.Rsd.Ninep.W9P2000 then failed s Residue.version
+    else good { s with phase := 1, msize := ms.toNat, pending := [] }
+  | .attach _ qid =>
+    if s.phase != 1 || !directory qid then failed s Residue.qid
+    else good { s with phase := 2, pending := [] }
+  | .walk _ qs =>
+    match qs with
+    | [dir, file] =>
+      if !directory dir || directory file then failed s Residue.qid
+      else good { s with phase := s.phase + 1, fileQid := file, iounit := 0, pending := [] }
+    | _ => failed s Residue.walk
+  | .open_ _ qid io =>
+    if qid.path != s.fileQid.path || directory qid != directory s.fileQid then failed s Residue.qid
+    else if io < 0 || io > 4294967295 then failed s Residue.wire
+    else good { s with phase := s.phase + 1, iounit := io.toNat, pending := [] }
+  | .write _ n =>
+    if n != Lib.Rsd.Ninep.tMaxCount (outgoing p s) then failed s Residue.shortWrite
+    else good { s with phase := s.phase + 1, pending := [] }
+  | .read _ bs =>
+    if s.phase == 12 then
+      if s.output.length + bs.length > p.maxOutput then failed s Residue.outputLimit
+      else good { s with phase := if bs.isEmpty then 13 else 12, output := s.output ++ bs, pending := [] }
+    else if s.statusBytes.length + bs.length > p.maxStatus then failed s Residue.statusLimit
+    else if !bs.isEmpty then good { s with statusBytes := s.statusBytes ++ bs, pending := [] }
+    else match parseStatus s.statusBytes with
+      | none => failed s Residue.status
+      | some (code, signal) => good { s with phase := 17, exit := code, signal := signal, pending := [] }
+  | .clunk _ => good { s with phase := s.phase + 1, pending := [] }
+  | _ => failed s Residue.wire
+
+def consume (p : Plan) (s : State) (e : Event) : Result :=
+  if e.kind == 1 && e.bytes.isEmpty then failed s Residue.timeout
+  else if e.kind == 2 && e.bytes.isEmpty then failed s Residue.closed
+  else if e.kind != 0 then failed s Residue.event
+  else if !bytesOk e.bytes then failed s Residue.wire
+  else
+    let t := outgoing p s
+    match Lib.Rsd.Ninep.decodeRNamed s.msize true 0 0 0 0 (Lib.Rsd.Ninep.tTag t) (Lib.Rsd.Ninep.tOp t) (Lib.Rsd.Ninep.tMaxCount t) e.bytes with
+    | (some r, 0) => acceptReply p s r
+    | _ => failed s Residue.wire
+
+def replay (p : Plan) (s : State) : List Event -> Result
+  | [] => next p s
+  | e :: rest =>
+    let sent := next p s
+    if sent.residue.isSome then sent
+    else if sent.state.done then failed sent.state Residue.extraReply
+    else
+      let received := consume p sent.state e
+      if received.residue.isSome then received else replay p received.state rest
+
+def decision (r : Request) : Result :=
+  if !planOk r.plan then failed {} Residue.plan
+  else if !r.plan.argv.all noNul || !(argsBytes r.plan).ok then failed {} Residue.arguments
+  else replay r.plan { msize := r.plan.msize } r.events
+
+def sigma (s : State) : State := { s with replayNoise := 0 }
+def q (r : Request) (s : State) : Key := { request := r, observations := sigma s }
+def residue? (r : Request) (s : State) : Option Residue := (decision r).residue
+def admissible (r : Request) (s : State) : Bool := (residue? r (sigma s)).isNone
+def runNF (r : Request) (s : State) : Result := decision r
+
+-- NF-CORRECT-0 r2: the checked decision; runNF retains the original
+-- transition and its failure-state observations for existing callers.
+def admit (observation : Key) : Except Residue State :=
+  let answer := (runNF observation.request observation.observations)
+  match answer.residue with
+  | some residue => .error residue
+  | none => .ok answer.state
+
+def decide (r : Request) (s : State) : Except Residue State :=
+  let answer := runNF r s
+  match answer.residue with
+  | some residue => .error residue
+  | none => .ok answer.state
+
+theorem quotient_factorization (r : Request) (s : State) : decide r s = admit (q r s) := rfl
+
+
+end Lib.Rsd.CommandDevice

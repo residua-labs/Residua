@@ -65,7 +65,7 @@ layout or serialization changed.
 
 | context | form |
 |---|---|
-| printed text fields (manifest values, receipt bindings, tables, logs) | `sha256:` + 64 lowercase hex, for both digest and q |
+| printed text fields (manifest values, [receipt](GLOSSARY.md) bindings, tables, logs) | `sha256:` + 64 lowercase hex, for both digest and q |
 | path segments and file names | `sha256-` + 64 hex |
 | self-describing binary (a q stored with no schema around it) | multihash `0x12 0x20` + 32 bytes (34 bytes total) [2] |
 | inside a schema-typed record | 32 raw bytes; the schema carries algorithm and kind |

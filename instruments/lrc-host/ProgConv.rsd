@@ -1,0 +1,44 @@
+-- micro program for the places where a number's limb list is not needed (lib/lrc/FromWire.rsd "A magnitude where no
+-- list is needed", and the short forms of the two conversions between a natural number and a word): a Nat as an
+-- Int and an Int as a Nat, the test for zero that a match on a Nat is, the index of an array's element and an
+-- array's size; each on zero, on small numbers, at 2^56 (where a magnitude stops being a small number) and far above.
+def b56 : Nat := 72057594037927936
+
+def c56 : Int := 72057594037927936
+
+def big : Nat := 1208925819614629174706181
+
+def bigI : Int := 1208925819614629174706181
+
+def pred : Nat → Nat
+  | 0 => 0
+  | k + 1 => k
+
+def count : Nat → Nat → Nat
+  | 0, acc => acc
+  | k + 1, acc => count k (acc + 3)
+
+def sign : Nat → Int
+  | 0 => 0
+  | _ + 1 => 1
+
+def at3 (i : Nat) : Nat :=
+  let a : Array Nat := #[10, 20, 30]
+  a.getD i 77
+
+def sizes (n : Nat) : Nat :=
+  let a : Array Nat := (#[] : Array Nat).push n
+  let b : Array Nat := a.push (n + 1)
+  a.size + b.size * 10 + [n, n, n].length * 100
+
+def convNats : List Nat :=
+  [Int.toNat 0, Int.toNat 5, Int.toNat (0 - 5), Int.toNat (c56 - 1), Int.toNat c56, Int.toNat (0 - c56), Int.toNat bigI, Int.toNat (0 - bigI),
+   pred 0, pred 1, pred 2, pred b56, pred (b56 + 1), pred big,
+   count 0 7, count 1 7, count 9 0,
+   at3 0, at3 2, at3 3, at3 (b56 - 1), at3 b56, at3 big,
+   sizes 0, sizes b56, sizes big]
+
+def convInts : List Int :=
+  [Int.ofNat 0, Int.ofNat 5, Int.ofNat (b56 - 1), Int.ofNat b56, Int.ofNat big, 0 - Int.ofNat big,
+   sign 0, sign 1, sign b56, sign big,
+   Int.ofNat (Int.toNat (0 - 3)), Int.ofNat (Int.toNat 3), Int.ofNat (Int.toNat bigI) - bigI]

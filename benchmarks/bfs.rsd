@@ -1,0 +1,165 @@
+-- bfs: the Bend bench/runtime bfs program (HigherOrderCO/Bend, bench/runtime/bfs/main.bend),
+-- ported to P1' Lean 4.14. Same algorithm: breadth-first search over 2^S independent 32x32 grid
+-- mazes; maze m seeds from the Knuth-mixed index, `fill` stamps the 1024-cell grid (a cell is a wall
+-- when the xorshift hash of seed and cell, mod 100, is under 30; the start is always open), the
+-- distance map starts at 4294967295 with cell 0 at 0, and the search pops cells from a flat queue,
+-- stamping each open unseen neighbour's distance and pushing it (fuel-bounded by the cell count).
+-- `fold` mixes every cell into the leaf checksum and seals it with the reached count; leaf
+-- checksums sum up the batch tree.
+-- Departures (named): SRC-BEND-U32 — the source's U32 words are modeled exactly in checked Int
+-- arithmetic (wrap mod 2^32, xor bit-decomposed; values stay in [0, 2^32)); SRC-BEND-ARR — the
+-- source's three flat Array<U32> (grid, queue, dist) ride as List Int with drop-based read and
+-- take/drop write (the frozen language has no array primitive); the whole state rides in one St
+-- record as in the source.
+-- The source's small size S = 4 expects 512822161 (all lanes agree, and at 12, 13, 15 too, verified
+-- there); its big size S = 19 expects 651176970, out of reach here.
+-- Source pin (BENCH-SRC-0, 2026-11-06): HigherOrderCO/Bend commit be236f324ed0338fe907fe50474468e4d3b94157
+-- (main), bench/runtime/bfs/main.bend, sha256
+-- d7e2acda29553218004cc937d3107e50862d692a140630740268eaa3896bffbd
+-- (raw.githubusercontent.com/HigherOrderCO/Bend/be236f324ed0338fe907fe50474468e4d3b94157/bench/runtime/bfs/main.bend).
+
+def W : Int := 4294967296
+
+def w32 (x : Int) : Int := x % W
+
+def bitXorLoop : Nat → Int → Int → Int → Int → Int
+  | 0, _, _, acc, _ => acc
+  | k + 1, a, b, acc, sc => bitXorLoop k (a / 2) (b / 2) (acc + ((a % 2 + b % 2) % 2) * sc) (sc * 2)
+
+def xor32 (a b : Int) : Int := bitXorLoop 32 a b 0 1
+
+def bitAndLoop : Nat → Int → Int → Int → Int → Int
+  | 0, _, _, acc, _ => acc
+  | k + 1, a, b, acc, sc => bitAndLoop k (a / 2) (b / 2) (acc + (a % 2 * b % 2) * sc) (sc * 2)
+
+def and32 (a b : Int) : Int := bitAndLoop 32 a b 0 1
+
+def wAdd (a b : Int) : Int := w32 (a + b)
+def wSub (a b : Int) : Int := w32 (a - b + W)
+-- wMul is split at 16 bits so the intermediates stay under the checked-i64
+-- bound (a_lo * b, a_hi * b < 2^48); a*b mod 2^32 is unchanged
+-- (checkedArithmeticStuck at ~2^63 on the flat form, probe-verified)
+def wMul (a b : Int) : Int :=
+  w32 (w32 (w32 (a % 65536) * b) + w32 (w32 (w32 (a / 65536) * b) % 65536) * 65536)
+def wInc (a : Int) : Int := w32 (a + 1)
+
+def pw2 : Nat → Int
+  | 0 => 1
+  | k + 1 => 2 * pw2 k
+
+def wShlN (a : Int) (k : Nat) : Int := w32 (a * pw2 k)
+def wShrN (a : Int) (k : Nat) : Int := a / pw2 k
+
+def b2u (b : Bool) : Int := if b then 1 else 0
+
+-- word-array read (drop-based, Arena.read's shape) and write (take/drop splice)
+def getAt : List Int → Int → Int
+  | [], _ => 0
+  | a, b => match (a.drop b.toNat).head? with
+    | some v => v
+    | none => 0
+
+def setAt (b : Int) (v : Int) : List Int → List Int
+  | [] => []
+  | a => (a.take b.toNat) ++ [v] ++ (a.drop (b.toNat + 1))
+
+/-- The source's St: grid, queue, dist, head, tail in one record (SRC-BEND-ARR). -/
+structure St where
+  g : List Int
+  q : List Int
+  d : List Int
+  head : Int
+  tail : Int
+
+-- xorshift: x ^= x<<13; x ^= x>>17; x ^= x<<5
+def prng (x : Int) : Int :=
+  let b := xor32 x (wShlN x 13)
+  let d := xor32 b (wShrN b 17)
+  xor32 d (wShlN d 5)
+
+-- 1 when cell c of the maze seeded s is open: the start always, any
+-- other cell when its hash mod 100 is 30 or more (30% walls)
+def openCell (s c : Int) : Int :=
+  let h := prng (xor32 s (wMul (wInc c) 340573321))
+  b2u (c == 0 || h % 100 >= 30)
+
+-- fill the grid: one write per cell, ascending
+def fill : Nat → Int → List Int → List Int
+  | 0, _, g => g
+  | p + 1, s, g => fill p s (setAt (1023 - p) (openCell s (1023 - p)) g)
+
+-- the neighbour is open: push it unless seen (stamp its distance, queue it at the tail)
+def lookPush (n v : Int) (seen : Bool) (st : St) : St :=
+  if seen then st
+  else { st with q := setAt st.tail n st.q, d := setAt n v st.d, tail := wInc st.tail }
+
+def lookSeen (n v : Int) (st : St) : St :=
+  let dn := getAt st.d n
+  lookPush n v (dn != 4294967295) st
+
+-- the neighbour is in bounds: skip a wall, else read its distance
+def lookWall (n v : Int) (wall : Bool) (st : St) : St :=
+  if wall then st else lookSeen n v st
+
+def lookOpen (n v : Int) (st : St) : St :=
+  let o := getAt st.g n
+  lookWall n v (o == 0) st
+
+-- one neighbour n at distance v: skip it out of bounds, a wall or seen
+def look (n v : Int) (inb : Bool) (st : St) : St :=
+  if inb then lookOpen n v st else st
+
+-- the four neighbours of cell c at distance v: left, right, up, down
+def look4 (c v : Int) (st : St) : St :=
+  let x := and32 c 31
+  let y := wShrN c 5
+  let s1 := look (wSub c 1) v (x > 0) st
+  let s2 := look (wInc c) v (x < 31) s1
+  let s3 := look (wSub c 32) v (y > 0) s2
+  look (wAdd c 32) v (y < 31) s3
+
+-- one pop: take the head cell and its distance, look at its four
+-- neighbours, then report whether the queue still holds a cell
+def pop (st : St) : St × Bool :=
+  let c := getAt st.q st.head
+  let dc := getAt st.d c
+  let st2 := { st with head := wInc st.head }
+  let st3 := look4 c (wInc dc) st2
+  (st3, st3.head < st3.tail)
+
+-- the search loop, fuel-bounded by the cell count: stops when the queue drains
+def bfs : Nat → St × Bool → St
+  | 0, r => r.1
+  | p + 1, r =>
+    if r.2 then bfs p (pop r.1) else r.1
+
+-- the leaf checksum: every cell in turn; a reached cell mixes its
+-- distance position-weighted and counts one
+def fold : Nat → List Int → Int → Int → Int
+  | 0, _, acc, cnt => xor32 acc (wMul cnt 2246822519)
+  | p + 1, d, acc, cnt =>
+    let c := 1023 - p
+    let v := getAt d c
+    let hit := b2u (v != 4294967295)
+    let k := wMul hit (wMul v (wInc c))
+    let m := xor32 (wMul acc 2654435761) k
+    fold p d m (wAdd cnt hit)
+
+def finish (st : St) : Int := fold 1024 st.d 0 0
+
+-- one maze: fill the grid, seed the search with cell 0 at distance 0, search, fold
+def maze (m : Int) : Int :=
+  let s := wMul (wInc m) 2654435761
+  let g := fill 1024 s (List.replicate 1024 0)
+  let d0 := setAt 0 0 (List.replicate 1024 4294967295)
+  finish (bfs 1024 ({ g := g, q := List.replicate 1024 0, d := d0, head := 0, tail := 1 }, true))
+
+-- batch tree over the maze index space: leaf i searches maze i
+def batch : Nat → Int → Int
+  | 0, i => maze i
+  | p + 1, i => wAdd (batch p i) (batch p (wAdd i (wShlN 1 p)))
+
+/-- Root: `bfsMain s` is batch(s, 0); the source's documented small
+size 4 expects 512822161 (all lanes agree there, and at 12, 13, 15),
+its main() runs 19. -/
+def bfsMain (s : Int) : Int := batch s.toNat 0

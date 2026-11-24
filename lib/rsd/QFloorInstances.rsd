@@ -1,0 +1,4 @@
+-- Derived equality remains outside the declaration-only NF source.
+namespace Lib.Rsd.QFloorBytes
+deriving instance BEq for Residue
+end Lib.Rsd.QFloorBytes

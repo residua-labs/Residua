@@ -1,0 +1,192 @@
+-- LRC host oracle: written IR cases for elimDeadBranches (stock Lean only). closure_claim = 0.
+-- Constructor informations as in instruments/lrc-host/Cases.rsd: type 1 the binary tree, type 2 the list,
+-- type 3 the three-constructor type.
+namespace Lrc.Host
+
+open Lrc in
+-- f30 retCtor x: wraps its argument in a node and returns it
+def eRetCtor : Lrc.Decl :=
+  fn 30 [pO 1] tyTObj
+    (mkVDecl 2 tyTObj (mkCtor leafI [])
+    (mkVDecl 3 tyTObj (mkCtor nodeI [1, 2]) (mkRet [3])))
+
+open Lrc in
+-- f31 callCtor x: cases on what f30 returns; the leaf alternative cannot be reached
+def eCallCtor : Lrc.Decl :=
+  fn 31 [pO 1] tyTObj
+    (mkVDecl 2 tyTObj (mkFap 30 [1])
+    (mkCase 2 tyTObj
+      [mkAltCtor leafI (mkRet [1]),
+       mkAltCtor nodeI (mkVDecl 3 tyTObj (mkProj 0 2) (mkRet [3]))]))
+
+open Lrc in
+-- f32 joinDiff x: a join point whose parameter gets a different constructor from each jump; the
+-- choice of them keeps both alternatives live
+def eJoinDiff : Lrc.Decl :=
+  fn 32 [pO 1] tyTObj
+    (mkJDecl 10 [pO 11]
+      (mkCase 11 tyTObj
+        [mkAltCtor leafI (mkRet [11]),
+         mkAltCtor nodeI (mkRet [11]),
+         mkAltDefault (mkRet [11])])
+      (mkCase 1 tyTObj
+        [mkAltCtor t3a (mkVDecl 2 tyTObj (mkCtor leafI []) (mkJmp 10 [2])),
+         mkAltCtor t3b (mkVDecl 3 tyTObj (mkCtor nodeI [1, 1]) (mkJmp 10 [3]))]))
+
+open Lrc in
+-- f33 joinDiff3 x: three different constructors through one join point; a third alternative is
+-- appended to the choice
+def eJoinDiff3 : Lrc.Decl :=
+  fn 33 [pO 1] tyTObj
+    (mkJDecl 10 [pO 11]
+      (mkCase 11 tyTObj
+        [mkAltCtor leafI (mkRet [11]),
+         mkAltCtor nodeI (mkRet [11]),
+         mkAltCtor consI (mkRet [11]),
+         mkAltDefault (mkRet [11])])
+      (mkCase 1 tyTObj
+        [mkAltCtor t3a (mkVDecl 2 tyTObj (mkCtor leafI []) (mkJmp 10 [2])),
+         mkAltCtor t3b (mkVDecl 3 tyTObj (mkCtor nodeI [1, 1]) (mkJmp 10 [3])),
+         mkAltCtor t3c (mkVDecl 4 tyTObj (mkCtor consI [1, 1]) (mkJmp 10 [4]))]))
+
+open Lrc in
+-- f34 joinProjCase x: the join point's parameter is a choice of leaf and node; a projection of it
+-- is cased — from leaf the projection is bottom, from node it is the nil cell stored in it
+def eJoinProjCase : Lrc.Decl :=
+  fn 34 [pO 1] tyTObj
+    (mkJDecl 10 [pO 11]
+      (mkVDecl 12 tyTObj (mkProj 0 11)
+      (mkCase 12 tyTObj
+        [mkAltCtor nilI (mkRet [11]),
+         mkAltCtor consI (mkRet [11]),
+         mkAltDefault (mkRet [11])]))
+      (mkCase 1 tyTObj
+        [mkAltCtor t3a (mkVDecl 2 tyTObj (mkCtor leafI []) (mkJmp 10 [2])),
+         mkAltCtor t3b
+           (mkVDecl 3 tyTObj (mkCtor nilI [])
+           (mkVDecl 4 tyTObj (mkCtor nodeI [3, 1]) (mkJmp 10 [4])))]))
+
+open Lrc in
+-- f35 nestedReset x: inside join point 10's body, join point 20's parameter follows the outer
+-- parameter; entering 10 again resets it, so it ends holding only the last constructor
+def eNestedReset : Lrc.Decl :=
+  fn 35 [pO 1] tyTObj
+    (mkJDecl 10 [pO 11]
+      (mkJDecl 20 [pO 21]
+        (mkCase 21 tyTObj
+          [mkAltCtor leafI (mkRet [21]),
+           mkAltCtor nodeI (mkVDecl 22 tyTObj (mkProj 0 21) (mkRet [22]))])
+        (mkJmp 20 [11]))
+      (mkCase 1 tyTObj
+        [mkAltCtor t3a (mkVDecl 2 tyTObj (mkCtor leafI []) (mkJmp 10 [2])),
+         mkAltCtor t3b (mkVDecl 3 tyTObj (mkCtor nodeI [1, 1]) (mkJmp 10 [3])),
+         mkAltCtor t3c (mkRet [1])]))
+
+open Lrc in
+-- f36 deepRet x: returns a cell nested nine deep — past the depth bound of the widening
+def eDeepRet : Lrc.Decl :=
+  fn 36 [pO 1] tyTObj
+    (mkVDecl 2 tyTObj (mkCtor nilI [])
+    (mkVDecl 3 tyTObj (mkCtor consI [2, 2])
+    (mkVDecl 4 tyTObj (mkCtor consI [3, 3])
+    (mkVDecl 5 tyTObj (mkCtor consI [4, 4])
+    (mkVDecl 6 tyTObj (mkCtor consI [5, 5])
+    (mkVDecl 7 tyTObj (mkCtor consI [6, 6])
+    (mkVDecl 8 tyTObj (mkCtor consI [7, 7])
+    (mkVDecl 9 tyTObj (mkCtor consI [8, 8])
+    (mkVDecl 10 tyTObj (mkCtor consI [9, 9])
+    (mkRet [10]))))))))))
+
+open Lrc in
+-- f37 deepCase x: eight projections into f36's result reach past the depth bound; the value there
+-- is `top` and every alternative stays
+def eDeepCase : Lrc.Decl :=
+  fn 37 [pO 1] tyTObj
+    (mkVDecl 2 tyTObj (mkFap 36 [1])
+    (mkVDecl 3 tyTObj (mkProj 0 2)
+    (mkVDecl 4 tyTObj (mkProj 0 3)
+    (mkVDecl 5 tyTObj (mkProj 0 4)
+    (mkVDecl 6 tyTObj (mkProj 0 5)
+    (mkVDecl 7 tyTObj (mkProj 0 6)
+    (mkVDecl 8 tyTObj (mkProj 0 7)
+    (mkVDecl 9 tyTObj (mkProj 0 8)
+    (mkCase 9 tyTObj
+      [mkAltCtor nilI (mkRet [9]),
+       mkAltCtor consI (mkRet [9]),
+       mkAltDefault (mkRet [9])])))))))))
+
+open Lrc in
+-- f38 caseOnExt x: a call of f40, a declaration without a body — the result is unknown and every
+-- alternative stays
+def eCaseOnExt : Lrc.Decl :=
+  fn 38 [pO 1] tyTObj
+    (mkVDecl 2 tyTObj (mkFap 40 [1])
+    (mkCase 2 tyTObj
+      [mkAltCtor leafI (mkRet [1]),
+       mkAltCtor nodeI (mkRet [1])]))
+
+open Lrc in
+-- f39 deadAltRet x: only the leaf alternative can run; the value the dead alternative would return
+-- must not enter the function's summary
+def eDeadAltRet : Lrc.Decl :=
+  fn 39 [pO 1] tyTObj
+    (mkVDecl 2 tyTObj (mkCtor leafI [])
+    (mkCase 2 tyTObj
+      [mkAltCtor leafI (mkVDecl 3 tyTObj (mkCtor nilI []) (mkRet [3])),
+       mkAltCtor nodeI (mkVDecl 4 tyTObj (mkCtor consI [2, 2]) (mkRet [4]))]))
+
+open Lrc in
+-- f41 polluteCall x: cases on what f39 returns — the cons alternative cannot be reached
+def ePolluteCall : Lrc.Decl :=
+  fn 41 [pO 1] tyTObj
+    (mkVDecl 2 tyTObj (mkFap 39 [1])
+    (mkCase 2 tyTObj
+      [mkAltCtor nilI (mkRet [2]),
+       mkAltCtor consI (mkVDecl 3 tyTObj (mkProj 0 2) (mkRet [3]))]))
+
+open Lrc in
+-- f42 deadJoinRet x: the only jump to join point 10 stands in an alternative that cannot run. The
+-- body of a join point no jump reaches is not walked, so the cons it would return must not enter
+-- the function's summary
+def eDeadJoinRet : Lrc.Decl :=
+  fn 42 [pO 1] tyTObj
+    (mkVDecl 2 tyTObj (mkCtor leafI [])
+    (mkJDecl 10 [pO 11]
+      (mkVDecl 12 tyTObj (mkCtor consI [11, 11]) (mkRet [12]))
+      (mkCase 2 tyTObj
+        [mkAltCtor leafI (mkVDecl 3 tyTObj (mkCtor nilI []) (mkRet [3])),
+         mkAltCtor nodeI (mkJmp 10 [2])])))
+
+open Lrc in
+-- f43 deadJoinCall x: cases on what f42 returns — the cons alternative cannot be reached
+def eDeadJoinCall : Lrc.Decl :=
+  fn 43 [pO 1] tyTObj
+    (mkVDecl 2 tyTObj (mkFap 42 [1])
+    (mkCase 2 tyTObj
+      [mkAltCtor nilI (mkRet [2]),
+       mkAltCtor consI (mkVDecl 3 tyTObj (mkProj 0 2) (mkRet [3]))]))
+
+open Lrc in
+-- A variable and a join point with one number. Lean has two kinds of names for them (VarId,
+-- JoinPointId), and its checker refuses an index that is used twice (IR/Checker.lean:38
+-- `markIndex`), so no image and none of the cases above has this; the pass itself must still not
+-- take one for the other (AUDIT-LAND-LRC r1, CX-3). The jump marks join point 1; variable 1 stays
+-- the leaf it was bound to, and the node alternative in the join point's body cannot be reached.
+-- This program goes to this pass only (`checkEdbSharedIndex`): Lean's other passes are not asked.
+def eSharedIndex : Lrc.Decl :=
+  fn 0 [pO 9] tyI64
+    (mkVDecl 1 tyTObj (mkCtor leafI [])
+    (mkJDecl 1 []
+      (mkCase 1 tyTObj
+        [mkAltCtor leafI (mkVDecl 2 tyI64 (mkLit 10) (mkRet [2])),
+         mkAltCtor nodeI (mkVDecl 3 tyI64 (mkLit 20) (mkRet [3]))])
+      (mkJmp 1 [])))
+
+def caseEdbSharedIndex : Prog := { name := "written_edb_shared_index", decls := [eSharedIndex] }
+
+def casesEdb : List Prog :=
+  [{ name := "written_edb", decls := [eRetCtor, eCallCtor, eJoinDiff, eJoinDiff3, eJoinProjCase,
+      eNestedReset, eDeepRet, eDeepCase, eCaseOnExt, eDeadAltRet, ePolluteCall, eDeadJoinRet, eDeadJoinCall,
+      ext 40 [{ x := 1, borrow := true, ty := Lrc.tyTObj }] Lrc.tyTObj] }]
+
+end Lrc.Host

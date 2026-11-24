@@ -1,0 +1,11 @@
+# FILE	FROM	TO  (FROM occurs exactly once in FILE; every row must make the differential report a mismatch)
+lib/lrc/Borrow.rsd	else if v.op == opReuse then bwOwnArgsIfParam ctx (bwOwnVar ctx (bwOwnVar ctx s z) (reuseVar v)) (reuseArgs v)	else if v.op == opReuse then bwOwnVar ctx (bwOwnVar ctx s z) (reuseVar v)
+lib/lrc/Borrow.rsd	bwPreserveTailCall ctx s (bwBindArgs (vdeclBinds n)) v b	s
+lib/lrc/Borrow.rsd	let s := if !p.borrow then bwOwnArg ctx s x else s	let s := if p.borrow then bwOwnArg ctx s x else s
+lib/lrc/RC.rsd	if !info.consume || vsContains liveVarsAfter x || xrIsBorrowParamAux x xsAll allConsumed ps 0	if !info.consume || vsContains liveVarsAfter x
+lib/lrc/RC.rsd	let b := if (xrGetVarInfo ctx x).consume then xrAddInc ctx z b 1 else b	let b := if !(xrGetVarInfo ctx x).consume then xrAddInc ctx z b 1 else b
+lib/lrc/RC.rsd	let ctx1 := if altIsDefault alt then ctx else xrUpdateRefUsingCtorInfo ctx x (infoOf alt)	let ctx1 := ctx
+lib/lrc/Borrow.rsd	else if v.op == opCtor then bwOwnArgsIfParam ctx (bwOwnVar ctx s z) (ctorArgs v)	else if v.op == opCtor then bwOwnVar ctx s z
+lib/lrc/Borrow.rsd	let s := if bwIsOwned ctx s x then bwOwnVar ctx s z else s	let s := if false then bwOwnVar ctx s z else s
+lib/lrc/RC.rsd	if xrMustConsume ctx x && xrIsFirstOcc xsAll i && xrIsBorrowParam x xsAll ps && !vsContains bLiveVars x then	if xrMustConsume ctx x && xrIsFirstOcc xsAll i && xrIsBorrowParam x xsAll ps then
+lib/lrc/RC.rsd	let b := if !vsContains altLiveVars x && xrMustConsume ctx x then xrAddDec ctx x b else b	let b := if xrMustConsume ctx x then xrAddDec ctx x b else b

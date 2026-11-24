@@ -78,4 +78,65 @@ end
 def declSimpCase (d : Decl) : Decl :=
   if d.ext then d else { d with body := simpCaseBody d.body }
 
+/-! ## A case in the default alternative of a case on the same variable
+
+The front end writes a match on a type of several constructors as a chain: the test for one constructor, and in
+its default alternative the test for the next. Lean's IR has one `case` with an alternative for each
+constructor, and its passes are written for that form. ResetReuse gives a variable its `reset` in one `case`
+only (lib/lrc/ResetReuse.rsd `alreadyFound`, ResetReuse.lean:170): in a chain that is the first link, so
+the cell of any constructor but the first is never reused, and the function that matches is left to borrow its
+argument and to build every result new (cfold on the Koka suite's expression type: no reset in the whole
+function). The emitter also reads the tag once for a `case` (lib/lrc/Emit.rsd `emAlts`), so once for each link.
+
+Here the chain becomes the one `case`: where the default alternative of a `case` on an object holds nothing but
+a `case` on the same variable, that inner `case`'s alternatives take its place. GHC's simplifier does the same
+under the name of case merging (GHC.Core.Opt.Simplify.Utils `mkCase`, Note [Merge Nested Cases]).
+Sound because both tests read one variable, which nothing between them can change; an alternative of the inner
+`case` for a constructor that the outer one has is never taken, and is left out. -/
+
+-- is there an alternative for constructor c
+def mcHas (c : Nat) : List N → Bool
+  | [] => false
+  | alt :: alts => (!altIsDefault alt && (infoOf alt).cidx == c) || mcHas c alts
+
+-- the inner alternatives that the outer ones leave open
+def mcNew (outer : List N) : List N → List N
+  | [] => []
+  | alt :: alts =>
+    if !altIsDefault alt && mcHas (infoOf alt).cidx outer then mcNew outer alts else alt :: mcNew outer alts
+
+def mcNoDefault : List N → List N
+  | [] => []
+  | alt :: alts => if altIsDefault alt then mcNoDefault alts else alt :: mcNoDefault alts
+
+-- the alternatives of a case on x of type ty with the chain's next link merged in; none when there is no such link
+def mcMerge (x ty : Int) : List N → List N → List N
+  | _, [] => []
+  | all, alt :: alts =>
+    let b := altBody alt
+    if altIsDefault alt && b.op == opCase && b.a == x && b.b == ty then
+      let own := mcNoDefault all
+      own ++ mcNew own (caseAlts b)
+    else mcMerge x ty all alts
+
+mutual
+partial def mcGo (n : N) : N :=
+  if n.op == opCase then
+    -- the inner links first: a chain of three is merged from its end
+    let alts := mcAlts (caseAlts n)
+    let m := if tyIsObj (caseTy n) then mcMerge n.a n.b alts alts else []
+    { n with kids := (if m.isEmpty then alts else m) }
+  else if n.op == opVDecl then { n with kids := [vdeclExpr n, mcGo (bodyOf n)] }
+  else if n.op == opJDecl then { n with kids := [mcGo (jdeclBody n), mcGo (bodyOf n)] }
+  else if isTerminal n then n
+  else setBody n (mcGo (bodyOf n))
+partial def mcAlts : List N → List N
+  | [] => []
+  | alt :: alts => altSetBody alt (mcGo (altBody alt)) :: mcAlts alts
+end
+
+def mergeCases : List Decl → List Decl
+  | [] => []
+  | d :: ds => (if d.ext then d else { d with body := mcGo d.body }) :: mergeCases ds
+
 end Lrc

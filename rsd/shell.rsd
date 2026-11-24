@@ -1,0 +1,157 @@
+-- rsd/shell.rsd — `rsd`, the front door of RSD-0. A deliberately
+-- small binary (stdlib + common.rsd only): it computes the source q, reads
+-- mod/<srcQ>, revalidates the toolchain parts and the file manifest in one
+-- shasum call, and on a hit runs the wasm under the shared host — warm runs
+-- skip both compilers, per the contract. On a miss (or stale record) it
+-- delegates the whole invocation to `rsdc`, which does the full pipeline,
+-- writes the record, and runs; the exit code propagates unchanged so named
+-- refusals keep their codes.
+-- Concatenate after common.rsd (see rsd/build.sh). closure_claim = 0.
+
+namespace Rsd
+
+-- ============================================================================
+-- The resident client (RSD-OPT-1): if <store>/serve/live exists, the
+-- request is filed at req-<id> and the client waits for res-<id>.code,
+-- printing the captured bytes. No live file (or no ack within
+-- `serveAckWaitUs`) means no resident server — the caller runs one-shot.
+-- RSD_NO_SERVE bypasses the delegation entirely.
+-- ============================================================================
+
+def serveAckWaitUs : Nat := 500000  -- 0.5 s: a live server acks in ~ms; a stale marker costs half a second once
+
+def serveTry (o : Opts) (store : String) : IO (Option UInt32) := do
+  if (← IO.getEnv "RSD_NO_SERVE").isSome then return none
+  if !(← System.FilePath.pathExists (serveLivePath store)) then return none
+  -- the request file is line-keyed; a newline inside a field would parse
+  -- wrong, so those requests stay one-shot.
+  if (o.file :: o.fuel :: o.scriptArgs).any (·.contains '\n') then return none
+  IO.FS.createDirAll (serveDir store)
+  let id := toString (← IO.monoNanosNow)
+  let body := String.intercalate "\n"
+    ([o.file, o.fuel, if o.printVal then "1" else "0", toString o.scriptArgs.length] ++ o.scriptArgs)
+  let tmp := s!"{serveDir store}/.w{id}"
+  IO.FS.writeFile tmp body
+  IO.FS.rename tmp (reqPath store id)
+  let t0 ← IO.monoNanosNow
+  while !(← System.FilePath.pathExists (resPath store id "ack")) do
+    if (← IO.monoNanosNow) - t0 > serveAckWaitUs * 1000 then
+      try IO.FS.removeFile (reqPath store id) catch _ => pure ()
+      return none
+    IO.sleep 0
+  while !(← System.FilePath.pathExists (resPath store id "code")) do
+    IO.sleep 1
+  let code := (((← IO.FS.readFile (resPath store id "code")).splitOn "\n").headD "70").toNat?.getD 70
+  let outp := resPath store id "out"
+  if ← System.FilePath.pathExists outp then (← IO.getStdout).write (← IO.FS.readBinFile outp)
+  let errp := resPath store id "err"
+  if ← System.FilePath.pathExists errp then IO.eprint (← IO.FS.readFile errp)
+  for ext in ["code", "out", "err", "ack"] do
+    try IO.FS.removeFile (resPath store id ext) catch _ => pure ()
+  return some code.toUInt32
+
+-- ============================================================================
+-- `rsd serve`: the resident process is rsdc (it alone holds the
+-- compile pipeline); the dispatcher hands the serve loop to it.
+-- ============================================================================
+
+def storeArgOf : List String → Option String
+  | [] => none
+  | "--store" :: v :: _ => some v
+  | _ :: r => storeArgOf r
+
+def serveDelegate (argv : List String) (_home : String) : IO UInt32 := do
+  let defaultStore := (← IO.getEnv "RSD_STORE").getD s!"{(← IO.getEnv "HOME").getD "."}/.cache/rsd"
+  let store := (storeArgOf argv).getD defaultStore
+  match ← findRsdc store with
+  | none => refuse "host_unavailable" "no rsdc compiler found (set RSDC or build it beside rsd)" 70
+  | some bin =>
+    let child ← IO.Process.spawn
+      { cmd := bin, args := argv.toArray,
+        stdin := .inherit, stdout := .inherit, stderr := .inherit }
+    child.wait
+
+def shellMain (argv0 : List String) : IO UInt32 := do
+  let clk ← clockNew
+  let argv := match argv0 with
+    | "watch" :: rest => "--watch" :: rest
+    | _ => argv0
+  match argv with
+  | "suite" :: _ =>
+    -- `rsd suite` delegates to rsdc: the suite lives in the compiler
+    -- binary (rsd/suite.rsd), the dispatcher stays thin.
+    let home := (← IO.getEnv "HOME").getD "."
+    let store := (storeArgOf argv).getD s!"{home}/.cache/rsd"
+    match ← findRsdc store with
+    | none =>
+      return ← refuse "host_unavailable" "no rsdc compiler found (set RSDC or build it beside rsd)" 70
+    | some bin =>
+      let child ← IO.Process.spawn
+        { cmd := bin, args := argv.toArray,
+          stdin := .inherit, stdout := .inherit, stderr := .inherit }
+      return ← child.wait
+  | "serve" :: _ =>
+    return ← serveDelegate argv ""
+  | _ => pure ()
+  match ← parseOpts argv with
+  | none => usage "rsd"
+  | some o => do
+    match ← findHome o with
+    | none => refuse "host_unavailable" "no repo home (set --home or RSD_HOME)" 70
+    | some home => do
+      IO.FS.createDirAll s!"{o.store}/q"
+      let store := (← IO.FS.realPath o.store).toString
+      let o := { o with store := store }
+      if !(← System.FilePath.pathExists o.file) then
+        return ← refuse "usage" s!"no such file: {o.file}" 2
+      if o.watch then
+        match ← findRsdc store with
+        | none =>
+          return ← refuse "host_unavailable" "no rsdc compiler found (set RSDC or build it beside rsd)" 70
+        | some bin =>
+          let child ← IO.Process.spawn
+            { cmd := bin, args := argv.toArray,
+              stdin := .inherit, stdout := .inherit, stderr := .inherit }
+          return ← child.wait
+      -- resident server: file the request when one is up (RSD-OPT-1).
+      let real ← IO.FS.realPath o.file
+      match ← serveTry { o with file := real.toString } store with
+      | some code => return code
+      | none => pure ()
+      -- source identity: file bytes, minus a leading `#!` line.
+      let raw ← IO.FS.readFile o.file
+      let feed := stripShebang raw
+      let srcQ := digestString feed
+      clk.mark "d_source"
+      if srcQ == "" then
+        return ← refuse "store" "source hashing failed" 66
+      let hostOpt ← findHost store home
+      let tq ← toolchainParts home store hostOpt
+      clk.mark "d_toolchain"
+      match ← readMod store srcQ with
+      | some rec =>
+        clk.mark "d_record"
+        if ← validateMod tq rec then
+          clk.mark "d_validate"
+          match hostOpt with
+          | some host =>
+            match ← runModule clk host home store tq.2.2 rec.wasmQ rec.entry rec.ret rec.arity rec.procStep o
+                (wasmOk store rec.wasmQ) with
+            | some code => return code
+            | none => pure ()
+          | none =>
+            return ← refuse "host_unavailable" "no wasm host (build rsd-host or keep runhost.cjs)" 70
+      | none => pure ()
+      -- miss or stale: the compiler does the whole pipeline + the run.
+      match ← findRsdc store with
+      | none =>
+        refuse "host_unavailable" "no rsdc compiler found (set RSDC or build it beside rsd)" 70
+      | some bin => do
+        let child ← IO.Process.spawn
+          { cmd := bin, args := argv.toArray,
+            stdin := .inherit, stdout := .inherit, stderr := .inherit }
+        child.wait
+
+end Rsd
+
+def main (argv : List String) : IO UInt32 := Rsd.shellMain argv

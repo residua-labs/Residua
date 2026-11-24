@@ -406,6 +406,7 @@ def Good {S : SigTable} (progs : Programs S S) (E : ResolvedEnv) (n : Nat)
     lowering refutes it (`lowerF_not_adequate_divArg`). -/
 def adequacyClosed {S : SigTable} (progs : Programs S S) : Prop :=
   ∀ (E : ResolvedEnv) (n lf fv : Nat) (e T v : Expr Nat) (t : BootTy) (w : Val),
+    EnvClosed E →
     BodiesTyped E n →
     inferT E n [] e = some T → DataTy E T →
     norm E lf e = some v → scmValOf E fv v = some w →
@@ -417,24 +418,27 @@ def adequacyClosed {S : SigTable} (progs : Programs S S) : Prop :=
         = some w
 
 /-! ### One statement per `Expr` constructor (8/8). Proved: bvar, sort, pi, lam, lit.
-    Stated (Prop objects, no `sorry`): const (δ and constructor heads), app (β and
-    constructor spines), letE (ζ). The const case is split below: its head half
-    (`adeqConstHead`, no transparent body) is proved; its δ half `AdeqConstDelta` is open. -/
+    `AdeqApp`, `AdeqLetE`, `AdeqConst`, and `AdeqConstDelta` take `EnvClosed`.
+    Without `EnvClosed` the three open ones are refuted (`not_adeqApp`,
+    `not_adeqLetE`, `not_adeqConstDelta`): constructor `weird : bvar 0`.
+    The `EnvClosed` forms are not proved. lemmas stays 5/8.
+    The const case is split below: its head half (`adeqConstHead`, no transparent
+    body) is proved for every environment; its δ half takes `EnvClosed`. -/
 
 def AdeqBvar {S : SigTable} (progs : Programs S S) : Prop :=
   ∀ E n i, Good progs E n (.bvar i)
 def AdeqSort {S : SigTable} (progs : Programs S S) : Prop :=
   ∀ E n l, Good progs E n (.sort l)
 def AdeqConst {S : SigTable} (progs : Programs S S) : Prop :=
-  ∀ E n r ls, Good progs E n (.const r ls)
+  ∀ E n r ls, EnvClosed E → Good progs E n (.const r ls)
 def AdeqApp {S : SigTable} (progs : Programs S S) : Prop :=
-  ∀ E n f a, Good progs E n (.app f a)
+  ∀ E n f a, EnvClosed E → Good progs E n (.app f a)
 def AdeqLam {S : SigTable} (progs : Programs S S) : Prop :=
   ∀ E n A b, Good progs E n (.lam A b)
 def AdeqPi {S : SigTable} (progs : Programs S S) : Prop :=
   ∀ E n A B, Good progs E n (.pi A B)
 def AdeqLetE {S : SigTable} (progs : Programs S S) : Prop :=
-  ∀ E n A v b, Good progs E n (.letE A v b)
+  ∀ E n A v b, EnvClosed E → Good progs E n (.letE A v b)
 def AdeqLit {S : SigTable} (progs : Programs S S) : Prop :=
   ∀ E n k, Good progs E n (.lit k)
 
@@ -445,15 +449,15 @@ theorem adequacy_of_constructs {S : SigTable} (progs : Programs S S)
     (ha : AdeqApp progs) (hl : AdeqLam progs) (hp : AdeqPi progs)
     (hz : AdeqLetE progs) (hn : AdeqLit progs) :
     adequacyClosed (S := S) progs := by
-  intro E n lf fv e T v t w
+  intro E n lf fv e T v t w hE
   cases e with
   | bvar i => exact hb E n i lf fv T v t w
   | sort l => exact hs E n l lf fv T v t w
-  | const r ls => exact hc E n r ls lf fv T v t w
-  | app f a => exact ha E n f a lf fv T v t w
+  | const r ls => exact hc E n r ls hE lf fv T v t w
+  | app f a => exact ha E n f a hE lf fv T v t w
   | lam A b => exact hl E n A b lf fv T v t w
   | pi A B => exact hp E n A B lf fv T v t w
-  | letE A x b => exact hz E n A x b lf fv T v t w
+  | letE A x b => exact hz E n A x b hE lf fv T v t w
   | lit k => exact hn E n k lf fv T v t w
 
 /-! ### The direct cases -/
@@ -1440,20 +1444,22 @@ theorem good_const_delta_lam {S : SigTable} (progs : Programs S S)
 
 `AdeqConst` follows from `AdeqConstHead` (a constant with no transparent body:
 constructor, axiom, opaque, recursor; `norm` leaves it, erasure keeps it as `ctor`/`rigid`)
-and `AdeqConstDelta` (a transparent constant: its value is its unfolded body's, so the case
-needs the erasure/run simulation the app and letE cases need; stated, open). -/
+and `AdeqConstDelta` (a transparent constant: its value is its unfolded body's,
+under `EnvClosed`). `not_adeqConstDelta` refutes the statement without
+`EnvClosed`. -/
 
 def AdeqConstHead {S : SigTable} (progs : Programs S S) : Prop :=
   ∀ E n r ls, transparentBody E r ls = none → Good progs E n (.const r ls)
 def AdeqConstDelta {S : SigTable} (progs : Programs S S) : Prop :=
-  ∀ E n r ls b, transparentBody E r ls = some b → Good progs E n (.const r ls)
+  ∀ E n r ls b, EnvClosed E →
+    transparentBody E r ls = some b → Good progs E n (.const r ls)
 
 theorem adeqConst_of_split {S : SigTable} (progs : Programs S S)
     (hh : AdeqConstHead progs) (hd : AdeqConstDelta progs) : AdeqConst progs := by
-  intro E n r ls
+  intro E n r ls hE
   cases hb : transparentBody E r ls with
   | none => exact hh E n r ls hb
-  | some b => exact hd E n r ls b hb
+  | some b => exact hd E n r ls b hE hb
 
 theorem norm_const_head {E : ResolvedEnv} {lf r : Nat} {ls : List Level} {v : Expr Nat}
     (hb : transparentBody E r ls = none) (h : norm E lf (.const r ls) = some v) :
@@ -2094,6 +2100,297 @@ theorem good_beta_lit {S : SigTable} (progs : Programs S S)
       exact ⟨3, 1, hbody⟩
     all_goals cases hf
 
+/- β of a λ whose body is a closed literal. `instantiate` leaves the
+   literal in place, so the argument does not appear in the normal form.
+   Not AdeqApp. -/
+theorem norm_beta_discard_lit (E : ResolvedEnv) (k : Nat) (A : Expr Nat)
+    (kbody narg : Nat) :
+    norm E (k + 3) (.app (.lam A (.lit kbody)) (.lit narg)) = some (.lit kbody) := by
+  have hbeta : whnfFuel E (k + 2) (.app (.lam A (.lit kbody)) (.lit narg)) =
+      whnfFuel E (k + 1) (instantiate0 (.lit narg) (.lit kbody)) := by
+    simp only [whnfFuel, appsSpine, foldApps, List.nil_append]
+  have hsub : (instantiate0 (.lit narg) (.lit kbody) : Expr Nat) = .lit kbody := rfl
+  have hlit : whnfFuel E (k + 1) (.lit kbody) = some (.lit kbody) := by
+    simp only [whnfFuel, appsSpine]
+  unfold norm
+  rw [hbeta, hsub, hlit]
+
+/- Fuels 0, 1 and 2 return `none`. -/
+theorem norm_beta_discard_lit_val (E : ResolvedEnv) (lf : Nat) (A : Expr Nat)
+    (kbody narg : Nat) {v : Expr Nat}
+    (hn : norm E lf (.app (.lam A (.lit kbody)) (.lit narg)) = some v) :
+    v = .lit kbody := by
+  cases lf with
+  | zero => exact Option.noConfusion hn
+  | succ lf =>
+    cases lf with
+    | zero =>
+      unfold norm at hn
+      rw [whnfFuel_fuel0] at hn
+      exact Option.noConfusion hn
+    | succ lf =>
+      cases lf with
+      | zero =>
+        have hbeta : whnfFuel E 1 (.app (.lam A (.lit kbody)) (.lit narg)) =
+            whnfFuel E 0 (instantiate0 (.lit narg) (.lit kbody)) := by
+          simp only [whnfFuel, appsSpine, foldApps, List.nil_append]
+        unfold norm at hn
+        rw [hbeta, whnfFuel_fuel0] at hn
+        exact Option.noConfusion hn
+      | succ j =>
+        rw [norm_beta_discard_lit E j A kbody narg] at hn
+        exact (Option.some.inj hn).symm
+
+/- `Good` of that application. The body literal erases as itself, and
+   `run` evaluates the argument literal and then discards it
+   (`run_apply_lit_body`). Relevance of the application and of the λ are
+   what erasure reads. Not AdeqApp. -/
+theorem good_beta_discard_lit {S : SigTable} (progs : Programs S S)
+    (E : ResolvedEnv) (n kbody narg : Nat) (A : Expr Nat)
+    (hirr : irrelevant E n [] (.app (.lam A (.lit kbody)) (.lit narg)) = false)
+    (hirrL : irrelevant E n [] (.lam A (.lit kbody)) = false) :
+    Good progs E n (.app (.lam A (.lit kbody)) (.lit narg)) := by
+  refine good_of_exists progs E n (.app (.lam A (.lit kbody)) (.lit narg)) ?_
+  intro lf fv T v t w _ _ _ hn hs _ _ hf _ _
+  have hv := norm_beta_discard_lit_val E lf A kbody narg hn
+  subst hv
+  cases fv with
+  | zero => exact Option.noConfusion hs
+  | succ m =>
+    have hs2 : scmValOf E (m + 1) (.lit kbody) = some (.int (Int.ofNat kbody)) := rfl
+    rw [hs2] at hs
+    cases hs
+    cases t
+    case i64 =>
+      have hk : inI64Range (Int.ofNat kbody) = true := hf
+      have he : erase E n 3 [] (.app (.lam A (.lit kbody)) (.lit narg)) =
+          some (.app (.lam (.lit kbody)) (.lit narg)) := by
+        simp only [erase, eraseWith, hirr, hirrL, Bool.false_eq_true, if_false, Option.map]
+      have hlow : lowerF E n 3 (S := S) .i64
+          (.app (.lam A (.lit kbody)) (.lit narg)) =
+          emit 3 .i64 (.lit kbody) := by
+        unfold lowerF pipeline
+        rw [he]
+        rfl
+      have hbody : Residua.Bootstrap.Semantics.eval lawsA progs 1 []
+          (lowerF E n 3 (S := S) .i64 (.app (.lam A (.lit kbody)) (.lit narg))) =
+          some (.int (Int.ofNat kbody)) := by
+        rw [hlow]
+        simp only [emit, emitWith]
+        rw [if_pos hk]
+        exact eval_litI progs (Int.ofNat kbody) hk
+      exact ⟨3, 1, hbody⟩
+    all_goals cases hf
+
+/- β of a λ whose body is a closed literal, at an arbitrary argument.
+   `instantiate` leaves the literal. Not AdeqApp. -/
+theorem norm_beta_discard_any (E : ResolvedEnv) (k : Nat) (A arg : Expr Nat)
+    (kbody : Nat) :
+    norm E (k + 3) (.app (.lam A (.lit kbody)) arg) = some (.lit kbody) := by
+  have hbeta : whnfFuel E (k + 2) (.app (.lam A (.lit kbody)) arg) =
+      whnfFuel E (k + 1) (instantiate0 arg (.lit kbody)) := by
+    simp only [whnfFuel, appsSpine, foldApps, List.nil_append]
+  have hsub : (instantiate0 arg (.lit kbody) : Expr Nat) = .lit kbody := rfl
+  have hlit : whnfFuel E (k + 1) (.lit kbody) = some (.lit kbody) := by
+    simp only [whnfFuel, appsSpine]
+  unfold norm
+  rw [hbeta, hsub, hlit]
+
+/- Fuels 0, 1 and 2 return `none`. -/
+theorem norm_beta_discard_any_val (E : ResolvedEnv) (lf : Nat) (A arg : Expr Nat)
+    (kbody : Nat) {v : Expr Nat}
+    (hn : norm E lf (.app (.lam A (.lit kbody)) arg) = some v) :
+    v = .lit kbody := by
+  cases lf with
+  | zero => exact Option.noConfusion hn
+  | succ lf =>
+    cases lf with
+    | zero =>
+      unfold norm at hn
+      rw [whnfFuel_fuel0] at hn
+      exact Option.noConfusion hn
+    | succ lf =>
+      cases lf with
+      | zero =>
+        have hbeta : whnfFuel E 1 (.app (.lam A (.lit kbody)) arg) =
+            whnfFuel E 0 (instantiate0 arg (.lit kbody)) := by
+          simp only [whnfFuel, appsSpine, foldApps, List.nil_append]
+        unfold norm at hn
+        rw [hbeta, whnfFuel_fuel0] at hn
+        exact Option.noConfusion hn
+      | succ j =>
+        rw [norm_beta_discard_any E j A arg kbody] at hn
+        exact (Option.some.inj hn).symm
+
+/- Erasure of that β when the argument erases to `□` at fuel 2.
+   The λ stays, because the application and the λ are relevant.
+   Not AdeqApp. -/
+theorem erase_beta_discard_box (E : ResolvedEnv) (n kbody : Nat) (A arg : Expr Nat)
+    (hirr : irrelevant E n [] (.app (.lam A (.lit kbody)) arg) = false)
+    (hirrL : irrelevant E n [] (.lam A (.lit kbody)) = false)
+    (harg : erase E n 2 [] arg = some .box) :
+    erase E n 3 [] (.app (.lam A (.lit kbody)) arg) =
+      some (.app (.lam (.lit kbody)) .box) := by
+  have hbody : erase E n 1 (.assumption A :: []) (.lit kbody) = some (.lit kbody) := rfl
+  have hlam : erase E n 2 [] (.lam A (.lit kbody)) = some (.lam (.lit kbody)) := by
+    rw [erase_lam_keep E n 1 [] A (.lit kbody) hirrL, hbody]
+    rfl
+  rw [erase_app_keep E n 2 [] (.lam A (.lit kbody)) arg hirr, hlam, harg]
+
+/- `Good` of that β. `run` evaluates the boxed argument and discards it.
+   Not AdeqApp. -/
+theorem good_beta_discard_box {S : SigTable} (progs : Programs S S)
+    (E : ResolvedEnv) (n kbody : Nat) (A arg : Expr Nat)
+    (hirr : irrelevant E n [] (.app (.lam A (.lit kbody)) arg) = false)
+    (hirrL : irrelevant E n [] (.lam A (.lit kbody)) = false)
+    (harg : erase E n 2 [] arg = some .box) :
+    Good progs E n (.app (.lam A (.lit kbody)) arg) := by
+  refine good_of_exists progs E n (.app (.lam A (.lit kbody)) arg) ?_
+  intro lf fv T v t w _ _ _ hn hs _ _ hf _ _
+  have hv := norm_beta_discard_any_val E lf A arg kbody hn
+  subst hv
+  cases fv with
+  | zero => exact Option.noConfusion hs
+  | succ m =>
+    have hs2 : scmValOf E (m + 1) (.lit kbody) = some (.int (Int.ofNat kbody)) := rfl
+    rw [hs2] at hs
+    cases hs
+    cases t
+    case i64 =>
+      have hk : inI64Range (Int.ofNat kbody) = true := hf
+      have he := erase_beta_discard_box E n kbody A arg hirr hirrL harg
+      have hlow : lowerF E n 3 (S := S) .i64
+          (.app (.lam A (.lit kbody)) arg) =
+          emit 3 .i64 (.lit kbody) := by
+        unfold lowerF pipeline
+        rw [he]
+        rfl
+      have hbody : Residua.Bootstrap.Semantics.eval lawsA progs 1 []
+          (lowerF E n 3 (S := S) .i64 (.app (.lam A (.lit kbody)) arg)) =
+          some (.int (Int.ofNat kbody)) := by
+        rw [hlow]
+        simp only [emit, emitWith]
+        rw [if_pos hk]
+        exact eval_litI progs (Int.ofNat kbody) hk
+      exact ⟨3, 1, hbody⟩
+    all_goals cases hf
+
+/- A sort erases to `□`, so the literal-body β that receives it is `Good`.
+   Not AdeqApp. -/
+theorem good_beta_discard_sort {S : SigTable} (progs : Programs S S)
+    (E : ResolvedEnv) (n kbody : Nat) (A : Expr Nat) (l : Level)
+    (hirr : irrelevant E n [] (.app (.lam A (.lit kbody)) (.sort l)) = false)
+    (hirrL : irrelevant E n [] (.lam A (.lit kbody)) = false) :
+    Good progs E n (.app (.lam A (.lit kbody)) (.sort l)) :=
+  good_beta_discard_box progs E n kbody A (.sort l) hirr hirrL rfl
+
+/- A Π erases to `□`. Not AdeqApp. -/
+theorem good_beta_discard_pi {S : SigTable} (progs : Programs S S)
+    (E : ResolvedEnv) (n kbody : Nat) (A B C : Expr Nat)
+    (hirr : irrelevant E n [] (.app (.lam A (.lit kbody)) (.pi B C)) = false)
+    (hirrL : irrelevant E n [] (.lam A (.lit kbody)) = false) :
+    Good progs E n (.app (.lam A (.lit kbody)) (.pi B C)) :=
+  good_beta_discard_box progs E n kbody A (.pi B C) hirr hirrL rfl
+
+/- ζ whose body is a closed literal, at an arbitrary bound term.
+   `instantiate` leaves the literal. Not AdeqLetE. -/
+theorem norm_let_discard_any (E : ResolvedEnv) (k : Nat) (A bound : Expr Nat)
+    (kbody : Nat) :
+    norm E (k + 3) (.letE A bound (.lit kbody)) = some (.lit kbody) := by
+  have hzeta : whnfFuel E (k + 2) (.letE A bound (.lit kbody)) =
+      whnfFuel E (k + 1) (instantiate0 bound (.lit kbody)) := by
+    simp only [whnfFuel, appsSpine, foldApps]
+  have hsub : (instantiate0 bound (.lit kbody) : Expr Nat) = .lit kbody := rfl
+  have hlit : whnfFuel E (k + 1) (.lit kbody) = some (.lit kbody) := by
+    simp only [whnfFuel, appsSpine]
+  unfold norm
+  rw [hzeta, hsub, hlit]
+
+/- Fuels 0, 1 and 2 return `none`. -/
+theorem norm_let_discard_any_val (E : ResolvedEnv) (lf : Nat) (A bound : Expr Nat)
+    (kbody : Nat) {v : Expr Nat}
+    (hn : norm E lf (.letE A bound (.lit kbody)) = some v) :
+    v = .lit kbody := by
+  cases lf with
+  | zero => exact Option.noConfusion hn
+  | succ lf =>
+    cases lf with
+    | zero =>
+      unfold norm at hn
+      rw [whnfFuel_fuel0] at hn
+      exact Option.noConfusion hn
+    | succ lf =>
+      cases lf with
+      | zero =>
+        have hzeta : whnfFuel E 1 (.letE A bound (.lit kbody)) =
+            whnfFuel E 0 (instantiate0 bound (.lit kbody)) := by
+          simp only [whnfFuel, appsSpine, foldApps]
+        unfold norm at hn
+        rw [hzeta, whnfFuel_fuel0] at hn
+        exact Option.noConfusion hn
+      | succ j =>
+        rw [norm_let_discard_any E j A bound kbody] at hn
+        exact (Option.some.inj hn).symm
+
+/- Erasure of that ζ when the bound term erases to `□` at fuel 1.
+   Not AdeqLetE. -/
+theorem erase_let_discard_box (E : ResolvedEnv) (n kbody : Nat) (A bound : Expr Nat)
+    (hirr : irrelevant E n [] (.letE A bound (.lit kbody)) = false)
+    (hbound : erase E n 1 [] bound = some .box) :
+    erase E n 2 [] (.letE A bound (.lit kbody)) =
+      some (.letE .box (.lit kbody)) := by
+  have hbody : erase E n 1 (.letBinding A bound :: []) (.lit kbody) =
+      some (.lit kbody) := rfl
+  rw [erase_let_keep E n 1 [] A bound (.lit kbody) hirr, hbound, hbody]
+
+/- `Good` of that ζ. `run` evaluates the box and then the literal.
+   Not AdeqLetE. -/
+theorem good_let_discard_box {S : SigTable} (progs : Programs S S)
+    (E : ResolvedEnv) (n kbody : Nat) (A bound : Expr Nat)
+    (hirr : irrelevant E n [] (.letE A bound (.lit kbody)) = false)
+    (hbound : erase E n 1 [] bound = some .box) :
+    Good progs E n (.letE A bound (.lit kbody)) := by
+  refine good_of_exists progs E n (.letE A bound (.lit kbody)) ?_
+  intro lf fv T v t w _ _ _ hn hs _ _ hf _ _
+  have hv := norm_let_discard_any_val E lf A bound kbody hn
+  subst hv
+  cases fv with
+  | zero => exact Option.noConfusion hs
+  | succ m =>
+    have hs2 : scmValOf E (m + 1) (.lit kbody) = some (.int (Int.ofNat kbody)) := rfl
+    rw [hs2] at hs
+    cases hs
+    cases t
+    case i64 =>
+      have hk : inI64Range (Int.ofNat kbody) = true := hf
+      have he := erase_let_discard_box E n kbody A bound hirr hbound
+      have hlow : lowerF E n 2 (S := S) .i64 (.letE A bound (.lit kbody)) =
+          emit 2 .i64 (.lit kbody) := by
+        unfold lowerF pipeline
+        rw [he]
+        rfl
+      have hbody : Residua.Bootstrap.Semantics.eval lawsA progs 1 []
+          (lowerF E n 2 (S := S) .i64 (.letE A bound (.lit kbody))) =
+          some (.int (Int.ofNat kbody)) := by
+        rw [hlow]
+        simp only [emit, emitWith]
+        rw [if_pos hk]
+        exact eval_litI progs (Int.ofNat kbody) hk
+      exact ⟨2, 1, hbody⟩
+    all_goals cases hf
+
+theorem good_let_discard_sort {S : SigTable} (progs : Programs S S)
+    (E : ResolvedEnv) (n kbody : Nat) (A : Expr Nat) (l : Level)
+    (hirr : irrelevant E n [] (.letE A (.sort l) (.lit kbody)) = false) :
+    Good progs E n (.letE A (.sort l) (.lit kbody)) :=
+  good_let_discard_box progs E n kbody A (.sort l) hirr rfl
+
+theorem good_let_discard_pi {S : SigTable} (progs : Programs S S)
+    (E : ResolvedEnv) (n kbody : Nat) (A B C : Expr Nat)
+    (hirr : irrelevant E n [] (.letE A (.pi B C) (.lit kbody)) = false) :
+    Good progs E n (.letE A (.pi B C) (.lit kbody)) :=
+  good_let_discard_box progs E n kbody A (.pi B C) hirr rfl
+
 /- A data type is an inductive constant applied to arguments, so it is not
    an arity. `irrelevant` of a term the checker types at such a `T` is then
    only whether the type of `T` is `Prop` as written. AdeqApp, AdeqLetE and
@@ -2140,6 +2437,27 @@ theorem erase_box_of_irrelevant (E : ResolvedEnv) (n F : Nat) (Γ : LCtx)
   | app _ _ => simp only [erase, eraseWith, h, if_true]
   | lam _ _ => simp only [erase, eraseWith, h, if_true]
   | letE _ _ _ => simp only [erase, eraseWith, h, if_true]
+
+/- Any irrelevant non-literal argument erases to `□` at fuel 2.
+   Not AdeqApp. -/
+theorem good_beta_discard_irr {S : SigTable} (progs : Programs S S)
+    (E : ResolvedEnv) (n kbody : Nat) (A arg : Expr Nat)
+    (hirr : irrelevant E n [] (.app (.lam A (.lit kbody)) arg) = false)
+    (hirrL : irrelevant E n [] (.lam A (.lit kbody)) = false)
+    (hirrA : irrelevant E n [] arg = true) (hl : ∀ k, arg ≠ .lit k) :
+    Good progs E n (.app (.lam A (.lit kbody)) arg) :=
+  good_beta_discard_box progs E n kbody A arg hirr hirrL
+    (erase_box_of_irrelevant E n 1 [] arg hirrA hl)
+
+/- An irrelevant non-literal bound term erases to `□` at fuel 1.
+   Not AdeqLetE. -/
+theorem good_let_discard_irr {S : SigTable} (progs : Programs S S)
+    (E : ResolvedEnv) (n kbody : Nat) (A bound : Expr Nat)
+    (hirr : irrelevant E n [] (.letE A bound (.lit kbody)) = false)
+    (hirrB : irrelevant E n [] bound = true) (hl : ∀ k, bound ≠ .lit k) :
+    Good progs E n (.letE A bound (.lit kbody)) :=
+  good_let_discard_box progs E n kbody A bound hirr
+    (erase_box_of_irrelevant E n 0 [] bound hirrB hl)
 
 /- `□` runs to `box` and emits `refuse` at every positive fuel. -/
 theorem lowerF_of_erase_box {S : SigTable} (E : ResolvedEnv) (n F : Nat)
@@ -2727,6 +3045,272 @@ theorem norm_zeta_spine_eq (E : ResolvedEnv) (k : Nat) (A v0 b : Expr Nat)
     rw [← heq]
     exact hn
 
+/- A normal form `scmValOf` refuses is `Good` at once. The five direct
+   constructors use this shape. Not AdeqApp, AdeqLetE, or AdeqConstDelta. -/
+theorem good_vacuous_of_norm {S : SigTable} (progs : Programs S S)
+    (E : ResolvedEnv) (n : Nat) (e : Expr Nat)
+    (h : ∀ {lf : Nat} {v : Expr Nat},
+      norm E lf e = some v → ∀ fv, scmValOf E fv v = none) :
+    Good progs E n e := by
+  intro lf fv T v t w _ _ _ hn hs _ _ _ _ _
+  rw [h hn fv] at hs
+  exact Option.noConfusion hs
+
+/- β whose body is a sort. The reduct is that sort at every argument, and
+   a sort is not data. Not AdeqApp. -/
+theorem good_beta_sort {S : SigTable} (progs : Programs S S)
+    (E : ResolvedEnv) (n : Nat) (A arg : Expr Nat) (l : Level) :
+    Good progs E n (.app (.lam A (.sort l)) arg) :=
+  good_vacuous_of_norm progs E n _ (fun {lf} {v} hn fv => by
+    cases lf with
+    | zero =>
+      rw [norm_fuel0] at hn
+      exact Option.noConfusion hn
+    | succ lf =>
+      cases lf with
+      | zero =>
+        unfold norm at hn
+        rw [whnfFuel_fuel0] at hn
+        exact Option.noConfusion hn
+      | succ k =>
+        have happ : foldApps (.lam A (.sort l)) (arg :: []) =
+            .app (.lam A (.sort l)) arg := by
+          simp only [foldApps]
+        have hnfold : norm E (k + 2) (foldApps (.lam A (.sort l)) (arg :: [])) =
+            some v := by
+          rw [happ]
+          exact hn
+        have hn' := norm_beta_spine_eq E k A (.sort l) arg [] v hnfold
+        have hsub : (instantiate0 arg (.sort l) : Expr Nat) = .sort l := rfl
+        rw [hsub] at hn'
+        rw [norm_sort_val hn']
+        exact scmValOf_sort E fv l)
+
+/- β whose body is a Π. The reduct is a Π, which is not data. Not AdeqApp. -/
+theorem good_beta_pi {S : SigTable} (progs : Programs S S)
+    (E : ResolvedEnv) (n : Nat) (A B C arg : Expr Nat) :
+    Good progs E n (.app (.lam A (.pi B C)) arg) :=
+  good_vacuous_of_norm progs E n _ (fun {lf} {v} hn fv => by
+    cases lf with
+    | zero =>
+      rw [norm_fuel0] at hn
+      exact Option.noConfusion hn
+    | succ lf =>
+      cases lf with
+      | zero =>
+        unfold norm at hn
+        rw [whnfFuel_fuel0] at hn
+        exact Option.noConfusion hn
+      | succ k =>
+        have happ : foldApps (.lam A (.pi B C)) (arg :: []) =
+            .app (.lam A (.pi B C)) arg := by
+          simp only [foldApps]
+        have hnfold : norm E (k + 2) (foldApps (.lam A (.pi B C)) (arg :: [])) =
+            some v := by
+          rw [happ]
+          exact hn
+        have hn' := norm_beta_spine_eq E k A (.pi B C) arg [] v hnfold
+        have hsub : instantiate0 arg (.pi B C) =
+            .pi (instantiate0 arg B) (instantiate 1 (lift 0 1 arg) C) := rfl
+        rw [hsub] at hn'
+        obtain ⟨A', B', hv⟩ := norm_pi_val hn'
+        rw [hv]
+        exact scmValOf_pi E fv A' B')
+
+/- β whose body is a λ. The reduct is a λ, which is not data. Not AdeqApp. -/
+theorem good_beta_lam {S : SigTable} (progs : Programs S S)
+    (E : ResolvedEnv) (n : Nat) (A B t arg : Expr Nat) :
+    Good progs E n (.app (.lam A (.lam B t)) arg) :=
+  good_vacuous_of_norm progs E n _ (fun {lf} {v} hn fv => by
+    cases lf with
+    | zero =>
+      rw [norm_fuel0] at hn
+      exact Option.noConfusion hn
+    | succ lf =>
+      cases lf with
+      | zero =>
+        unfold norm at hn
+        rw [whnfFuel_fuel0] at hn
+        exact Option.noConfusion hn
+      | succ k =>
+        have happ : foldApps (.lam A (.lam B t)) (arg :: []) =
+            .app (.lam A (.lam B t)) arg := by
+          simp only [foldApps]
+        have hnfold : norm E (k + 2) (foldApps (.lam A (.lam B t)) (arg :: [])) =
+            some v := by
+          rw [happ]
+          exact hn
+        have hn' := norm_beta_spine_eq E k A (.lam B t) arg [] v hnfold
+        have hsub : instantiate0 arg (.lam B t) =
+            .lam (instantiate0 arg B) (instantiate 1 (lift 0 1 arg) t) := rfl
+        rw [hsub] at hn'
+        obtain ⟨A', b', hv⟩ := norm_lam_val hn'
+        rw [hv]
+        exact scmValOf_lam E fv A' b')
+
+/- β whose body is `bvar (j + 1)`. Substitution shifts it to `bvar j`,
+   which is not data. The bound index `0` is not this theorem. Not AdeqApp. -/
+theorem good_beta_bvar_succ {S : SigTable} (progs : Programs S S)
+    (E : ResolvedEnv) (n j : Nat) (A arg : Expr Nat) :
+    Good progs E n (.app (.lam A (.bvar (j + 1))) arg) :=
+  good_vacuous_of_norm progs E n _ (fun {lf} {v} hn fv => by
+    cases lf with
+    | zero =>
+      rw [norm_fuel0] at hn
+      exact Option.noConfusion hn
+    | succ lf =>
+      cases lf with
+      | zero =>
+        unfold norm at hn
+        rw [whnfFuel_fuel0] at hn
+        exact Option.noConfusion hn
+      | succ k =>
+        have happ : foldApps (.lam A (.bvar (j + 1))) (arg :: []) =
+            .app (.lam A (.bvar (j + 1))) arg := by
+          simp only [foldApps]
+        have hnfold :
+            norm E (k + 2) (foldApps (.lam A (.bvar (j + 1))) (arg :: [])) =
+              some v := by
+          rw [happ]
+          exact hn
+        have hn' := norm_beta_spine_eq E k A (.bvar (j + 1)) arg [] v hnfold
+        have hne : j + 1 ≠ 0 := Nat.succ_ne_zero j
+        have hlt : 0 < j + 1 := Nat.zero_lt_succ j
+        have hr : instantiate0 arg (.bvar (j + 1)) = .bvar j := by
+          simp only [instantiate0, instantiate, if_neg hne, if_pos hlt]
+          rw [Nat.add_sub_cancel j 1]
+        rw [hr] at hn'
+        rw [norm_bvar_val hn']
+        exact scmValOf_bvar E fv j)
+
+/- ζ whose body is a sort. The bound term is discarded and the reduct is
+   that sort. Not AdeqLetE. -/
+theorem good_let_sort {S : SigTable} (progs : Programs S S)
+    (E : ResolvedEnv) (n : Nat) (A bound : Expr Nat) (l : Level) :
+    Good progs E n (.letE A bound (.sort l)) :=
+  good_vacuous_of_norm progs E n _ (fun {lf} {v} hn fv => by
+    cases lf with
+    | zero =>
+      rw [norm_fuel0] at hn
+      exact Option.noConfusion hn
+    | succ lf =>
+      cases lf with
+      | zero =>
+        unfold norm at hn
+        rw [whnfFuel_fuel0] at hn
+        exact Option.noConfusion hn
+      | succ k =>
+        have hlet : foldApps (.letE A bound (.sort l)) ([] : List (Expr Nat)) =
+            .letE A bound (.sort l) := by
+          simp only [foldApps]
+        have hnfold :
+            norm E (k + 2) (foldApps (.letE A bound (.sort l)) []) = some v := by
+          rw [hlet]
+          exact hn
+        have hn' := norm_zeta_spine_eq E k A bound (.sort l) [] v hnfold
+        have hsub : (instantiate0 bound (.sort l) : Expr Nat) = .sort l := rfl
+        rw [hsub] at hn'
+        rw [norm_sort_val hn']
+        exact scmValOf_sort E fv l)
+
+/- ζ whose body is a Π. Not AdeqLetE. -/
+theorem good_let_pi {S : SigTable} (progs : Programs S S)
+    (E : ResolvedEnv) (n : Nat) (A bound B C : Expr Nat) :
+    Good progs E n (.letE A bound (.pi B C)) :=
+  good_vacuous_of_norm progs E n _ (fun {lf} {v} hn fv => by
+    cases lf with
+    | zero =>
+      rw [norm_fuel0] at hn
+      exact Option.noConfusion hn
+    | succ lf =>
+      cases lf with
+      | zero =>
+        unfold norm at hn
+        rw [whnfFuel_fuel0] at hn
+        exact Option.noConfusion hn
+      | succ k =>
+        have hlet : foldApps (.letE A bound (.pi B C)) ([] : List (Expr Nat)) =
+            .letE A bound (.pi B C) := by
+          simp only [foldApps]
+        have hnfold :
+            norm E (k + 2) (foldApps (.letE A bound (.pi B C)) []) = some v := by
+          rw [hlet]
+          exact hn
+        have hn' := norm_zeta_spine_eq E k A bound (.pi B C) [] v hnfold
+        have hsub : instantiate0 bound (.pi B C) =
+            .pi (instantiate0 bound B) (instantiate 1 (lift 0 1 bound) C) := rfl
+        rw [hsub] at hn'
+        obtain ⟨A', B', hv⟩ := norm_pi_val hn'
+        rw [hv]
+        exact scmValOf_pi E fv A' B')
+
+/- ζ whose body is a λ. Not AdeqLetE. -/
+theorem good_let_lam {S : SigTable} (progs : Programs S S)
+    (E : ResolvedEnv) (n : Nat) (A bound B t : Expr Nat) :
+    Good progs E n (.letE A bound (.lam B t)) :=
+  good_vacuous_of_norm progs E n _ (fun {lf} {v} hn fv => by
+    cases lf with
+    | zero =>
+      rw [norm_fuel0] at hn
+      exact Option.noConfusion hn
+    | succ lf =>
+      cases lf with
+      | zero =>
+        unfold norm at hn
+        rw [whnfFuel_fuel0] at hn
+        exact Option.noConfusion hn
+      | succ k =>
+        have hlet : foldApps (.letE A bound (.lam B t)) ([] : List (Expr Nat)) =
+            .letE A bound (.lam B t) := by
+          simp only [foldApps]
+        have hnfold :
+            norm E (k + 2) (foldApps (.letE A bound (.lam B t)) []) = some v := by
+          rw [hlet]
+          exact hn
+        have hn' := norm_zeta_spine_eq E k A bound (.lam B t) [] v hnfold
+        have hsub : instantiate0 bound (.lam B t) =
+            .lam (instantiate0 bound B) (instantiate 1 (lift 0 1 bound) t) := rfl
+        rw [hsub] at hn'
+        obtain ⟨A', b', hv⟩ := norm_lam_val hn'
+        rw [hv]
+        exact scmValOf_lam E fv A' b')
+
+/- ζ whose body is `bvar (j + 1)`. The bound index `0` is not this
+   theorem. Not AdeqLetE. -/
+theorem good_let_bvar_succ {S : SigTable} (progs : Programs S S)
+    (E : ResolvedEnv) (n j : Nat) (A bound : Expr Nat) :
+    Good progs E n (.letE A bound (.bvar (j + 1))) :=
+  good_vacuous_of_norm progs E n _ (fun {lf} {v} hn fv => by
+    cases lf with
+    | zero =>
+      rw [norm_fuel0] at hn
+      exact Option.noConfusion hn
+    | succ lf =>
+      cases lf with
+      | zero =>
+        unfold norm at hn
+        rw [whnfFuel_fuel0] at hn
+        exact Option.noConfusion hn
+      | succ k =>
+        have hlet :
+            foldApps (.letE A bound (.bvar (j + 1))) ([] : List (Expr Nat)) =
+              .letE A bound (.bvar (j + 1)) := by
+          simp only [foldApps]
+        have hnfold :
+            norm E (k + 2) (foldApps (.letE A bound (.bvar (j + 1))) []) =
+              some v := by
+          rw [hlet]
+          exact hn
+        have hn' := norm_zeta_spine_eq E k A bound (.bvar (j + 1)) [] v hnfold
+        have hne : j + 1 ≠ 0 := Nat.succ_ne_zero j
+        have hlt : 0 < j + 1 := Nat.zero_lt_succ j
+        have hr : instantiate0 bound (.bvar (j + 1)) = .bvar j := by
+          simp only [instantiate0, instantiate, if_neg hne, if_pos hlt]
+          rw [Nat.add_sub_cancel j 1]
+        rw [hr] at hn'
+        rw [norm_bvar_val hn']
+        exact scmValOf_bvar E fv j)
+
 /- One δ step on a spine whose head is a transparent constant.
    `whnf_const_delta` is the empty spine. Not AdeqConstDelta. -/
 theorem whnf_delta_spine (E : ResolvedEnv) (k r : Nat) (ls : List Level)
@@ -3060,6 +3644,261 @@ def cTrue : Expr Nat := .const 4 []
 def cIntro : Expr Nat := .const 5 []
 def cMk : Expr Nat := .const 10 []
 
+/-- `closedAt c e`: every `bvar` sits strictly under cutoff `c`. -/
+def closedAt (c : Nat) : Expr Nat → Bool
+  | .bvar i => decide (i < c)
+  | .sort _ => true
+  | .const _ _ => true
+  | .lit _ => true
+  | .app f x => closedAt c f && closedAt c x
+  | .lam a b => closedAt c a && closedAt (c + 1) b
+  | .pi a b => closedAt c a && closedAt (c + 1) b
+  | .letE a v b => closedAt c a && closedAt c v && closedAt (c + 1) b
+
+theorem lift_eq_of_closedAt :
+    ∀ (e : Expr Nat) (c k : Nat), closedAt c e = true → lift (c + k) 1 e = e
+  | .bvar i, c, k, h => by
+      have hlt : i < c := by simpa [closedAt, decide_eq_true_eq] using h
+      have hle : ¬ c + k ≤ i :=
+        Nat.not_le.mpr (Nat.lt_of_lt_of_le hlt (Nat.le_add_right c k))
+      simp only [lift]
+      rw [if_neg hle]
+  | .sort _, _, _, _ => rfl
+  | .const _ _, _, _, _ => rfl
+  | .lit _, _, _, _ => rfl
+  | .app f x, c, k, h => by
+      simp only [closedAt, Bool.and_eq_true] at h
+      simp only [lift, lift_eq_of_closedAt f c k h.1, lift_eq_of_closedAt x c k h.2]
+  | .lam a b, c, k, h => by
+      simp only [closedAt, Bool.and_eq_true] at h
+      have hb := lift_eq_of_closedAt b (c + 1) k h.2
+      have hc : c + k + 1 = c + 1 + k := Nat.add_right_comm c k 1
+      simp only [lift, lift_eq_of_closedAt a c k h.1, hc, hb]
+  | .pi a b, c, k, h => by
+      simp only [closedAt, Bool.and_eq_true] at h
+      have hb := lift_eq_of_closedAt b (c + 1) k h.2
+      have hc : c + k + 1 = c + 1 + k := Nat.add_right_comm c k 1
+      simp only [lift, lift_eq_of_closedAt a c k h.1, hc, hb]
+  | .letE a v b, c, k, h => by
+      simp only [closedAt, Bool.and_eq_true] at h
+      have ha := lift_eq_of_closedAt a c k h.1.1
+      have hv := lift_eq_of_closedAt v c k h.1.2
+      have hb := lift_eq_of_closedAt b (c + 1) k h.2
+      have hc : c + k + 1 = c + 1 + k := Nat.add_right_comm c k 1
+      simp only [lift, ha, hv, hc, hb]
+
+/- A term `lift` fixes from cutoff `c` has no free index at `c` or above,
+   so `closedAt c` holds. The binder case shifts the cutoff by one, the
+   same `c + k + 1 = (c + 1) + k` as `lift_eq_of_closedAt`. -/
+theorem closedAt_of_lifts :
+    ∀ (e : Expr Nat) (c : Nat), (∀ k, lift (c + k) 1 e = e) → closedAt c e = true
+  | .bvar j, c, h => by
+      by_cases hcj : c ≤ j
+      · have h0 := h 0
+        rw [Nat.add_zero] at h0
+        simp only [lift, hcj, ite_true] at h0
+        exact absurd (Expr.bvar.inj h0) (Nat.succ_ne_self j)
+      · simp only [closedAt, decide_eq_true_eq]
+        exact Nat.not_le.mp hcj
+  | .sort _, _, _ => rfl
+  | .const _ _, _, _ => rfl
+  | .lit _, _, _ => rfl
+  | .app f x, c, h => by
+      have hf : ∀ k, lift (c + k) 1 f = f := by
+        intro k
+        have hk := h k
+        simp only [lift] at hk
+        exact (Expr.app.inj hk).1
+      have hx : ∀ k, lift (c + k) 1 x = x := by
+        intro k
+        have hk := h k
+        simp only [lift] at hk
+        exact (Expr.app.inj hk).2
+      simp only [closedAt, closedAt_of_lifts f c hf, closedAt_of_lifts x c hx, Bool.and_self]
+  | .lam a b, c, h => by
+      have ha : ∀ k, lift (c + k) 1 a = a := by
+        intro k
+        have hk := h k
+        simp only [lift] at hk
+        exact (Expr.lam.inj hk).1
+      have hb : ∀ k, lift ((c + 1) + k) 1 b = b := by
+        intro k
+        have hk := h k
+        simp only [lift] at hk
+        have h2 := (Expr.lam.inj hk).2
+        have hc : c + k + 1 = (c + 1) + k := Nat.add_right_comm c k 1
+        simpa [hc] using h2
+      simp only [closedAt, closedAt_of_lifts a c ha, closedAt_of_lifts b (c + 1) hb,
+        Bool.and_self]
+  | .pi a b, c, h => by
+      have ha : ∀ k, lift (c + k) 1 a = a := by
+        intro k
+        have hk := h k
+        simp only [lift] at hk
+        exact (Expr.pi.inj hk).1
+      have hb : ∀ k, lift ((c + 1) + k) 1 b = b := by
+        intro k
+        have hk := h k
+        simp only [lift] at hk
+        have h2 := (Expr.pi.inj hk).2
+        have hc : c + k + 1 = (c + 1) + k := Nat.add_right_comm c k 1
+        simpa [hc] using h2
+      simp only [closedAt, closedAt_of_lifts a c ha, closedAt_of_lifts b (c + 1) hb,
+        Bool.and_self]
+  | .letE a v b, c, h => by
+      have ha : ∀ k, lift (c + k) 1 a = a := by
+        intro k
+        have hk := h k
+        simp only [lift] at hk
+        exact (Expr.letE.inj hk).1
+      have hv : ∀ k, lift (c + k) 1 v = v := by
+        intro k
+        have hk := h k
+        simp only [lift] at hk
+        exact (Expr.letE.inj hk).2.1
+      have hb : ∀ k, lift ((c + 1) + k) 1 b = b := by
+        intro k
+        have hk := h k
+        simp only [lift] at hk
+        have h3 := (Expr.letE.inj hk).2.2
+        have hc : c + k + 1 = (c + 1) + k := Nat.add_right_comm c k 1
+        simpa [hc] using h3
+      simp only [closedAt, closedAt_of_lifts a c ha, closedAt_of_lifts v c hv,
+        closedAt_of_lifts b (c + 1) hb, Bool.and_self]
+
+/- Below a closed cutoff, `instantiate` does not meet a free index, so it
+   is the identity. `EnvClosed` gives this at cutoff 0 for member types
+   and bodies (`envSubst_of_envClosed`). Not AdeqApp, AdeqLetE, or
+   AdeqConstDelta. -/
+theorem instantiate_eq_of_closedAt :
+    ∀ (e : Expr Nat) (c i : Nat) (v : Expr Nat),
+      closedAt c e = true → c ≤ i → instantiate i v e = e
+  | .bvar j, c, i, _, h, hci => by
+      have hlt : j < c := by simpa [closedAt, decide_eq_true_eq] using h
+      have hji : j < i := Nat.lt_of_lt_of_le hlt hci
+      have hne : j ≠ i := Nat.ne_of_lt hji
+      have hnge : ¬ i < j := Nat.not_lt.mpr (Nat.le_of_lt hji)
+      simp only [instantiate]
+      rw [if_neg hne, if_neg hnge]
+  | .sort _, _, _, _, _, _ => rfl
+  | .const _ _, _, _, _, _, _ => rfl
+  | .lit _, _, _, _, _, _ => rfl
+  | .app f x, c, i, v, h, hci => by
+      simp only [closedAt, Bool.and_eq_true] at h
+      simp only [instantiate, instantiate_eq_of_closedAt f c i v h.1 hci,
+        instantiate_eq_of_closedAt x c i v h.2 hci]
+  | .lam a b, c, i, v, h, hci => by
+      simp only [closedAt, Bool.and_eq_true] at h
+      have hb := instantiate_eq_of_closedAt b (c + 1) (i + 1) (lift 0 1 v) h.2
+        (Nat.succ_le_succ hci)
+      simp only [instantiate, instantiate_eq_of_closedAt a c i v h.1 hci, hb]
+  | .pi a b, c, i, v, h, hci => by
+      simp only [closedAt, Bool.and_eq_true] at h
+      have hb := instantiate_eq_of_closedAt b (c + 1) (i + 1) (lift 0 1 v) h.2
+        (Nat.succ_le_succ hci)
+      simp only [instantiate, instantiate_eq_of_closedAt a c i v h.1 hci, hb]
+  | .letE a v0 b, c, i, v, h, hci => by
+      simp only [closedAt, Bool.and_eq_true] at h
+      have hb := instantiate_eq_of_closedAt b (c + 1) (i + 1) (lift 0 1 v) h.2
+        (Nat.succ_le_succ hci)
+      simp only [instantiate, instantiate_eq_of_closedAt a c i v h.1.1 hci,
+        instantiate_eq_of_closedAt v0 c i v h.1.2 hci, hb]
+
+/- `EnvClosed` is the lift form of the checked-member invariant.
+   `EnvSubst` is the instantiate form. The three open defs keep `EnvClosed`
+   as the hypothesis; this is the step from one to the other. -/
+theorem envSubst_of_envClosed {E : ResolvedEnv} (hE : EnvClosed E) : EnvSubst E := by
+  intro r m hm
+  obtain ⟨hty, hbo⟩ := hE r m hm
+  refine ⟨fun v k => ?_, fun b hb v k => ?_⟩
+  · have hc : closedAt 0 m.mtype = true :=
+      closedAt_of_lifts m.mtype 0 (fun j => by simpa [Nat.zero_add] using hty j)
+    have h := instantiate_eq_of_closedAt m.mtype 0 k v hc (Nat.zero_le k)
+    exact h
+  · have hc : closedAt 0 b = true :=
+      closedAt_of_lifts b 0 (fun j => by simpa [Nat.zero_add] using hbo b hb j)
+    exact instantiate_eq_of_closedAt b 0 k v hc (Nat.zero_le k)
+
+/- `lift k 1` pushes every free index up by one, so a term closed at `c`
+   is closed at `c + 1` afterwards. The binder arm lifts at cutoff `k + 1`.
+   Not AdeqApp, AdeqLetE, or AdeqConstDelta. -/
+theorem closedAt_lift :
+    ∀ (e : Expr Nat) (c k : Nat),
+      closedAt c e = true → closedAt (c + 1) (lift k 1 e) = true
+  | .bvar i, c, k, h => by
+      have hlt : i < c := by simpa [closedAt, decide_eq_true_eq] using h
+      simp only [lift]
+      by_cases hk : k ≤ i
+      · rw [if_pos hk]
+        simp only [closedAt, decide_eq_true_eq]
+        exact Nat.succ_lt_succ hlt
+      · rw [if_neg hk]
+        simp only [closedAt, decide_eq_true_eq]
+        exact Nat.lt_succ_of_lt hlt
+  | .sort _, _, _, _ => rfl
+  | .const _ _, _, _, _ => rfl
+  | .lit _, _, _, _ => rfl
+  | .app f x, c, k, h => by
+      simp only [closedAt, Bool.and_eq_true] at h
+      simp only [lift, closedAt, closedAt_lift f c k h.1, closedAt_lift x c k h.2,
+        Bool.and_self]
+  | .lam a b, c, k, h => by
+      simp only [closedAt, Bool.and_eq_true] at h
+      have hb := closedAt_lift b (c + 1) (k + 1) h.2
+      simp only [lift, closedAt, closedAt_lift a c k h.1, hb, Bool.and_self]
+  | .pi a b, c, k, h => by
+      simp only [closedAt, Bool.and_eq_true] at h
+      have hb := closedAt_lift b (c + 1) (k + 1) h.2
+      simp only [lift, closedAt, closedAt_lift a c k h.1, hb, Bool.and_self]
+  | .letE a v b, c, k, h => by
+      simp only [closedAt, Bool.and_eq_true] at h
+      have hb := closedAt_lift b (c + 1) (k + 1) h.2
+      simp only [lift, closedAt, closedAt_lift a c k h.1.1, closedAt_lift v c k h.1.2,
+        hb, Bool.and_self]
+
+/- Substituting a term closed at `c` for index `c` in a term closed at
+   `c + 1` stays closed at `c`. The binder arm substitutes `lift 0 1 v`,
+   which `closedAt_lift` puts at cutoff `c + 1`. Not AdeqApp, AdeqLetE,
+   or AdeqConstDelta. -/
+theorem closedAt_instantiate :
+    ∀ (e : Expr Nat) (c : Nat) (v : Expr Nat),
+      closedAt (c + 1) e = true → closedAt c v = true →
+      closedAt c (instantiate c v e) = true
+  | .bvar j, c, v, he, hv => by
+      have hlt : j < c + 1 := by simpa [closedAt, decide_eq_true_eq] using he
+      by_cases heq : j = c
+      · simp only [instantiate]
+        rw [if_pos heq]
+        exact hv
+      · have hjc : j < c := Nat.lt_of_le_of_ne (Nat.le_of_lt_succ hlt) heq
+        have hnge : ¬ c < j := Nat.not_lt.mpr (Nat.le_of_lt hjc)
+        simp only [instantiate]
+        rw [if_neg heq, if_neg hnge]
+        simp only [closedAt, decide_eq_true_eq]
+        exact hjc
+  | .sort _, _, _, _, _ => rfl
+  | .const _ _, _, _, _, _ => rfl
+  | .lit _, _, _, _, _ => rfl
+  | .app f x, c, v, he, hv => by
+      simp only [closedAt, Bool.and_eq_true] at he
+      simp only [instantiate, closedAt, closedAt_instantiate f c v he.1 hv,
+        closedAt_instantiate x c v he.2 hv, Bool.and_self]
+  | .lam a b, c, v, he, hv => by
+      simp only [closedAt, Bool.and_eq_true] at he
+      have hb := closedAt_instantiate b (c + 1) (lift 0 1 v) he.2 (closedAt_lift v c 0 hv)
+      simp only [instantiate, closedAt, closedAt_instantiate a c v he.1 hv, hb,
+        Bool.and_self]
+  | .pi a b, c, v, he, hv => by
+      simp only [closedAt, Bool.and_eq_true] at he
+      have hb := closedAt_instantiate b (c + 1) (lift 0 1 v) he.2 (closedAt_lift v c 0 hv)
+      simp only [instantiate, closedAt, closedAt_instantiate a c v he.1 hv, hb,
+        Bool.and_self]
+  | .letE a v0 b, c, v, he, hv => by
+      simp only [closedAt, Bool.and_eq_true] at he
+      have hb := closedAt_instantiate b (c + 1) (lift 0 1 v) he.2 (closedAt_lift v c 0 hv)
+      simp only [instantiate, closedAt, closedAt_instantiate a c v he.1.1 hv,
+        closedAt_instantiate v0 c v he.1.2 hv, hb, Bool.and_self]
+
 def ctlEnv : ResolvedEnv where
   members := fun r =>
     match r with
@@ -3079,6 +3918,72 @@ def ctlEnv : ResolvedEnv where
     | 13 => some ⟨.axiomM, 0, cN, none⟩
     | 14 => some ⟨.theoremM, 0, cTrue, some cIntro⟩
     | _ => none
+
+private theorem ctl_member_closed (m : CheckedMember)
+    (ht : closedAt 0 m.mtype = true)
+    (hb : ∀ b, m.body = some b → closedAt 0 b = true) :
+    (∀ k, lift k 1 m.mtype = m.mtype) ∧
+      (∀ b, m.body = some b → ∀ k, lift k 1 b = b) :=
+  ⟨fun k => by
+      have h := lift_eq_of_closedAt m.mtype 0 k ht
+      rwa [Nat.zero_add] at h,
+   fun b hsome k => by
+      have h := lift_eq_of_closedAt b 0 k (hb b hsome)
+      rwa [Nat.zero_add] at h⟩
+
+theorem ctlEnv_closed : EnvClosed ctlEnv := by
+  intro r m hm
+  match r, hm with
+  | 0, hm =>
+      cases hm
+      exact ctl_member_closed _ rfl (fun _ hb => nomatch hb)
+  | 1, hm =>
+      cases hm
+      exact ctl_member_closed _ rfl (fun _ hb => nomatch hb)
+  | 2, hm =>
+      cases hm
+      exact ctl_member_closed _ rfl (fun _ hb => nomatch hb)
+  | 3, hm => exact Option.noConfusion hm
+  | 4, hm =>
+      cases hm
+      exact ctl_member_closed _ rfl (fun _ hb => nomatch hb)
+  | 5, hm =>
+      cases hm
+      exact ctl_member_closed _ rfl (fun _ hb => nomatch hb)
+  | 6, hm =>
+      cases hm
+      exact ctl_member_closed _ rfl (fun _ hb => nomatch hb)
+  | 7, hm =>
+      cases hm
+      exact ctl_member_closed _ rfl (fun _ hb => nomatch hb)
+  | 8, hm =>
+      cases hm
+      exact ctl_member_closed _ rfl (fun _ hb => nomatch hb)
+  | 9, hm =>
+      cases hm
+      exact ctl_member_closed _ rfl (fun _ hb => nomatch hb)
+  | 10, hm =>
+      cases hm
+      exact ctl_member_closed _ rfl (fun _ hb => nomatch hb)
+  | 11, hm =>
+      cases hm
+      exact ctl_member_closed _ rfl (fun b hb => by
+        cases hb
+        rfl)
+  | 12, hm =>
+      cases hm
+      exact ctl_member_closed _ rfl (fun b hb => by
+        cases hb
+        rfl)
+  | 13, hm =>
+      cases hm
+      exact ctl_member_closed _ rfl (fun _ hb => nomatch hb)
+  | 14, hm =>
+      cases hm
+      exact ctl_member_closed _ rfl (fun b hb => by
+        cases hb
+        rfl)
+  | _ + 15, hm => exact Option.noConfusion hm
 
 /-- scm sum type with `k` summands, each `list τ`. -/
 def sumL (k : Nat) (τ : BootTy) : BootTy := .sum (List.replicate k (.list τ))
@@ -5381,6 +6286,526 @@ theorem lowerF_not_adequate_divArg {S : SigTable} (progs : Programs S S) :
 #guard optValEq (obs loopEnv bomb) (some (.int 0)) &&
   (runLowered (lowerF loopEnv 0 4 (t := .i64) bomb)).isNone
 
+/- `convWith` only appends code. The entries already in the table stay a
+   prefix, so a label assigned before the argument is converted still
+   points at the same body. Not AdeqApp. -/
+theorem convWith_suffix (cr : List Nat → Nat → Nat) (ρ : Nat → Nat)
+    (code : List Code) (l : LExpr) :
+    ∃ ext, (convWith cr ρ code l).2 = code ++ ext := by
+  induction l generalizing code ρ with
+  | bvar i => exact ⟨[], by simp [convWith, List.append_nil]⟩
+  | box => exact ⟨[], by simp [convWith, List.append_nil]⟩
+  | lit k => exact ⟨[], by simp [convWith, List.append_nil]⟩
+  | ctor r => exact ⟨[], by simp [convWith, List.append_nil]⟩
+  | rigid r => exact ⟨[], by simp [convWith, List.append_nil]⟩
+  | glob i => exact ⟨[], by simp [convWith, List.append_nil]⟩
+  | app f a ihf iha =>
+      obtain ⟨ef, hf⟩ := ihf ρ code
+      obtain ⟨ea, ha⟩ := iha ρ (convWith cr ρ code f).2
+      refine ⟨ef ++ ea, ?_⟩
+      simp only [convWith]
+      rw [ha, hf, List.append_assoc]
+  | lam b ih =>
+      let fs := freeVars 1 b
+      obtain ⟨eb, hb⟩ := ih (cr fs) code
+      let inner := convWith cr (cr fs) code b
+      let entry : Code := { ncap := fs.length, body := inner.1 }
+      refine ⟨eb ++ [entry], ?_⟩
+      simp only [convWith]
+      rw [hb, List.append_assoc]
+  | letE v b ihv ihb =>
+      obtain ⟨ev, hv⟩ := ihv ρ code
+      obtain ⟨eb, hb⟩ := ihb (liftRen ρ) (convWith cr ρ code v).2
+      refine ⟨ev ++ eb, ?_⟩
+      simp only [convWith]
+      rw [hb, hv, List.append_assoc]
+
+/- A λ whose body has no free index above the binder converts to a
+   closure with an empty capture list. `run` of that closure does not
+   enter the body. Not AdeqApp. -/
+theorem convWith_closed_lam (code : List Code) (ρ : Nat → Nat) (b : LExpr)
+    (h : freeVars 1 b = []) :
+    (convWith capRen ρ code (.lam b)).1 =
+      .clo (convWith capRen (capRen []) code b).2.length [] := by
+  simp only [convWith, h, List.map_nil]
+
+/- Defunctionalization of `app (λ _. k) arg`. The literal body is code
+   entry 0; the argument is converted against that one-entry table.
+   Not AdeqApp. -/
+theorem defunc_app_lam_lit (k : Nat) (la : LExpr) :
+    defunc (.app (.lam (.lit k)) la) =
+      (let q := convWith capRen id [{ ncap := 0, body := .lit k }] la
+       (.apply (.clo 0 []) q.1, q.2)) := by
+  rfl
+
+/- `run` of that β when the argument is a λ of a literal. The argument
+   closure is built and discarded; the result is the literal.
+   Fuel 3 is the pipeline fuel of the erasure below. Not AdeqApp. -/
+theorem run_beta_lam_lit (k j : Nat) :
+    run (defunc (.app (.lam (.lit k)) (.lam (.lit j)))).2 3 []
+      (defunc (.app (.lam (.lit k)) (.lam (.lit j)))).1
+      = some (.lit k) := by
+  rfl
+
+/- The same discard under ζ. Not AdeqLetE. -/
+theorem run_let_lam_lit (k j : Nat) :
+    run (defunc (.letE (.lam (.lit j)) (.lit k))).2 3 []
+      (defunc (.letE (.lam (.lit j)) (.lit k))).1
+      = some (.lit k) := by
+  rfl
+
+/- Erasure of a β whose argument is a relevant λ of a literal.
+   Both λs stay, because the application, the function, and the
+   argument are relevant. Not AdeqApp. -/
+theorem erase_beta_discard_lam_lit (E : ResolvedEnv) (n kbody j : Nat)
+    (A B : Expr Nat)
+    (hirr : irrelevant E n [] (.app (.lam A (.lit kbody)) (.lam B (.lit j))) = false)
+    (hirrL : irrelevant E n [] (.lam A (.lit kbody)) = false)
+    (hirrA : irrelevant E n [] (.lam B (.lit j)) = false) :
+    erase E n 3 [] (.app (.lam A (.lit kbody)) (.lam B (.lit j))) =
+      some (.app (.lam (.lit kbody)) (.lam (.lit j))) := by
+  have hbody : erase E n 1 (.assumption A :: []) (.lit kbody) = some (.lit kbody) := rfl
+  have hlam : erase E n 2 [] (.lam A (.lit kbody)) = some (.lam (.lit kbody)) := by
+    rw [erase_lam_keep E n 1 [] A (.lit kbody) hirrL, hbody]
+    rfl
+  have hAb : erase E n 1 (.assumption B :: []) (.lit j) = some (.lit j) := rfl
+  have harg : erase E n 2 [] (.lam B (.lit j)) = some (.lam (.lit j)) := by
+    rw [erase_lam_keep E n 1 [] B (.lit j) hirrA, hAb]
+    rfl
+  rw [erase_app_keep E n 2 [] (.lam A (.lit kbody)) (.lam B (.lit j)) hirr, hlam, harg]
+
+/- `Good` of that β. `run` evaluates the argument λ to a closure and
+   discards it. Not AdeqApp. -/
+theorem good_beta_discard_lam_lit {S : SigTable} (progs : Programs S S)
+    (E : ResolvedEnv) (n kbody j : Nat) (A B : Expr Nat)
+    (hirr : irrelevant E n [] (.app (.lam A (.lit kbody)) (.lam B (.lit j))) = false)
+    (hirrL : irrelevant E n [] (.lam A (.lit kbody)) = false)
+    (hirrA : irrelevant E n [] (.lam B (.lit j)) = false) :
+    Good progs E n (.app (.lam A (.lit kbody)) (.lam B (.lit j))) := by
+  refine good_of_exists progs E n (.app (.lam A (.lit kbody)) (.lam B (.lit j))) ?_
+  intro lf fv T v t w _ _ _ hn hs _ _ hf _ _
+  have hv := norm_beta_discard_any_val E lf A (.lam B (.lit j)) kbody hn
+  subst hv
+  cases fv with
+  | zero => exact Option.noConfusion hs
+  | succ m =>
+    have hs2 : scmValOf E (m + 1) (.lit kbody) = some (.int (Int.ofNat kbody)) := rfl
+    rw [hs2] at hs
+    cases hs
+    cases t
+    case i64 =>
+      have hk : inI64Range (Int.ofNat kbody) = true := hf
+      have he := erase_beta_discard_lam_lit E n kbody j A B hirr hirrL hirrA
+      have hlow : lowerF E n 3 (S := S) .i64
+          (.app (.lam A (.lit kbody)) (.lam B (.lit j))) =
+          emit 3 .i64 (.lit kbody) := by
+        unfold lowerF pipeline
+        rw [he]
+        rfl
+      have hbody : Residua.Bootstrap.Semantics.eval lawsA progs 1 []
+          (lowerF E n 3 (S := S) .i64
+            (.app (.lam A (.lit kbody)) (.lam B (.lit j)))) =
+          some (.int (Int.ofNat kbody)) := by
+        rw [hlow]
+        simp only [emit, emitWith]
+        rw [if_pos hk]
+        exact eval_litI progs (Int.ofNat kbody) hk
+      exact ⟨3, 1, hbody⟩
+    all_goals cases hf
+
+/- Erasure of a ζ whose bound term is a relevant λ of a literal.
+   Not AdeqLetE. -/
+theorem erase_let_discard_lam_lit (E : ResolvedEnv) (n kbody j : Nat)
+    (A B : Expr Nat)
+    (hirr : irrelevant E n [] (.letE A (.lam B (.lit j)) (.lit kbody)) = false)
+    (hirrA : irrelevant E n [] (.lam B (.lit j)) = false) :
+    erase E n 3 [] (.letE A (.lam B (.lit j)) (.lit kbody)) =
+      some (.letE (.lam (.lit j)) (.lit kbody)) := by
+  have hAb : erase E n 1 (.assumption B :: []) (.lit j) = some (.lit j) := rfl
+  have hbound : erase E n 2 [] (.lam B (.lit j)) = some (.lam (.lit j)) := by
+    rw [erase_lam_keep E n 1 [] B (.lit j) hirrA, hAb]
+    rfl
+  have hbody : erase E n 2 (.letBinding A (.lam B (.lit j)) :: []) (.lit kbody) =
+      some (.lit kbody) := rfl
+  rw [erase_let_keep E n 2 [] A (.lam B (.lit j)) (.lit kbody) hirr, hbound, hbody]
+
+/- `Good` of that ζ. Not AdeqLetE. -/
+theorem good_let_discard_lam_lit {S : SigTable} (progs : Programs S S)
+    (E : ResolvedEnv) (n kbody j : Nat) (A B : Expr Nat)
+    (hirr : irrelevant E n [] (.letE A (.lam B (.lit j)) (.lit kbody)) = false)
+    (hirrA : irrelevant E n [] (.lam B (.lit j)) = false) :
+    Good progs E n (.letE A (.lam B (.lit j)) (.lit kbody)) := by
+  refine good_of_exists progs E n (.letE A (.lam B (.lit j)) (.lit kbody)) ?_
+  intro lf fv T v t w _ _ _ hn hs _ _ hf _ _
+  have hv := norm_let_discard_any_val E lf A (.lam B (.lit j)) kbody hn
+  subst hv
+  cases fv with
+  | zero => exact Option.noConfusion hs
+  | succ m =>
+    have hs2 : scmValOf E (m + 1) (.lit kbody) = some (.int (Int.ofNat kbody)) := rfl
+    rw [hs2] at hs
+    cases hs
+    cases t
+    case i64 =>
+      have hk : inI64Range (Int.ofNat kbody) = true := hf
+      have he := erase_let_discard_lam_lit E n kbody j A B hirr hirrA
+      have hlow : lowerF E n 3 (S := S) .i64
+          (.letE A (.lam B (.lit j)) (.lit kbody)) =
+          emit 3 .i64 (.lit kbody) := by
+        unfold lowerF pipeline
+        rw [he]
+        rfl
+      have hbody : Residua.Bootstrap.Semantics.eval lawsA progs 1 []
+          (lowerF E n 3 (S := S) .i64
+            (.letE A (.lam B (.lit j)) (.lit kbody))) =
+          some (.int (Int.ofNat kbody)) := by
+        rw [hlow]
+        simp only [emit, emitWith]
+        rw [if_pos hk]
+        exact eval_litI progs (Int.ofNat kbody) hk
+      exact ⟨3, 1, hbody⟩
+    all_goals cases hf
+
+/- `run` of a β whose argument erasure is any closed λ.
+   The argument closure is built in one step and discarded.
+   The literal body is code entry 0, and `convWith_suffix` keeps it
+   there. Not AdeqApp. -/
+theorem run_beta_closed_lam (k : Nat) (lb : LExpr) (h : freeVars 1 lb = []) :
+    run (defunc (.app (.lam (.lit k)) (.lam lb))).2 2 []
+      (defunc (.app (.lam (.lit k)) (.lam lb))).1 = some (.lit k) := by
+  rw [defunc_app_lam_lit]
+  let code0 : List Code := [{ ncap := 0, body := .lit k }]
+  let q := convWith capRen id code0 (.lam lb)
+  have h1 : q.1 = .clo (convWith capRen (capRen []) code0 lb).2.length [] := by
+    simpa [q, code0] using convWith_closed_lam code0 id lb h
+  obtain ⟨ext, hext⟩ := convWith_suffix capRen id code0 (.lam lb)
+  have hc : q.2.get? 0 = some (⟨0, .lit k⟩ : Code) := by
+    have hq : q.2 = code0 ++ ext := by simpa [q, code0] using hext
+    unfold code0 at hq
+    rw [hq]
+    rfl
+  have ha : run q.2 1 [] q.1 =
+      some (.clo (convWith capRen (capRen []) code0 lb).2.length []) := by
+    rw [h1]
+    exact run_clo_nil q.2 0 _ []
+  simpa [code0, q] using
+    run_apply_lit_body q.2 0 0 k [] q.1
+      (.clo (convWith capRen (capRen []) code0 lb).2.length []) hc ha
+
+/- Defunctionalization of a let whose body is a literal. The bound term
+   is converted first; the literal allocates no code. Not AdeqLetE. -/
+theorem defunc_let_lit (k : Nat) (lv : LExpr) :
+    defunc (.letE lv (.lit k)) =
+      (let p := convWith capRen id [] lv
+       (.letE p.1 (.lit k), p.2)) := by
+  rfl
+
+/- `run` of a ζ whose bound erasure is any closed λ. Not AdeqLetE. -/
+theorem run_let_closed_lam (k : Nat) (lb : LExpr) (h : freeVars 1 lb = []) :
+    run (defunc (.letE (.lam lb) (.lit k))).2 2 []
+      (defunc (.letE (.lam lb) (.lit k))).1 = some (.lit k) := by
+  rw [defunc_let_lit]
+  let p := convWith capRen id [] (.lam lb)
+  have h1 : p.1 = .clo (convWith capRen (capRen []) [] lb).2.length [] := by
+    simpa [p] using convWith_closed_lam [] id lb h
+  rw [run_let_eq, h1, run_clo_nil]
+  unfold run
+  rfl
+
+/- Erasure of a β whose argument erases to a λ. The function λ of a
+   literal stays. Not AdeqApp. -/
+theorem erase_beta_discard_closed_lam (E : ResolvedEnv) (n kbody : Nat)
+    (A arg : Expr Nat) (lb : LExpr)
+    (hirr : irrelevant E n [] (.app (.lam A (.lit kbody)) arg) = false)
+    (hirrL : irrelevant E n [] (.lam A (.lit kbody)) = false)
+    (harg : erase E n 2 [] arg = some (.lam lb)) :
+    erase E n 3 [] (.app (.lam A (.lit kbody)) arg) =
+      some (.app (.lam (.lit kbody)) (.lam lb)) := by
+  have hbody : erase E n 1 (.assumption A :: []) (.lit kbody) = some (.lit kbody) := rfl
+  have hlam : erase E n 2 [] (.lam A (.lit kbody)) = some (.lam (.lit kbody)) := by
+    rw [erase_lam_keep E n 1 [] A (.lit kbody) hirrL, hbody]
+    rfl
+  rw [erase_app_keep E n 2 [] (.lam A (.lit kbody)) arg hirr, hlam, harg]
+
+/- `Good` of that β, when the erased argument λ captures nothing.
+   `run` at fuel 2 returns the literal; `run_mono` lifts it to the
+   pipeline fuel 3. Not AdeqApp. -/
+theorem good_beta_discard_closed_lam {S : SigTable} (progs : Programs S S)
+    (E : ResolvedEnv) (n kbody : Nat) (A arg : Expr Nat) (lb : LExpr)
+    (hirr : irrelevant E n [] (.app (.lam A (.lit kbody)) arg) = false)
+    (hirrL : irrelevant E n [] (.lam A (.lit kbody)) = false)
+    (harg : erase E n 2 [] arg = some (.lam lb))
+    (hclosed : freeVars 1 lb = []) :
+    Good progs E n (.app (.lam A (.lit kbody)) arg) := by
+  refine good_of_exists progs E n (.app (.lam A (.lit kbody)) arg) ?_
+  intro lf fv T v t w _ _ _ hn hs _ _ hf _ _
+  have hv := norm_beta_discard_any_val E lf A arg kbody hn
+  subst hv
+  cases fv with
+  | zero => exact Option.noConfusion hs
+  | succ m =>
+    have hs2 : scmValOf E (m + 1) (.lit kbody) = some (.int (Int.ofNat kbody)) := rfl
+    rw [hs2] at hs
+    cases hs
+    cases t
+    case i64 =>
+      have hk : inI64Range (Int.ofNat kbody) = true := hf
+      have he := erase_beta_discard_closed_lam E n kbody A arg lb hirr hirrL harg
+      have hr2 := run_beta_closed_lam kbody lb hclosed
+      have hr3 := run_mono
+        (defunc (.app (.lam (.lit kbody)) (.lam lb))).2 2 3 []
+        (defunc (.app (.lam (.lit kbody)) (.lam lb))).1
+        (.lit kbody) (Nat.le_succ 2) hr2
+      have hlow : lowerF E n 3 (S := S) .i64
+          (.app (.lam A (.lit kbody)) arg) =
+          emit 3 .i64 (.lit kbody) := by
+        unfold lowerF pipeline
+        simp only [he, hr3]
+      have hbody : Residua.Bootstrap.Semantics.eval lawsA progs 1 []
+          (lowerF E n 3 (S := S) .i64 (.app (.lam A (.lit kbody)) arg)) =
+          some (.int (Int.ofNat kbody)) := by
+        rw [hlow]
+        simp only [emit, emitWith]
+        rw [if_pos hk]
+        exact eval_litI progs (Int.ofNat kbody) hk
+      exact ⟨3, 1, hbody⟩
+    all_goals cases hf
+
+/- Erasure of a ζ whose bound term erases to a λ. Not AdeqLetE. -/
+theorem erase_let_discard_closed_lam (E : ResolvedEnv) (n kbody : Nat)
+    (A bound : Expr Nat) (lb : LExpr)
+    (hirr : irrelevant E n [] (.letE A bound (.lit kbody)) = false)
+    (hbound : erase E n 2 [] bound = some (.lam lb)) :
+    erase E n 3 [] (.letE A bound (.lit kbody)) =
+      some (.letE (.lam lb) (.lit kbody)) := by
+  have hbody : erase E n 2 (.letBinding A bound :: []) (.lit kbody) =
+      some (.lit kbody) := rfl
+  rw [erase_let_keep E n 2 [] A bound (.lit kbody) hirr, hbound, hbody]
+
+/- `Good` of that ζ, when the erased bound λ captures nothing.
+   Not AdeqLetE. -/
+theorem good_let_discard_closed_lam {S : SigTable} (progs : Programs S S)
+    (E : ResolvedEnv) (n kbody : Nat) (A bound : Expr Nat) (lb : LExpr)
+    (hirr : irrelevant E n [] (.letE A bound (.lit kbody)) = false)
+    (hbound : erase E n 2 [] bound = some (.lam lb))
+    (hclosed : freeVars 1 lb = []) :
+    Good progs E n (.letE A bound (.lit kbody)) := by
+  refine good_of_exists progs E n (.letE A bound (.lit kbody)) ?_
+  intro lf fv T v t w _ _ _ hn hs _ _ hf _ _
+  have hv := norm_let_discard_any_val E lf A bound kbody hn
+  subst hv
+  cases fv with
+  | zero => exact Option.noConfusion hs
+  | succ m =>
+    have hs2 : scmValOf E (m + 1) (.lit kbody) = some (.int (Int.ofNat kbody)) := rfl
+    rw [hs2] at hs
+    cases hs
+    cases t
+    case i64 =>
+      have hk : inI64Range (Int.ofNat kbody) = true := hf
+      have he := erase_let_discard_closed_lam E n kbody A bound lb hirr hbound
+      have hr2 := run_let_closed_lam kbody lb hclosed
+      have hr3 := run_mono
+        (defunc (.letE (.lam lb) (.lit kbody))).2 2 3 []
+        (defunc (.letE (.lam lb) (.lit kbody))).1
+        (.lit kbody) (Nat.le_succ 2) hr2
+      have hlow : lowerF E n 3 (S := S) .i64
+          (.letE A bound (.lit kbody)) =
+          emit 3 .i64 (.lit kbody) := by
+        unfold lowerF pipeline
+        simp only [he, hr3]
+      have hbody : Residua.Bootstrap.Semantics.eval lawsA progs 1 []
+          (lowerF E n 3 (S := S) .i64 (.letE A bound (.lit kbody))) =
+          some (.int (Int.ofNat kbody)) := by
+        rw [hlow]
+        simp only [emit, emitWith]
+        rw [if_pos hk]
+        exact eval_litI progs (Int.ofNat kbody) hk
+      exact ⟨3, 1, hbody⟩
+    all_goals cases hf
+
+/- `AdeqApp`, `AdeqLetE`, and `AdeqConstDelta` without `EnvClosed` are false.
+The defs above require `EnvClosed`, so these refutations are stated for
+the unclosed quantifiers. `flipEnv` fails `EnvClosed`.
+
+`weird` is a constructor whose declared type is `bvar 0`. In the empty
+context `inferT` of that type is `none`, so `irrelevant weird = false`,
+and `scmValOf` is the nullary injection. The application
+`(λ (_ : Sort 0), weird) True`, the let `let _ : Sort 0 := True in weird`,
+and a transparent definition of that application at type `True` all
+normalize to `weird`. Each redex is typed at `True : Prop`, so erasure
+is `□` and `lowerF` is `refuse`. `BodiesTyped` holds: the application
+and the let sit in an environment with no transparent member, and the
+definition's body is that application, which `inferT` types at `True`. -/
+
+def flipEnv : ResolvedEnv where
+  members := fun r =>
+    match r with
+    | 0 => some ⟨.inductiveM, 0, .sort .zero, none⟩
+    | 1 => some ⟨.constructorM, 0, .bvar 0, none⟩
+    | _ => none
+
+def flipTrue : Expr Nat := .const 0 []
+def flipWeird : Expr Nat := .const 1 []
+def flipLam : Expr Nat := .lam (.sort .zero) flipWeird
+def flipApp : Expr Nat := .app flipLam flipTrue
+def flipLet : Expr Nat := .letE (.sort .zero) flipTrue flipWeird
+
+def flipDeltaEnv : ResolvedEnv where
+  members := fun r =>
+    match r with
+    | 0 => some ⟨.inductiveM, 0, .sort .zero, none⟩
+    | 1 => some ⟨.constructorM, 0, .bvar 0, none⟩
+    | 2 => some ⟨.definitionM, 0, flipTrue, some flipApp⟩
+    | _ => none
+
+def flipDelta : Expr Nat := .const 2 []
+
+theorem flipBodies (n : Nat) : BodiesTyped flipEnv n := by
+  intro r m b _ hm _ hb _ _
+  match r, hm with
+  | 0, hm => cases hm; cases hb
+  | 1, hm => cases hm; cases hb
+  | _ + 2, hm => exact Option.noConfusion hm
+
+theorem flipData : DataTy flipEnv flipTrue :=
+  ⟨0, [], [], ⟨.inductiveM, 0, .sort .zero, none⟩, rfl, rfl, rfl⟩
+
+theorem flipDeltaData : DataTy flipDeltaEnv flipTrue :=
+  ⟨0, [], [], ⟨.inductiveM, 0, .sort .zero, none⟩, rfl, rfl, rfl⟩
+
+theorem flipApp_norm : norm flipEnv 3 flipApp = some flipWeird := rfl
+theorem flipLet_norm : norm flipEnv 3 flipLet = some flipWeird := rfl
+theorem flipDelta_norm : norm flipDeltaEnv 4 flipDelta = some flipWeird := rfl
+theorem flipDelta_tb : transparentBody flipDeltaEnv 2 [] = some flipApp := rfl
+theorem flipWeird_scm : scmValOf flipEnv 1 flipWeird = some (.inj 1 (.list [])) := rfl
+theorem flipWeird_scm_delta :
+    scmValOf flipDeltaEnv 1 flipWeird = some (.inj 1 (.list [])) := rfl
+theorem flipWeird_spine : relevantSpine flipEnv 0 1 flipWeird = true := rfl
+theorem flipWeird_spine_delta : relevantSpine flipDeltaEnv 0 1 flipWeird = true := rfl
+
+theorem flipTrue_infer : inferT flipEnv 0 [] flipTrue = some (.sort .zero) := rfl
+theorem flipTrue_infer_delta :
+    inferT flipDeltaEnv 0 [] flipTrue = some (.sort .zero) := rfl
+theorem flipWeird_ty : inferT flipEnv 0 [] flipWeird = some (.bvar 0) := rfl
+theorem flipWeird_ty_delta :
+    inferT flipDeltaEnv 0 [] flipWeird = some (.bvar 0) := rfl
+theorem flipWeird_vinfer : (inferT flipEnv 0 [] flipWeird).isSome = true := by
+  rw [flipWeird_ty]
+  rfl
+theorem flipWeird_vinfer_delta :
+    (inferT flipDeltaEnv 0 [] flipWeird).isSome = true := by
+  rw [flipWeird_ty_delta]
+  rfl
+theorem flipWeird_rel : irrelevant flipEnv 0 [] flipWeird = false := by
+  rw [irrelevant, flipWeird_ty]
+  rfl
+theorem flipWeird_rel_delta : irrelevant flipDeltaEnv 0 [] flipWeird = false := by
+  rw [irrelevant, flipWeird_ty_delta]
+  rfl
+theorem flipFits : valFits 1 (sumL 2 .i64) (.inj 1 (.list [])) = true := rfl
+
+theorem flipApp_infer : inferT flipEnv 0 [] flipApp = some flipTrue := rfl
+theorem flipLet_infer : inferT flipEnv 0 [] flipLet = some flipTrue := rfl
+theorem flipDelta_infer : inferT flipDeltaEnv 0 [] flipDelta = some flipTrue := rfl
+theorem flipApp_body_infer : inferT flipDeltaEnv 0 [] flipApp = some flipTrue := rfl
+
+theorem flipApp_irr : irrelevant flipEnv 0 [] flipApp = true :=
+  irrelevant_data_tt flipEnv 0 flipApp flipTrue (.sort .zero)
+    flipApp_infer flipData flipTrue_infer rfl
+
+theorem flipLet_irr : irrelevant flipEnv 0 [] flipLet = true :=
+  irrelevant_data_tt flipEnv 0 flipLet flipTrue (.sort .zero)
+    flipLet_infer flipData flipTrue_infer rfl
+
+theorem flipDelta_irr : irrelevant flipDeltaEnv 0 [] flipDelta = true :=
+  irrelevant_data_tt flipDeltaEnv 0 flipDelta flipTrue (.sort .zero)
+    flipDelta_infer flipDeltaData flipTrue_infer_delta rfl
+
+theorem flipDeltaBodies : BodiesTyped flipDeltaEnv 0 := by
+  intro r m b ls hm _ hb hlen _
+  match r, hm with
+  | 0, hm => cases hm; cases hb
+  | 1, hm => cases hm; cases hb
+  | 2, hm =>
+      cases hm
+      cases hb
+      cases ls with
+      | nil => exact ⟨hasTyT_of_inferT flipApp_body_infer⟩
+      | cons _ _ => exact Nat.noConfusion hlen
+  | _ + 3, hm => exact Option.noConfusion hm
+
+theorem flipApp_er : Erasable flipEnv 0 flipApp :=
+  ⟨1, .box, erase_box_of_irrelevant flipEnv 0 0 [] flipApp flipApp_irr
+      (fun k => app_ne_lit flipLam flipTrue k)⟩
+
+theorem flipLet_er : Erasable flipEnv 0 flipLet :=
+  ⟨1, .box, erase_box_of_irrelevant flipEnv 0 0 [] flipLet flipLet_irr
+      (fun k => letE_ne_lit (.sort .zero) flipTrue flipWeird k)⟩
+
+theorem flipDelta_er : Erasable flipDeltaEnv 0 flipDelta :=
+  ⟨1, .box, erase_box_of_irrelevant flipDeltaEnv 0 0 [] flipDelta flipDelta_irr
+      (fun k => const_ne_lit 2 k [])⟩
+
+def AdeqAppUnclosed {S : SigTable} (progs : Programs S S) : Prop :=
+  ∀ E n f a, Good progs E n (.app f a)
+
+def AdeqLetEUnclosed {S : SigTable} (progs : Programs S S) : Prop :=
+  ∀ E n A v b, Good progs E n (.letE A v b)
+
+def AdeqConstDeltaUnclosed {S : SigTable} (progs : Programs S S) : Prop :=
+  ∀ E n r ls b, transparentBody E r ls = some b → Good progs E n (.const r ls)
+
+theorem not_adeqApp {S : SigTable} (progs : Programs S S) : ¬ AdeqAppUnclosed progs := by
+  intro h
+  obtain ⟨F₀, hF⟩ := h flipEnv 0 flipLam flipTrue 3 1 flipTrue flipWeird
+      (sumL 2 .i64) (.inj 1 (.list [])) (flipBodies 0) flipApp_infer flipData
+      flipApp_norm flipWeird_scm flipWeird_spine flipWeird_rel flipFits
+      flipWeird_vinfer flipApp_er
+  obtain ⟨lf, he⟩ := hF F₀ (Nat.le_refl _)
+  exact eval_irrelevant_ne progs flipEnv 0 (sumL 2 .i64) flipApp _
+    flipApp_irr (fun k => app_ne_lit flipLam flipTrue k) F₀ lf he
+
+theorem not_adeqLetE {S : SigTable} (progs : Programs S S) : ¬ AdeqLetEUnclosed progs := by
+  intro h
+  obtain ⟨F₀, hF⟩ := h flipEnv 0 (.sort .zero) flipTrue flipWeird 3 1 flipTrue
+      flipWeird (sumL 2 .i64) (.inj 1 (.list [])) (flipBodies 0) flipLet_infer
+      flipData flipLet_norm flipWeird_scm flipWeird_spine flipWeird_rel flipFits
+      flipWeird_vinfer flipLet_er
+  obtain ⟨lf, he⟩ := hF F₀ (Nat.le_refl _)
+  exact eval_irrelevant_ne progs flipEnv 0 (sumL 2 .i64) flipLet _
+    flipLet_irr (fun k => letE_ne_lit (.sort .zero) flipTrue flipWeird k) F₀ lf he
+
+theorem not_adeqConstDelta {S : SigTable} (progs : Programs S S) :
+    ¬ AdeqConstDeltaUnclosed progs := by
+  intro h
+  obtain ⟨F₀, hF⟩ := h flipDeltaEnv 0 2 [] flipApp flipDelta_tb 4 1 flipTrue
+      flipWeird (sumL 2 .i64) (.inj 1 (.list [])) flipDeltaBodies
+      flipDelta_infer flipDeltaData flipDelta_norm flipWeird_scm_delta
+      flipWeird_spine_delta flipWeird_rel_delta flipFits flipWeird_vinfer_delta
+      flipDelta_er
+  obtain ⟨lf, he⟩ := hF F₀ (Nat.le_refl _)
+  exact eval_irrelevant_ne progs flipDeltaEnv 0 (sumL 2 .i64) flipDelta _
+    flipDelta_irr (fun k => const_ne_lit 2 k []) F₀ lf he
+
+theorem flipEnv_not_closed : ¬ EnvClosed flipEnv := by
+  intro h
+  have h0 :=
+    (h 1 ⟨.constructorM, 0, .bvar 0, none⟩ rfl).1 0
+  have : lift 0 1 (.bvar 0 : Expr Nat) = .bvar 1 := by
+    simp only [lift, Nat.zero_le, ite_true]
+  rw [this] at h0
+  exact Nat.noConfusion (Expr.bvar.inj h0)
+
+theorem flipDeltaEnv_not_closed : ¬ EnvClosed flipDeltaEnv := by
+  intro h
+  have h0 :=
+    (h 1 ⟨.constructorM, 0, .bvar 0, none⟩ rfl).1 0
+  have : lift 0 1 (.bvar 0 : Expr Nat) = .bvar 1 := by
+    simp only [lift, Nat.zero_le, ite_true]
+  rw [this] at h0
+  exact Nat.noConfusion (Expr.bvar.inj h0)
+
 end Lower
 end Rsx
 
@@ -5430,6 +6855,32 @@ end Rsx
 #print axioms Rsx.Lower.norm_beta_lit
 #print axioms Rsx.Lower.norm_beta_lit_val
 #print axioms Rsx.Lower.good_beta_lit
+#print axioms Rsx.Lower.norm_beta_discard_lit
+#print axioms Rsx.Lower.norm_beta_discard_lit_val
+#print axioms Rsx.Lower.good_beta_discard_lit
+#print axioms Rsx.Lower.good_vacuous_of_norm
+#print axioms Rsx.Lower.good_beta_sort
+#print axioms Rsx.Lower.good_beta_pi
+#print axioms Rsx.Lower.good_beta_lam
+#print axioms Rsx.Lower.good_beta_bvar_succ
+#print axioms Rsx.Lower.good_let_sort
+#print axioms Rsx.Lower.good_let_pi
+#print axioms Rsx.Lower.good_let_lam
+#print axioms Rsx.Lower.good_let_bvar_succ
+#print axioms Rsx.Lower.norm_beta_discard_any
+#print axioms Rsx.Lower.norm_beta_discard_any_val
+#print axioms Rsx.Lower.erase_beta_discard_box
+#print axioms Rsx.Lower.good_beta_discard_box
+#print axioms Rsx.Lower.good_beta_discard_sort
+#print axioms Rsx.Lower.good_beta_discard_pi
+#print axioms Rsx.Lower.good_beta_discard_irr
+#print axioms Rsx.Lower.norm_let_discard_any
+#print axioms Rsx.Lower.norm_let_discard_any_val
+#print axioms Rsx.Lower.erase_let_discard_box
+#print axioms Rsx.Lower.good_let_discard_box
+#print axioms Rsx.Lower.good_let_discard_sort
+#print axioms Rsx.Lower.good_let_discard_pi
+#print axioms Rsx.Lower.good_let_discard_irr
 #print axioms Rsx.Lower.defunc_lam_ctor_bvar
 #print axioms Rsx.Lower.run_lit_any
 #print axioms Rsx.Lower.run_ctor_any
@@ -5627,3 +7078,31 @@ end Rsx
 #print axioms Rsx.Lower.norm_delta_spine_eq
 #print axioms Rsx.Lower.good_const_delta_of_eval
 #print axioms Rsx.Lower.run_apply_lit_body
+#print axioms Rsx.Lower.convWith_suffix
+#print axioms Rsx.Lower.convWith_closed_lam
+#print axioms Rsx.Lower.defunc_app_lam_lit
+#print axioms Rsx.Lower.run_beta_lam_lit
+#print axioms Rsx.Lower.run_let_lam_lit
+#print axioms Rsx.Lower.erase_beta_discard_lam_lit
+#print axioms Rsx.Lower.good_beta_discard_lam_lit
+#print axioms Rsx.Lower.erase_let_discard_lam_lit
+#print axioms Rsx.Lower.good_let_discard_lam_lit
+#print axioms Rsx.Lower.run_beta_closed_lam
+#print axioms Rsx.Lower.defunc_let_lit
+#print axioms Rsx.Lower.run_let_closed_lam
+#print axioms Rsx.Lower.erase_beta_discard_closed_lam
+#print axioms Rsx.Lower.good_beta_discard_closed_lam
+#print axioms Rsx.Lower.erase_let_discard_closed_lam
+#print axioms Rsx.Lower.good_let_discard_closed_lam
+#print axioms Rsx.Lower.not_adeqApp
+#print axioms Rsx.Lower.not_adeqLetE
+#print axioms Rsx.Lower.not_adeqConstDelta
+#print axioms Rsx.Lower.lift_eq_of_closedAt
+#print axioms Rsx.Lower.closedAt_of_lifts
+#print axioms Rsx.Lower.instantiate_eq_of_closedAt
+#print axioms Rsx.Lower.envSubst_of_envClosed
+#print axioms Rsx.Lower.closedAt_lift
+#print axioms Rsx.Lower.closedAt_instantiate
+#print axioms Rsx.Lower.ctlEnv_closed
+#print axioms Rsx.Lower.flipEnv_not_closed
+#print axioms Rsx.Lower.flipDeltaEnv_not_closed

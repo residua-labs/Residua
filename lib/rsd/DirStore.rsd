@@ -1,0 +1,113 @@
+-- Per-entry durable store (RAISIN-OPT-1). The NF memo folds
+-- (lib/FnNF.rsd) persist one file per trace key under <dir>/e/<key-hex>,
+-- not one whole-store file: a lookup is a stat and a read of the asked
+-- keys only, a write is tmp+rename of the units that missed, and no
+-- codec ever walks entries a compile did not ask for. Same rule as the
+-- toolchain's other content-addressed storage (REF-Q objects at
+-- q/<sha256>, ccache, Bazel's CAS).
+--
+-- Entry bytes = "RNE1" + encField keyBytes + encField objectQ +
+-- encField objectBytes (u32le fields, lib/rsd/store.rsd's codec).
+-- The file's name is the trace key (sha256 of keyBytes); the reader
+-- re-derives key = sha256(keyBytes) and refuses a file whose stored
+-- preimage does not hash to its name. Loaded entries enter the in-memory
+-- store as-is, so Lib.FnNF.recall runs the same checks it always did —
+-- keyBytes equality (nf_memo_key_mismatch), object re-hash on hit
+-- (nf_memo_tampered), value decode (nf_memo_undecodable). An
+-- unparseable or misfiled entry is named `[nf_entry_bad]` and treated
+-- as a miss; the writer's rewrite heals it.
+--
+-- Concatenate after lib/rsd/store.rsd. closure_claim = 0.
+-- Pure helpers live in DirStoreData; policy lives in DirEntry.
+namespace Lib.Rsd.DirStore
+
+-- Host read failure is a raw unavailable observation, silently preserved.
+def observeEntry (p : String) : IO (Option (List Int)) := do
+  try return some (bytesOfBA (← IO.FS.readBinFile p))
+  catch _ => return none
+
+def readEntry (p : String) (key : List Int) : IO (Option (List Int × List Int × List Int)) := do
+  let r := Lib.Rsd.DirEntry.runNF
+    { request := { operation := .read, key := key, observed := (← observeEntry p) } }
+  for tag in r.state.decision.diagnostic do IO.eprintln s!"[{tag}] {p}"
+  return r.state.decision.entry
+
+-- Load only the asked keys into an in-memory Store. Entries are inserted
+-- as read (the value bytes unchecked here, exactly as the whole-store
+-- load left them): recall's own checks still name every failure.
+def load (dir : String) (keys : List (List Int)) : IO Lib.Rsd.Store.Store := do
+  let mut s := Lib.Rsd.Store.declare "blob" "nf-key"
+  for key in keys do
+    let p := entryPath dir (toHex key)
+    let lp := legacyEntryPath dir (toHex key)
+    let pp ← if ← System.FilePath.pathExists p then pure (some p)
+      else if ← System.FilePath.pathExists lp then pure (some lp) else pure none
+    match pp with
+    | none => pure ()
+    | some path =>
+      match ← readEntry path key with
+      | none => pure ()
+      | some (kb, oq, v) =>
+        s := insertDiskEntry s key kb oq v
+  return s
+
+-- Lazy on-miss loader: only reads `<dir>/e/<key-hex>` for keys not already
+-- present in `s0`, preventing duplicate list growth across `serve` requests
+-- and avoiding disk I/O on in-memory hits.
+def loadInto (dir : String) (s0 : Lib.Rsd.Store.Store) (keys : List (List Int))
+    : IO Lib.Rsd.Store.Store := do
+  let mut s := s0
+  for key in keys do
+    match Lib.Rsd.Store.lookupAction s key with
+    | some _ => pure ()
+    | none =>
+      let p := entryPath dir (toHex key)
+      let lp := legacyEntryPath dir (toHex key)
+      let pp ← if ← System.FilePath.pathExists p then pure (some p)
+        else if ← System.FilePath.pathExists lp then pure (some lp) else pure none
+      match pp with
+      | none => pure ()
+      | some path =>
+        match ← readEntry path key with
+        | none => pure ()
+        | some (kb, oq, v) =>
+          s := insertDiskEntry s key kb oq v
+  return s
+
+-- File effects execute the canonical NF plan; no second entry validator.
+def writeEntry (dir : String) (key kb oq v : List Int) : IO Unit := do
+  let p := entryPath dir (toHex key)
+  let observed ← if ← System.FilePath.pathExists p then observeEntry p else pure none
+  let r := Lib.Rsd.DirEntry.runNF
+    { request := { operation := .write, key := key, proposed := (kb, oq, v), observed := observed } }
+  for tag in r.state.decision.diagnostic do IO.eprintln s!"[{tag}] {p}"
+  if r.state.decision.write then
+    let tmp := s!"{p}.tmp-{← IO.monoNanosNow}"
+    IO.FS.writeBinFile tmp (baOfBytes (encEntry kb oq v))
+    IO.FS.rename tmp p
+
+-- Persist the entries of the units that ran (the misses, and the
+-- refused-then-recomputed). Hits write nothing; two keys naming one
+-- object write once each (the entry carries its own value).
+def saveRan (dir : String) (ran : List String) (keys : List (String × List Int))
+    (s : Lib.Rsd.Store.Store) : IO Unit := do
+  if ran.isEmpty then return
+  IO.FS.createDirAll (entryDir dir)
+  let mut done : Lib.Rsd.Store.QMap Bool := .leaf
+  for name in ran do
+    match keys.find? (fun k => k.1 == name) with
+    | none => pure ()
+    | some (_, key) =>
+      match Lib.Rsd.Store.QMap.find done key with
+      | some true => pure ()
+      | _ =>
+        done := Lib.Rsd.Store.QMap.insert done key true
+        match Lib.Rsd.Store.lookupAction s key with
+        | none => pure ()
+        | some a =>
+          for (_, oq) in a.outputs do
+            match Lib.Rsd.Store.lookupObj s oq with
+            | none => pure ()
+            | some o => writeEntry dir key a.keyBytes oq o.bytes
+
+end Lib.Rsd.DirStore

@@ -1,5 +1,7 @@
 -- LRC: insert reset and reuse.
 -- A port of Lean 4.14.0 src/lean/Lean/Compiler/IR/ResetReuse.lean, cited as ResetReuse:LINE.
+-- Not Lean's: the context's `projs` and the section "A field of an object that the constructor stores"
+-- (empty in `declInsertResetReuse`, which is the port).
 -- closure_claim = 0.
 -- absent: Context M mkFresh N argsContainsVar
 --   (the reader and state monads, the fresh-index wrapper and the argument test: the context is
@@ -47,6 +49,8 @@ structure RrCtx where
   lctx : List JP
   alreadyFound : VSet
   relaxed : Bool
+  -- z, y, z, y, ...: z was read from a field of y ("A field of an object that the constructor stores")
+  projs : List Int
   deriving Inhabited
 
 -- a function's result: the body and the fresh-variable counter (ResetReuse.lean:100 mkFresh)
@@ -84,6 +88,54 @@ def rrDFinalize (x : Nat) (c : CtorInfo) (ctx : RrCtx) (r : RrD) : RrB :=
 def rrIsCtorUsing (b : N) (x : Nat) : Bool :=
   b.op == opVDecl && (vdeclExpr b).op == opCtor && hasIdxArgs x (ctorArgs (vdeclExpr b))
 
+/-! ## A field of an object that the constructor stores
+
+Lean ends the search for x at a constructor that stores x: "reuse would not pay" (ResetReuse.lean:166), since
+the cell stays referenced. The same holds, and without exception, when the constructor stores an object y that
+x was read from, directly or through further reads: y keeps its reference to x for as long as y lives, the
+reset of x stands before the constructor, so there x is counted twice at least and the reset finds it shared
+every time. What it costs is not only the reset. `R` gives the innermost matched variable the first choice
+(ResetReuse.lean:186), so such an x takes the constructor from the variable that could have given its cell:
+in cfold's `| e1', e2' => add e1' e2'` under a nested pattern, a field of e2' was reset, never unique, and
+the function's own cell, unique and of the right size, was released and a new one allocated.
+
+Perceus pairs a constructor with a cell that is dropped before it (Reinking, Xie, de Moura and Leijen, PLDI
+2021, section 2.4): a field read from a live object is borrowed, not dropped. Lean's pass runs before the
+counting and has no drops to read; the reads say as much. `projs` holds, for each read `z := proj[i] y`, the
+pair z, y; it is empty in the port. -/
+
+-- the object z was read from, -1 when z is no read
+def rrParent (z : Int) : List Int → Int
+  | a :: b :: rest => if a == z then b else rrParent z rest
+  | _ => -1
+
+-- is one of the objects x was read from, directly or through further reads, among ys. `fuel` bounds the walk
+-- by the number of reads.
+def rrFieldOf (projs : List Int) (ys : List Int) : Nat → Int → Bool
+  | 0, _ => false
+  | fuel + 1, x =>
+    let y := rrParent x projs
+    y >= 0 && (hasIdxArgs y.toNat ys || rrFieldOf projs ys fuel y)
+
+def rrIsCtorHolding (projs : List Int) (b : N) (x : Nat) : Bool :=
+  !projs.isEmpty && b.op == opVDecl && (vdeclExpr b).op == opCtor
+    && rrFieldOf projs (ctorArgs (vdeclExpr b)) (projs.length / 2) (x : Int)
+
+mutual
+-- every read of an object field in the body, as pairs z, y
+partial def rrProjs (b : N) (acc : List Int) : List Int :=
+  if b.op == opVDecl then
+    let v := vdeclExpr b
+    rrProjs (bodyOf b) (if v.op == opProj then (vdeclVar b : Int) :: (projVar v : Int) :: acc else acc)
+  else if b.op == opJDecl then rrProjs (bodyOf b) (rrProjs (jdeclBody b) acc)
+  else if b.op == opCase then rrProjsAlts (caseAlts b) acc
+  else if isTerminal b then acc
+  else rrProjs (bodyOf b) acc
+partial def rrProjsAlts : List N → List Int → List Int
+  | [], acc => acc
+  | alt :: alts, acc => rrProjsAlts alts (rrProjs (altBody alt) acc)
+end
+
 mutual
 -- ResetReuse:137 Dmain: delete the last occurrence of x, and place a reset where it pays.
 -- The join points of the enclosing scopes are in ctx for hasLiveVar (LiveVars.lean:79).
@@ -103,7 +155,7 @@ partial def rrDMain (x : Nat) (c : CtorInfo) (ctx : RrCtx) (e : N) (next : Nat) 
   else if isTerminal e then { next := next, body := e, found := hasLiveVar e ctx.lctx x }
   else
     -- ResetReuse.lean:166: a constructor storing x ends the search: reuse would not pay
-    if rrIsCtorUsing e x then { next := next, body := e, found := true }
+    if rrIsCtorUsing e x || rrIsCtorHolding ctx.projs e x then { next := next, body := e, found := true }
     else
       let instr := setBody e mkUnreachable
       let r := rrDMain x c ctx (bodyOf e) next
@@ -178,16 +230,21 @@ end
 
 -- ResetReuse:222 insertResetReuseCore: on the relaxed run the resets of the strict run's output
 -- are already found, so no cell is reset twice
-def declInsertResetReuseCore (d : Decl) (relaxed : Bool) : Decl :=
+def declInsertResetReuseCore (d : Decl) (relaxed : Bool) (fields : Bool) : Decl :=
   if d.ext then d
   else
     let alreadyFound := if relaxed then rrCollectResets d.body vsEmpty else vsEmpty
-    let r := rrR { lctx := [], alreadyFound := alreadyFound, relaxed := relaxed } d.body (declMaxIndex d + 1)
+    let r := rrR { lctx := [], alreadyFound := alreadyFound, relaxed := relaxed, projs := if fields then rrProjs d.body [] else [] }
+               d.body (declMaxIndex d + 1)
     { d with body := r.body }
 
 -- ResetReuse:232 insertResetReuse runs the strict pass over the input, then the relaxed pass
 -- over its output (Lean's issue #4089)
 def declInsertResetReuse (d : Decl) : Decl :=
-  declInsertResetReuseCore (declInsertResetReuseCore d false) true
+  declInsertResetReuseCore (declInsertResetReuseCore d false false) true false
+
+-- the stage's: a field of an object that the constructor stores gives no cell
+def declInsertResetReuseFields (d : Decl) : Decl :=
+  declInsertResetReuseCore (declInsertResetReuseCore d false true) true true
 
 end Lrc

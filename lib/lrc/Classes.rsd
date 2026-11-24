@@ -50,6 +50,8 @@
 -- a class with list cells of both shapes.
 import AvlMap
 import Lib.Lrc.Prim
+import Lib.Lrc.Set
+import Lib.Lrc.FreeVars
 
 namespace Lrc
 
@@ -192,6 +194,9 @@ structure OcCx where
   nImg : Nat
   decls : DeclTab
   self : Nat
+  -- an object field is four bytes (rsc's layer `narrow`): every list cell is the cell of an object head
+  -- (lib/lrc/FromWire.rsd "A scalar head where an object field is four bytes")
+  narrow : Bool := false
   deriving Inhabited
 
 -- the object fields of constructor x and their arguments
@@ -314,8 +319,10 @@ partial def ocGo (cx : OcCx) (rets : List Int) (sums known excl : List Int) (jps
         -- An array with one element more, or with one replaced (lib/lrc/FromWire.rsd "Arrays"): for
         -- the classes it is a cell of that element before the array. The immediate is the cell's shape.
         let v := if primOp e == primArrPush then intAt 1 e.ys else intAt 2 e.ys
-        let cell : CtorInfo := if e.b == 0 then { cidx := 1, size := 1, ssize := 8, tid := 2 } else { cidx := 1, size := 2, ssize := 0, tid := 3 }
-        { s with c := ocCtor cx.self x cell (if e.b == 0 then [intAt 0 e.ys] else [v, intAt 0 e.ys]) s.c }
+        -- With narrow fields the cell of a scalar element is the cell of an object head too; its head is no object
+        -- of the image, so only the tail is joined.
+        let cell : CtorInfo := if e.b == 0 && !cx.narrow then { cidx := 1, size := 1, ssize := 8, tid := 2 } else { cidx := 1, size := 2, ssize := 0, tid := 3 }
+        { s with c := ocCtor cx.self x cell (if e.b != 0 then [v, intAt 0 e.ys] else if cx.narrow then [argIrr, intAt 0 e.ys] else [intAt 0 e.ys]) s.c }
       else if e.op == opPrim && (primOp e == primArrOfList || primOp e == primArrToList || primOp e == primArrSlice) then
         -- the same elements, or some of them, in another form: the argument's class
         (if intAt 0 e.ys < 0 then s else { s with c := ocUnion s.c x (ocVar cx.self (intAt 0 e.ys).toNat) })
@@ -356,12 +363,12 @@ partial def ocAlts (cx : OcCx) (rets : List Int) (sums known excl : List Int) (j
     ocAlts cx rets sums known excl jps x tested alts (ocGo cx rets sums1 known1 excl1 jps s (altBody alt))
 end
 
-def ocDecls (nImg : Nat) (all : DeclTab) : List Decl → OcS → OcS
+def ocDecls (nImg : Nat) (all : DeclTab) (narrow : Bool) : List Decl → OcS → OcS
   | [], s => s
   | d :: ds, s =>
-    ocDecls nImg all ds (if d.ext then s
+    ocDecls nImg all narrow ds (if d.ext then s
       else if declMaxIndex d >= ocVarSpan then { s with c := { s.c with bad := true } }
-      else ocGo { nImg := nImg, decls := all, self := d.f } d.rets [] [] [] [] s d.body)
+      else ocGo { nImg := nImg, decls := all, self := d.f, narrow := narrow } d.rets [] [] [] [] s d.body)
 
 structure OcT where
   c : Oc
@@ -434,8 +441,8 @@ partial def ocSettle (later : List (List Int)) (lists : List Int) (projs : List 
   if b.changed then ocSettle later lists projs b.c else b.c
 
 -- the classes of the image's objects; `bad` when nothing may be concluded from them
-def classesOf (nImg : Nat) (decls : List Decl) : Oc :=
-  let s := ocDecls nImg (dtOfList decls) decls { c := oc0, projs := [], later := [], lists := [] }
+def classesOf (nImg : Nat) (decls : List Decl) (narrow : Bool := false) : Oc :=
+  let s := ocDecls nImg (dtOfList decls) narrow decls { c := oc0, projs := [], later := [], lists := [] }
   ocSettle s.later s.lists s.projs s.c
 
 -- the tags a node held by variable x of function f may have: the ones built into its class

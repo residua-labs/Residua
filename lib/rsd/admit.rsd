@@ -1,0 +1,29 @@
+-- S1a admission. docs/RSD.md C6.1: a later build compiles nothing only
+-- when the key hits an entry the sandbox published. The agent name is not
+-- an input. A different source q is a different artifact key.
+-- closure_claim = 0.
+namespace Lib.Rsd.Admit
+
+def recipe : String := "rsd.artifact-key/1"
+
+/-- Compiled module count for this process. -/
+def compiledCount (hermeticHit : Bool) : Nat :=
+  if hermeticHit then 0 else 1
+
+/-- One changed source byte is not the stored key. -/
+def editMisses (before after : List Int) : Bool :=
+  before != after
+
+/-- A hit does not publish. A miss publishes only after the sandbox. -/
+def publishes (hermeticHit : Bool) : Bool :=
+  !hermeticHit
+
+end Lib.Rsd.Admit
+
+#guard Lib.Rsd.Admit.recipe == "rsd.artifact-key/1"
+#guard Lib.Rsd.Admit.compiledCount true == 0
+#guard Lib.Rsd.Admit.compiledCount false == 1
+#guard Lib.Rsd.Admit.editMisses [1] [2]
+#guard Lib.Rsd.Admit.editMisses [1] [1] == false
+#guard Lib.Rsd.Admit.publishes true == false
+#guard Lib.Rsd.Admit.publishes false

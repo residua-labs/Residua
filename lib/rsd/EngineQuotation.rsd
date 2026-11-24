@@ -1,0 +1,46 @@
+import incr.LinkedBody
+
+/-! Rsd supplies a content-pinned body module to the shared incremental
+engine. These are quotations of that engine, not a scheduler implementation.
+The body receives the node and its ordered complete input outcomes. Its
+identity, including its environment, belongs in the node's body identity.
+-/
+namespace Lib.Rsd.EngineQuotation
+open Residua.SCMEmission
+open Residua.Incr
+
+def prepare : Except String (SCMExpr 0) := CarrierModules.prepare
+
+def advance (body : SCMPinnedModule) : Except String (SCMExpr 0) :=
+  LinkedBody.advance body
+
+def stabilize (stepQ : String) : Except String (SCMExpr 0) :=
+  LinkedBody.stabilize (LinkedBody.stepPin stepQ)
+
+def corePin (coreQ : String) : SCMPinnedModule := {
+  name := .literal "rsd.stabilize_core"
+  path := "lib/rsd/scm/stabilize_core.scm"
+  params := [.literal "nodes", .literal "cache", .literal "observers"]
+  q := coreQ }
+
+def source (coreQ : String) : Except String (SCMExpr 0) :=
+  Carrier.sourceWith
+    (fun nodes cache observers => Carrier.call (corePin coreQ) [nodes, cache, observers]) 0
+
+theorem prepare_shared : prepare = CarrierModules.prepare := rfl
+
+theorem advance_shared (body : SCMPinnedModule) :
+    advance body = Carrier.stepWith (LinkedBody.bodyCall body) false
+      (Carrier.atom "cache") (Carrier.atom "needed")
+      (Carrier.atom "state") (Carrier.atom "node") 0 := rfl
+
+theorem stabilize_shared (stepQ : String) :
+    stabilize stepQ = Carrier.stabilizeWith CarrierModules.prepareCall
+      (LinkedBody.stepCall (LinkedBody.stepPin stepQ))
+      (Carrier.atom "nodes") (Carrier.atom "cache") (Carrier.atom "observers") 0 := rfl
+
+theorem source_shared (coreQ : String) :
+    source coreQ = Carrier.sourceWith
+      (fun nodes cache observers => Carrier.call (corePin coreQ) [nodes, cache, observers]) 0 := rfl
+
+end Lib.Rsd.EngineQuotation

@@ -1,0 +1,32 @@
+# FILE	FROM	TO  (FROM occurs exactly once in FILE; every row must make the differential report a mismatch)
+# A list's scalar head where an object field is four bytes (lib/lrc/FromWire.rsd "A scalar head where an object field is four
+# bytes"; docs/OBJECT-ABI.md "Narrow fields"): the head is an object word, a boxed number below 2^31 and a box of the word
+# from there on. The rows show in the image check's run under the narrow bounds, whose interpreter refuses a number boxed that
+# no box of 31 bits holds and a read of an object that is not what the code takes it for (instruments/lrc-host/Interp.rsd), and
+# whose value must be the row's. The programs that meet them: instruments/lrc-host/ProgHead.rsd (rows head, headlist, headback)
+# and every row with a number that is a limb list there.
+# The bound: a word of 2^31 boxed in line where it is computed; a literal of 2^31 boxed in line.
+lib/lrc/FromWire.rsd	def wordBoxShift : Int := 31	def wordBoxShift : Int := 32
+lib/lrc/FromWire.rsd	    let word := if n >= 0 && n < 2147483648 then [mkVDecl next tyTObj (mkPrim primBox 0 0 [h]) mkUnreachable]	    let word := if n >= 0 && n < 4294967296 then [mkVDecl next tyTObj (mkPrim primBox 0 0 [h]) mkUnreachable]
+# The read: a box taken for a boxed number; the box's word read from another place; the box's word never written; the tail read
+# for the head.
+lib/lrc/FromWire.rsd	    (mkCase w tyTObj [mkAltCtor wordBoxInfo (mkVDecl v tyI64 (mkSProj 0 0 w) (mkJmp j [(v : Int)]))])	    (mkVDecl v tyI64 (mkPrim primUnbox 0 0 [(w : Int)]) (mkJmp j [(v : Int)]))
+lib/lrc/FromWire.rsd	    (mkCase w tyTObj [mkAltCtor wordBoxInfo (mkVDecl v tyI64 (mkSProj 0 0 w) (mkJmp j [(v : Int)]))])	    (mkCase w tyTObj [mkAltCtor wordBoxInfo (mkVDecl v tyI64 (mkSProj 0 8 w) (mkJmp j [(v : Int)]))])
+lib/lrc/FromWire.rsd	       (mkVDecl bx tyTObj (mkCtor wordBoxInfo []) (mkSSet bx 0 0 h.toNat tyI64 (mkJmp j [(bx : Int)]))))]	       (mkVDecl bx tyTObj (mkCtor wordBoxInfo []) (mkJmp j [(bx : Int)])))]
+lib/lrc/FromWire.rsd	      items := [mkVDecl next tyTObj (mkProj 0 x) mkUnreachable,	      items := [mkVDecl next tyTObj (mkProj 1 x) mkUnreachable,
+# The cell: its head and its tail in each other's field; the cells of a list of scalars taken for cells of the shape they
+# have with fields of eight bytes; the element read at an index of a list taken as its head's object word.
+lib/lrc/FromWire.rsd	        ++ [mkVDecl x tyTObj (mkCtor (consInfo lsObject) [((next + 4 : Nat) : Int), tl]) mkUnreachable] }	        ++ [mkVDecl x tyTObj (mkCtor (consInfo lsObject) [tl, ((next + 4 : Nat) : Int)]) mkUnreachable] }
+lib/lrc/FromWire.rsd	def cellShape (narrow : Bool) (ts : List Int) : Nat := if narrow then lsObject else elemShape ts	def cellShape (narrow : Bool) (ts : List Int) : Nat := if narrow && false then lsObject else elemShape ts
+lib/lrc/FromWire.rsd	    let some2 := if shape == lsScalar && cx.narrow then headWord dr (isA + 19) h2 found	    let some2 := if shape == lsScalar && cx.narrow then mkVDecl h2 ety (mkProj 0 dr) found
+# The stage's own functions: equality of two lists of scalars on the object words (two boxes of one word are two objects); a
+# limb put into its cell as it is; the limbs of a number read with the head taken for the tail.
+lib/lrc/FromWire.rsd	  let both := if narrow then headWord 1 13 3 (headWord 2 18 4 cmp)	  let both := if narrow then mkVDecl 3 tyTObj (mkProj 0 1) (mkVDecl 4 tyTObj (mkProj 0 2) cmp)
+lib/lrc/FromWire.rsd	  let cell := if narrow then mkVDecl 9 tyTObj (mkPrim primBox 0 0 [7]) (mkVDecl 8 tyTObj (mkCtor (consInfo lsObject) [9, 6]) (mkRet [8]))	  let cell := if narrow then mkVDecl 9 tyTObj (mkPrim primBox 0 0 [7]) (mkVDecl 8 tyTObj (mkCtor (consInfo lsObject) [7, 6]) (mkRet [8]))
+lib/lrc/FromWire.rsd	  let more := if lims.narrow then headWord 2 20 8 (mkVDecl 9 tyTObj (mkProj (consTail lsObject) 2) sum)	  let more := if lims.narrow then headWord 2 20 8 (mkVDecl 9 tyTObj (mkProj 0 2) sum)
+# What no value shows, and instruments/lrc-host/Peaks.tsv does. The box read without the `case` that names its constructor:
+# lib/lrc/Pack.rsd then packs nothing in any program (the row pack holds more bytes). A literal's cell written with the test:
+# the cell is no closed term, a string literal is built on every use, and two calls that differ in nothing but which copy of
+# one literal they take are two calls (the row deriv holds more bytes).
+lib/lrc/FromWire.rsd	    (mkCase w tyTObj [mkAltCtor wordBoxInfo (mkVDecl v tyI64 (mkSProj 0 0 w) (mkJmp j [(v : Int)]))])	    (mkVDecl v tyI64 (mkSProj 0 0 w) (mkJmp j [(v : Int)]))
+lib/lrc/FromWire.rsd	  if k == 0 && narrow && !lit.isEmpty then	  if k == 0 && narrow && !lit.isEmpty && false then

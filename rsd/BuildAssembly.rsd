@@ -1,0 +1,127 @@
+-- Actual executable assembly NF; imported by the build front door.
+namespace Rsd.BuildAssembly
+
+def stripImports (ls : List String) : List String :=
+  ls.filter (fun l => !(l.startsWith "import "))
+
+-- Drop every s..e range (sed /s/,/e/ semantics, applied repeatedly); when
+-- keepEnd, lines starting `end ` inside a range survive (NinepIO's namespace
+-- end sits inside its fixture range).
+def dropRange (s e : String) (keepEnd : Bool) : List String -> List String :=
+  let rec go (inR : Bool) (acc : List String) : List String -> List String
+    | [] => acc.reverse
+    | l :: rest =>
+      if !inR then
+        if l.startsWith s then go true acc rest else go false (l :: acc) rest
+      else
+        let acc := if keepEnd && l.startsWith "end " then l :: acc else acc
+        go (!(l.startsWith e)) acc rest
+  go false []
+
+-- The parser mutual (`def eatLine`) and the lowering mutual (`def low`)
+-- both exceed the 200k heartbeat default under Lean 4.14. The lowering
+-- mutual still exceeded 800k after recursive-inductive OBJECT-ABI v1.
+-- Scoped here, not in Compile.rsd (LEAN-RESOURCE-RULES Rule 3).
+def scopeLowHeartbeats (ls : List String) : List String :=
+  let rec go (acc : List String) : List String -> List String
+    | [] => acc.reverse
+    | "mutual" :: (l :: rest) =>
+      let acc := if l.startsWith "def low :" || l.startsWith "def eatLine " then
+        "set_option maxHeartbeats 4000000 in" :: acc else acc
+      go ("mutual" :: acc) (l :: rest)
+    | l :: rest => go (l :: acc) rest
+  go [] ls
+
+-- Pure decision shared by the existing host adapter and the future Proc
+-- adapter. Inputs are the original file bytes, never a second Lean copy.
+def cutModSource (m source reuse : String) : List String :=
+  if m == "lib/rt/V1.rsd" then
+    [s!"def runtimeSourceRaw : String := {repr source}",
+     "def runtimeSourceWire : List Int := rtModuleWire (rtParseSource runtimeSourceRaw).functions",
+     s!"def runtimeReuseSourceRaw : String := {repr reuse}",
+     "def runtimeReuseSourceWire : List Int := rtModuleWire (rtParseExtension (rtParseSource runtimeSourceRaw).functions runtimeReuseSourceRaw).functions"]
+  else if m == "lib/rt/Reuse.rsd" then []
+  else if m == "lib/rt/AllocFast.rsd" then
+    [s!"def runtimeAllocSourceRaw : String := {repr source}",
+     "def runtimeAllocSourceWire : List Int := rtModuleWire (rtParseExtension [] runtimeAllocSourceRaw).functions"]
+  else
+    let ls := stripImports (source.splitOn "\n")
+    if m == "rsc/SourceBundle.lean" then
+      ls.takeWhile (fun l => !(l.startsWith "def main "))
+    else if m == "lib/RscBase.rsd" then "namespace Rsc" :: ls
+    else if m == "rsc/rsc.rsd" then ls ++ ["end Rsc"]
+    else if m == "lib/rsd/RefQRun.rsd" then
+      ls.takeWhile (fun l => !(l.startsWith "def checkRow "))
+    else if m == "rsdc/Compile.rsd" then
+      -- Keep the original marker and scoped-heartbeat rules. The parser
+      -- and lowering mutuals need the named 4M budget above under 4.14.
+      scopeLowHeartbeats (dropRange "-- avl begin" "-- avl end" false ls)
+    else if m == "lib/rsd/NinepIO.rsd" then
+      -- Preserve the namespace end while omitting the expensive fixture.
+      dropRange "def makePayload20000 " "end Lib.Rsd.NinepIO" true ls
+    else ls
+
+
+structure Request where
+  modulePath : String
+  source : String
+  reuseSource : String
+
+structure State where
+  request : Request
+  lines : List String
+
+inductive Residue where
+  | outputDiffers
+
+def residueName : Residue -> String
+  | Residue.outputDiffers => "nf_build_assembly_output_differs"
+
+def expected (r : Request) : List String :=
+  cutModSource r.modulePath r.source r.reuseSource
+
+def normalizeOutput (s : State) : State :=
+  { request := s.request, lines := expected s.request }
+
+-- The observation includes the source inputs and their canonical output.
+-- A proposed output is checked, never used as an input to normalization.
+def outputIdentity (s : State) : Prod Request (List String) :=
+  (s.request, expected s.request)
+
+def residue? (s : State) : Option Residue :=
+  if s.lines == expected s.request then none else some .outputDiffers
+
+def admissible (s : State) : Bool := (residue? s).isNone
+
+structure Result where
+  state : State
+  residue : Option Residue
+
+def runNF (s : State) : Result :=
+  { state := normalizeOutput s, residue := residue? s }
+
+-- NF-CORRECT-0 r2: the checked decision; runNF retains the original
+-- transition and its failure-state observations for existing callers.
+-- The old outputIdentity omits the proposed lines and cannot factor
+-- refusal. The quotient therefore retains those checked observations.
+def q (s : State) : Prod Request (List String) := (s.request, s.lines)
+
+def admit (observation : Prod Request (List String)) : Except Residue State :=
+  let answer := (runNF {request := observation.1, lines := observation.2})
+  match answer.residue with
+  | some residue => .error residue
+  | none => .ok answer.state
+
+def decide (s : State) : Except Residue State :=
+  let answer := runNF s
+  match answer.residue with
+  | some residue => .error residue
+  | none => .ok answer.state
+
+theorem quotient_factorization (s : State) : decide s = admit (q s) := rfl
+
+
+def assemble (r : Request) : List String :=
+  (normalizeOutput { request := r, lines := [] }).lines
+
+end Rsd.BuildAssembly

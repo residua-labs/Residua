@@ -1,0 +1,228 @@
+-- Acceptance for discover. Concatenate after OrderedMap.rsd and discover.rsd.
+-- The argument is a record file. Paths are arguments, not literals.
+-- closure_claim = 0.
+namespace Lib.Rsd.DiscoverRun
+
+open Lib.OrderedMap
+open Lib.Rsd.Discover
+
+def check (bad : Bool) (name : String) (ok : Bool) : IO Bool := do
+  IO.println s!"{name} {if ok then "ok" else "fail"}"
+  return bad || !ok
+
+def fields (line : String) : List String :=
+  line.splitOn "\t"
+
+def nth (xs : List String) (i : Nat) : String :=
+  (xs.drop i).headD ""
+
+def parseNat (s : String) : Nat :=
+  s.foldl (fun a c => a * 10 + (c.toNat - 48)) 0
+
+def nodeOf (f : List String) : Node :=
+  { kind := nth f 3
+  , q := nth f 4
+  , name := nth f 5
+  , evidence := nth f 6
+  , axioms := nth f 7
+  , semantics := nth f 8
+  , text := nth f 9
+  , cone := nth f 10 }
+
+structure Loaded where
+  cut : String
+  recs : List Rec
+  probes : List String
+  classes : List (String × String × Nat × List String)
+  envs : List String
+  docs : List Doc
+  queries : List (String × String)
+
+def load (lines : List String) : Loaded :=
+  let rec go (cut : String) (rs : List Rec) (probes : List String)
+      (cls : List (String × String × Nat × List String))
+      (envs : List String) (docs : List Doc) (qs : List (String × String))
+      : List String → Loaded :=
+    fun
+    | [] =>
+      { cut
+      , recs := reverse rs
+      , probes := reverse probes
+      , classes := reverse cls
+      , envs := reverse envs
+      , docs := reverse docs
+      , queries := reverse qs }
+    | line :: rest =>
+      if line == "" || line.startsWith "#" then
+        go cut rs probes cls envs docs qs rest
+      else
+        let f := fields line
+        match f.headD "" with
+        | "CUT" => go (nth f 1) rs probes cls envs docs qs rest
+        | "S" =>
+          let sigma := let s := nth f 2; if s == "-" then "" else s
+          let env := nth f 11
+          go cut ({ stmtQ := nth f 1, sigma, node := nodeOf f } :: rs)
+            probes cls (env :: envs) docs qs rest
+        | "M" => go cut rs (nth f 1 :: probes) cls envs docs qs rest
+        | "C" =>
+          let ids := if nth f 4 == "" || nth f 4 == "-" then [] else (nth f 4).splitOn ","
+          go cut rs probes ((nth f 1, nth f 2, parseNat (nth f 3), ids) :: cls)
+            envs docs qs rest
+        | "D" =>
+          go cut rs probes cls envs
+            ({ name := nth f 1, text := nth f 2 } :: docs) qs rest
+        | "Q" =>
+          go cut rs probes cls envs docs ((nth f 1, nth f 2) :: qs) rest
+        | _ => go cut rs probes cls envs docs qs rest
+  go "" [] [] [] [] [] [] lines
+
+def flipByte (s : String) : String :=
+  match s.data with
+  | [] => "0"
+  | c :: cs => String.mk ((if c == '0' then '1' else '0') :: cs)
+
+def hitLines (text : String) : List String :=
+  (text.splitOn "\n").filter fun line => line.startsWith "candidate propose "
+
+def mentions (text id : String) : Bool :=
+  (text.splitOn id).length > 1
+
+def classWhole (text : String) (n : Nat) (ids : List String) : Bool :=
+  (hitLines text).length == n && ids.all fun id => mentions text id
+
+def mapsEqual (a b : Index) : Bool :=
+  renderMap a.byStmt == renderMap b.byStmt
+    && renderMap a.bySigma == renderMap b.bySigma
+    && renderMap a.explicit == renderMap b.explicit
+
+def eachFound (ix : Index) (rs : List Rec) : Bool :=
+  rs.all fun r =>
+    match lookupQ (statementKey r.stmtQ r.node.cone r.node.evidence) ix.byStmt with
+    | none => false
+    | some ns => ns.any fun n => nodeId n == nodeId r.node
+
+def queriesHold (ix : Index) : Bool :=
+  ix.byStmt.all (fun p => queryStmt ix p.k == renderHits p.v)
+    && ix.bySigma.all (fun p => querySigma ix p.k == renderHits p.v)
+
+def sortedPostings (ix : Index) : Bool :=
+  ix.byStmt.all (fun p => sortedByQ p.v) && ix.bySigma.all (fun p => sortedByQ p.v)
+
+def envDropped (text : String) (envs : List String) : Bool :=
+  envs.all fun env => env == "" || !mentions text env
+
+def kindsApart (rs : List Rec) (cut : String) : Bool :=
+  match rs with
+  | [] => false
+  | r :: _ =>
+    let twin : Rec :=
+      { r with node := { r.node with kind := "binding", name := "binding-twin" } }
+    let ix := rebuild (twin :: rs) cut
+    let ns := posting ix.byStmt r.stmtQ
+    ns.any (fun n => n.kind == r.node.kind && n.name == r.node.name)
+      && ns.any (fun n => n.kind == "binding" && n.q == r.node.q)
+      && nodeId twin.node != nodeId r.node
+      && ((queryStmt ix r.stmtQ).splitOn "unprovable").length == 1
+
+def incremental (rs : List Rec) (cut : String) : Bool :=
+  let n := rs.length / 2
+  let full := rebuild rs cut
+  let inc := applyDelta (rebuild (rs.take n) cut) (rs.drop n) cut
+  mapsEqual full inc
+
+def oneByteMiss (ix : Index) (rs : List Rec) : Bool :=
+  match rs with
+  | [] => false
+  | r :: _ =>
+    let flipped := flipByte r.stmtQ
+    flipped != r.stmtQ
+      && queryStmt ix flipped == absentInThisCut ix.cut
+      && !readsAsUnprovable (queryStmt ix flipped)
+
+def probesMiss (ix : Index) (ps : List String) : Bool :=
+  ps.all fun q => queryStmt ix q == absentInThisCut ix.cut && !readsAsUnprovable (queryStmt ix q)
+
+def classesHold (ix : Index) (cls : List (String × String × Nat × List String)) : Bool :=
+  cls.all fun c =>
+    let text := if c.2.1 == "sigma" then querySigma ix c.1 else queryStmt ix c.1
+    classWhole text c.2.2.1 c.2.2.2
+      && text != absentInThisCut ix.cut
+      && (hitLines text).all fun line => line.startsWith "candidate propose "
+
+def keyIgnoresEnv : Bool :=
+  statementKey "stmt" "cone" "env-a" == statementKey "stmt" "cone" "env-b"
+    && statementKey "stmt" "cone" "env-a" == "stmt"
+    && statementKey "stmt" "cone-a" "env" == statementKey "stmt" "cone-b" "env"
+
+def nearMarked : Bool :=
+  let s := renderNear "lemma"
+  s.startsWith "candidate propose " && !readsAsUnprovable s && !admits
+
+def rateOf (c : Corpus) (qs : List (String × String)) : Nat × Nat :=
+  qs.foldl (fun p q =>
+    let hit := if inTop c q.2 q.1 topK then p.1 + 1 else p.1
+    (hit, p.2 + 1)) (0, 0)
+
+end Lib.Rsd.DiscoverRun
+
+def main (args : List String) : IO UInt32 := do
+  let mut bad := false
+  if ← Lib.Rsd.DiscoverRun.check bad "admits" (!Lib.Rsd.Discover.admits) then bad := true
+  if ← Lib.Rsd.DiscoverRun.check bad "outcomes"
+      (Lib.Rsd.Discover.outcomesNamedApart "cut") then bad := true
+  if ← Lib.Rsd.DiscoverRun.check bad "key-ignores-env"
+      Lib.Rsd.DiscoverRun.keyIgnoresEnv then bad := true
+  if ← Lib.Rsd.DiscoverRun.check bad "near-marked"
+      Lib.Rsd.DiscoverRun.nearMarked then bad := true
+  match args with
+  | [] =>
+    IO.println "need-record fail"
+    return 1
+  | path :: _ =>
+    let text ← IO.FS.readFile path
+    let loaded := Lib.Rsd.DiscoverRun.load (text.splitOn "\n")
+    let ix := Lib.Rsd.Discover.rebuild loaded.recs loaded.cut
+    if ← Lib.Rsd.DiscoverRun.check bad "cut"
+        (loaded.cut != "" && ix.cut == loaded.cut) then bad := true
+    if ← Lib.Rsd.DiscoverRun.check bad "self"
+        (Lib.Rsd.DiscoverRun.eachFound ix loaded.recs) then bad := true
+    if ← Lib.Rsd.DiscoverRun.check bad "query"
+        (Lib.Rsd.DiscoverRun.queriesHold ix) then bad := true
+    if ← Lib.Rsd.DiscoverRun.check bad "sorted"
+        (Lib.Rsd.DiscoverRun.sortedPostings ix) then bad := true
+    if ← Lib.Rsd.DiscoverRun.check bad "cone"
+        (Lib.Rsd.Discover.conesUniform ix.byStmt
+          && Lib.Rsd.Discover.conesUniform ix.bySigma) then bad := true
+    if ← Lib.Rsd.DiscoverRun.check bad "one-byte"
+        (Lib.Rsd.DiscoverRun.oneByteMiss ix loaded.recs) then bad := true
+    if ← Lib.Rsd.DiscoverRun.check bad "probes"
+        (Lib.Rsd.DiscoverRun.probesMiss ix loaded.probes) then bad := true
+    if ← Lib.Rsd.DiscoverRun.check bad "kinds"
+        (Lib.Rsd.DiscoverRun.kindsApart loaded.recs loaded.cut) then bad := true
+    if ← Lib.Rsd.DiscoverRun.check bad "incremental"
+        (Lib.Rsd.DiscoverRun.incremental loaded.recs loaded.cut) then bad := true
+    if ← Lib.Rsd.DiscoverRun.check bad "class"
+        (loaded.classes != [] && Lib.Rsd.DiscoverRun.classesHold ix loaded.classes) then bad := true
+    let rendered := Lib.Rsd.Discover.renderMap ix.byStmt
+      ++ "\n" ++ Lib.Rsd.Discover.renderMap ix.bySigma
+    if ← Lib.Rsd.DiscoverRun.check bad "env-dropped"
+        (Lib.Rsd.DiscoverRun.envDropped rendered loaded.envs) then bad := true
+    let marked := match loaded.recs with
+      | [] => false
+      | r :: _ =>
+        let hit := Lib.Rsd.Discover.queryStmt ix r.stmtQ
+        hit.startsWith "candidate propose " && !Lib.Rsd.Discover.readsAsUnprovable (Lib.Rsd.Discover.absentInThisCut ix.cut)
+    if ← Lib.Rsd.DiscoverRun.check bad "candidate" marked then bad := true
+    let corpus := Lib.Rsd.Discover.corpusOf loaded.docs
+    IO.println s!"bm25 k1 {Lib.Rsd.Discover.k1} b {Lib.Rsd.Discover.bPar} k {Lib.Rsd.Discover.topK}"
+    if ← Lib.Rsd.DiscoverRun.check bad "bm25-self"
+        (Lib.Rsd.Discover.selfPrefix corpus 20) then bad := true
+    let rate := Lib.Rsd.DiscoverRun.rateOf corpus loaded.queries
+    for q in loaded.queries do
+      if Lib.Rsd.Discover.inTop corpus q.2 q.1 Lib.Rsd.Discover.topK then
+        IO.println (Lib.Rsd.Discover.renderNear q.1)
+    IO.println s!"rate {rate.1}/{rate.2}"
+    if ← Lib.Rsd.DiscoverRun.check bad "rate" (rate.2 != 0) then bad := true
+    IO.println "closure_claim 0"
+    if bad then return 1 else return 0

@@ -1,0 +1,31 @@
+namespace Lib.Rsd.FileBuildSession
+ theorem sigma_idempotent (s : Lib.Rsd.BuildSession.State) : id (id s) = id s := rfl
+ theorem q_sigma (r : Request) (s : Lib.Rsd.BuildSession.State) : (fun value (_state : Lib.Rsd.BuildSession.State) => value) r (id s) = (fun value (_state : Lib.Rsd.BuildSession.State) => value) r s := rfl
+ theorem admit_iff (r : Request) (s : Lib.Rsd.BuildSession.State) : admissible r s = true ↔ residue? r s = none := by
+   simp only [admissible, id, Option.isNone_iff_eq_none]
+ theorem soundness (r : Request) (s : Lib.Rsd.BuildSession.State) (h : admissible r s = true) : residue? r s = none := (admit_iff r s).mp h
+ theorem completeness (r : Request) (s : Lib.Rsd.BuildSession.State) (h : residue? r s = none) : admissible r s = true := (admit_iff r s).mpr h
+ theorem exactness (r : Request) (s : Lib.Rsd.BuildSession.State) : (runNF r s).residue = none ↔ admissible r s = true := (admit_iff r s).symm
+ theorem state_not_authority (r : Request) (s t : Lib.Rsd.BuildSession.State) : runNF r s = runNF r t := rfl
+ theorem refusal_no_publication (e : Residue) : (failed e).state.store.actions = [] := rfl
+ theorem residue_named (e : Residue) : residueName e != "" := by
+   cases e <;> decide
+ theorem lifted_name (e : Lib.Rsd.BuildSession.Residue) : residueName (liftBuild e) = Lib.Rsd.BuildSession.residueName e := by
+   cases e <;> rfl
+end Lib.Rsd.FileBuildSession
+#print axioms Lib.Rsd.FileBuildSession.sigma_idempotent
+#print axioms Lib.Rsd.FileBuildSession.q_sigma
+#print axioms Lib.Rsd.FileBuildSession.admit_iff
+#print axioms Lib.Rsd.FileBuildSession.soundness
+#print axioms Lib.Rsd.FileBuildSession.completeness
+#print axioms Lib.Rsd.FileBuildSession.exactness
+#print axioms Lib.Rsd.FileBuildSession.state_not_authority
+#print axioms Lib.Rsd.FileBuildSession.refusal_no_publication
+#print axioms Lib.Rsd.FileBuildSession.residue_named
+#print axioms Lib.Rsd.FileBuildSession.lifted_name
+
+def main : IO UInt32 := do
+  let source ← IO.FS.readBinFile "lib/rsd/FileBuildSession.rsd"
+  match Lib.NF.residue? { source := source.data.toList.map (fun b => Int.ofNat b.toNat) } 0 with
+  | none => IO.println "FileBuildSession:conformance-ok"; return 0
+  | some e => IO.println (Lib.NF.residueName e); return 1

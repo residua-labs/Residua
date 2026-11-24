@@ -1,0 +1,870 @@
+-- rsd/suite.rsd — `rsdc suite`, the E2E-RSD-0 end-to-end suite.
+-- One command runs the corpus manifest through every stage rsd builds:
+-- .rsd → REF-Q closure → rsdc stages → rscm → rsc (once per switch, plus
+-- all) → wasm → run under node (runhost.cjs), wasmtime JIT (rsd-host)
+-- and wasmtime AOT (--cwasm-in of `wasmtime compile` output), with an
+-- evalLean column as the independent evaluator reference. Every object is
+-- stored by sha256 under <store>/q; every row records its outcome tag, the
+-- stage a refusal came from, wall time and peak memory. A `check` row per
+-- (row, cfg) and one per row states the verdict as a name: pass,
+-- column_disagree, expected_miss, rsd_check_disagree, cfg_disagree, or
+-- the upstream refusal itself. Expected values and outcomes come only from
+-- the named oracle in the manifest; the suite never derives an expectation
+-- from a column it is testing.
+--
+-- Manifest (<home>/e2e/manifest.tsv): tab-separated, `#` comments.
+--   name kind program program_q entry args input_q expected expected_q
+--   oracle eval extras
+--   kind: rsd | rscm | wasm. entry: rsd → root fn name; rscm/wasm → sig
+--   index. args: `-` or a comma list of i64 text. expected: `value:<text>`,
+--   an outcome tag, `-`, or a `v1:` class (normalized before compare).
+--   eval: `self` (the same rscm+entry), `emit` (EmitFast, needs the emit
+--   env), `<path>:<N>`, or `-`. extras: k=v pairs — fuel, efuel, ret,
+--   arity, lib, cap.
+--
+-- Concatenate after common.rsd + RefQBase + rsdc.rsd (build.sh).
+-- External tools resolve from env (no absolute paths in the repo):
+--   RSD_EVALLEAN, RSD_EMIT_BUILD, RSD_EMIT_OLEAN, RSD_EMIT_SRC,
+--   RSD_EMIT_DRV, RSD_LEANROOT, RSD_NODE, RSD_WASMTIME,
+--   RSD_HOST, RSD_TIMEOUT (default timeout), RSD_TIMEBIN
+--   (default /usr/bin/time). A tool that cannot be resolved names its
+--   column `no_<tool>` instead of running.
+-- closure_claim = 0.
+
+open Lib.Rsd.RefQRun
+
+namespace Rsd
+
+-- ============================================================================
+-- Options. `rsdc suite MANIFEST [flags]`; `rsdc suite --classify DIR`.
+-- ============================================================================
+
+structure SuiteOpts where
+  manifest : String := ""
+  out : String := ""
+  store : String := ""
+  home : String := ""
+  cfgs : List String := ["off", "arr", "reg", "tail", "qbe", "cte", "all"]
+  cols : List String := ["node", "jit", "aot", "eval"]
+  rowFilter : List String := []
+  cap : Nat := 60
+  fuel : String := "4000000000000000"
+  classify : String := ""
+  offset : Nat := 0
+  limit : Nat := 0
+  libDir : String := ""
+
+def sUsage : IO UInt32 := do
+  IO.eprintln "usage: rsdc suite MANIFEST.tsv [--store DIR] [--home DIR] [--out FILE]"
+  IO.eprintln "                 [--cfgs a,b] [--cols a,b] [--rows a,b] [--cap SECS]"
+  IO.eprintln "                 [--fuel N] [--lib DIR]"
+  IO.eprintln "       rsdc suite --classify DIR [--out FILE] [--offset N] [--limit N]"
+  return 2
+
+partial def sParseOptsGo (o : SuiteOpts) (args : List String) : IO (Option SuiteOpts) := do
+  match args with
+  | [] =>
+    if o.manifest == "" && o.classify == "" then return none
+    return some o
+  | a :: r =>
+    match a, r with
+    | "--store", v :: r2 => sParseOptsGo { o with store := v } r2
+    | "--home", v :: r2 => sParseOptsGo { o with home := v } r2
+    | "--out", v :: r2 => sParseOptsGo { o with out := v } r2
+    | "--cfgs", v :: r2 => sParseOptsGo { o with cfgs := v.splitOn "," } r2
+    | "--cols", v :: r2 => sParseOptsGo { o with cols := v.splitOn "," } r2
+    | "--rows", v :: r2 => sParseOptsGo { o with rowFilter := v.splitOn "," } r2
+    | "--cap", v :: r2 => sParseOptsGo { o with cap := v.toNat! } r2
+    | "--fuel", v :: r2 => sParseOptsGo { o with fuel := v } r2
+    | "--lib", v :: r2 => sParseOptsGo { o with libDir := v } r2
+    | "--classify", v :: r2 => sParseOptsGo { o with classify := v } r2
+    | "--offset", v :: r2 => sParseOptsGo { o with offset := v.toNat! } r2
+    | "--limit", v :: r2 => sParseOptsGo { o with limit := v.toNat! } r2
+    | _, _ =>
+      if a.startsWith "--" then
+        IO.eprintln s!"unknown flag {a}"
+        return none
+      else if o.manifest == "" then
+        sParseOptsGo { o with manifest := a } r
+      else
+        IO.eprintln s!"unexpected argument {a}"
+        return none
+
+def sParseOpts (args : List String) : IO (Option SuiteOpts) := do
+  let home ← IO.getEnv "HOME"
+  sParseOptsGo { store := s!"{home.getD "."}/.cache/rsd" } args
+
+-- Repo home for suite mode: --home, RSD_HOME, or a walk up from the
+-- manifest path (same rule as findHome).
+def sFindHome (o : SuiteOpts) : IO (Option String) := do
+  if o.home != "" then return some o.home
+  match ← IO.getEnv "RSD_HOME" with
+  | some h => return some h
+  | none => pure ()
+  let anchor := if o.manifest == "" then o.classify else o.manifest
+  let abs ← IO.FS.realPath anchor
+  let isd ← abs.isDir
+  let mut dir : Option String :=
+    (if isd then some abs.toString else abs.parent.map (·.toString))
+  for _ in [0:12] do
+    match dir with
+    | none => return none
+    | some d =>
+      if (← System.FilePath.pathExists s!"{d}/lib") && (← System.FilePath.pathExists s!"{d}/rsc/rsc.rsd") then
+        return some d
+      dir := (System.FilePath.mk d).parent.map (·.toString)
+  return none
+
+-- ============================================================================
+-- Manifest rows. extras `k=v` pairs are folded into one lookup.
+-- ============================================================================
+
+structure SRow where
+  name : String
+  kind : String
+  prog : String
+  progQ : String
+  entry : String
+  argsText : String
+  inputQ : String
+  expected : String
+  expectedQ : String
+  oracle : String
+  eval : String
+  extras : String
+
+def sParseRow (line : String) : Option SRow :=
+  match line.splitOn "\t" with
+  | [nm, k, p, pq, e, a, iq, ex, eq, oc, ev] =>
+    some { name := nm, kind := k, prog := p, progQ := pq, entry := e, argsText := a,
+           inputQ := iq, expected := ex, expectedQ := eq, oracle := oc, eval := ev, extras := "" }
+  | [nm, k, p, pq, e, a, iq, ex, eq, oc, ev, xs] =>
+    some { name := nm, kind := k, prog := p, progQ := pq, entry := e, argsText := a,
+           inputQ := iq, expected := ex, expectedQ := eq, oracle := oc, eval := ev, extras := xs }
+  | _ => none
+
+def sRowArgs (r : SRow) : List String :=
+  if r.argsText == "-" then [] else r.argsText.splitOn ","
+
+def sEx (r : SRow) (k : String) : Option String :=
+  match (r.extras.splitOn ",").find? (·.startsWith s!"{k}=") with
+  | some v => some (v.drop (k.length + 1))
+  | none => none
+
+def sRowFuel (r : SRow) (o : SuiteOpts) : String := (sEx r "fuel").getD o.fuel
+def sRowEFuel (r : SRow) (o : SuiteOpts) : String := (sEx r "efuel").getD (sRowFuel r o)
+def sRowRet (r : SRow) : Int := Int.ofNat (((sEx r "ret").getD "1").toNat?.getD 1)
+def sRowArity (r : SRow) : Nat :=
+  match sEx r "arity" with
+  | some a => a.toNat?.getD (sRowArgs r).length
+  | none => (sRowArgs r).length
+def sRowCap (r : SRow) (o : SuiteOpts) : Nat :=
+  ((sEx r "cap").getD "").toNat?.getD o.cap
+
+def sResolve (home p : String) : String :=
+  if p.startsWith "/" then p else s!"{home}/{p}"
+
+def sHasSub (s sub : String) : Bool := (s.splitOn sub).length > 1
+
+-- ============================================================================
+-- Outcome names (docs/block_abi.tsv v2 + the v1 decode for committed rows).
+-- Hosts print `status <tag>` + `detail <n>`; the suite names the canonical
+-- outcome. v1 small details and v2 abiDetailBase-keyed details both decode.
+-- ============================================================================
+
+def sAbiDetailBase : Int := 144115188075855872
+
+def sStuckNames : List String :=
+  ["integerRange", "missingVariable", "typeMismatch", "emptyDelimiter", "invalidIntegerText",
+   "malformedPair", "malformedSum", "negativeSumTag", "missingSumBranch", "malformedRecord",
+   "missingField", "invalidBytes", "invalidByteSliceBounds", "negativeFixBound", "checkedArithmeticStuck"]
+
+def sV2Residue (k : Nat) : String :=
+  if k == 0 then "residue:divisionByZero"
+  else if k == 1 then "residue:signedOverflow"
+  else if k == 2 then "residue:nonExact"
+  else s!"residue:{k}"
+
+def sDecodeOutcome (status detail : String) : String :=
+  if status == "value" then "value"
+  else if status == "trap" then "trap"
+  else if status == "residue" then
+    match detail.toInt? with
+    | some d =>
+      if d >= sAbiDetailBase then sV2Residue (Int.toNat (d - sAbiDetailBase))
+      else if d == 1 then "residue:divisionByZero"
+      else if d == 2 then "residue:nonExact"
+      else if d == 3 then "residue:signedOverflow"
+      else s!"residue:{d}"
+    | none =>
+      if detail == "nonExactDivision" then "residue:nonExact" else s!"residue:{detail}"
+  else if status == "fuel" then "sourceFuelExhausted"
+  else if status == "stuck" then
+    match detail.toInt? with
+    | some d =>
+      if d >= sAbiDetailBase then
+        let k := Int.toNat (d - sAbiDetailBase)
+        match sStuckNames[k]? with
+        | some n => s!"sourceStuck:{n}"
+        | none => s!"sourceStuck:{k}"
+      else "stuck"
+    | none => s!"sourceStuck:{detail}"
+  else if status == "capacity" then
+    match detail.toInt? with
+    | some d =>
+      if d >= sAbiDetailBase then
+        let k := Int.toNat (d - sAbiDetailBase)
+        if k == 1 then "capacity:memory"
+        else if k == 2 then "capacity:representation"
+        else s!"capacity:{k}"
+      else "capacity"
+    | none => s!"capacity:{detail}"
+  else if status == "5" || status == "clock" then "machineClock"
+  else if status == "" then "no_output"
+  else s!"outcome_{status}"
+
+-- Expected classes normalize through the same table (`v1:` rows keep their
+-- manifest text; the compare sees the canonical name).
+def sNormExpected (e : String) : String :=
+  if e.startsWith "v1:" then
+    let c := e.drop 3
+    if c == "value" || c.startsWith "value:" then c
+    else if c == "residue:divisionByZero" then "residue:divisionByZero"
+    else if c == "residue:nonExactDivision" then "residue:nonExact"
+    else if c == "residue:signedOverflow" then "residue:signedOverflow"
+    else if c == "fuel" then "sourceFuelExhausted"
+    else if c == "stuck" then "stuck"
+    else if c.startsWith "capacity" then "capacity"
+    else c
+  else e
+
+-- Values compare as text modulo rendering shape: quotes and commas removed,
+-- whitespace collapsed, `true`/`false` read as 1/0 (the i64 the hosts print).
+def sNormVal (s : String) : String :=
+  let words := (String.mk (s.data.filter (fun c => c != '"' && c != ','))).splitOn " "
+    |>.filter (fun w => w != "")
+    |>.map (fun w => if w == "true" then "1" else if w == "false" then "0" else w)
+  String.intercalate " " words
+
+def sExpectedOk (expected outcome value : String) : Bool :=
+  let e := sNormExpected expected
+  if e == "-" then true
+  else if e == "refused" then outcome != "value" && outcome != "no_columns"
+    && outcome != "machineClock"
+  else if e.startsWith "value:" then
+    outcome == "value" && sNormVal (e.drop 6) == sNormVal value
+  else if e == "value" then outcome == "value"
+  else outcome == e
+
+-- ============================================================================
+-- The columns. A column spec resolves to the argv run under
+-- `nice -n 15 /usr/bin/time -l timeout -k 5 <cap>`: the wall clock is ours,
+-- peak RSS comes from time's stderr, `machineClock` is the cap's name.
+-- ============================================================================
+
+structure SRes where
+  col : String
+  outcome : String
+  value : String
+  wallMs : Nat
+  peakKib : Nat
+  detail : String
+
+def sBlankRes (col outcome : String) : SRes :=
+  { col, outcome, value := "-", wallMs := 0, peakKib := 0, detail := "" }
+
+def sEnvPair (k : String) : IO (String × Option String) := do
+  return (k, ← IO.getEnv k)
+
+def sWrapEnv : IO (Array (String × Option String)) := do
+  let p ← sEnvPair "PATH"
+  let h ← sEnvPair "HOME"
+  let t ← sEnvPair "TMPDIR"
+  return #[p, h, t]
+
+def sTool (key deflt : String) : IO String := do
+  match ← IO.getEnv key with
+  | some v => return v
+  | none => return deflt
+
+-- argv ++ wrapper; returns (exitCode, stdout, stderr, wallMs, peakKib).
+def sSpawnTimed (cap : Nat) (argv : List String) : IO (UInt32 × String × String × Nat × Nat) := do
+  let tbin ← sTool "RSD_TIMEBIN" "/usr/bin/time"
+  let tout ← sTool "RSD_TIMEOUT" "timeout"
+  match argv with
+  | [] => return ((1 : UInt32), "", "empty argv", 0, 0)
+  | cmd :: rest =>
+    let full := ["nice", "-n", "15", tbin, "-l", tout, "-k", "5", toString cap, cmd] ++ rest
+    let t0 ← IO.monoNanosNow
+    let r ← try
+        IO.Process.output { cmd := full.head!, args := full.tail!.toArray }
+      catch e =>
+        return ((1 : UInt32), "", s!"spawn_failed {e}", 0, 0)
+    let wall := (← IO.monoNanosNow) - t0
+    let mut peak : Nat := 0
+    for l in r.stderr.splitOn "\n" do
+      if sHasSub l "maximum resident set size" then
+        peak := ((l.trim.splitOn " ").headD "0").toNat?.getD 0 / 1024
+    return (r.exitCode, r.stdout, r.stderr, wall / 1000000, peak)
+
+-- Parse an rsc-ABI host's protocol stdout into a result.
+def sFromHost (col : String) (code : UInt32) (stdout : String) (wall peak : Nat) : SRes :=
+  if code == 124 || code == 137 then
+    { col, outcome := "machineClock", value := "-", wallMs := wall, peakKib := peak, detail := "cap" }
+  else
+    let lines := stdout.splitOn "\n"
+    let status := lineValue lines "status"
+    let detail := lineValue lines "detail"
+    if status == "" then
+      { col, outcome := "host_unavailable", value := "-", wallMs := wall, peakKib := peak,
+        detail := s!"exit {code}" }
+    else if status == "value" then
+      let v := String.fromUTF8! (unhex (lineValue lines "value_hex"))
+      { col, outcome := "value", value := v, wallMs := wall, peakKib := peak, detail }
+    else
+      { col, outcome := sDecodeOutcome status detail, value := "-",
+        wallMs := wall, peakKib := peak, detail := s!"{status} {detail}" }
+
+-- ============================================================================
+-- Resolved toolchain for the run columns. Missing parts name the column
+-- `no_node` / `no_host` / `no_aot` / `no_evallean` / `no_emit`.
+-- ============================================================================
+
+structure SCtx where
+  o : SuiteOpts
+  home : String
+  store : String
+  rscBin : Option String
+  host : Option HostSpec        -- the C host only (precompile = true)
+  cjs : Option String           -- runhost.cjs path
+  nodeBin : String
+  wtBin : String
+  evallean : Option String
+  emitB : Option String         -- dir holding libemit.dylib + lib/
+  emitOlean : Option String     -- chain olean dir
+  emitSrc : Option String       -- EmitFast source dir
+  emitDrv : Option String       -- emit-rsd.lean driver
+  leanBin : String
+  rscQ : String
+  hostQ : String
+
+-- The C host only for jit/aot: node runhost.cjs is the `node` column.
+def sFindHostC (store : String) : IO (Option HostSpec) := do
+  match ← IO.getEnv "RSD_HOST" with
+  | some h =>
+    if ← System.FilePath.pathExists h then
+      let rp ← IO.FS.realPath h
+      return some { cmd := h, preArgs := [], identityPath := rp.toString, precompile := true }
+    return none
+  | none =>
+    let c := s!"{store}/build/rsd-host"
+    if ← System.FilePath.pathExists c then
+      let rp ← IO.FS.realPath c
+      return some { cmd := c, preArgs := [], identityPath := rp.toString, precompile := true }
+    return none
+
+def sFindEvallean : IO (Option String) := do
+  match ← IO.getEnv "RSD_EVALLEAN" with
+  | some p =>
+    if ← System.FilePath.pathExists p then return some p
+    return none
+  | none => return none
+
+def sMkCtx (o : SuiteOpts) (home : String) : IO SCtx := do
+  IO.FS.createDirAll s!"{o.store}/q"
+  let store := (← IO.FS.realPath o.store).toString
+  let o := { o with store := store }
+  IO.FS.createDirAll s!"{store}/suite/idx"
+  IO.FS.createDirAll s!"{store}/suite/cwasm"
+  let rscBin ← ensureRscNative home store (← IO.mkRef "")
+  let host ← sFindHostC store
+  let cjs ← ensureRunHost store
+  let cjsOpt := some cjs
+  let nodeBin ← sTool "RSD_NODE" "node"
+  let wtBin ← sTool "RSD_WASMTIME" "wasmtime"
+  let evallean ← sFindEvallean
+  let emitB ← IO.getEnv "RSD_EMIT_BUILD"
+  let emitOlean ← IO.getEnv "RSD_EMIT_OLEAN"
+  let emitSrc := (← IO.getEnv "RSD_EMIT_SRC").getD s!"{home}/emitter/typed"
+  let emitDrv ← IO.getEnv "RSD_EMIT_DRV"
+  let leanBin := match ← IO.getEnv "RSD_LEANROOT" with
+    | some r => s!"{r}/bin/lean"
+    | none => "lean"
+  let rscQ ← match rscBin with | some b => digestFile b | none => pure "absent"
+  let hostQ ← match host with | some h => digestFile h.identityPath | none => pure "absent"
+  return { o, home, store, rscBin, host,
+           cjs := cjsOpt, nodeBin, wtBin, evallean,
+           emitB, emitOlean, emitSrc := some emitSrc, emitDrv, leanBin, rscQ, hostQ }
+
+-- ============================================================================
+-- One row: program → rscm (rsdc stages for rsd) → wasm per cfg → columns.
+-- ============================================================================
+
+def sRowLine (r : SRow) (cfg col outcome value : String) (wall peak : Nat)
+    (stage detail : String) : String :=
+  let v := if value == "" then "-" else (value.replace "\n" " ").trim
+  let d := if detail == "" then "-" else ((detail.splitOn "\n").headD "-").trim
+  String.intercalate "\t"
+    [r.name, cfg, col, outcome, v, toString wall, toString peak, stage, d]
+
+-- The rsdc front end over a .rsd program: REF-Q closure then emitStages
+-- under the row's entry name. Refusals come back named by stage.
+def sCompileRsd (ctx : SCtx) (r : SRow)
+    : IO (String × String × Int × Int × Nat) := do
+  let progPath := sResolve ctx.home r.prog
+  let raw ← IO.FS.readFile progPath
+  let feed := stripShebang raw
+  let imps := headerImportList feed
+  match imps.find? toolchainImport with
+  | some t => return (s!"import_toolchain {t}", "", 0, 0, 0)
+  | none => pure ()
+  let libDir := (sEx r "lib").getD (if ctx.o.libDir == "" then s!"{ctx.home}/lib" else ctx.o.libDir)
+  let (imErr, _, decls, _) ← loadModuleGo libDir ctx.store 64 [] [] [] imps
+  if imErr != "" then
+    return ((imErr.splitOn " ").headD "import_unresolved", "", 0, 0, 0)
+  let (_, scriptDecls) := computeModuleDecls "Script" feed decls
+  for (q, bytes) in objectPairs scriptDecls do
+    let path := s!"{ctx.store}/q/{q}"
+    if !(← System.FilePath.pathExists path) then
+      IO.FS.writeBinFile path (intListToByteArray bytes)
+  let manifest := buildManifest (decls ++ scriptDecls)
+  let rootIds := moduleClosureRootIds manifest ["Script"]
+  let clos ← resolveClosureVia (fun q => readQDir ctx.store q) manifest rootIds
+  if !clos.ok then
+    return (s!"closure_{clos.residue}", "", 0, 0, 0)
+  let clk ← clockNew
+  let em ← emitStages clk r.entry clos.assembledSource
+  if em.err != 0 then
+    let lc := lcOf 0 (clos.assembledSource.toUTF8.data.toList.map (fun b => (b.toNat : Int))) em.pos
+    let ps := if em.pos < 0 then "-" else s!"{nthI lc 0}:{nthI lc 1}"
+    return (s!"rsdc_{errName em.err}@{em.stage}@{ps}", "", 0, 0, 0)
+  if em.mainWire < 0 then
+    let nm := if r.entry == "main" then "main_absent" else s!"entry_absent {r.entry}"
+    return (nm, "", 0, 0, 0)
+  let rscmQ ← storePut ctx.store (intListToByteArray em.rscm)
+  return ("", rscmQ, em.mainWire, em.mainRet, em.mainPs.length)
+
+-- rsc compile under cfg, cached by (rscmQ, cfg, rscBinQ) → wasmQ.
+def sCompileCfg (ctx : SCtx) (cfg rscmQ : String) : IO (String × String) := do
+  match ctx.rscBin with
+  | none => return ("rsc_unavailable", "")
+  | some rscBin =>
+    let key := digestString s!"rscm|{rscmQ}|cfg:{cfg}|rsc:{ctx.rscQ}"
+    let idx := s!"{ctx.store}/suite/idx/{key}"
+    if ← System.FilePath.pathExists idx then
+      let wq := (← IO.FS.readFile idx).trim
+      if wq.length == 64 && (← digestFile s!"{ctx.store}/q/{wq}") == wq then
+        return ("", wq)
+      IO.eprintln s!"[suite_cache_tampered] idx/{key}"
+    let tmp := s!"{ctx.store}/suite/.w-{(key.take 16)}.wasm"
+    let pathE ← IO.getEnv "PATH"
+    let homeE ← IO.getEnv "HOME"
+    let tmpE ← IO.getEnv "TMPDIR"
+    let comp ← IO.Process.output
+      { cmd := rscBin, args := #["compile", s!"{ctx.store}/q/{rscmQ}", tmp, cfg],
+        cwd := some ctx.store,
+        env := #[("RSC_LAYERS", some cfg), ("PATH", pathE), ("HOME", homeE), ("TMPDIR", tmpE)] }
+    if comp.exitCode != 0 then
+      let lines := comp.stdout.splitOn "\n"
+      let ref := (lines.filter (fun l => l.startsWith "[" && l.endsWith "]")).headD
+        ((lines.filter (fun l => l != "")).headD "[refusal]")
+      let reason := if ref.startsWith "[" && ref.endsWith "]" then
+        ((ref.drop 1).dropRight 1).trim else ref.trim
+      return (s!"rsc_{reason}", "")
+    let wasmBytes ← IO.FS.readBinFile tmp
+    let rawQ ← storePut ctx.store wasmBytes
+    let patched := patchWasmMemory wasmBytes
+    let wasmQ ← if patched.size == wasmBytes.size then pure rawQ
+      else storePut ctx.store patched
+    try IO.FS.removeFile tmp catch _ => pure ()
+    IO.FS.writeFile idx (wasmQ ++ "\n")
+    return ("", wasmQ)
+
+-- Column argv specs; eval uses rscmPath, the wasm columns q/<wasmQ>.
+def sColArgv (ctx : SCtx) (col wasmQ rscmPath entry fuel : String) (ret : Int)
+    (args : List String) : IO (Option (List String)) := do
+  let qpath := s!"{ctx.store}/q/{wasmQ}"
+  if col == "node" then
+    match ctx.cjs with
+    | some c => return some ([ctx.nodeBin, c, qpath, s!"f{entry}", fuel, toString ret] ++ args)
+    | none => return none
+  else if col == "jit" then
+    match ctx.host with
+    | some h => return some ([h.cmd, qpath, s!"f{entry}", fuel, toString ret] ++ args)
+    | none => return none
+  else if col == "aot" then
+    match ctx.host with
+    | none => return none
+    | some h =>
+      let ver ← IO.Process.output { cmd := ctx.wtBin, args := #["--version"] }
+      if ver.exitCode != 0 then return none
+      let key := digestString s!"cwasm|{wasmQ}|{ctx.hostQ}|{ver.stdout.trim}"
+      let cpath := s!"{ctx.store}/suite/cwasm/{key}"
+      if !(← System.FilePath.pathExists cpath) then
+        let r ← IO.Process.output
+          { cmd := ctx.wtBin,
+            args := #["compile", "-o", s!"{cpath}.tmp", qpath] }
+        if r.exitCode != 0 || !(← System.FilePath.pathExists s!"{cpath}.tmp") then
+          return none
+        IO.FS.rename s!"{cpath}.tmp" cpath
+      return some ([h.cmd, "--cwasm-in", cpath, qpath, s!"f{entry}", fuel, toString ret] ++ args)
+  else if col == "eval" then
+    match ctx.evallean with
+    | some b => return some ([b, "run", rscmPath, entry, fuel] ++ args)
+    | none => return none
+  return none
+
+def sRunCol (ctx : SCtx) (r : SRow) (col : String) (argv : List String) : IO SRes := do
+  let (code, stdout, stderr, wall, peak) ← sSpawnTimed (sRowCap r ctx.o) argv
+  if col == "eval" then
+    if code == 124 || code == 137 then
+      return { col, outcome := "machineClock", value := "-", wallMs := wall, peakKib := peak, detail := "cap" }
+    let t := stdout.trim
+    if code != 0 || sHasSub stderr "takes" then
+      return { col, outcome := "evallean_refused", value := "-", wallMs := wall, peakKib := peak,
+               detail := (stderr.splitOn "\n").headD (s!"exit {code}") }
+    if t == "none" then
+      return { col, outcome := "none", value := "-", wallMs := wall, peakKib := peak, detail := "" }
+    return { col, outcome := "value", value := t, wallMs := wall, peakKib := peak, detail := "" }
+  return sFromHost col code stdout wall peak
+
+-- evalLean entry discovery over an emitted rscm: probe sig count, then each
+-- entry with the row's args; the arity line names the match.
+def sRscmSigCount (path : String) : IO Nat := do
+  let bs ← IO.FS.readBinFile path
+  if bs.size < 6 then return 0
+  let mut n := 0
+  let mut s := 0
+  let mut i := 5
+  while i < bs.size do
+    let b := bs.data[i]!.toNat
+    n := n ||| ((b &&& 0x7f) <<< s)
+    i := i + 1
+    if b &&& 0x80 == 0 then break
+    s := s + 7
+  return n
+
+partial def sProbeEntries (ctx : SCtx) (path : String) (i n : Nat)
+    (args : List String) : IO (Option String) := do
+  if i >= n then return none
+  match ctx.evallean with
+  | none => return none
+  | some b =>
+    let r1 ← IO.Process.output
+      { cmd := b, args := #["run", path, toString i, "1"] ++ args.toArray }
+    if !(sHasSub r1.stderr "takes") then return some (toString i)
+    sProbeEntries ctx path (i + 1) n args
+
+-- EmitFast emit of an .rsd program for the eval column. The `main` entry is
+-- renamed to e2eMain (stock Lean refuses `def main : Int`); roots come from
+-- EMIT_ROOTS. Returns (rscmPath or "", note).
+def sEmit (ctx : SCtx) (r : SRow) : IO (String × String) := do
+  match ctx.emitB, ctx.emitOlean, ctx.emitSrc, ctx.emitDrv with
+  | some bdir, some olean, some sdir, some drv =>
+    if !(← System.FilePath.pathExists s!"{bdir}/libemit.dylib")
+        || !(← System.FilePath.pathExists drv) then
+      return ("", "no_emit")
+    let progPath := sResolve ctx.home r.prog
+    let raw ← IO.FS.readFile progPath
+    let feed := stripShebang raw
+    let root := if r.entry == "main" then "e2eMain" else r.entry
+    let src :=
+      if r.entry == "main" then
+        String.intercalate "\n" ((feed.splitOn "\n").map (fun l =>
+          if (l.dropWhile (· == ' ')).startsWith "def main" then
+            l.replace "def main" "def e2eMain" else l))
+      else feed
+    let dir := s!"{ctx.store}/suite/emit"
+    IO.FS.createDirAll dir
+    let tmp := s!"{dir}/{(digestString src).take 16}.rsd"
+    let outp := s!"{tmp}.rscm"
+    IO.FS.writeFile tmp src
+    let pathE ← IO.getEnv "PATH"
+    let homeE ← IO.getEnv "HOME"
+    let tmpE ← IO.getEnv "TMPDIR"
+    let res ← IO.Process.output
+      { cmd := ctx.leanBin, args := #["--load-dynlib", s!"{bdir}/libemit.dylib", drv],
+        env := #[("LEAN_PATH", some s!"{bdir}/lib:{olean}"),
+          ("EMIT_RSD", some tmp), ("EMIT_ROOTS", some root), ("EMIT_NS", some "e2e"),
+          ("EMIT_OUT", some outp), ("EMIT_DIR", some dir), ("EMIT_SRC", some sdir),
+          ("PATH", pathE), ("HOME", homeE), ("TMPDIR", tmpE)] }
+    let emLine := ((res.stdout.splitOn "\n").find? (·.startsWith "EMITRSD ")).getD ""
+    if emLine == "" || !(← System.FilePath.pathExists outp) then
+      return ("", s!"emit_refused {((res.stderr.splitOn "\n").headD "").take 60}")
+    let rf := (((emLine.splitOn "refusals=").get? 1).getD "").splitOn " " |>.headD "1"
+    if rf != "0" then
+      return ("", s!"emit_refused refusals={rf}")
+    return (outp, "")
+  | _, _, _, _ => return ("", "no_emit")
+
+-- Resolve the eval column's rscm path + entry per the row's eval field.
+def sEvalPath (ctx : SCtx) (r : SRow) (rscmQ entry : String)
+    (args : List String) : IO (String × String) := do
+  if r.eval == "self" then
+    if rscmQ == "" then return ("", "no_eval")
+    return (s!"{ctx.store}/q/{rscmQ}", entry)
+  else if r.eval == "-" then return ("", "no_eval")
+  else if r.eval == "emit" then
+    let (p, note) ← sEmit ctx r
+    if p == "" then return ("", note)
+    let n ← sRscmSigCount p
+    match ← sProbeEntries ctx p 0 n args with
+    | some e => return (p, e)
+    | none => return ("", "eval_entry_ambiguous")
+  else
+    match r.eval.splitOn ":" with
+    | [p, e] =>
+      let rp := sResolve ctx.home p
+      if !(← System.FilePath.pathExists rp) then return ("", "no_eval")
+      return (rp, e)
+    | _ => return ("", "no_eval")
+
+def sEvalCol (ctx : SCtx) (r : SRow) (rscmQ entry : String) (args : List String)
+    : IO SRes := do
+  match ctx.evallean with
+  | none => return sBlankRes "eval" "no_evallean"
+  | some _ =>
+    let (rp, ent) ← sEvalPath ctx r rscmQ entry args
+    if rp == "" then return sBlankRes "eval" ent
+    match ← sColArgv ctx "eval" "" rp ent (sRowEFuel r ctx.o) 0 args with
+    | none => return sBlankRes "eval" "no_evallean"
+    | some argv => sRunCol ctx r "eval" argv
+
+-- ============================================================================
+-- Row driver: stage outcomes → column runs → per-cfg and row checks.
+-- ============================================================================
+
+-- Consensus over the wasm columns: all present columns must carry the same
+-- outcome and normalized value, else the first differing pair is named.
+def sCfgOutcome (cols : List SRes) : String :=
+  let wcols := cols.filter (fun c => c.col == "node" || c.col == "jit" || c.col == "aot")
+    |>.filter (fun c => !(c.outcome.startsWith "no_"))
+  match wcols with
+  | [] => "no_columns"
+  | first :: rest =>
+    match rest.find? (fun c =>
+        c.outcome != first.outcome || sNormVal c.value != sNormVal first.value) with
+    | some d => s!"column_disagree {first.col}/{d.col}"
+    | none => first.outcome
+
+-- The row-level check: cfgs must agree, expected must hold, and the eval
+-- column must not contradict (a `none`/absent eval adds no evidence; a
+-- value that differs is the [rsd_check_disagree] the contract names).
+def sCheckRow (r : SRow) (cfgOuts : List (String × String)) (ev : SRes)
+    (cfgVals : List (String × String)) : String :=
+  match cfgOuts with
+  | [] => "no_columns"
+  | (_, first) :: rest =>
+    match rest.find? (fun (_, oc) => oc != first) with
+    | some (c, oc) => s!"cfg_disagree {c}:{oc}"
+    | none =>
+      let wv := (cfgVals.headD ("", "")).2
+      if !sExpectedOk r.expected first wv then "expected_miss"
+      else if ev.outcome == "value" && first == "value" && sNormVal ev.value != sNormVal wv then
+        s!"rsd_check_disagree f{r.entry}@{r.argsText}"
+      else if ev.outcome == "value" && first != "value" then
+        s!"rsd_check_disagree f{r.entry}@{r.argsText}"
+      else if ev.outcome == "none" && first == "value" then
+        s!"eval_none f{r.entry}@{r.argsText}"
+      else if ev.outcome == "evallean_refused" then "eval_refused"
+      else if ev.outcome == "machineClock" then "eval_clock"
+      else if ev.outcome == "no_eval" || ev.outcome == "no_evallean" then "pass"
+      else if ev.outcome == "no_emit" || ev.outcome == "eval_entry_ambiguous"
+          || ev.outcome.startsWith "emit_refused" then
+        ev.outcome
+      else "pass"
+
+def suiteRow (ctx : SCtx) (r : SRow) : IO (List String) := do
+  let mut out : List String := []
+  -- verify the row's own q's
+  let progPath := sResolve ctx.home r.prog
+  if !(← System.FilePath.pathExists progPath) then
+    return out ++ [sRowLine r "-" "manifest" "manifest_drift" "-" 0 0 "manifest" s!"missing {r.prog}"]
+  let pq ← digestFile progPath
+  if pq != r.progQ then
+    return out ++ [sRowLine r "-" "manifest" "manifest_drift" "-" 0 0 "manifest" s!"program_q {(pq.take 16)}"]
+  if digestString r.argsText != r.inputQ || digestString r.expected != r.expectedQ then
+    return out ++ [sRowLine r "-" "manifest" "manifest_drift" "-" 0 0 "manifest" "field_q"]
+  let args := sRowArgs r
+  -- program → rscmQ / wasmQ by kind
+  let mut rscmQ := ""
+  let mut wasmQ := ""
+  let mut entry := r.entry
+  let mut ret : Int := sRowRet r
+  let mut upstream := ""
+  let mut upstreamStage := "compile"
+  if r.kind == "rsd" then
+    let (err, q, wire, rt, ar) ← sCompileRsd ctx r
+    if err != "" then
+      upstream := ((err.splitOn "@").headD err)
+      upstreamStage := (((err.splitOn "@").get? 1).getD "compile")
+      out := out ++ [sRowLine r "-" "stage" upstream "-" 0 0 upstreamStage err]
+    else
+      rscmQ := q; entry := toString wire; ret := rt
+      if args.length != ar then
+        upstream := "main_arity"
+        out := out ++ [sRowLine r "-" "stage" "main_arity" "-" 0 0 "compile" s!"main takes {ar} args, got {args.length}"]
+      else if !(args.all intArgOk) then
+        upstream := "main_args"
+        out := out ++ [sRowLine r "-" "stage" "main_args" "-" 0 0 "compile" "non-i64 argument"]
+  else if r.kind == "rscm" then
+    let bs ← IO.FS.readBinFile progPath
+    rscmQ ← storePut ctx.store bs
+  else if r.kind == "wasm" then
+    let bs ← IO.FS.readBinFile progPath
+    wasmQ ← storePut ctx.store (patchWasmMemory bs)
+  else
+    upstream := "manifest_kind"
+    out := out ++ [sRowLine r "-" "stage" "manifest_kind" "-" 0 0 "manifest" r.kind]
+  -- per-cfg compile + wasm columns
+  let cfgs := if r.kind == "wasm" then ["-"] else ctx.o.cfgs
+  let wcols := ctx.o.cols.filter (fun c => c == "node" || c == "jit" || c == "aot")
+  let mut cfgOuts : List (String × String) := []
+  let mut cfgVals : List (String × String) := []
+  for cfg in cfgs do
+    let mut u := upstream
+    let mut wq := wasmQ
+    if u == "" && wq == "" then
+      let (err, q) ← sCompileCfg ctx cfg rscmQ
+      if err != "" then
+        u := err
+        out := out ++ [sRowLine r cfg "stage" ((err.splitOn " ").headD err) "-" 0 0 "rsc" err]
+      else wq := q
+    if u != "" then
+      let uo := (u.splitOn " ").headD u
+      cfgOuts := cfgOuts ++ [(cfg, uo)]
+      cfgVals := cfgVals ++ [(cfg, "")]
+      let verdict := if sExpectedOk r.expected uo "" then "pass" else "expected_miss"
+      out := out ++ [sRowLine r cfg "check" verdict "-" 0 0 "check" uo]
+    else
+      let mut cols : List SRes := []
+      for col in wcols do
+        match ← sColArgv ctx col wq s!"{ctx.store}/q/{rscmQ}" entry (sRowFuel r ctx.o) ret args with
+        | none =>
+          let nm := if col == "node" then "no_node" else if col == "aot" then "no_aot" else "no_host"
+          cols := cols ++ [sBlankRes col nm]
+          out := out ++ [sRowLine r cfg col nm "-" 0 0 "run" ""]
+        | some argv =>
+          let res ← sRunCol ctx r col argv
+          cols := cols ++ [res]
+          out := out ++ [sRowLine r cfg col res.outcome res.value res.wallMs res.peakKib "run" res.detail]
+      let oc := sCfgOutcome cols
+      cfgOuts := cfgOuts ++ [(cfg, oc)]
+      let nv := sNormVal ((cols.headD (sBlankRes "" "")).value)
+      cfgVals := cfgVals ++ [(cfg, nv)]
+      let verdict := if oc.startsWith "column_disagree" || oc == "no_columns" then oc
+        else if !sExpectedOk r.expected oc nv then "expected_miss"
+        else "pass"
+      out := out ++ [sRowLine r cfg "check" verdict "-" 0 0 "check" oc]
+  -- eval column (once per row)
+  let ev ← if ctx.o.cols.contains "eval" then sEvalCol ctx r rscmQ entry args
+    else pure (sBlankRes "eval" "no_eval")
+  out := out ++ [sRowLine r "-" "eval" ev.outcome ev.value ev.wallMs ev.peakKib "eval" ev.detail]
+  let rowVerdict := sCheckRow r cfgOuts ev cfgVals
+  out := out ++ [sRowLine r "-" "check" rowVerdict "-" 0 0 "check"
+    ((cfgOuts.headD ("-", "-")).2)]
+  return out
+
+-- ============================================================================
+-- classify mode: parse every *.lean under DIR through emitStages and list
+-- each file with its rsdc refusal name (D2's outside-subset listing).
+-- ============================================================================
+
+partial def sWalk (dir : String) (acc : List String) : IO (List String) := do
+  let mut a := acc
+  for e in (← (System.FilePath.mk dir).readDir) do
+    if ← e.path.isDir then
+      a ← sWalk e.path.toString a
+    else
+      a := a ++ [e.path.toString]
+  return a
+
+def sClassify (o : SuiteOpts) : IO UInt32 := do
+  let files0 ← sWalk o.classify []
+  let files := (files0.filter (·.endsWith ".lean")).mergeSort (· < ·)
+  let clk ← clockNew
+  let mut out : List String := []
+  let mut i : Nat := 0
+  for f in files do
+    if i >= o.offset && (o.limit == 0 || i < o.offset + o.limit) then
+      let oc ← try
+        let q ← digestFile f
+        let src ← IO.FS.readFile f
+        let feed := stripShebang src
+        let imps := headerImportList feed
+        let oc ←
+          match imps.find? toolchainImport with
+          | some t => pure s!"import_toolchain:{t}"
+          | none => do
+            let em ← emitStages clk "main" feed
+            if em.err != 0 then
+              let lc := lcOf 0 (feed.toUTF8.data.toList.map (fun b => (b.toNat : Int))) em.pos
+              let ps := if em.pos < 0 then "-" else s!"{nthI lc 0}:{nthI lc 1}"
+              pure s!"rsdc_{errName em.err}@{em.stage}@{ps}"
+            else if em.mainWire < 0 then pure "ok_no_main"
+            else pure "ok"
+        pure s!"{f}\t{q}\t{oc}"
+      catch _ => pure s!"{f}\t-\tunreadable"
+      out := out ++ [oc]
+    i := i + 1
+  let body := String.intercalate "\n" (out ++ [""])
+  if o.out == "" then IO.print body
+  else IO.FS.writeFile o.out body
+  IO.eprintln s!"classify {out.length} files"
+  return 0
+
+-- ============================================================================
+-- suiteMain
+-- ============================================================================
+
+def suiteMain (argv : List String) : IO UInt32 := do
+  match ← sParseOpts argv with
+  | none => sUsage
+  | some o =>
+    if o.classify != "" then return ← sClassify o
+    match ← sFindHome o with
+    | none => refuse "usage" "no repo home (set --home or RSD_HOME)" 2
+    | some home => do
+      let manPath := sResolve home o.manifest
+      if !(← System.FilePath.pathExists manPath) then
+        return ← refuse "usage" s!"no such manifest: {o.manifest}" 2
+      let ctx ← sMkCtx o home
+      let lines := ((← IO.FS.readFile manPath).splitOn "\n")
+        |>.filter (fun l => l != "" && !(l.startsWith "#"))
+      let mut rows : List SRow := []
+      for l in lines do
+        match sParseRow l with
+        | some r =>
+          if o.rowFilter.isEmpty || o.rowFilter.contains r.name then rows := rows ++ [r]
+        | none => IO.eprintln s!"[manifest_bad_line] {l.take 80}"
+      let mut out : List String := []
+      for r in rows do
+        let rl ← suiteRow ctx r
+        out := out ++ rl
+      let body := String.intercalate "\n" (out ++ [""])
+      let outPath := if o.out == "" then s!"{ctx.store}/suite/rows.tsv" else o.out
+      match (System.FilePath.mk outPath).parent with
+      | some d => IO.FS.createDirAll d.toString
+      | none => pure ()
+      IO.FS.writeFile outPath body
+      let tq ← digestFile outPath
+      let checks := out.filter (fun l => (l.splitOn "\t").get? 2 == some "check")
+      let passes := checks.filter (fun l => (l.splitOn "\t").get? 3 == some "pass")
+      let mut bad : List String := []
+      for l in checks do
+        match (l.splitOn "\t").get? 3 with
+        | some v => if v != "pass" && !(bad.contains v) then bad := bad ++ [v]
+        | none => pure ()
+      IO.println s!"SUITE rows={rows.length} lines={out.length} checks={checks.length} pass={passes.length} table={outPath} table_q={tq} verdicts={String.intercalate "," bad}"
+      -- exit 1 names real contradictions; missing columns are data, not fails.
+      let hard := bad.filter (fun v => v.startsWith "column_disagree"
+        || v.startsWith "rsd_check_disagree" || v.startsWith "cfg_disagree"
+        || v == "expected_miss" || v == "manifest_drift")
+      return if hard.isEmpty then 0 else 1
+
+end Rsd
+
+def main (argv : List String) : IO UInt32 :=
+  match argv with
+  | "suite" :: rest => Rsd.suiteMain rest
+  | _ => Rsd.rsdcMain argv

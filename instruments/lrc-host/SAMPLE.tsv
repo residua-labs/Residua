@@ -1,0 +1,123 @@
+# The pinned sample of a landing of the stage (the repository's landing rule r9, item 9: a fix lands on the rows it targets plus a
+# pinned at-risk sample, in minutes; the whole set runs once, for the closure claim). A landing that changes lib/lrc runs, at its head:
+#   lean --run instruments/lrc-host/Diff.rsd plants                    every planted row of every table still names one line
+#                                                                       (seconds; first, before any replay)
+#   lean --run instruments/lrc-host/Diff.rsd rsdc                      the front end takes the stage's modules
+#   the compiled host check as `quick` (Diff.rsd emit, DIR/0.lean)      every image row, the default pipeline, six budgets; the bytes
+#                                                                       live at most under narrow fields for the rows of Peaks.tsv
+#   Sides.rsd NATIVE 40 and the `image` rows below                      the real compiler, both lowerings and the stage's module of
+#                                                                       narrow fields (the layer `narrow`), 41 budgets
+#   the `planted` rows below, and every row of a table that names a line the landing changes
+#   the `sides` rows below when the landing changes a guard, a call's depth or lib/lrc/Emit.rsd
+# The sample holds a row of every table and of every pass that has rows: a row far from a change found the one defect that a whole
+# replay found on 2026-11-18 (a helper that switched lib/lrc/Pack.rsd off; MutantsCover row 53).
+# KIND	NAME (an image row of Images.tsv) or TABLE:ROW (a row of instruments/lrc-host/Mutants<TABLE>.tsv; BASE is Mutants.tsv; Sides is SidesMutants.tsv)
+image	rbtree
+image	rbtreeck
+image	nqueens
+image	binarytrees
+image	cfold
+image	deriv
+image	mapat9b
+image	magint
+image	magnat
+image	arrints
+image	arrboxes
+image	convints
+image	numints
+image	numedgei
+image	numchain
+image	numxlen
+image	numxnum
+image	numxtag
+image	order
+image	closed
+image	eqat7x
+image	litlong
+image	narrownat
+image	narrowint
+image	narrowmix
+image	arrof
+image	convnats
+image	pack
+image	inl
+image	inlempty
+image	head
+image	headlist
+image	headback
+image	over
+image	count
+image	countbig
+image	wrap
+image	fold
+image	foldkept
+image	splitwalk
+image	splitshape
+image	append
+image	appfuel
+image	wordDiv0
+image	wordLt0
+image	wordNode0
+image	wordCastOnly
+planted	BASE:1
+planted	BASE:8
+planted	Arr:3
+planted	Arr:18
+planted	Arr:22
+planted	AuditAgy:2
+planted	AuditGlm:5
+planted	Cover:21
+planted	Cover:40
+planted	Cover:53
+planted	Cover:59
+planted	Edb:6
+planted	Mag:1
+planted	Mag:5
+planted	Mag:10
+planted	Num:3
+planted	Num:4
+planted	Num:8
+planted	Conv:2
+planted	Conv:3
+planted	Once:1
+planted	RC:1
+planted	Reuse:1
+planted	Narrow:1
+planted	Narrow:6
+planted	Pack:4
+planted	Pack:9
+planted	Pack:17
+planted	Pack:18
+planted	Head:1
+planted	Head:9
+planted	Head:13
+planted	Head:14
+planted	Count:2
+planted	Count:7
+planted	Count:12
+planted	Share:1
+planted	Share:5
+planted	Share:9
+planted	Share:10
+planted	Split:1
+planted	Split:5
+planted	App:1
+planted	App:5
+planted	W64:2
+planted	W64:4
+planted	W64Layout:1
+sides	Sides:1
+sides	Sides:16
+sides	Sides:19
+sides	Sides:25
+sides	Sides:32
+sides	Sides:34
+sides	Sides:38
+sides	Sides:40
+sides	Sides:43
+sides	Sides:46
+sides	Sides:55
+sides	Sides:60
+sides	Sides:62
+sides	Sides:70
+sides	Sides:73

@@ -1,0 +1,151 @@
+-- Compiled counterexamples about the actual collector, not #eval test data.
+namespace Lib.Rsd.FrontCollectorRows
+open Lib.Rsd.FrontCollector
+
+structure Row where
+  name : String
+  expected : Option String
+  actual : Option String
+
+def result (r : Request) (s : State) : Option String := (runNF r s).residue.map residueName
+def check (name : String) (ok : Bool) : Row :=
+  { name, expected := none, actual := if ok then none else some "row_changed" }
+
+def replaceObservation (r : Request) (s : State) (label : String)
+    (o : Lib.Rsd.CommandReceipt.Observation) : Request × State :=
+  let plans := r.plans.map fun p => if p.label != label then p else
+    { p with request := { p.request with expected := { p.request.expected with
+      stdoutQ := hash o.stdout, stderrQ := hash o.stderr } } }
+  let cells := s.cells.map fun c => if c.label != label then c else
+    { c with state := { c.state with observation := o, observed := { c.state.observed with
+      stdoutQ := hash o.stdout, stderrQ := hash o.stderr } } }
+  ({ r with plans }, { s with cells })
+
+def diagnosticRow (r : Request) (s : State) (name label : String)
+    (o : Lib.Rsd.CommandReceipt.Observation) (expected : String) : Row :=
+  let pair := replaceObservation r s label o
+  { name, expected := some expected, actual := result pair.1 pair.2 }
+
+-- Normalize only generated mutant filenames and the subset oracle's frozen
+-- input locator. Preserve every other diagnostic byte, including positions.
+def stableLabels : List String := ["laws-rows-conformance"] ++
+  mutations.map (fun m => "mutant-" ++ m.1) ++ ["rsdc-subset", "rsx-roundtrip"]
+def stableText (label text : String) : String :=
+  if label == "rsdc-subset" then text.replace
+    (directory ++ "/frozen/lib/rsd/schedule.rsd") "lib/rsd/schedule.rsd"
+  else if !label.startsWith "mutant-" then text else
+    (text.replace ("out/rsd/front/" ++ label ++ ".lean") "[mutant-source]").replace
+      (directory ++ "/" ++ label ++ ".rsd") "[mutant-source]"
+def stableRows (fresh reference : State) : List Row := stableLabels.map fun label =>
+  let a := observation fresh label
+  let b := observation reference label
+  check ("output/" ++ label)
+    (a.exit == b.exit && a.signal == b.signal && a.errorCode == b.errorCode &&
+      stableText label a.stdout == stableText label b.stdout &&
+      stableText label a.stderr == stableText label b.stderr)
+
+def parserRows (r : Request) (s : State) : List Row := Id.run do
+  let mut rows := [check "version/stock" (stockVersionOK "Lean (version 4.14.0, arm64)"),
+    check "version/exact" (stockVersionOK "version 4.14.0"),
+    check "version/digit-suffix" (!stockVersionOK "version 4.14.00"),
+    check "version/word-suffix" (!stockVersionOK "version 4.14.0nightly"),
+    check "version/foreign" (!stockVersionOK "version 4.15.0")]
+  let text := (observation s "laws-rows-conformance").stdout
+  for law in laws do
+    let name := "Lib.Rsd.Schedule." ++ law
+    let removed := String.intercalate "\n" ((text.splitOn "\n").filter (fun line => !line.startsWith ("'" ++ name ++ "'")))
+    rows := rows ++ [check ("axiom/missing/" ++ law) (!axiomsOK removed)]
+    let duplicate := text ++ "\n'" ++ name ++ "' does not depend on any axioms\n"
+    rows := rows ++ [check ("axiom/duplicate/" ++ law) (!axiomsOK duplicate)]
+    let forbidden := String.intercalate "\n" ((text.splitOn "\n").map fun line =>
+      if line.startsWith ("'" ++ name ++ "'") then "'" ++ name ++ "' depends on axioms: [Classical.choice]" else line)
+    rows := rows ++ [check ("axiom/forbidden/" ++ law) (!axiomsOK forbidden)]
+  rows := rows ++ [check "axiom/stock" (axiomsOK text),
+    check "axiom/allowed-basis" (axiomsOK (text.replace "[propext]" "[propext, Quot.sound]")),
+    check "axiom/malformed" (!axiomsOK (text.replace "depends on axioms: [" "depends on axioms: (")),
+    check "axiom/foreign-name" (!axiomsOK (text.replace "Lib.Rsd.Schedule.sigma_idempotent" "Other.sigma_idempotent"))]
+  for exit in [none, some 0, some 1, some 2, some 124] do
+    for marker in ["did not evaluate to `true`", "did not evaluate to 'true'", "did not evaluate to \"true\"", "did not evaluate to true", "unknown identifier", "syntax error"] do
+      let expected := exit == some 1 && marker.startsWith "did not evaluate to"
+      rows := rows ++ [check ("caught/" ++ toString exit ++ "/" ++ marker)
+        (caught { exit, stdout := marker } == expected)]
+  rows := rows ++ [check "caught/signal" (!caught { exit := some 1, signal := some "SIGKILL", stdout := "did not evaluate to `true`" }),
+    check "caught/launch" (!caught { exit := some 1, errorCode := some "ENOENT", stdout := "did not evaluate to `true`" })]
+  let rt := observation s "rsx-roundtrip"
+  rows := rows ++ [check "roundtrip/stock" (roundtripOK rt)]
+  for flag in roundtripFlags do
+    rows := rows ++ [check ("roundtrip/false/" ++ flag) (!roundtripOK { rt with stdout := rt.stdout.replace (flag ++ "=true") (flag ++ "=false") }),
+      check ("roundtrip/token-suffix/" ++ flag) (!roundtripOK { rt with stdout := rt.stdout.replace (flag ++ "=true") (flag ++ "=truefalse") })]
+  return rows
+
+def aggregateRows (r : Request) (s : State) : List Row := Id.run do
+  let mut rows : List Row := [{ name := "aggregate/stock", expected := none, actual := result r s }]
+  rows := rows ++ [
+    { name := "source/before", expected := some "nf_front_source_pin", actual := result r { s with beforeSourceQ := "foreign" } },
+    { name := "source/after", expected := some "nf_front_source_pin", actual := result r { s with afterSourceQ := "foreign" } },
+    { name := "source/body", expected := some "nf_front_source_pin", actual := result { r with sources := r.sources.drop 1 } s },
+    { name := "commands/missing", expected := some "nf_front_command_inventory", actual := result r { s with cells := s.cells.drop 1 } },
+    { name := "commands/duplicate", expected := some "nf_front_command_inventory", actual := result r { s with cells := s.cells ++ s.cells.take 1 } },
+    { name := "commands/order", expected := some "nf_front_command_inventory", actual := result r { s with cells := s.cells.reverse } }]
+  match r.plans with
+  | [] => pure ()
+  | p :: rest =>
+    for wall in [0, 60001, 300001] do
+      rows := rows ++ [{
+        name := "plan/wall/" ++ toString wall, expected := some "nf_front_command_plan",
+        actual := result { r with plans := { p with request := { p.request with wallMs := wall } } :: rest } s }]
+    rows := rows ++ [{
+      name := "plan/command", expected := some "nf_front_command_plan",
+      actual := result { r with plans := { p with request := { p.request with expected := { p.request.expected with command := ["foreign"] } } } :: rest } s }]
+  match s.cells with
+  | [] => pure ()
+  | cell :: rest =>
+    let changes : List (String × Lib.Rsd.CommandReceipt.Binding) := [
+      ("subject", { cell.state.observed with subject := "foreign" }),
+      ("command", { cell.state.observed with command := ["foreign"] }),
+      ("executable", { cell.state.observed with executableQ := "foreign" }),
+      ("input", { cell.state.observed with inputQ := "foreign" }),
+      ("stdout", { cell.state.observed with stdoutQ := "foreign" }),
+      ("stderr", { cell.state.observed with stderrQ := "foreign" })]
+    for (name, b) in changes do
+      rows := rows ++ [{
+        name := "binding/" ++ name, expected := some "nf_front_command_binding",
+        actual := result r { s with cells := { cell with state := { cell.state with observed := b } } :: rest } }]
+    rows := rows ++ [{
+      name := "binding/raw-stream", expected := some "nf_front_command_binding",
+      actual := result r { s with cells := { cell with state := { cell.state with observation := { cell.state.observation with stdout := "forged" } } } :: rest } }]
+  for label in ["lean-version", "mutant-memo-body"] do
+    let o := observation s label
+    rows := rows ++ [diagnosticRow r s ("resource/" ++ label) label { o with exit := some 124 } "nf_front_command_binding"]
+  rows := rows ++ [
+    diagnosticRow r s "version/wrong" "lean-version" { exit := some 0, stdout := "Lean version 4.15.0" } "nf_front_stock_version",
+    diagnosticRow r s "laws/no-conformance" "laws-rows-conformance" { exit := some 0, stdout := "no source convention observation" } "nf_front_laws_rows",
+    diagnosticRow r s "laws/missing" "laws-rows-conformance" { exit := some 0, stdout := "conformance-ok" } "nf_front_axiom_basis",
+    diagnosticRow r s "mutant/unrelated-compiler-error" "mutant-memo-body" { exit := some 1, stdout := "unknown identifier" } "nf_front_mutation_escaped",
+    diagnosticRow r s "mutant/success" "mutant-memo-body" { exit := some 0, stdout := "did not evaluate to `true`" } "nf_front_mutation_escaped",
+    diagnosticRow r s "subset/build" "rsdc-build" { exit := some 1 } "nf_front_subset_build",
+    diagnosticRow r s "subset/verdict" "rsdc-subset" { exit := some 0, stdout := "error" } "nf_front_subset_verdict",
+    diagnosticRow r s "canonical/core" "rsx-core-build" { exit := some 1 } "nf_front_canonical_build",
+    diagnosticRow r s "canonical/build" "rsx-build" { exit := some 1 } "nf_front_canonical_build",
+    diagnosticRow r s "canonical/flag" "rsx-roundtrip" { exit := some 0, stdout := "rtT=false" } "nf_front_canonical_roundtrip"]
+  let o := observation s "laws-rows-conformance"
+  rows := rows ++ [diagnosticRow r s "laws/forbidden-axiom" "laws-rows-conformance"
+    { o with stdout := o.stdout.replace "[propext]" "[Classical.choice]" } "nf_front_axiom_basis",
+    check "identity/noise" (q r { s with replayNoise := 13 } == q r s),
+    check "canonical/noise" ((runNF r { s with replayNoise := 13 }).state.replayNoise == 0)]
+  return rows
+
+def mutations : List (String × String × String) := [
+  ("law-identity", "(rows.filter (fun row => row.1 == \"Lib.Rsd.Schedule.\" ++ name)).length == 1", "true"),
+  ("forbidden-axiom", "a == \"propext\" || a == \"Quot.sound\"", "true"),
+  ("compiler-error-as-caught", "o.exit == some 1 && (Lib.Rsd.CommandReceipt.resource? .front o).isNone &&", "o.exit == some 1 || (Lib.Rsd.CommandReceipt.resource? .front o).isNone &&"),
+  ("false-roundtrip", "(name ++ \"=true\")", "(name ++ \"=false\")"),
+  ("stale-source", "s.afterSourceQ != sourceQ", "false")]
+
+def failures (rows : List Row) : List String :=
+  rows.filterMap (fun row => if row.expected == row.actual then none else some row.name)
+def report (rows : List Row) : String := Lib.Rsd.QFloorJson.encode 8 (.obj [
+  ("schema", .str "rsd-front-rows/1"), ("closure_claim", .int 0),
+  ("rows", .int rows.length), ("failures", .arr ((failures rows).map .str))])
+
+end Lib.Rsd.FrontCollectorRows

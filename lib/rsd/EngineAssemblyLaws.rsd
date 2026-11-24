@@ -1,0 +1,33 @@
+namespace Lib.Rsd.EngineAssembly
+
+-- Check the observation boundary for an arbitrary generator result. The
+-- proofs need not unfold the shared SCM quotations or raise resource limits.
+theorem check_exact (files : List (String × String)) (generated : Except String (List (String × String))) :
+    checkFiles files generated = none <-> files.length = names.length ∧ generated = .ok files := by
+  cases generated with
+  | error e => by_cases count : files.length = names.length <;> simp [checkFiles, count]
+  | ok expected =>
+      by_cases count : files.length = names.length
+      · by_cases same : files = expected
+        · subst expected; simp [checkFiles, count]
+        · have other : expected ≠ files := Ne.symm same
+          simp [checkFiles, count, same, other]
+      · simp [checkFiles, count]
+
+theorem sigma_idempotent (s : State) : sigma (sigma s) = sigma s := rfl
+theorem q_sigma (r : Request) (s : State) : q r (sigma s) = q r s := rfl
+theorem residue_sigma (r : Request) (s : State) : residue? r (sigma s) = residue? r s := rfl
+theorem admit_iff (r : Request) (s : State) : admissible r s = true <-> residue? r s = none := by
+  simp only [admissible, residue_sigma, Option.isNone_iff_eq_none]
+theorem soundness (r : Request) (s : State) (h : admissible r s = true) : residue? r s = none := (admit_iff r s).mp h
+theorem completeness (r : Request) (s : State) (h : residue? r s = none) : admissible r s = true := (admit_iff r s).mpr h
+theorem exactness (r : Request) (s : State) : (runNF r s).residue = none <-> admissible r s = true := by
+  simp only [runNF, residue_sigma, admit_iff]
+theorem refusal_exact (r : Request) (s : State) (e : Residue) : (runNF r s).residue = some e <-> residue? r s = some e := by
+  simp only [runNF, residue_sigma]
+theorem admitted_outputs (r : Request) (s : State) (h : admissible r s = true) : outputs r = .ok s.files :=
+  ((check_exact s.files (outputs r)).mp (soundness r s h)).2
+theorem admitted_inventory (r : Request) (s : State) (h : admissible r s = true) : s.files.length = names.length :=
+  ((check_exact s.files (outputs r)).mp (soundness r s h)).1
+
+end Lib.Rsd.EngineAssembly

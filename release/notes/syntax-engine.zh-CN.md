@@ -2,27 +2,28 @@
 
 [English](syntax-engine.md) | 中文
 
-状态：**随 0.2 版发货**；摘要另见 `docs/RELEASE-NOTES.zh-CN.md`。
-`closure_claim = 0`。
+状态：**随 0.3 版发货**；摘要另见 `docs/RELEASE-NOTES.zh-CN.md`。
 
 ## 提供的内容
 
 解析器是一个函数：（以数据给出的类内文法，一个输入）-> 一棵树
 或一个带位置的命名拒绝。类在 `semantics/Syntax/Class.rsd`：
 `SynSpec.Grammar`、`Parses` 关系与参照判定器 `refParses` 及其
-正确性证明（公理 `propext`、`Quot.sound`）。引擎源在
-`rsdc/syntax/`；一种表面是 `rsdc/profiles/*.syn` 中的数据——
-新增一个 profile 不需要改动 `rsdc/syntax/`。所发编译器接受的
+正确性证明（公理 `propext`、`Quot.sound`）。引擎实现源码位于开发仓库的
+`rsdc/syntax/`；本归档中它们随 seed 的整模块源包
+（`bootstrap/seed/stage-14274/sources/`）发货，而一种表面是
+`rsdc/profiles/*.syn` 中的数据——新增一个 profile 不需要改动
+`rsdc/syntax/`。所发编译器接受的
 表面不变（`docs/LANGUAGE.md` 的 `.rsd` 引导子集）。
 
 ## 验收证据
 
 - 源码修订：`28b9ff89f10514b93de92b8c0f60a109660ffa49`（在开发
   `main` 分支上）。
-- 独立审核：在该 sha 上判定 **SIGN**；记录
+- 独立审核：在该 sha 上判定 an independent audit passed；记录
   `reports/release-02/evidence/AUDIT-SYNTAX-ENGINE.28b9ff89f1.md`
-  （由开发合同仓库复制入包）。
-- 与类一致（E2）：`rsdc/syntax/ClassGate.rsd` 在 240 个生成文法
+  （仓库侧保存，不在本归档）。
+- 与类一致（E2）：`rsdc/syntax/ClassGate.rsd`（仓库侧）在 240 个生成文法
   与 4,334 个生成输入上——`disagreements=0`；每个文法带一个会
   改变 `refParses` 判定的变异体（240/240 已武装），并检查覆盖：
   右部长度 0..3、优先级 −1..2、结合性 0..3、消歧 0..3、选择组

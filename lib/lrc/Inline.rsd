@@ -221,4 +221,279 @@ def inlineScalar (nImg : Nat) (decls : List Decl) : List Decl := ilWith nImg ilL
 -- taken apart: as functions, each frees nothing of the caller's and allocates the cell again.
 def inlineOnce (nImg : Nat) (decls : List Decl) : List Decl := ilWith nImg 0 (ilCounts (ilCallsOf decls []) imEmpty) false decls
 
+/-! ## Splitting: in a function that calls itself, code that makes no such call is a function of its own
+
+The inverse of the above, for one kind of function.
+
+A function that calls itself other than as its last step, or through others (lib/lrc/CallGraph.rsd:
+a second form or a clone that a pass made calls the function it was made from), holds one frame for
+each call that has not returned, and a frame is as large as the function's worst path needs: a C compiler saves every
+register that any path uses on entry and reserves the slots of every path, and a wasm engine
+reserves a slot for every value that lives across some call (V8's baseline compiler: for every
+local). cfold's function folds a chain of a million sums by calling itself on the rest of the
+chain; what follows the call, the match on the two results with the integer operations written
+out, is fourteen hundred instructions, and none of it runs while the calls below are open. Its
+frame was 128 bytes where the two values that live across the call need 48.
+
+So such a function is split (function splitting: GCC's ipa-split, LLVM's hot/cold splitting and its
+CodeExtractor; lifting the code out with its free variables as parameters is lambda lifting,
+Johnsson 1985): a part of the body that
+  * makes no call of the function itself or of a function that calls it back,
+  * jumps to no join point outside it (it ends by returning, as every part of a body does),
+  * has at least `spLimit` instructions, and
+  * makes a call or builds, counts down or frees an object (code without these keeps its values in
+    registers that a call does not preserve, and adds nothing to the frame)
+becomes a function whose parameters are the part's free variables; in its place stands the call
+and the return of its results. The largest such part is taken: the body below a call of the
+function itself, an alternative, or a join point's body, in a body that does call the function
+elsewhere. What a frame then holds is what the calls of the function itself need, as a
+continuation's closure holds its free variables and no more (Appel, Compiling with
+Continuations, 1992, on space safety).
+
+The cost is one call where the part runs. `spLimit` is the size above which the inliner leaves a
+function a call (lib/lrc/Inline.rsd `ilLimit`): a part that would have been called, had the source
+written it as a function, is called.
+
+The new function is entered at the fuel of the function it was taken from (lib/lrc/Ir.rsd
+`mkFapApart`, a call as `fapSame` has it), so every call and every guard inside it sees the fuel
+it saw, and the function keeps its outcome at every budget. It is no loop, so the emitter does not
+write it back at its one call (lib/lrc/Emit.rsd "A function with one caller"); and the module
+names it in its table, so that a C compiler behind wasm2c does not write it back either
+(lib/lrc/Emit.rsd `keptFns`). The counting instructions are in the code already and move with it.
+
+Not split: a function whose only calls of itself are jumps to its start (it holds one frame), and
+a function with a result that does not exist at run time (lib/lrc/Trmc.rsd, the plain form). -/
+
+-- a part of at least this many instructions becomes a function
+def spLimit : Nat := ilLimit + 1
+-- when it has at most this many free variables
+def spCap : Nat := 3
+
+-- is the expression a call of a function of `own`
+def spOwnCall (own : VSet) (e : N) : Bool := e.op == opFap && vsContains own (fapFn e)
+
+mutual
+-- Does the body of function f call a function of `own`, the functions that call each other with f (f itself
+-- among them), so that frames pile up: any such call but a call of f itself as the body's last step (a call
+-- whose results are returned at once is a jump to the function's start, lib/lrc/Emit.rsd `emBody`).
+partial def spRecurses (f : Nat) (own : VSet) (n : N) : Bool :=
+  if n.op == opVDecl then
+    (spOwnCall own (vdeclExpr n) && !(fapFn (vdeclExpr n) == f && (bodyOf n).op == opRet)) || spRecurses f own (bodyOf n)
+  else if n.op == opJDecl then spRecurses f own (jdeclBody n) || spRecurses f own (bodyOf n)
+  else if n.op == opCase then spRecursesAlts f own (caseAlts n)
+  else if isTerminal n then false
+  else spRecurses f own (bodyOf n)
+partial def spRecursesAlts (f : Nat) (own : VSet) : List N → Bool
+  | [] => false
+  | alt :: alts => spRecurses f own (altBody alt) || spRecursesAlts f own alts
+end
+
+/-! ## The types of a function's variables -/
+
+def spBindTys : List Int → IMap → IMap
+  | x :: ty :: rest, m => spBindTys rest (if x >= 0 && ty >= 0 then imInsert m x.toNat ty.toNat else m)
+  | _, m => m
+
+def spParamTys : List Param → IMap → IMap
+  | [], m => m
+  | p :: ps, m => spParamTys ps (if p.ty >= 0 then imInsert m p.x p.ty.toNat else m)
+
+mutual
+partial def spTys (n : N) (m : IMap) : IMap :=
+  if n.op == opVDecl then spTys (bodyOf n) (spBindTys (vdeclBinds n) m)
+  else if n.op == opJDecl then spTys (bodyOf n) (spTys (jdeclBody n) (spParamTys (jdeclParams n) m))
+  else if n.op == opCase then spTysAlts (caseAlts n) m
+  else if isTerminal n then m
+  else spTys (bodyOf n) m
+partial def spTysAlts : List N → IMap → IMap
+  | [], m => m
+  | alt :: alts, m => spTysAlts alts (spTys (altBody alt) m)
+end
+
+/-! ## Is a part fit to be a function -/
+
+mutual
+-- does the body jump to a join point that it does not declare (`js`: those declared so far)
+partial def spJumpsOut (n : N) (js : VSet) : Bool :=
+  if n.op == opVDecl then spJumpsOut (bodyOf n) js
+  else if n.op == opJDecl then spJumpsOut (jdeclBody n) js || spJumpsOut (bodyOf n) (vsInsert js (jdeclId n))
+  else if n.op == opCase then spJumpsOutAlts (caseAlts n) js
+  else if n.op == opJmp then !vsContains js (jmpId n)
+  else if isTerminal n then false
+  else spJumpsOut (bodyOf n) js
+partial def spJumpsOutAlts : List N → VSet → Bool
+  | [], _ => false
+  | alt :: alts, js => spJumpsOut (altBody alt) js || spJumpsOutAlts alts js
+end
+
+mutual
+-- does the body make a call, or build, count down or free an object
+partial def spWorks (n : N) : Bool :=
+  if n.op == opVDecl then
+    let e := vdeclExpr n
+    e.op == opFap || e.op == opCtor || e.op == opReuse || e.op == opReset || spWorks (bodyOf n)
+  else if n.op == opJDecl then spWorks (jdeclBody n) || spWorks (bodyOf n)
+  else if n.op == opCase then spWorksAlts (caseAlts n)
+  else if isTerminal n then false
+  else n.op == opDec || n.op == opDel || spWorks (bodyOf n)
+partial def spWorksAlts : List N → Bool
+  | [] => false
+  | alt :: alts => spWorks (altBody alt) || spWorksAlts alts
+end
+
+structure SpPs where
+  ok : Bool
+  ps : List Param
+  deriving Inhabited
+
+-- the parameters of the new function: the part's free variables with their types
+def spParams (tys : IMap) : List Nat → SpPs
+  | [] => { ok := true, ps := [] }
+  | x :: xs =>
+    let r := spParams tys xs
+    let t := imFind tys x
+    { ok := r.ok && t >= 0, ps := { x := x, borrow := false, ty := t } :: r.ps }
+
+def spArgs : List Nat → List Int
+  | [] => []
+  | x :: xs => (x : Int) :: spArgs xs
+
+-- binders for the results of a call of a function with these result types, from index x on: x, ty, ...
+def spBinds (x : Nat) : List Int → List Int
+  | [] => []
+  | ty :: tys => (x : Int) :: ty :: spBinds (x + 1) tys
+
+def spAllLive : List Int → Bool
+  | [] => true
+  | ty :: tys => !tyIsIrr ty && spAllLive tys
+
+/-! ## The split -/
+
+-- own: the function and those that call each other with it; rets: its result types; tys: its variables' types;
+-- lim: `spLimit`; cap: `spCap`
+structure SpCx where
+  own : VSet
+  rets : List Int
+  tys : IMap
+  lim : Nat
+  cap : Nat
+  deriving Inhabited
+
+-- next: the next function number; fresh: the next free index of the function that is split;
+-- added: the new functions, the last one first
+structure SpSt where
+  next : Nat
+  fresh : Nat
+  added : List Decl
+  deriving Inhabited
+
+-- calls: does the node call a function of `own`
+structure SpR where
+  node : N
+  calls : Bool
+  st : SpSt
+  deriving Inhabited
+
+-- flags: for each alternative, does it call a function of `own`
+structure SpAlts where
+  alts : List N
+  flags : List Bool
+  calls : Bool
+  st : SpSt
+  deriving Inhabited
+
+-- A part that makes no call of a function of `own`: a function of its own when it is fit, else as it was.
+def spTake (cx : SpCx) (n : N) (st : SpSt) : SpR :=
+  if ilSize n < cx.lim || !spWorks n || spJumpsOut n vsEmpty then { node := n, calls := false, st := st }
+  else
+    let fv := vsToList (freeIndices n)
+    let ps := spParams cx.tys fv
+    if !ps.ok || fv.length > cx.cap then { node := n, calls := false, st := st }
+    else
+      let g : Decl := declNormalizeIds { f := st.next, xs := ps.ps, rets := cx.rets, body := n, ext := false }
+      let binds := spBinds st.fresh cx.rets
+      let call := mkFapApart st.next (spArgs fv)
+      { node := mkVDecls st.fresh (intAt 1 binds) (binds.drop 2) call (mkRet (spArgs (bindVars binds))),
+        calls := false,
+        st := { next := st.next + 1, fresh := st.fresh + cx.rets.length, added := g :: st.added } }
+
+-- the same for a kid of a node that calls the function elsewhere
+def spKid (cx : SpCx) (r : SpR) : SpR := if r.calls then r else spTake cx r.node r.st
+
+-- the alternatives of a case that calls the function in one of them, each split already: one that does not
+-- call it is taken
+def spTakeAlts (cx : SpCx) : List N → List Bool → SpSt → SpAlts
+  | alt :: alts, c :: cs, st =>
+    let k := spKid cx { node := altBody alt, calls := c, st := st }
+    let r := spTakeAlts cx alts cs k.st
+    { alts := altSetBody alt k.node :: r.alts, flags := [], calls := true, st := r.st }
+  | _, _, st => { alts := [], flags := [], calls := true, st := st }
+
+mutual
+-- One body. A part without a call of the function comes back unchanged with `calls` false, and the node
+-- above it, which knows whether the function is called beside it, takes it or hands it on.
+partial def spGo (cx : SpCx) (n : N) (st : SpSt) : SpR :=
+  if n.op == opVDecl then
+    let e := vdeclExpr n
+    let r := spGo cx (bodyOf n) st
+    if spOwnCall cx.own e then
+      let k := spKid cx r
+      { node := { n with kids := [e, k.node] }, calls := true, st := k.st }
+    else { node := { n with kids := [e, r.node] }, calls := r.calls, st := r.st }
+  else if n.op == opJDecl then
+    let v := spGo cx (jdeclBody n) st
+    let b := spGo cx (bodyOf n) v.st
+    if v.calls || b.calls then
+      let v2 := spKid cx { v with st := b.st }
+      let b2 := spKid cx { b with st := v2.st }
+      { node := { n with kids := [v2.node, b2.node] }, calls := true, st := b2.st }
+    else { node := n, calls := false, st := st }
+  else if n.op == opCase then
+    let r := spAlts cx (caseAlts n) st
+    if r.calls then
+      let t := spTakeAlts cx r.alts r.flags r.st
+      { node := { n with kids := t.alts }, calls := true, st := t.st }
+    else { node := n, calls := false, st := st }
+  else if isTerminal n then { node := n, calls := false, st := st }
+  else
+    let r := spGo cx (bodyOf n) st
+    { node := setBody n r.node, calls := r.calls, st := r.st }
+-- the alternatives, each split by itself; no alternative is taken yet
+partial def spAlts (cx : SpCx) : List N → SpSt → SpAlts
+  | [], st => { alts := [], flags := [], calls := false, st := st }
+  | alt :: alts, st =>
+    let b := spGo cx (altBody alt) st
+    let r := spAlts cx alts b.st
+    { alts := altSetBody alt b.node :: r.alts, flags := b.calls :: r.flags, calls := b.calls || r.calls, st := r.st }
+end
+
+structure SpDs where
+  decls : List Decl
+  st : SpSt
+  deriving Inhabited
+
+def spDecls (scc : CallScc) (lim cap : Nat) : List Decl → SpSt → SpDs
+  | [], st => { decls := [], st := st }
+  | d :: ds, st =>
+    let own := vsInsertArgs vsEmpty (sccOf scc (d.f : Int))
+    if d.ext || d.rets.isEmpty || !spAllLive d.rets || !vsContains scc.recs d.f || !spRecurses d.f own d.body then
+      let r := spDecls scc lim cap ds st
+      { decls := d :: r.decls, st := r.st }
+    else
+      let cx : SpCx := { own := own, rets := d.rets, tys := spTys d.body (spParamTys d.xs imEmpty), lim := lim, cap := cap }
+      let b := spGo cx d.body { st with fresh := declMaxIndex d + 1 }
+      let d2 := if b.st.next == st.next then d else declNormalizeIds { d with body := b.node }
+      let r := spDecls scc lim cap ds b.st
+      { decls := d2 :: r.decls, st := r.st }
+
+-- The declarations are numbered 0, 1, ... in their order (lib/lrc/Trmc.rsd `trmc`; any other list is returned as
+-- it is); the new functions follow them.
+def splitWith (lim cap : Nat) (decls : List Decl) : List Decl :=
+  if !declsDense 0 decls then decls
+  else
+    let r := spDecls (callScc decls) lim cap decls { next := decls.length, fresh := 0, added := [] }
+    r.decls ++ r.st.added.reverse
+
+def split (decls : List Decl) : List Decl := splitWith spLimit spCap decls
+
 end Lrc

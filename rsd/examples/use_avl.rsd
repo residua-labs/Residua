@@ -1,0 +1,9 @@
+import AvlMap
+def compute : Nat -> Int
+  | fuel =>
+    let a : MR := ins (map0 0) 7 70 0 0 [];
+    let b : MR := ins a.m 3 30 0 0 [];
+    let g1 : MR := get b.m 7;
+    let g2 : MR := get b.m 3;
+    g1.v + g2.v
+def main : Int := compute 0

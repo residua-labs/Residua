@@ -1,0 +1,39 @@
+-- Executable NF boundary; helpers are in QFloorByteRowsData.rsd.
+namespace Lib.Rsd.QFloorByteRows
+
+inductive Residue where
+  | checksRefused
+
+def residueName : Residue -> String
+  | Residue.checksRefused => "nf_qfloor_byte_rows"
+
+structure Request where
+  unit : Nat := 0
+structure State where
+  failures : List String
+structure Result where
+  state : State
+  residue : Option Residue
+def decision (_r : Request) : Result :=
+  let failures := checks.filterMap fun (n, ok) => if ok then none else some n
+  { state := { failures }, residue := if failures.isEmpty then none else some .checksRefused }
+
+
+def runNF (r : Request) (_s : State) : Result := decision r
+
+-- NF-CORRECT-0 r2: the checked decision; runNF retains the original
+-- transition and its failure-state observations for existing callers.
+def decide (r : Request) (_s : State) : Except Residue State :=
+  let answer := runNF r _s
+  match answer.residue with
+  | some residue => .error residue
+  | none => .ok answer.state
+
+def residue? (r : Request) (_s : State) : Option Residue := (decision r).residue
+def admissible (r : Request) (s : State) : Bool := (residue? r (id s)).isNone
+
+def report : String := Lib.Rsd.QFloorJson.encode 4 (.obj [
+  ("schema", .str "rsd-qfloor-byte-rows/1"), ("closure_claim", .int 0),
+  ("admit", .bool (decision {}).residue.isNone), ("rows", .int checks.length),
+  ("failures", .arr ((decision {}).state.failures.map Lib.Rsd.QFloorJson.Value.str))])
+end Lib.Rsd.QFloorByteRows

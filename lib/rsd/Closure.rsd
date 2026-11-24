@@ -1,0 +1,264 @@
+-- Rsd REF-Q closure assembly, extracted from RefQRun (a33b217).
+-- Injectable q-checked read follows swe/raisin resolveClosureVia.
+-- Host glue; this IO transport is not part of the self-compiled rsc bundle.
+-- Concatenate after AvlMap.rsd and rsd/refq.rsd. closure_claim = 0.
+namespace Lib.Rsd.RefQRun
+
+structure ReadResult where
+  ok : Bool
+  residue : String
+  bytes : ByteArray
+
+-- Package manifest (`rsd.manifest/1`) pinning `Mod.decl -> (unisonQ, srcQ)`
+structure ManifestEntry where
+  id : Int
+  modName : String
+  declName : String
+  unisonQ : String
+  srcQ : String
+  depIds : List Int
+  deriving Inhabited
+
+structure ClosureResult where
+  ok : Bool
+  residue : String
+  failedDecl : String
+  orderedUnisonQs : List String
+  assembledSource : String
+
+def parseDepsFromUnisonNode (nodeText : String) : List String :=
+  let lines := nodeText.splitOn "\n"
+  match lines.find? (fun l => l.startsWith "deps ") with
+  | none => []
+  | some l =>
+    let rest := (l.drop 5).trim
+    if rest == "" then [] else rest.splitOn ","
+
+inductive StrMap (α : Type) where
+  | leaf : StrMap α
+  | node : Nat → StrMap α → String → α → StrMap α → StrMap α
+  deriving Inhabited
+
+namespace StrMap
+
+def empty {α : Type} : StrMap α := .leaf
+
+def height {α : Type} : StrMap α → Nat
+  | .leaf => 0
+  | .node h _ _ _ _ => h
+
+def mkNode {α : Type} (l : StrMap α) (k : String) (v : α) (r : StrMap α) : StrMap α :=
+  let hl := height l
+  let hr := height r
+  .node ((if hl > hr then hl else hr) + 1) l k v r
+
+def bal {α : Type} (l : StrMap α) (k : String) (v : α) (r : StrMap α) : StrMap α :=
+  let hl := height l
+  let hr := height r
+  if hl > hr + 2 then
+    match l with
+    | .node _ ll lk lv lr =>
+      if height ll ≥ height lr then
+        mkNode ll lk lv (mkNode lr k v r)
+      else
+        match lr with
+        | .node _ lrl lrk lrv lrr =>
+          mkNode (mkNode ll lk lv lrl) lrk lrv (mkNode lrr k v r)
+        | .leaf => mkNode l k v r
+    | .leaf => mkNode l k v r
+  else if hr > hl + 2 then
+    match r with
+    | .node _ rl rk rv rr =>
+      if height rr ≥ height rl then
+        mkNode (mkNode l k v rl) rk rv rr
+      else
+        match rl with
+        | .node _ rll rlk rlv rlr =>
+          mkNode (mkNode l k v rll) rlk rlv (mkNode rlr rk rv rr)
+        | .leaf => mkNode l k v r
+    | .leaf => mkNode l k v r
+  else
+    mkNode l k v r
+
+def find {α : Type} : StrMap α → String → Option α
+  | .leaf, _ => none
+  | .node _ l k v r, q =>
+    if q < k then find l q
+    else if k < q then find r q
+    else some v
+
+def contains {α : Type} (m : StrMap α) (q : String) : Bool :=
+  (find m q).isSome
+
+def insert {α : Type} : StrMap α → String → α → StrMap α
+  | .leaf, q, v => .node 1 .leaf q v .leaf
+  | .node _ l k cur r, q, v =>
+    if q < k then bal (insert l q v) k cur r
+    else if k < q then bal l k cur (insert r q v)
+    else mkNode l q v r
+
+end StrMap
+
+inductive IntMap (α : Type) where
+  | leaf : IntMap α
+  | node : Nat → IntMap α → Int → α → IntMap α → IntMap α
+  deriving Inhabited
+
+namespace IntMap
+
+def empty {α : Type} : IntMap α := .leaf
+
+def height {α : Type} : IntMap α → Nat
+  | .leaf => 0
+  | .node h _ _ _ _ => h
+
+def mkNode {α : Type} (l : IntMap α) (k : Int) (v : α) (r : IntMap α) : IntMap α :=
+  let hl := height l
+  let hr := height r
+  .node ((if hl > hr then hl else hr) + 1) l k v r
+
+def bal {α : Type} (l : IntMap α) (k : Int) (v : α) (r : IntMap α) : IntMap α :=
+  let hl := height l
+  let hr := height r
+  if hl > hr + 2 then
+    match l with
+    | .node _ ll lk lv lr =>
+      if height ll ≥ height lr then
+        mkNode ll lk lv (mkNode lr k v r)
+      else
+        match lr with
+        | .node _ lrl lrk lrv lrr =>
+          mkNode (mkNode ll lk lv lrl) lrk lrv (mkNode lrr k v r)
+        | .leaf => mkNode l k v r
+    | .leaf => mkNode l k v r
+  else if hr > hl + 2 then
+    match r with
+    | .node _ rl rk rv rr =>
+      if height rr ≥ height rl then
+        mkNode (mkNode l k v rl) rk rv rr
+      else
+        match rl with
+        | .node _ rll rlk rlv rlr =>
+          mkNode (mkNode l k v rll) rlk rlv (mkNode rlr rk rv rr)
+        | .leaf => mkNode l k v r
+    | .leaf => mkNode l k v r
+  else
+    mkNode l k v r
+
+def find {α : Type} : IntMap α → Int → Option α
+  | .leaf, _ => none
+  | .node _ l k v r, q =>
+    if q < k then find l q
+    else if k < q then find r q
+    else some v
+
+def insert {α : Type} : IntMap α → Int → α → IntMap α
+  | .leaf, q, v => .node 1 .leaf q v .leaf
+  | .node _ l k cur r, q, v =>
+    if q < k then bal (insert l q v) k cur r
+    else if k < q then bal l k cur (insert r q v)
+    else mkNode l q v r
+
+end IntMap
+
+def resolveClosureVia (read : String → IO ReadResult) (manifest : List ManifestEntry)
+    (rootIds : List Int) : IO ClosureResult := do
+  let qnodes : List QNode := manifest.map (fun e => {
+    id := e.id
+    qhi := Int.ofNat e.unisonQ.length
+    qlo := Int.ofNat e.srcQ.length
+    sa := 0
+    sb := 0
+    deps := e.depIds : QNode
+  })
+  let plan := rqResolve 0 qnodes rootIds
+  if plan.err != 0 then
+    return {
+      ok := false
+      residue := "not_in_view"
+      failedDecl := "manifest_id_missing"
+      orderedUnisonQs := []
+      assembledSource := ""
+    }
+  let mut byId : IntMap ManifestEntry := IntMap.empty
+  let mut byUnisonQ : StrMap ManifestEntry := StrMap.empty
+  for e in manifest do
+    if (IntMap.find byId e.id).isNone then
+      byId := IntMap.insert byId e.id e
+    if (StrMap.find byUnisonQ e.unisonQ).isNone then
+      byUnisonQ := StrMap.insert byUnisonQ e.unisonQ e
+  let mut readCache : StrMap ReadResult := StrMap.empty
+  let mut orderedQs : Array String := #[]
+  let mut seenQs : StrMap Bool := StrMap.empty
+  let mut slices : Array String := #[]
+  for eid in plan.order do
+    match IntMap.find byId eid with
+    | none =>
+      return {
+        ok := false
+        residue := "not_in_view"
+        failedDecl := s!"id:{eid}"
+        orderedUnisonQs := []
+        assembledSource := ""
+      }
+    | some entry =>
+      let nodeRes ← match StrMap.find readCache entry.unisonQ with
+        | some r => pure r
+        | none =>
+          let r ← read entry.unisonQ
+          readCache := StrMap.insert readCache entry.unisonQ r
+          pure r
+      if !nodeRes.ok then
+        return {
+          ok := false
+          residue := nodeRes.residue
+          failedDecl := s!"{entry.modName}.{entry.declName}"
+          orderedUnisonQs := []
+          assembledSource := ""
+        }
+      let nodeText := String.fromUTF8! nodeRes.bytes
+      for depQ in parseDepsFromUnisonNode nodeText do
+        let depRes ← match StrMap.find readCache depQ with
+          | some r => pure r
+          | none =>
+            let r ← read depQ
+            readCache := StrMap.insert readCache depQ r
+            pure r
+        if !depRes.ok then
+          let depName := match StrMap.find byUnisonQ depQ with
+            | some de => s!"{de.modName}.{de.declName}"
+            | none => depQ
+          return {
+            ok := false
+            residue := depRes.residue
+            failedDecl := depName
+            orderedUnisonQs := []
+            assembledSource := ""
+          }
+      let srcRes ← match StrMap.find readCache entry.srcQ with
+        | some r => pure r
+        | none =>
+          let r ← read entry.srcQ
+          readCache := StrMap.insert readCache entry.srcQ r
+          pure r
+      if !srcRes.ok then
+        return {
+          ok := false
+          residue := srcRes.residue
+          failedDecl := s!"{entry.modName}.{entry.declName}"
+          orderedUnisonQs := []
+          assembledSource := ""
+        }
+      if !(StrMap.contains seenQs entry.unisonQ) then
+        seenQs := StrMap.insert seenQs entry.unisonQ true
+        orderedQs := orderedQs.push entry.unisonQ
+      slices := slices.push (String.fromUTF8! srcRes.bytes)
+  return {
+    ok := true
+    residue := ""
+    failedDecl := ""
+    orderedUnisonQs := orderedQs.toList
+    assembledSource := String.join slices.toList
+  }
+
+end Lib.Rsd.RefQRun

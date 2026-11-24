@@ -1,0 +1,6 @@
+inductive U where
+  | wrap : U -> U
+  | leaf : U
+def build : Nat -> U
+  | 0 => U.leaf
+  | n + 1 => U.wrap (build n)

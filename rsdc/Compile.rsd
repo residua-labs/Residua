@@ -870,7 +870,7 @@ def reserved : Nat -> List Int -> Bool
   | 0, bs =>
     let b : Int := hdB 0 bs;
     if b == 100 then isKw 0 bs "def" || isKw 0 bs "do" || isKw 0 bs "deriving" || isKw 0 bs "decreasing_by"
-    else if b == 115 then isKw 0 bs "structure" || isKw 0 bs "section"
+    else if b == 115 then isKw 0 bs "structure" || isKw 0 bs "section" || isKw 0 bs "set_option"
     else if b == 119 then isKw 0 bs "where" || isKw 0 bs "with"
     else if b == 109 then isKw 0 bs "mutual" || isKw 0 bs "match"
     else if b == 101 then isKw 0 bs "end" || isKw 0 bs "else"
@@ -2769,6 +2769,10 @@ partial def parseCmdsGo : St -> List Int -> St
       let st0 : St := skipWs st;
       if atEnd 0 st0 then spine1 (setRet 0 st0 (-1)) 19 acc
       else if isKw 0 st0.cur "end" then spine1 (setRet 0 st0 (-1)) 19 acc
+      else if isKw 0 st0.cur "set_option" then
+        let st1 : St := parseSetOption st0;
+        if st1.err != 0 then st1
+        else parseCmdsGo st1 (if st1.ret < 0 then acc else st1.ret :: acc)
       else if isKw 0 st0.cur "mutual" then
         let pos0 : Nat := st0.pos;
         let st1 : St := parseMutual st0;
@@ -2915,6 +2919,7 @@ partial def parseOpen : St -> St
             if isKw 0 st5.cur "in" then
               let st6 : St := parseOneCmd (advance 0 st5 2);
               if st6.err != 0 then st6
+              else if st6.ret < 0 then alloc 0 st6 36 names (-1) hidden
               else
                 let st7 : St := alloc 0 st6 19 st6.ret (-1) 0;
                 alloc 0 st7 36 names st7.ret hidden
@@ -2928,6 +2933,7 @@ partial def parseOneCmd : St -> St
     else
       let st0 : St := skipWs st;
       if isKw 0 st0.cur "def" then parseDef st0
+      else if isKw 0 st0.cur "set_option" then parseSetOption st0
       else if isKw 0 st0.cur "instance" then parseInstance st0
       else if isKw 0 st0.cur "structure" then parseStruct st0
       else if isKw 0 st0.cur "inductive" then parseInductive st0
@@ -2938,6 +2944,25 @@ partial def parseOneCmd : St -> St
       else if isKw 0 st0.cur "abbrev" then parseAbbrev st0
       else if isKw 0 st0.cur "partial" then parsePartial st0
       else setErr 0 st0 1
+
+-- Lean 4.14, Lean/Parser/Command.lean, optionValue and set_option.
+-- RSD consumes the option syntax without changing compiler settings.
+partial def parseSetOption (st : St) : St :=
+  let name : St := skipWs (advance 0 st 10);
+  if !(isIdentStart 0 name.cur) || reserved 0 name.cur then setErr 0 name 1
+  else
+    let value : St := skipWs (advance 0 name (identLen 0 name.cur));
+    let next : St :=
+      if isKw 0 value.cur "true" then advance 0 value 4
+      else if isKw 0 value.cur "false" then advance 0 value 5
+      else if hdB 0 value.cur == 34 then parseStrGo (advance 0 value 1) value.pos
+      else if isDigit 0 value.cur then parseNumeral value
+      else setErr 0 value 1;
+    if next.err != 0 then next
+    else
+      let command : St := skipWs next;
+      if isKw 0 command.cur "in" then parseOneCmd (advance 0 command 2)
+      else setRet 0 command (-1)
 end
 
 -- Bounded port of DefView.mkDefViewOfInstance and DeclNameGen.mkInstanceName.
@@ -3840,6 +3865,554 @@ def wordSyntaxNodes : St -> Nat -> Bool
        spanEq 0 st a b "Nat.toUInt8" || spanEq 0 st a b "Nat.toUInt32");
     word || wordSyntaxNodes st nodeCount
 
+-- specFun (LRC-REV2-IMPL-0 r2, whole-program defunctionalisation by specialisation: Reynolds 1972; MLton).
+-- A top-level definition with a function-typed parameter has no type code in the checker, so it was refused.
+-- Here the set of such definitions that the rest of the program reaches is decided on the parse tree
+-- after desugarSt and before check; the ones nothing reaches are unlinked from the command chain (dead code,
+-- as MLton drops them), and every reached one is left as it is, so the refusal stays where it was.
+-- Only a file whose commands are all def, structure, abbrev, inductive or open is looked at; a file with
+-- a namespace, a mutual block or any other command is left as it is.
+-- Tree reads follow the node layout above: tag a b c at fd slots 0 1 2 3, chains end at -1.
+-- a name the pass makes has a span no source line holds: the position of what it replaces is kept beside it
+-- (pool key of qa + 1) and an error reported at the name is reported there (specPos, in checkSrcPos)
+def specNote (st : St) (qa : Int) (orig : Int) : St :=
+  setPool 0 st (putSpan 0 st.pool (qa + 1) [orig])
+
+def specHead1 : List Int -> Int -> Int
+  | [], d => d
+  | o :: _, _ => o
+
+def specPos (st : St) (pos : Int) : Int :=
+  if pos < fileLenI 0 st then pos
+  else
+    let g : MR := get st.pool (0 - (pos + 1) - 1);
+    specHead1 g.xs pos
+
+def specA (t : Int) : Bool :=
+  t == 5 || t == 8 || t == 10 || t == 11 || t == 12 || t == 13 || t == 17 || t == 23 || t == 25 || t == 29
+    || t == 30 || t == 31 || t == 47
+
+def specB (t : Int) : Bool :=
+  t == 5 || t == 6 || t == 7 || t == 8 || t == 10 || t == 12 || t == 14 || t == 15 || t == 24 || t == 31 || t == 32
+
+def specC (t : Int) : Bool := t == 6 || t == 8 || t == 9 || t == 15 || t == 24
+
+def specKnown (t : Int) : Bool :=
+  specA t || specB t || specC t || t == 1 || t == 2 || t == 3 || t == 4 || t == 16 || t == 22 || t == 41
+
+def specDotSuffix : List Int -> List Int -> Bool
+  | [], _ => false
+  | b :: rest, name => (b == 46 && eqListI rest name) || specDotSuffix rest name
+
+-- does the subtree n hold an identifier that names `name` (or ends in .name); a tag not listed counts as a mention
+partial def specRefers (st : St) (name : List Int) (n : Int) : Bool :=
+  if n < 0 then false
+  else
+    let t : Int := fd 0 st n 0;
+    if t == 1 then
+      let bs : List Int := spanBytes 0 st (fd 0 st n 1) (fd 0 st n 2);
+      eqListI bs name || specDotSuffix bs name
+    else if !(specKnown t) then true
+    else (specA t && specRefers st name (fd 0 st n 1)) || (specB t && specRefers st name (fd 0 st n 2))
+      || (specC t && specRefers st name (fd 0 st n 3))
+
+partial def specArrow (st : St) (t : Int) : Bool :=
+  if t < 0 then false
+  else if fd 0 st t 0 == 16 then true
+  else if fd 0 st t 0 == 13 then specArrow st (fd 0 st t 1)
+  else false
+
+-- the domains of a return-type arrow chain
+partial def specDoms (st : St) (t : Int) : Bool :=
+  if t >= 0 && fd 0 st t 0 == 16 then specArrow st (fd 0 st t 1) || specDoms st (fd 0 st t 2)
+  else false
+
+partial def specGrps (st : St) (g : Int) : Bool :=
+  if g < 0 then false else specArrow st (fd 0 st g 2) || specGrps st (fd 0 st g 3)
+
+def specIsHO (st : St) (d : Int) : Bool :=
+  let sig : Int := fd 0 st d 2;
+  specGrps st (fd 0 st sig 1) || specDoms st (fd 0 st sig 2)
+
+def specName (st : St) (d : Int) : List Int :=
+  let nm : Int := fd 0 st d 1;
+  spanBytes 0 st (fd 0 st nm 1) (fd 0 st nm 2)
+
+-- every command is one the pass can read
+partial def specSimple (st : St) (c : Int) : Bool :=
+  if c < 0 then true
+  else
+    let d : Int := fd 0 st c 1;
+    let t : Int := fd 0 st d 0;
+    (t == 20 || t == 26 || t == 35 || t == 37 || t == 38 || (t == 36 && specSimple st (fd 0 st d 2)))
+      && specSimple st (fd 0 st c 2)
+
+partial def specDefs (st : St) (c : Int) : List Int :=
+  if c < 0 then []
+  else
+    let d : Int := fd 0 st c 1;
+    (if fd 0 st d 0 == 20 then [d] else if fd 0 st d 0 == 36 then specDefs st (fd 0 st d 2) else []) ++ specDefs st (fd 0 st c 2)
+
+partial def specHOs (st : St) : List Int -> List Int
+  | [] => []
+  | d :: rest => if specIsHO st d then d :: specHOs st rest else specHOs st rest
+
+def specMem (x : Int) : List Int -> Bool
+  | [] => false
+  | y :: ys => x == y || specMem x ys
+
+def specNotIn : List Int -> List Int -> List Int
+  | [], _ => []
+  | x :: xs, ys => if specMem x ys then specNotIn xs ys else x :: specNotIn xs ys
+
+-- does a definition of srcs other than h mention h
+partial def specMentioned (st : St) (name : List Int) (h : Int) : List Int -> Bool
+  | [] => false
+  | s :: rest => (s != h && specRefers st name (fd 0 st s 3)) || specMentioned st name h rest
+
+-- a structure field's default is an expression that can call a definition
+partial def specStructRef (st : St) (name : List Int) (fl : Int) : Bool :=
+  if fl < 0 then false
+  else
+    let ty : Int := fd 0 st fl 2;
+    (fd 0 st ty 0 == 40 && specRefers st name (fd 0 st ty 2)) || specStructRef st name (fd 0 st fl 3)
+
+partial def specStructs (st : St) (c : Int) : List Int :=
+  if c < 0 then []
+  else
+    let d : Int := fd 0 st c 1;
+    (if fd 0 st d 0 == 26 then [d] else if fd 0 st d 0 == 36 then specStructs st (fd 0 st d 2) else []) ++ specStructs st (fd 0 st c 2)
+
+partial def specStructMention (st : St) (name : List Int) : List Int -> Bool
+  | [] => false
+  | s :: rest => specStructRef st name (fd 0 st s 2) || specStructMention st name rest
+
+partial def specNew (st : St) (srcs : List Int) (live : List Int) (structs : List Int) : List Int -> List Int
+  | [] => []
+  | h :: rest =>
+    if specMem h live then specNew st srcs live structs rest
+    else if specMentioned st (specName st h) h srcs || specStructMention st (specName st h) structs then h :: specNew st srcs live structs rest
+    else specNew st srcs live structs rest
+
+partial def specFix (st : St) (hs : List Int) (others : List Int) (structs : List Int) (live : List Int) : List Int :=
+  let add : List Int := specNew st (others ++ live) live structs hs;
+  if isEmptyI add then live else specFix st hs others structs (live ++ add)
+
+partial def specDrop (st : St) (holder : Int) (slot : Nat) (c : Int) (dead : List Int) : St :=
+  if c < 0 then st
+  else
+    let d : Int := fd 0 st c 1;
+    let nx : Int := fd 0 st c 2;
+    if fd 0 st d 0 == 36 then specDrop (specDrop st d 2 (fd 0 st d 2) dead) c 2 nx dead
+    else if specMem d dead then specDrop (setNodeSlot st holder slot nx) holder slot nx dead
+    else specDrop st c 2 nx dead
+
+-- ---- the live case: a definition D with one function-typed parameter, called with a global function g
+-- as that argument, is copied as D_spec_g with the parameter removed and its uses replaced by g (MLton's
+-- defunctionalisation by specialisation, no captured variables); the call is rewritten to D_spec_g without
+-- that argument. A definition or call shape not listed here is left as it is and the refusal stays.
+structure SpR where
+  st : St
+  id : Int
+  deriving Inhabited
+
+def spR (s : St) (i : Int) : SpR := { st := s, id := i : SpR }
+
+def specCpA (t : Int) : Bool :=
+  t == 5 || t == 8 || t == 9 || t == 10 || t == 11 || t == 12 || t == 13 || t == 14 || t == 15 || t == 16 || t == 17
+    || t == 22 || t == 23 || t == 24 || t == 25 || t == 29 || t == 30 || t == 31 || t == 41 || t == 47
+
+def specCpB (t : Int) : Bool :=
+  t == 5 || t == 6 || t == 7 || t == 8 || t == 9 || t == 10 || t == 12 || t == 14 || t == 15 || t == 16 || t == 17
+    || t == 22 || t == 24 || t == 30 || t == 31 || t == 41
+
+def specCpC (t : Int) : Bool := t == 6 || t == 8 || t == 9 || t == 15 || t == 22 || t == 24
+
+def specCpLeaf (t : Int) : Bool := t == 1 || t == 2 || t == 3 || t == 4
+
+partial def specCopyable (st : St) (n : Int) : Bool :=
+  if n < 0 then true
+  else
+    let t : Int := fd 0 st n 0;
+    if specCpLeaf t then true
+    else if !(specCpA t || specCpB t || specCpC t) then false
+    else (!(specCpA t) || specCopyable st (fd 0 st n 1)) && (!(specCpB t) || specCopyable st (fd 0 st n 2))
+      && (!(specCpC t) || specCopyable st (fd 0 st n 3))
+
+-- a copy of the subtree n; an identifier spelling `sub` becomes the identifier node g
+partial def specCopy (st : St) (sub : List Int) (g : Int) (n : Int) : SpR :=
+  if n < 0 then spR st n
+  else
+    let t : Int := fd 0 st n 0;
+    if specCpLeaf t then
+      let bs : List Int := spanBytes 0 st (fd 0 st n 1) (fd 0 st n 2);
+      let src : Int := if t == 1 && !(isEmptyI sub) && eqListI bs sub then g else n;
+      let s : St := alloc 0 st t (fd 0 st src 1) (fd 0 st src 2) (fd 0 st src 3);
+      spR s s.ret
+    else
+      let ra : SpR := if specCpA t then specCopy st sub g (fd 0 st n 1) else spR st (fd 0 st n 1);
+      let rb : SpR := if specCpB t then specCopy ra.st sub g (fd 0 st n 2) else spR ra.st (fd 0 st n 2);
+      let rc : SpR := if specCpC t then specCopy rb.st sub g (fd 0 st n 3) else spR rb.st (fd 0 st n 3);
+      let s : St := alloc 0 rc.st t ra.id rb.id rc.id;
+      spR s s.ret
+
+partial def specNth (st : St) (li : Int) (k : Int) : Int :=
+  if li < 0 then -1
+  else if k == 0 then li
+  else specNth st (fd 0 st li 2) (k - 1)
+
+partial def specLen (st : St) (li : Int) : Int :=
+  if li < 0 then 0 else 1 + specLen st (fd 0 st li 2)
+
+-- a li chain without its element k
+partial def specCopyLiSkip (st : St) (sub : List Int) (g : Int) (li : Int) (k : Int) : SpR :=
+  if li < 0 then spR st li
+  else if k == 0 then specCopyLiSkip st sub g (fd 0 st li 2) (k - 1)
+  else
+    let rest : SpR := specCopyLiSkip st sub g (fd 0 st li 2) (k - 1);
+    let e : SpR := specCopy rest.st sub g (fd 0 st li 1);
+    let s : St := alloc 0 e.st 12 e.id rest.id 0;
+    spR s s.ret
+
+-- the spelling of the k-th pattern of an alternative when it is a plain name
+def specPatName (st : St) (pats : Int) (k : Int) : List Int :=
+  let li : Int := specNth st pats k;
+  let e : Int := fd 0 st li 1;
+  if li < 0 || fd 0 st e 0 != 1 then []
+  else
+    let bs : List Int := spanBytes 0 st (fd 0 st e 1) (fd 0 st e 2);
+    if eqListI bs [95] then [] else bs
+
+partial def specCopyAlts (st : St) (g : Int) (k : Int) (sub0 : List Int) (a : Int) : SpR :=
+  if a < 0 then spR st a
+  else
+    let pats : Int := fd 0 st a 1;
+    let sub : List Int := if k < 0 then sub0 else specPatName st pats k;
+    let rest : SpR := specCopyAlts st g k sub0 (fd 0 st a 3);
+    let ps : SpR := specCopyLiSkip rest.st sub g pats k;
+    let body : SpR := specCopy ps.st sub g (fd 0 st a 2);
+    let s : St := alloc 0 body.st 24 ps.id body.id rest.id;
+    spR s s.ret
+
+-- an arrow chain without its domain k
+partial def specCopyArrow (st : St) (t : Int) (k : Int) : SpR :=
+  if fd 0 st t 0 == 16 then
+    if k == 0 then specCopy st [] 0 (fd 0 st t 2)
+    else
+      let rest : SpR := specCopyArrow st (fd 0 st t 2) (k - 1);
+      let dom : SpR := specCopy rest.st [] 0 (fd 0 st t 1);
+      let s : St := alloc 0 dom.st 16 dom.id rest.id 0;
+      spR s s.ret
+  else specCopy st [] 0 t
+
+-- binder groups without the group hg
+partial def specCopyGrps (st : St) (gr : Int) (hg : Int) : SpR :=
+  if gr < 0 then spR st gr
+  else
+    let rest : SpR := specCopyGrps st (fd 0 st gr 3) hg;
+    if gr == hg then rest
+    else
+      let nm : SpR := specCopy rest.st [] 0 (fd 0 st gr 1);
+      let ty : SpR := specCopy nm.st [] 0 (fd 0 st gr 2);
+      let s : St := alloc 0 ty.st 22 nm.id ty.id rest.id;
+      spR s s.ret
+
+-- binder form: the group of the function-typed parameter, when it is the only one and holds one name
+partial def specHoGrp (st : St) (gr : Int) : Int :=
+  if gr < 0 then -1
+  else if specArrow st (fd 0 st gr 2) then
+    if specLen st (fd 0 st gr 1) == 1 && !(specGrps st (fd 0 st gr 3)) then gr else -1
+  else specHoGrp st (fd 0 st gr 3)
+
+partial def specGrpPos (st : St) (gr : Int) (hg : Int) : Int :=
+  if gr < 0 || gr == hg then 0 else specLen st (fd 0 st gr 1) + specGrpPos st (fd 0 st gr 3) hg
+
+-- equation form: the position of the only function-typed domain
+partial def specDomPos (st : St) (t : Int) (acc : Int) : Int :=
+  if fd 0 st t 0 != 16 then -1
+  else if specArrow st (fd 0 st t 1) then (if specDoms st (fd 0 st t 2) then -1 else acc)
+  else specDomPos st (fd 0 st t 2) (acc + 1)
+
+-- does the subtree hold an identifier spelled `sub`; a tag not listed counts as a hit
+partial def specIdIn (st : St) (sub : List Int) (n : Int) : Bool :=
+  if n < 0 then false
+  else
+    let t : Int := fd 0 st n 0;
+    if t == 1 then eqListI (spanBytes 0 st (fd 0 st n 1) (fd 0 st n 2)) sub
+    else if !(specKnown t) then true
+    else (specA t && specIdIn st sub (fd 0 st n 1)) || (specB t && specIdIn st sub (fd 0 st n 2))
+      || (specC t && specIdIn st sub (fd 0 st n 3))
+
+-- does a let or a match alternative under n bind a name spelled `sub` (the copy would rename its uses)
+partial def specBinds (st : St) (sub : List Int) (n : Int) : Bool :=
+  if n < 0 then false
+  else
+    let t : Int := fd 0 st n 0;
+    if t == 1 then false
+    else if !(specKnown t) then true
+    else
+      let own : Bool := (t == 9 || t == 24) && specIdIn st sub (fd 0 st n 1);
+      own || (specA t && specBinds st sub (fd 0 st n 1)) || (specB t && specBinds st sub (fd 0 st n 2))
+        || (specC t && specBinds st sub (fd 0 st n 3))
+
+partial def specPatsOther (st : St) (sub : List Int) (li : Int) (k : Int) (i : Int) : Bool :=
+  if li < 0 then false
+  else (i != k && specIdIn st sub (fd 0 st li 1)) || specPatsOther st sub (fd 0 st li 2) k (i + 1)
+
+partial def specAltsBind (st : St) (k : Int) (a : Int) : Bool :=
+  if a < 0 then false
+  else
+    let pats : Int := fd 0 st a 1;
+    let sub : List Int := specPatName st pats k;
+    (!(isEmptyI sub) && (specPatsOther st sub pats k 0 || specBinds st sub (fd 0 st a 2)))
+      || specAltsBind st k (fd 0 st a 3)
+
+partial def specAltsBindName (st : St) (sub : List Int) (a : Int) : Bool :=
+  if a < 0 then false
+  else (specPatsOther st sub (fd 0 st a 1) (-1) 0 || specBinds st sub (fd 0 st a 2)) || specAltsBindName st sub (fd 0 st a 3)
+
+def specHoName (st : St) (hg : Int) : List Int :=
+  let e : Int := fd 0 st (fd 0 st hg 1) 1;
+  spanBytes 0 st (fd 0 st e 1) (fd 0 st e 2)
+
+-- the position of the function-typed parameter of a definition the pass can copy, else -1
+def specInfo (st : St) (d : Int) : Int :=
+  let sig : Int := fd 0 st d 2;
+  let val : Int := fd 0 st d 3;
+  let grps : Int := fd 0 st sig 1;
+  let ty : Int := fd 0 st sig 2;
+  if fd 0 st val 2 != 0 || fd 0 st val 3 != 0 then -1
+  else if !(specCopyable st val) || !(specCopyable st ty) || !(specCopyable st grps) then -1
+  else if fd 0 st val 0 == 25 then
+    let hg : Int := specHoGrp st grps;
+    if hg < 0 || fd 0 st ty 0 == 16 then -1
+    else if specBinds st (specHoName st hg) (fd 0 st val 1) then -1
+    else specGrpPos st grps hg
+  else if fd 0 st val 0 == 23 && grps < 0 then
+    let k : Int := specDomPos st ty 0;
+    if k < 0 || specAltsBind st k (fd 0 st val 1) then -1 else k
+  else if fd 0 st val 0 == 23 then
+    -- the mixed form: the function-typed parameter is a binder, the equations match the arrows of the type
+    let hg : Int := specHoGrp st grps;
+    if hg < 0 || specDoms st ty || fd 0 st ty 0 != 16 then -1
+    else if specAltsBindName st (specHoName st hg) (fd 0 st val 1) then -1
+    else specGrpPos st grps hg
+  else -1
+
+partial def specDefByName (st : St) (name : List Int) : List Int -> Int
+  | [] => -1
+  | d :: rest => if eqListI (specName st d) name then d else specDefByName st name rest
+
+def specCloneName (st : St) (d : Int) (g : Int) : List Int :=
+  specName st d ++ [64, 115, 112, 101, 99, 64] ++ spanBytes 0 st (fd 0 st g 1) (fd 0 st g 2)
+
+partial def specHasDot : List Int -> Bool
+  | [] => false
+  | b :: rest => b == 46 || specHasDot rest
+
+partial def specCmdOf (st : St) (c : Int) (d : Int) : Int :=
+  if c < 0 then -1
+  else if fd 0 st c 1 == d then c
+  else
+    let dd : Int := fd 0 st c 1;
+    let inner : Int := if fd 0 st dd 0 == 36 then specCmdOf st (fd 0 st dd 2) d else -1;
+    if inner >= 0 then inner else specCmdOf st (fd 0 st c 2) d
+
+-- the clone of D for the global named by the identifier node g, inserted after D
+def specMakeClone (st : St) (d : Int) (k : Int) (g : Int) : St :=
+  let sig : Int := fd 0 st d 2;
+  let val : Int := fd 0 st d 3;
+  let grps : Int := fd 0 st sig 1;
+  let ty : Int := fd 0 st sig 2;
+  let synSt : St := synthIdent 0 st (specCloneName st d g);
+  let nameSt : St := specNote synSt (fd 0 synSt synSt.ret 1) (fd 0 synSt (fd 0 synSt d 1) 1);
+  let nameId : Int := nameSt.ret;
+  let dd : St :=
+    if fd 0 nameSt val 0 == 25 then
+      let hg : Int := specHoGrp nameSt grps;
+      let sub : List Int := spanBytes 0 nameSt (fd 0 nameSt (fd 0 nameSt (fd 0 nameSt hg 1) 1) 1) (fd 0 nameSt (fd 0 nameSt (fd 0 nameSt hg 1) 1) 2);
+      let g2 : SpR := specCopyGrps nameSt grps hg;
+      let ty2 : SpR := specCopy g2.st [] 0 ty;
+      let sg : St := alloc 0 ty2.st 21 g2.id ty2.id (fd 0 nameSt sig 3);
+      let e : SpR := specCopy sg sub g (fd 0 nameSt val 1);
+      let v : St := alloc 0 e.st 25 e.id 0 0;
+      alloc 0 v 20 nameId sg.ret v.ret
+    else if grps >= 0 then
+      let hg : Int := specHoGrp nameSt grps;
+      let sub : List Int := specHoName nameSt hg;
+      let g2 : SpR := specCopyGrps nameSt grps hg;
+      let ty2 : SpR := specCopy g2.st [] 0 ty;
+      let alts : SpR := specCopyAlts ty2.st g (-1) sub (fd 0 nameSt val 1);
+      let sg : St := alloc 0 alts.st 21 g2.id ty2.id (fd 0 nameSt sig 3);
+      let v : St := alloc 0 sg 23 alts.id 0 0;
+      alloc 0 v 20 nameId sg.ret v.ret
+    else
+      let alts : SpR := specCopyAlts nameSt g k [] (fd 0 nameSt val 1);
+      let ty2 : SpR := specCopyArrow alts.st ty k;
+      let sg : St := alloc 0 ty2.st 21 (-1) ty2.id (fd 0 nameSt sig 3);
+      let v : St := alloc 0 sg 23 alts.id 0 0;
+      alloc 0 v 20 nameId sg.ret v.ret;
+  let cmd : Int := specCmdOf dd (fd 0 dd dd.root 1) d;
+  let ins : St := alloc 0 dd 19 dd.ret (fd 0 dd cmd 2) 0;
+  setNodeSlot ins cmd 2 ins.ret
+
+partial def specCandByName (st : St) (name : List Int) : List Int -> Int
+  | [] => -1
+  | d :: rest => if eqListI (specName st d) name && specInfo st d >= 0 then d else specCandByName st name rest
+
+-- the first call under n of a copyable definition with a global function as its function-typed argument
+partial def specFindCall (st : St) (hs : List Int) (globals : List Int) (n : Int) : Int :=
+  if n < 0 then -1
+  else
+    let t : Int := fd 0 st n 0;
+    if !(specKnown t) then -1
+    else
+      let own : Int :=
+        if t != 5 then -1
+        else
+          let fnode : Int := fd 0 st n 1;
+          if fd 0 st fnode 0 != 1 then -1
+          else
+            let d : Int := specCandByName st (spanBytes 0 st (fd 0 st fnode 1) (fd 0 st fnode 2)) hs;
+            if d < 0 then -1
+            else
+              let k : Int := specInfo st d;
+              let li : Int := specNth st (fd 0 st n 2) k;
+              let arg : Int := fd 0 st li 1;
+              let gname : List Int := spanBytes 0 st (fd 0 st arg 1) (fd 0 st arg 2);
+              if li < 0 || fd 0 st arg 0 != 1 || specHasDot gname || specLen st (fd 0 st n 2) < 2 then -1
+              else if specDefByName st gname globals >= 0 then n else -1;
+      if own >= 0 then own
+      else
+        let ra : Int := if specA t then specFindCall st hs globals (fd 0 st n 1) else -1;
+        if ra >= 0 then ra
+        else
+          let rb : Int := if specB t then specFindCall st hs globals (fd 0 st n 2) else -1;
+          if rb >= 0 then rb
+          else if specC t then specFindCall st hs globals (fd 0 st n 3) else -1
+
+partial def specFirstCall (st : St) (hs : List Int) (globals : List Int) : List Int -> Int
+  | [] => -1
+  | s :: rest =>
+    let r : Int := specFindCall st hs globals (fd 0 st s 3);
+    if r >= 0 then r else specFirstCall st hs globals rest
+
+def specRewrite (st : St) (hs : List Int) (appN : Int) : St :=
+  let fnode : Int := fd 0 st appN 1;
+  let d : Int := specCandByName st (spanBytes 0 st (fd 0 st fnode 1) (fd 0 st fnode 2)) hs;
+  let k : Int := specInfo st d;
+  let arg : Int := fd 0 st (specNth st (fd 0 st appN 2) k) 1;
+  let cname : List Int := specCloneName st d arg;
+  let defs0 : List Int := specDefs st (fd 0 st st.root 1);
+  let st1 : St := if specDefByName st cname defs0 >= 0 then st else specMakeClone st d k arg;
+  let cl : Int := specDefByName st1 cname (specDefs st1 (fd 0 st1 st1.root 1));
+  let cnm : Int := fd 0 st1 cl 1;
+  let syn : St := synthIdent 0 st1 cname;
+  let sa : Int := fd 0 syn syn.ret 1;
+  let sb : Int := fd 0 syn syn.ret 2;
+  let noted : St := specNote syn sa (fd 0 syn fnode 1);
+  let st2 : St := setNodeSlot (setNodeSlot (setNodeSlot noted fnode 1 sa) fnode 2 sb) fnode 3 0;
+  if k == 0 then setNodeSlot st2 appN 2 (fd 0 st2 (fd 0 st2 appN 2) 2)
+  else
+    let prev : Int := specNth st2 (fd 0 st2 appN 2) (k - 1);
+    setNodeSlot st2 prev 2 (fd 0 st2 (fd 0 st2 prev 2) 2)
+
+-- `f a b` parses as an application of an application; a call of a higher-order definition is made one application
+partial def specLast (st : St) (li : Int) : Int :=
+  if fd 0 st li 2 < 0 then li else specLast st (fd 0 st li 2)
+
+partial def specHead (st : St) (n : Int) : Int :=
+  if fd 0 st n 0 == 5 then specHead st (fd 0 st n 1) else n
+
+def specIsHOName (st : St) (hs : List Int) (bs : List Int) : Bool :=
+  specMem (specDefByName st bs hs) hs
+
+partial def specMerge (st : St) (n : Int) : St :=
+  let f : Int := fd 0 st n 1;
+  if fd 0 st f 0 != 5 then st
+  else
+    let s1 : St := specMerge st f;
+    let il : Int := fd 0 s1 f 2;
+    let ol : Int := fd 0 s1 n 2;
+    if il < 0 then s1
+    else
+      let s2 : St := setNodeSlot s1 (specLast s1 il) 2 ol;
+      setNodeSlot (setNodeSlot s2 n 1 (fd 0 s2 f 1)) n 2 il
+
+partial def specFlat (st : St) (hs : List Int) (n : Int) : St :=
+  if n < 0 then st
+  else
+    let t : Int := fd 0 st n 0;
+    if !(specKnown t) then st
+    else
+      let h : Int := specHead st n;
+      let s0 : St :=
+        if t == 5 && fd 0 st h 0 == 1 && fd 0 st (fd 0 st n 1) 0 == 5
+            && specIsHOName st hs (spanBytes 0 st (fd 0 st h 1) (fd 0 st h 2))
+        then specMerge st n else st;
+      let s1 : St := if specA t then specFlat s0 hs (fd 0 s0 n 1) else s0;
+      let s2 : St := if specB t then specFlat s1 hs (fd 0 s1 n 2) else s1;
+      if specC t then specFlat s2 hs (fd 0 s2 n 3) else s2
+
+partial def specFlatAll (st : St) (hs : List Int) : List Int -> St
+  | [] => st
+  | d :: rest => specFlatAll (specFlat st hs (fd 0 st d 3)) hs rest
+
+partial def specLoop (st : St) : Nat -> St
+  | 0 => st
+  | k + 1 =>
+    if st.err != 0 then st
+    else
+      let defs : List Int := specDefs st (fd 0 st st.root 1);
+      let hs : List Int := specHOs st defs;
+      let globals : List Int := specNotIn defs hs;
+      let st : St := specFlatAll st hs globals;
+      let call : Int := specFirstCall st hs globals globals;
+      if call < 0 then st else specLoop (specRewrite st hs call) k
+
+-- the checker reads `f a b` as an application of an application, one argument each: the flattened calls go back
+partial def specCurryApp (st : St) (n : Int) : St :=
+  let li : Int := fd 0 st n 2;
+  if li < 0 || fd 0 st li 2 < 0 then st
+  else
+    let prev : Int := specNth st li (specLen st li - 2);
+    let lastLi : Int := fd 0 st prev 2;
+    let st1 : St := setNodeSlot st prev 2 (-1);
+    let st2 : St := alloc 0 st1 5 (fd 0 st1 n 1) li 0;
+    let inner : Int := st2.ret;
+    specCurryApp (setNodeSlot (setNodeSlot st2 n 1 inner) n 2 lastLi) inner
+
+partial def specCurry (st : St) (n : Int) : St :=
+  if n < 0 then st
+  else
+    let t : Int := fd 0 st n 0;
+    if !(specKnown t) then st
+    else
+      let s0 : St := if t == 5 then specCurryApp st n else st;
+      let s1 : St := if specA t then specCurry s0 (fd 0 s0 n 1) else s0;
+      let s2 : St := if specB t then specCurry s1 (fd 0 s1 n 2) else s1;
+      if specC t then specCurry s2 (fd 0 s2 n 3) else s2
+
+partial def specCurryAll (st : St) : List Int -> St
+  | [] => st
+  | d :: rest => specCurryAll (specCurry st (fd 0 st d 3)) rest
+
+def specFun (st : St) : St :=
+  if st.err != 0 || st.root < 0 then st
+  else if !(specSimple st (fd 0 st st.root 1)) then st
+  else
+    let defs0 : List Int := specDefs st (fd 0 st st.root 1);
+    if isEmptyI (specHOs st defs0) then st
+    else
+      let st : St := specLoop st 2000;
+      let defs : List Int := specDefs st (fd 0 st st.root 1);
+      let hs : List Int := specHOs st defs;
+      let others : List Int := specNotIn defs hs;
+      let live : List Int := specFix st hs others (specStructs st (fd 0 st st.root 1)) [];
+      let dead : List Int := specNotIn hs live;
+      let st : St := if isEmptyI dead then st else specDrop st st.root 1 (fd 0 st st.root 1) dead;
+      specCurryAll st (specNotIn (specDefs st (fd 0 st st.root 1)) (specHOs st (specDefs st (fd 0 st st.root 1))))
+
 def parseSrc : Nat -> List Int -> St
   | 0, bs =>
     let size := lenAcc bs 0
@@ -3850,9 +4423,9 @@ def parseSrc : Nat -> List Int -> St
       if raw.err != 0 then raw
       else if wordSyntaxNodes raw raw.nxt then
         let bridged := parseFile (initSt 0 (bs ++ wordBridgeBytes))
-        let cut : St := if bridged.err != 0 then bridged else desugarSt (setNodeSlot bridged bridged.root 2 (Int.ofNat size));
+        let cut : St := if bridged.err != 0 then bridged else specFun (desugarSt (setNodeSlot bridged bridged.root 2 (Int.ofNat size)));
         if cut.err != 0 && cut.pos > size then setPos 0 cut size else cut
-      else desugarSt raw
+      else specFun (desugarSt raw)
   | n + 1, bs => parseSrc n bs
 
 -- Codes: 1 Int, 2 Bool, 3 String, 4 Nat, 5 String.Pos, 6 Char, 7 Array Char,
@@ -4021,26 +4594,31 @@ def basicTy : Nat -> Int -> List Int -> Int
   | n + 1, k, bs => basicTy n k bs
 
 def isWordTy : Int -> Bool
-  | c => c >= 9 && c <= 11
+  | c => c >= 9 && c <= 12
 
 def wordWidth : Int -> Int
-  | c => if c == 9 then 8 else if c == 10 then 16 else 32
+  | c => if c == 9 then 8 else if c == 10 then 16 else if c == 11 then 32 else 64
 
+-- UINT64-0: the modulus 2^64 is not an Int of the twin; code 12 has no modulus here (0), its operators wrap by their own tags
 def wordModulus : Int -> Int
-  | c => if c == 9 then 256 else if c == 10 then 65536 else 4294967296
+  | c => if c == 9 then 256 else if c == 10 then 65536 else if c == 11 then 4294967296 else 0
 
--- Closed helper allow-list, exactly TypedScmLower.wordGuard.
+-- Bitwise operations still use the bridge's closed helper list.
 def wordHelper : Int -> Int -> Int
   | ty, op =>
-    if !(isWordTy ty) then 0
-    else if op == 1 || op == 2 then 1
-    else if op == 3 then (if ty == 11 then 3 else 2)
+    if !(isWordTy ty) || ty == 12 then 0
     else if op == 19 then 4
     else if op == 20 then 5
     else if op == 21 then 6
     else if op == 23 then 7
     else if op == 22 then (if ty == 11 then 8 else 9)
     else 0
+
+def wordScalarOp (ty op : Int) : Bool :=
+  isWordTy ty && ((op >= 1 && op <= 3) || op == 15)
+
+def wordBinAllowed (ty op : Int) : Bool :=
+  wordScalarOp ty op || wordHelper ty op > 0 || (ty == 12 && (op == 4 || (op >= 19 && op <= 23)))
 
 def wordHelperName : Int -> String
   | h =>
@@ -4511,6 +5089,11 @@ def primWordMethod : St -> Int -> Int -> Int -> Sig
     let ret : Int :=
       if ty == 4 && spanEq 0 st a b "toUInt8" then 9
       else if ty == 4 && spanEq 0 st a b "toUInt32" then 11
+      else if ty == 4 && (spanEq 0 st a b "toUInt64" || spanEq 0 st a b "toUSize") then 12
+      else if (ty >= 9 && ty <= 12) && (spanEq 0 st a b "toUInt64" || spanEq 0 st a b "toUSize") then 12
+      else if ty == 12 && spanEq 0 st a b "toUInt8" then 9
+      else if ty == 12 && spanEq 0 st a b "toUInt16" then 10
+      else if ty == 12 && spanEq 0 st a b "toUInt32" then 11
       else if isWordTy ty && spanEq 0 st a b "toNat" then 4
       else if ty == 11 && spanEq 0 st a b "val" then 4
       else if (ty == 10 || ty == 11) && spanEq 0 st a b "toUInt8" then 9
@@ -4523,14 +5106,17 @@ def primWord : St -> Int -> Int -> Sig
   | st, a, b =>
     if spanEq 0 st a b "UInt8.ofNat" then { a := a, b := b, ret := 9, ps := [4] : Sig }
     else if spanEq 0 st a b "UInt32.ofNat" then { a := a, b := b, ret := 11, ps := [4] : Sig }
+    else if spanEq 0 st a b "UInt64.ofNat" || spanEq 0 st a b "USize.ofNat" then { a := a, b := b, ret := 12, ps := [4] : Sig }
     else
       let ty : Int :=
         if b > a + 4 && spanEq 0 st a (a + 4) "Nat." then 4
         else if b > a + 6 && spanEq 0 st a (a + 6) "UInt8." then 9
         else if b > a + 7 && spanEq 0 st a (a + 7) "UInt16." then 10
         else if b > a + 7 && spanEq 0 st a (a + 7) "UInt32." then 11
+        else if b > a + 7 && spanEq 0 st a (a + 7) "UInt64." then 12
+        else if b > a + 6 && spanEq 0 st a (a + 6) "USize." then 12
         else 0;
-      let p : Int := a + (if ty == 4 then 4 else if ty == 9 then 6 else 7);
+      let p : Int := a + (if ty == 4 then 4 else if ty == 9 then 6 else if b > a + 6 && spanEq 0 st a (a + 6) "USize." then 6 else 7);
       let sg : Sig := primWordMethod st ty p b;
       if sg.ret == 0 then miss 0 else { a := a, b := b, ret := sg.ret, ps := [ty] : Sig }
 
@@ -4541,7 +5127,9 @@ def prim : Nat -> St -> Int -> Int -> Sig
     if spanEq 0 st a b "toString" || spanEq 0 st a b "ToString.toString" then { a := a, b := b, ret := 3, ps := [0] : Sig }
     else if spanEq 0 st a b "Nat.zero" then { a := a, b := b, ret := 4, ps := [] : Sig }
     else if spanEq 0 st a b "Nat.succ" then { a := a, b := b, ret := 4, ps := [4] : Sig }
-    else if spanEq 0 st a b "max" then { a := a, b := b, ret := 4, ps := [4, 4] : Sig }
+    else if spanEq 0 st a b "max" || spanEq 0 st a b "min" then { a := a, b := b, ret := 4, ps := [4, 4] : Sig }
+    else if spanEq 0 st a b "Int.fmod" then { a := a, b := b, ret := 1, ps := [1, 1] : Sig }
+    else if spanEq 0 st a b "decide" then { a := a, b := b, ret := 2, ps := [2] : Sig }
     else if spanEq 0 st a b "List.replicate" then { a := a, b := b, ret := -3, ps := [4, 0] : Sig }
     else if spanEq 0 st a b "List.range" then { a := a, b := b, ret := listTy 0 4, ps := [4] : Sig }
     else if spanEq 0 st a b "String.length" then { a := a, b := b, ret := 4, ps := [3] : Sig }
@@ -4763,6 +5351,7 @@ partial def decTy : St -> List Int -> Int -> Int -> Int -> Int -> Int
         else if spanEq 0 st a b "UInt8" then 9
         else if spanEq 0 st a b "UInt16" then 10
         else if spanEq 0 st a b "UInt32" then 11
+        else if spanEq 0 st a b "UInt64" || spanEq 0 st a b "USize" then 12
         else if spanEq 0 st a b "ByteArray" then basicTy 0 2 []
         else if spanEq 0 st a b "Substring" then basicTy 0 3 []
         else if sa >= 0 && spanSame 0 st a b sa sb then sc
@@ -5085,6 +5674,7 @@ def dataKnownBytes : List Int -> List String -> Bool
 
 def primL : Nat -> List Int -> Bool
   | 0, bs =>
+    litEq 0 bs "Int.fmod" || litEq 0 bs "decide" || litEq 0 bs "min" ||
     litEq 0 bs "Nat.zero" || litEq 0 bs "Nat.succ" || litEq 0 bs "max" || litEq 0 bs "List.range" || litEq 0 bs "List.getLast?" || litEq 0 bs "List.flatten" || litEq 0 bs "List.flatMap" || litEq 0 bs "List.zip" ||
     litEq 0 bs "List.replicate" || litEq 0 bs "String.split" || litEq 0 bs "toString" || litEq 0 bs "ToString.toString" ||
     litEq 0 bs "String.length" || litEq 0 bs "String.drop" || litEq 0 bs "String.startsWith" || litEq 0 bs "String.extract" ||
@@ -5095,7 +5685,11 @@ def primL : Nat -> List Int -> Bool
     litEq 0 bs "Nat.toUInt8" || litEq 0 bs "Nat.toUInt32" || litEq 0 bs "UInt8.ofNat" || litEq 0 bs "UInt32.ofNat" ||
     litEq 0 bs "UInt8.toNat" || litEq 0 bs "UInt16.toNat" || litEq 0 bs "UInt32.toNat" || litEq 0 bs "UInt32.val" ||
     litEq 0 bs "UInt32.toUInt8" || litEq 0 bs "UInt32.toUInt16" || litEq 0 bs "UInt16.toUInt8" ||
-    litEq 0 bs "UInt8.toUInt16" || litEq 0 bs "UInt8.toUInt32" || litEq 0 bs "UInt16.toUInt32"
+    litEq 0 bs "UInt8.toUInt16" || litEq 0 bs "UInt8.toUInt32" || litEq 0 bs "UInt16.toUInt32" ||
+    litEq 0 bs "Nat.toUInt64" || litEq 0 bs "Nat.toUSize" || litEq 0 bs "UInt64.ofNat" || litEq 0 bs "USize.ofNat" ||
+    litEq 0 bs "UInt64.toNat" || litEq 0 bs "USize.toNat" || litEq 0 bs "UInt64.toUInt8" || litEq 0 bs "UInt64.toUInt16" ||
+    litEq 0 bs "UInt64.toUInt32" || litEq 0 bs "UInt8.toUInt64" || litEq 0 bs "UInt16.toUInt64" || litEq 0 bs "UInt32.toUInt64" ||
+    litEq 0 bs "USize.toUInt64" || litEq 0 bs "UInt64.toUSize"
   | n + 1, bs => primL n bs
 
 def addStructHead : St -> Env -> Int -> Env
@@ -5199,12 +5793,13 @@ def dataKeyDigits : List Int -> List Int
   | 36 :: _ => []
   | x :: xs => x :: dataKeyDigits xs
 
+def dataFamilyKeyGo : List Int -> List Int -> List Int
+  | acc, [] => revI [] acc
+  | acc, 36 :: 112 :: _ => revI [] acc
+  | acc, x :: xs => dataFamilyKeyGo (x :: acc) xs
+
 def dataFamilyKey : List Int -> List Int
-  | [] => []
-  | 36 :: 112 :: xs => [36, 112] ++ dataKeyDigits xs
-  | x :: xs =>
-    let rest : List Int := dataFamilyKey xs;
-    if lenI rest == 0 then [] else x :: rest
+  | xs => dataFamilyKeyGo [] xs
 
 def sameDataFamily (st : St) (heads : List Int) (a : Int) (b : Int) : Bool :=
   let ka : List Int := dataFamilyKey (spanBytes 0 st (nthF 0 heads (Int.toNat a * 4)) (nthF 0 heads (Int.toNat a * 4 + 1)));
@@ -5477,17 +6072,30 @@ def openScopesValid : St -> Int -> List OpenScope -> Bool
 
 -- Distinct declarations from opens are ambiguous. Reopening the same
 -- namespace still denotes one declaration. [-1] is a named refusal marker.
+-- Three cells identify a structure constructor. Two cells name a value.
+def resValue (st : St) (e : Env) (bs : List Int) : List Int :=
+  let sg : Sig := findSigBE st e bs;
+  if sg.ret != 0 then [sg.a, sg.b]
+  else
+    let n : Nat := lenI bs;
+    if n < 4 || !(litEq 0 (dropI bs (n - 3)) ".mk") then []
+    else
+      let head : List Int := findHeadBE st e (takeI bs (n - 3));
+      if lenI head == 0 then []
+      else
+        let a : Int := nthI head 0;
+        let b : Int := nthI head 1;
+        let ty : Int := findStruct st e.heads 0 a b;
+        if ty >= 100 && ty < 1000 then [a, b, ty] else []
+
 def resValOpen : St -> Env -> List OpenScope -> List Int -> List Int -> List Int
 
   | _, _, [], _, acc => acc
   | st, e, p :: rest, bs, acc =>
-    let sg : Sig := findSigBE st e (joinDot 0 p.ns bs);
-    if inBss p.excepts bs then resValOpen st e rest bs acc
-    else if sg.ret == 0 then resValOpen st e rest bs acc
-    else
-      let found : List Int := [sg.a, sg.b];
-      if lenI acc == 0 || eqListI acc found then resValOpen st e rest bs found
-      else [-1]
+    let found : List Int := resValue st e (joinDot 0 p.ns bs);
+    if inBss p.excepts bs || lenI found == 0 then resValOpen st e rest bs acc
+    else if lenI acc == 0 || eqListI acc found then resValOpen st e rest bs found
+    else [-1]
 
 def resTyOpen : St -> Env -> List OpenScope -> List Int -> List Int -> List Int
 
@@ -5511,8 +6119,8 @@ def resValGo : St -> Env -> List OpenScope -> List Int -> List Int
       resValOpen st e (p :: rest) bs []
     else
       let cand : List Int := joinDot 0 p.ns bs;
-      let sg : Sig := findSigBE st e cand;
-      if sg.ret != 0 then [sg.a, sg.b]
+      let found : List Int := resValue st e cand;
+      if lenI found != 0 then found
       else if primL 0 cand then []
       else if lenI p.ns == 0 then resValOpen st e rest bs []
       else resValGo st e rest bs
@@ -5998,13 +6606,14 @@ partial def qExC : St -> Env -> Int -> List Int -> List OpenScope -> List (List 
         else
           let r : List Int := resValGo st e (prefsOf 0 ns ops) (spanBytes 0 st na nb);
           if lenI r == 1 then setErr 0 st 5
+          else if lenI r == 3 then setC 0 st id (-10000 - nthI r 2)
           else if lenI r == 0 then
             let dot : Int := lastDot st na nb;
             if dot >= 0 && findLocal st locs na dot >= 0 then setC 0 st id (-9)
             else if dot >= 0 then
               let r2 : List Int := resValGo st e (prefsOf 0 ns ops) (spanBytes 0 st na dot);
               if lenI r2 == 1 then setErr 0 st 5
-              else if lenI r2 == 0 then st
+              else if lenI r2 != 2 then st
               else
                 let qbs : List Int := joinDot 0 (spanBytes 0 st (nthI r2 0) (nthI r2 1)) (spanBytes 0 st (dot + 1) nb);
                 -- Reuse the existing fresh-name allocator and reserve its node.
@@ -6104,7 +6713,7 @@ def ckName : Nat -> St -> Env -> List Int -> Int -> Ans
       else if fd 0 st id 3 != -9 && spanEq 0 st na nb "Nat.zero" && (findSigE st env na nb).ret == 0 then good 0 4
       else
         let pin : Bool := fd 0 st id 3 == -9;
-        let p : Sig := if pin || ((spanEq 0 st na nb "max" || spanEq 0 st na nb "String.singleton" || spanEq 0 st na nb "Nat.zero" || spanEq 0 st na nb "Nat.succ") && (findSigE st env na nb).ret != 0) then miss 0 else prim 0 st na nb;
+        let p : Sig := if pin || ((spanEq 0 st na nb "max" || spanEq 0 st na nb "min" || spanEq 0 st na nb "Int.fmod" || spanEq 0 st na nb "decide" || spanEq 0 st na nb "String.singleton" || spanEq 0 st na nb "Nat.zero" || spanEq 0 st na nb "Nat.succ") && (findSigE st env na nb).ret != 0) then miss 0 else prim 0 st na nb;
         if p.ret != 0 then bad 0 7
         else
           let sg : Sig := if pin then miss 0 else findSigE st env na nb;
@@ -6981,6 +7590,17 @@ partial def ckMethod : St -> Env -> List Int -> Int -> List Int -> Int -> Ans
 partial def ckHof : St -> Env -> List Int -> Int -> Int -> List Int -> Int -> Ans
 
   | st, env, locs, ty, op, args, exp =>
+    let first : Ans := ckHofOnce st env locs ty op args exp;
+    -- foldl with no expected type: a numeral initial value defaults to Nat before the callback is seen; Lean unifies
+    -- it with the callback, so a refusal is retried once with the element type as the expected type of the initial value.
+    if first.err != 0 && op == 24 && exp == 0 then
+      let again : Ans := ckHofOnce st env locs ty op args (elemTy 0 ty);
+      if again.err == 0 then again else first
+    else first
+
+partial def ckHofOnce : St -> Env -> List Int -> Int -> Int -> List Int -> Int -> Ans
+
+  | st, env, locs, ty, op, args, exp =>
     if lenI args != (if op == 24 then 2 else 1) then bad 0 7
     else
       let e : Int := if op == 30 then 6 else elemTy 0 ty;
@@ -7212,6 +7832,17 @@ partial def ckLet : St -> Env -> List Int -> Int -> Int -> Int -> Int -> Ans
           let locs2 : List Int := fd 0 st name 1 :: fd 0 st name 2 :: tyR :: locs;
           ck st env locs2 (fd 0 st rest 2) exp
 
+-- With no expected result, keep the concrete Int context of either operand.
+-- ckArgs still checks both operands at the selected type.
+partial def numericChoiceTy (st : St) (e : Env) (locs args : List Int) (exp : Int) : Int :=
+  if exp == 1 || exp == 4 then exp
+  else
+    let left : Ans := ck st e locs (nthF 0 args 0) 0;
+    if left.err == 0 && left.ty == 1 then 1
+    else
+      let right : Ans := ck st e locs (nthF 0 args 1) 0;
+      if right.err == 0 && right.ty == 1 then 1 else 4
+
 partial def ckCall : St -> Env -> List Int -> Int -> Int -> Ans
 
   | st, env, locs, id, exp =>
@@ -7225,7 +7856,7 @@ partial def ckCall : St -> Env -> List Int -> Int -> Int -> Ans
         else if findLocal st locs na nb >= 0 then bad 0 6
         else
           let pin : Bool := fd 0 st fn 3 == -9;
-          let p : Sig := if pin || ((spanEq 0 st na nb "max" || spanEq 0 st na nb "String.singleton" || spanEq 0 st na nb "Nat.zero" || spanEq 0 st na nb "Nat.succ") && (findSigE st env na nb).ret != 0) then miss 0 else prim 0 st na nb;
+          let p : Sig := if pin || ((spanEq 0 st na nb "max" || spanEq 0 st na nb "min" || spanEq 0 st na nb "Int.fmod" || spanEq 0 st na nb "decide" || spanEq 0 st na nb "String.singleton" || spanEq 0 st na nb "Nat.zero" || spanEq 0 st na nb "Nat.succ") && (findSigE st env na nb).ret != 0) then miss 0 else prim 0 st na nb;
           let sg : Sig := if pin then miss 0 else if p.ret != 0 then p else findSigE st env na nb;
           let p2 : Sig :=
             if sg.ret != 0 then miss 0
@@ -7239,6 +7870,12 @@ partial def ckCall : St -> Env -> List Int -> Int -> Int -> Ans
           let recv : Bool := sg.ret == 0 && p2.ret != 0;
           let fin : Sig := if recv then p2 else sg;
           if fin.ret == 0 then bad 0 5
+          else if p.ret != 0 && (spanEq 0 st na nb "max" || spanEq 0 st na nb "min") then
+            if lenI args != 2 then bad 0 7
+            else
+              let use : Int := numericChoiceTy st env locs args exp;
+              let checked : Ans := ckArgs st env locs args [use, use];
+              if checked.err != 0 then checked else fit exp (good 0 use)
           else if !recv && spanEq 0 st na nb "List.replicate" then
             if lenI args != 2 then bad 0 7
             else
@@ -7326,7 +7963,7 @@ partial def ckBin : St -> Env -> List Int -> Int -> Int -> Int -> Int -> Ans
             if rB.err != 0 then rB
             else if rB.ty == 3 || rB.ty == 6 then fit exp (good 0 5) else bad 0 6
           else rA
-      else if isWordTy lA.ty && wordHelper lA.ty op == 0 then bad 0 15
+      else if isWordTy lA.ty && !(wordBinAllowed lA.ty op) then bad 0 15
       else if !(isWordTy lA.ty) && lA.ty != 4 && op >= 19 then bad 0 15
       else if lA.ty != 1 && lA.ty != 4 && !(isWordTy lA.ty) then bad 0 6
       else
@@ -7339,7 +7976,7 @@ partial def ckBin : St -> Env -> List Int -> Int -> Int -> Int -> Int -> Ans
           else
             let lB : Ans := ck st env locs l rB.ty;
             if lB.err != 0 then lB
-            else if isWordTy lB.ty && wordHelper lB.ty op == 0 then bad 0 15
+            else if isWordTy lB.ty && !(wordBinAllowed lB.ty op) then bad 0 15
             -- Pos zero may inherit the right Pos type only for add/sub.
             else if lB.ty == 1 || lB.ty == 4 || isWordTy lB.ty || (lB.ty == 5 && (op == 1 || op == 2)) then fit exp (good 0 lB.ty)
             else bad 0 6
@@ -8067,6 +8704,94 @@ partial def fillWithFlds : St -> Int -> Int -> List Int -> St
         let st3 : St := setC 0 st2 st2.ret (-9);
         alloc 0 st3 15 nm st3.ret curChain
 
+-- the imported-struct counterpart of fillWithFlds: the field name list comes
+-- from the merged env fields (rows first..last, walked last-first so the
+-- filled entries land in declaration order), not from a local decl node.
+partial def fillWithFldsE : St -> List Int -> Int -> Int -> Int -> List Int -> St
+
+  | st, flds, i, first, chain, baseBs =>
+    if i < first then setRet 0 st chain
+    else
+      let na : Int := nthF 0 flds (Int.toNat i * 3);
+      let nb : Int := nthF 0 flds (Int.toNat i * 3 + 1);
+      let st1 : St := fillWithFldsE st flds (i - 1) first chain baseBs;
+      let curChain : Int := st1.ret;
+      if findLit st1 curChain na nb >= 0 then st1
+      else
+        let projBs : List Int := joinDot 0 baseBs (spanBytes 0 st1 na nb);
+        let st2 : St := synthIdent 0 st1 projBs;
+        let st3 : St := setC 0 st2 st2.ret (-9);
+        let sn : St := synthIdent 0 st3 (spanBytes 0 st3 na nb);
+        alloc 0 sn 15 sn.ret st3.ret curChain
+
+-- An imported structure's field defaults live in the exporting module's
+-- source, which the importer never reads. The exporter emits one synthesized
+-- `Name._dflt<i>` def per defaulted field (next to the structure, so the
+-- namespace qualifier prefixes it the same way), and the importer fills a
+-- missing literal field with a call to it. The value therefore travels as
+-- code: editing a default changes the exporter's object and every linked
+-- image, while no importer's interface moves.
+partial def fldCount : St -> Int -> Int
+
+  | st, f =>
+    if f < 0 || fd 0 st f 0 != 27 then 0
+    else 1 + fldCount st (fd 0 st f 3)
+
+partial def dfltDefsGo : St -> List Int -> Int -> Int -> Int -> St
+
+  | st, qbs, f, n, tail =>
+    if f < 0 || fd 0 st f 0 != 27 then st
+    else
+      let tyId : Int := fd 0 st f 2;
+      let st1 : St :=
+        if fd 0 st tyId 0 != 40 then st
+        else
+          let bs : List Int := joinDot 0 qbs ([95, 100, 102, 108, 116] ++ natBytes (Int.toNat (n - 1)));
+          let si : St := synthIdent 0 st bs;
+          let sg : St := alloc 0 si 21 (-1) (fd 0 si tyId 1) 0;
+          let bd : St := alloc 0 sg 25 (fd 0 sg tyId 2) 0 0;
+          let df : St := alloc 0 bd 20 si.ret sg.ret bd.ret;
+          let sp : St := alloc 0 df 19 df.ret (fd 0 df tail 2) 0;
+          setNodeSlot sp tail 2 sp.ret;
+      dfltDefsGo st1 qbs (fd 0 st1 f 3) (n - 1) tail
+
+partial def injectDfltDefs : St -> Int -> St
+
+  | st, id =>
+    if id < 0 then st
+    else if fd 0 st id 0 != 19 then st
+    else
+      let d : Int := fd 0 st id 1;
+      let t : Int := fd 0 st d 0;
+      let st1 : St :=
+        if t == 26 then
+          let nm : Int := fd 0 st d 1;
+          let f : Int := fd 0 st d 2;
+          dfltDefsGo st (spanBytes 0 st (fd 0 st nm 1) (fd 0 st nm 2)) f (fldCount st f) id
+        else if t == 28 then injectDfltDefs st (fd 0 st d 1)
+        else if t == 34 || t == 36 then injectDfltDefs st (fd 0 st d 2)
+        else st;
+      injectDfltDefs st1 (fd 0 st1 id 2)
+
+-- The imported-struct counterpart of fillDefaultFlds: missing literal fields
+-- are filled with a call to the exported `Name._dflt<i>`, so the importing
+-- module needs only the interface, never the source.
+partial def fillDefaultFldsE : St -> List Int -> Int -> Int -> Int -> Int -> List Int -> St
+
+  | st, flds, i, first, last, chain, qbs =>
+    if i < first then setRet 0 st chain
+    else
+      let na : Int := nthF 0 flds (Int.toNat i * 3);
+      let nb : Int := nthF 0 flds (Int.toNat i * 3 + 1);
+      let st1 : St := fillDefaultFldsE st flds (i - 1) first last chain qbs;
+      let curChain : Int := st1.ret;
+      if findLit st1 curChain na nb >= 0 then st1
+      else
+        let dbs : List Int := joinDot 0 qbs ([95, 100, 102, 108, 116] ++ natBytes (Int.toNat (last - i)));
+        let st2 : St := synthIdent 0 st1 dbs;
+        let sn : St := synthIdent 0 st2 (spanBytes 0 st2 na nb);
+        alloc 0 sn 15 sn.ret st2.ret curChain
+
 -- Inferred binder types are negative payloads, disjoint from AST ids.
 partial def annotateLambda : St -> Int -> List Int -> St
 
@@ -8573,7 +9298,7 @@ def pipeMethodLast (st : St) (ty exp a b : Int) (args : List Int) : Bool :=
 -- ck still requires a typed Nat variable or a different word width to fit.
 def wordBinTy (st : St) (e : Env) (locs : List Int) (op : Int) (l : Int) (r : Int) (exp : Int) : Int :=
   if isWordTy (op / 100) then op / 100
-  else if wordHelper exp (op % 100) > 0 then exp
+  else if wordBinAllowed exp (op % 100) then exp
   else
     let a : Ans := ck st e locs l 0;
     if a.err == 0 && isWordTy a.ty then a.ty
@@ -8602,6 +9327,56 @@ def structReceiverIndex : List Int -> Int -> Int
       let i : Int := structReceiverIndex ps ty;
       if i < 0 then -1 else i + 1
 
+-- Lean 4.14 Init/Data/Int/DivMod.lean Int.fmod (floor remainder), written
+-- over the existing Int remainder (Int.emod, `%`): with r = a % b, which is
+-- in [0, |b|), the floor remainder is r, except that r + b when r != 0 and
+-- b < 0. For b = 0 it is a. Operands are bound once, in source order.
+def intTypeNode (st : St) (ty : Int) : St := alloc 0 st 56 ty 0 0
+
+def lowerFmod (st : St) (a b : Int) : St :=
+  let sa : St := synthIdent 0 st ([36, 102, 97] ++ natBytes st.nxt);
+  let sb : St := synthIdent 0 sa ([36, 102, 98] ++ natBytes sa.nxt);
+  let sr : St := synthIdent 0 sb ([36, 102, 114] ++ natBytes sb.nxt);
+  let fa : Int := sa.ret;
+  let fb : Int := sb.ret;
+  let fr : Int := sr.ret;
+  let rem : St := mkBin sr 15 fa fb;
+  let z1 : St := mkNum rem 0;
+  let ne : St := mkBin z1 6 fr z1.ret;
+  let z2 : St := mkNum ne 0;
+  let lt : St := mkBin z2 7 fb z2.ret;
+  let both : St := mkBin lt 11 ne.ret lt.ret;
+  let sum : St := mkBin both 1 fr fb;
+  let pick : St := mkIf sum both.ret sum.ret fr;
+  let t3 : St := intTypeNode pick 1;
+  let l3 : St := mkLet t3 fr t3.ret rem.ret pick.ret;
+  let t2 : St := intTypeNode l3 1;
+  let l2 : St := mkLet t2 fb t2.ret b l3.ret;
+  let t1 : St := intTypeNode l2 1;
+  mkLet t1 fa t1.ret a l2.ret
+
+-- Lean 4.14 Init/Prelude.lean:1140 max x y = if x <= y then y else x, and
+-- :1153 min x y = if x <= y then x else y (maxOfLe/minOfLe; Int.Basic:332,334).
+-- Operands are bound once at the chosen numeric type ty.
+def lowerMinMax (st : St) (isMax : Bool) (ty a b : Int) : St :=
+  let sa : St := synthIdent 0 st ([36, 109, 97] ++ natBytes st.nxt);
+  let sb : St := synthIdent 0 sa ([36, 109, 98] ++ natBytes sa.nxt);
+  let fa : Int := sa.ret;
+  let fb : Int := sb.ret;
+  let test : St := mkBin sb 9 fa fb;
+  let pick : St := mkIf test test.ret (if isMax then fb else fa) (if isMax then fa else fb);
+  let t2 : St := intTypeNode pick ty;
+  let l2 : St := mkLet t2 fb t2.ret b pick.ret;
+  let t1 : St := intTypeNode l2 ty;
+  mkLet t1 fa t1.ret a l2.ret
+
+-- Saturated conditional applications use ordinary statically named calls.
+partial def conditionalCallSig (st : St) (e : Env) (locs : List Int) (id : Int) : Sig :=
+  let a : Int := fd 0 st id 1;
+  let b : Int := fd 0 st id 2;
+  if fd 0 st id 0 != 1 || fd 0 st id 3 != 0 || findLocal st locs a b >= 0 then miss 0
+  else findSigE st e a b
+
 mutual
 partial def desugar : St -> Env -> Int -> Int -> List Int -> Int -> St
 
@@ -8612,6 +9387,37 @@ partial def desugar : St -> Env -> Int -> Int -> List Int -> Int -> St
       if t == 47 then
         let lowered : St := anonymousExprLower st e id exp [];
         if lowered.err != 0 then lowered else desugar lowered e top id locs exp
+      else if (t == 1 || t == 5) && fd 0 st (getFn st id) 3 <= -10100 && fd 0 st (getFn st id) 3 > -11000 then
+        let ty : Int := -10000 - fd 0 st (getFn st id) 3;
+        let i : Nat := Int.toNat (ty - 100);
+        let cnt : Nat := Int.toNat (nthF 0 e.heads (i * 4 + 2));
+        let first : Nat := Int.toNat (nthF 0 e.heads (i * 4 + 3));
+        let fields : List Int := takeI (dropI e.fields (first * 3)) (cnt * 3);
+        let spine : St := spine1 (setRet 0 st (-1)) 12 (revI [] (getArgs st id));
+        let built : St := anonymousFields spine spine.ret fields;
+        if built.err != 0 then built
+        else
+          let body : St := alloc 0 built 14 (-1) built.ret 0;
+          let ann : St := alloc 0 body 56 ty 0 0;
+          desugar (setNode 0 ann id 30 body.ret ann.ret 0) e top id locs exp
+      else if t == 5 && fd 0 st (getFn st id) 0 == 8 then
+        let head : Int := getFn st id;
+        let th : Int := unwrapP st (fd 0 st head 2);
+        let el : Int := unwrapP st (fd 0 st head 3);
+        let left : Sig := conditionalCallSig st e locs th;
+        let right : Sig := conditionalCallSig st e locs el;
+        let args : List Int := getArgs st id;
+        if left.ret == 0 || left.ret != right.ret || !(eqListI left.ps right.ps) then setErr 0 st 6
+        else if lenI args != lenI left.ps then setErr 0 st 7
+        else
+          let test : Int := fd 0 st head 1;
+          let prepared : St := desugar st e top test locs 2;
+          let ready : St := desugarArgs prepared e top args left.ps locs;
+          let yes : St := applyDefaultArgs ready th args;
+          let no : St := applyDefaultArgs yes el args;
+          let body : St := alloc 0 no 8 test yes.ret no.ret;
+          let ann : St := alloc 0 body 56 left.ret 0 0;
+          setNode 0 ann id 30 body.ret ann.ret 0
       else if t == 43 || (t == 5 && fd 0 st (getFn st id) 0 == 43) then
         let fn : Int := getFn st id;
         let args : List Int := getArgs st id;
@@ -8773,6 +9579,36 @@ partial def desugar : St -> Env -> Int -> Int -> List Int -> Int -> St
         let st1 : St := desugarArgs st e top args [4, if isListTy 0 exp then elemTy 0 exp else 0] locs;
         let result : Ans := ck st1 e locs id exp;
         if result.err == 0 then setC 0 st1 id result.ty else st1
+      else if t == 5 && fd 0 st (getFn st id) 0 == 1 && fd 0 st (getFn st id) 3 != -9 &&
+        (spanEq 0 st (fd 0 st (getFn st id) 1) (fd 0 st (getFn st id) 2) "max" ||
+         spanEq 0 st (fd 0 st (getFn st id) 1) (fd 0 st (getFn st id) 2) "min") &&
+        findLocal st locs (fd 0 st (getFn st id) 1) (fd 0 st (getFn st id) 2) < 0 &&
+        (findSigE st e (fd 0 st (getFn st id) 1) (fd 0 st (getFn st id) 2)).ret == 0 then
+        let args : List Int := getArgs st id;
+        if lenI args != 2 then setErr 0 st 7
+        else
+          let use : Int := numericChoiceTy st e locs args exp;
+          let isMax : Bool := spanEq 0 st (fd 0 st (getFn st id) 1) (fd 0 st (getFn st id) 2) "max";
+          if isMax && use != 1 then
+            let ready : St := desugarArgs st e top args [use, use] locs;
+            let result : Ans := ck ready e locs id exp;
+            if result.err == 0 then setC 0 ready id result.ty else ready
+          else
+            let built : St := lowerMinMax st isMax use (nthI args 0) (nthI args 1);
+            let r : Int := built.ret;
+            let rewritten : St := setNode 0 built id 9 (fd 0 built r 1) (fd 0 built r 2) (fd 0 built r 3);
+            desugar rewritten e top id locs exp
+      else if t == 5 && fd 0 st (getFn st id) 0 == 1 && fd 0 st (getFn st id) 3 != -9 &&
+        spanEq 0 st (fd 0 st (getFn st id) 1) (fd 0 st (getFn st id) 2) "Int.fmod" &&
+        findLocal st locs (fd 0 st (getFn st id) 1) (fd 0 st (getFn st id) 2) < 0 &&
+        (findSigE st e (fd 0 st (getFn st id) 1) (fd 0 st (getFn st id) 2)).ret == 0 then
+        let args : List Int := getArgs st id;
+        if lenI args != 2 then setErr 0 st 7
+        else
+          let built : St := lowerFmod st (nthI args 0) (nthI args 1);
+          let r : Int := built.ret;
+          let rewritten : St := setNode 0 built id 9 (fd 0 built r 1) (fd 0 built r 2) (fd 0 built r 3);
+          desugar rewritten e top id locs exp
       else if t == 5 && fd 0 st (getFn st id) 0 == 32 then desugarLocalApp st e top id locs exp
       else if t == 5 then
         let st0 : St := expandDefDefaults st e top id (getFn st id) (getArgs st id) locs;
@@ -9025,7 +9861,10 @@ partial def desugarHof : St -> Env -> Int -> Int -> Int -> Int -> List Int -> Li
             let st3 : St := annotateLambda st2 (fd 0 st2 cb 1) ps;
             let st4 : St := desugar st3 e top (fd 0 st3 cb 2) (binds.xs ++ locs) ret;
             let result : Ans := ck st4 e (binds.xs ++ locs) (fd 0 st4 cb 2) ret;
-            if result.err != 0 then st4 else setC 0 st4 cb result.ty
+            -- An initial numeral with no expected type is Nat until the callback is seen; a callback that disagrees is checked again
+            -- from the unstamped tree with the element type (Lean unifies the numeral with the callback).
+            if result.err != 0 then (if op == 24 && exp == 0 && elemTy 0 ty != 0 then desugarHof st e top id ty op args locs (elemTy 0 ty) else st4)
+            else setC 0 st4 cb result.ty
 
 partial def desugarArgs : St -> Env -> Int -> List Int -> List Int -> List Int -> St
 
@@ -9070,21 +9909,25 @@ partial def desugarInst : St -> Env -> Int -> Int -> List Int -> Int -> St
         let stTy : St := if tyN >= 0 then st2 else alloc 0 st2 1 sa sb 0;
         let tyNode : Int := if tyN >= 0 then tyN else stTy.ret;
         let fdecl : Int := findStructFlds stTy top sa sb;
+        let frow : Int := nthF 0 e.heads (si * 4 + 3);
         if withB <= 0 then
-          let st3 : St := fillDefaultFlds stTy fdecl chain;
+          let st3 : St := if fdecl >= 0 then fillDefaultFlds stTy fdecl chain
+            else fillDefaultFldsE stTy e.fields (frow + Int.ofNat cnt - 1) frow (frow + Int.ofNat cnt - 1) chain (spanBytes 0 stTy sa sb);
           setNode 0 st3 id 14 tyNode st3.ret 0
         else
           let base : Int := withB - 1;
           let isLoc : Bool := fd 0 stTy base 0 == 1 && findLocal stTy locs (fd 0 stTy base 1) (fd 0 stTy base 2) >= 0;
           if isLoc then
             let bbs : List Int := spanBytes 0 stTy (fd 0 stTy base 1) (fd 0 stTy base 2);
-            let st3 : St := fillWithFlds stTy fdecl chain bbs;
+            let st3 : St := if fdecl >= 0 then fillWithFlds stTy fdecl chain bbs
+              else fillWithFldsE stTy e.fields (frow + Int.ofNat cnt - 1) frow chain bbs;
             setNode 0 st3 id 14 tyNode st3.ret 0
           else
             let ubs : List Int := [95, 95, 117] ++ natBytes (Int.toNat id);
             let st3 : St := synthIdent 0 stTy ubs;
             let nm : Int := st3.ret;
-            let st4 : St := fillWithFlds st3 fdecl chain ubs;
+            let st4 : St := if fdecl >= 0 then fillWithFlds st3 fdecl chain ubs
+              else fillWithFldsE st3 e.fields (frow + Int.ofNat cnt - 1) frow chain ubs;
             let st5 : St := alloc 0 st4 14 tyNode st4.ret 0;
             let instNode : Int := st5.ret;
             let st6 : St := alloc 0 st5 10 base instNode 0;
@@ -9230,12 +10073,36 @@ def nPreOf : List Int -> Int
     let rest : List Int := afterMark (takeI xs (Int.toNat k));
     nthF 0 rest 0
 
-def recsOf : List Int -> List Int
+-- Module-mode flag cell: a packed env may end its field section with
+-- [-12, indHeap, dataNode]; the flags pin the v2 convention for separately
+-- compiled objects (always the nPre=4 handle forms) regardless of what the
+-- module-local recursive tables would imply. recsOf stops at -12.
+def takeNonNeg : List Int -> List Int
 
   | [] => []
-  | k :: xs =>
-    let rest : List Int := afterMark (takeI xs (Int.toNat k));
-    dropI rest 1
+  | x :: xs => if x < 0 then [] else x :: takeNonNeg xs
+
+def dropNonNeg : List Int -> List Int
+
+  | [] => []
+  | x :: xs => if x < 0 then x :: xs else dropNonNeg xs
+
+def recsTail : List Int -> List Int
+
+  | [] => []
+  | k :: xs => dropI (afterMark (takeI xs (Int.toNat k))) 1
+
+def recsOf : List Int -> List Int
+
+  | pk => takeNonNeg (recsTail pk)
+
+def pkFlags : List Int -> List Int
+
+  | pk => dropNonNeg (recsTail pk)
+
+def modMode : List Int -> Bool
+
+  | pk => lenI (pkFlags pk) == 3
 
 def headsOf : List Int -> List Int
 
@@ -9341,7 +10208,9 @@ def hasTyErr : Nat -> List Int -> Bool
 -- Keep the previously accepted recursive-record wire bytes unchanged.
 def indHeap : List Int -> Bool
 
-  | pk => hasIndRec (headsOf pk) (recsOf pk)
+  | pk =>
+    let fl : List Int := pkFlags pk;
+    if lenI fl == 3 then nthI fl 1 != 0 else hasIndRec (headsOf pk) (recsOf pk)
 
 def stringFields : List Int -> Nat -> Nat -> Bool
   | _, _, 0 => false
@@ -9418,7 +10287,10 @@ partial def arenaMagnitudeRecs : List Int -> List Int -> Bool
       arenaMagnitudeRecs pk rest
 
 def dataNode : List Int -> Bool
-  | pk => !(indHeap pk) || stringRecs pk (recsOf pk) || arenaMagnitudeRecs pk (recsOf pk)
+  | pk =>
+    let fl : List Int := pkFlags pk;
+    if lenI fl == 3 then nthI fl 2 != 0
+    else !(indHeap pk) || stringRecs pk (recsOf pk) || arenaMagnitudeRecs pk (recsOf pk)
 
 def handleTyW : List Int -> List Int
 
@@ -9504,13 +10376,19 @@ def intMagnitudeMarker : List Int := [1,8,0,73,110,116,77,97,103,49]
 def natMagnitudeTyW : List Int := [7,1] ++ natMagnitudeMarker ++ [4,0]
 def intMagnitudeTyW : List Int := [7,2] ++ intMagnitudeSignMarker ++ [1] ++ intMagnitudeMarker ++ [4,0]
 
+-- WIRE-SEQ-0: element width in bits of a sequence of source element type c: 8, 16, 32 for
+-- UInt8, UInt16, UInt32 elements; 0 for every other element (a full word, a magnitude or an object).
+def seqWidth (c : Int) : Int := if isWordTy c then wordWidth c else 0
+
 mutual
 partial def tyW : List Int -> Int -> List Int
 
   | pk, c =>
     if c == 1 then intMagnitudeTyW
     else if c == 4 then natMagnitudeTyW
-    else if c == 6 || isWordTy c then [0]
+    -- WIRE-SEQ-0 rev 2: a fixed-width scalar says its width (tag 11, bits); it still means a word.
+    else if isWordTy c then [11, wordWidth c]
+    else if c == 6 then [0]
     else if c == 2 then [1]
     else if c == 3 then [4, 0]
     else if c == 8 then handleTyW pk
@@ -9540,7 +10418,8 @@ partial def tyW : List Int -> Int -> List Int
     else if basicKind 0 c == 4 then
       -- The typed emitter still gives Array Char a special text lowering.
       -- Preserve that subset boundary rather than emit incompatible bytes.
-      if basicFirst 0 c == 6 then [-99] else [4] ++ tyW pk (basicFirst 0 c)
+      -- WIRE-SEQ-0: tag 10 = sequence with its source kind (4 Array) and element width.
+      if basicFirst 0 c == 6 then [-99] else [10, 4, seqWidth (basicFirst 0 c)] ++ tyW pk (basicFirst 0 c)
     else if basicKind 0 c == 5 then
       -- Bounded extensional adapter, from HashMapCompositions.lean. No
       -- bucket/traversal-order claim; scalar keys and payloads only.
@@ -9549,7 +10428,7 @@ partial def tyW : List Int -> Int -> List Int
     -- Lean 4.14: String.Pos is a Nat wrapper; ByteArray wraps Array UInt8;
     -- Substring stores str/startPos/stopPos. Erase wrappers to existing forms.
     else if c == 5 then natMagnitudeTyW
-    else if basicKind 0 c == 2 then [4,0]
+    else if basicKind 0 c == 2 then [10, 2, 8, 0]
     else if basicKind 0 c == 3 then [7,3] ++ fiName 0 ++ [4,0] ++ fiName 1 ++ natMagnitudeTyW ++ fiName 2 ++ natMagnitudeTyW
     else if isBasicTy 0 c then [-99]
     else if c >= 100 then
@@ -10782,7 +11661,7 @@ def defConstInt : St -> Fn -> Int
         else
           let v : Int := numeralBounded (numeralMagnitude st inner) 1000000000000;
           if v < 1000000000000 then
-            if isWordTy f.ret then v % wordModulus f.ret else v
+            if isWordTy f.ret && f.ret != 12 then v % wordModulus f.ret else v
           else -1
 
 def defLitFld : St -> Fn -> Int -> Int -> Int
@@ -11347,6 +12226,17 @@ partial def selfSpine : Int -> Int -> Int -> List Int
       (if ua == 1 then [1] ++ varB (np + 1) ++ [0] else [0])
     else [1] ++ varB i ++ selfSpine (i + 1) np ua
 
+-- Module-mode call emission: under a -12-flagged pk the callee index is
+-- left as a name relocation ([52] ++ [-700044] ++ leb len ++ name bytes);
+-- the module link splices each marker to `leb (4 + global index)`.
+def callIxW : St -> List Int -> Fn -> Int -> List Int
+
+  | st, hd, f, ix =>
+    if modMode hd then
+      let nm : List Int := spanBytes 0 st f.na f.nb;
+      [52, -700044] ++ leb (Int.ofNat (lenI nm)) ++ nm
+    else [52] ++ leb (ix + nPreOf hd)
+
 def fuelWrap : St -> List Int -> List Fn -> Fn -> Bw -> Bw
 
   | st, hd, fs, f, b =>
@@ -11355,7 +12245,7 @@ def fuelWrap : St -> List Int -> List Fn -> Fn -> Bw -> Bw
       let np : Int := Int.ofNat (lenI f.ps);
       let ix : Int := fnIx st fs f.na f.nb;
       let cond : List Int := [17, 12] ++ litI 0 ++ varB np;
-      let selfC : List Int := [52] ++ leb (ix + nPreOf hd) ++ selfSpine 0 np f.usesA;
+      let selfC : List Int := callIxW st hd f ix ++ selfSpine 0 np f.usesA;
       bwOk 0 [] b.ctx 0 ([5] ++ cond ++ selfC ++ b.bs) b.ty
 
 -- Detect whether any identifier in the file projects a field of a recursive structure.
@@ -12893,10 +13783,37 @@ def arenaMagnitudeHoldW (hd : List Int) (kind : Int) (w : Bw) : Bw :=
       let ctx1 : List Int := -3 :: -3 :: 8 :: shiftTrailer w.ctx 1;
       bwOk 0 (w.pre ++ [4] ++ wrapResTy hd 8 ++ call) ctx1 (w.moved + 1) (projF0 hd 8 (varB 0)) 8
 
+-- UINT64-0 (docs/EMITTER.md, W row): the 64-bit word literal is tag 64 and the low eight base-256 digits of the numeral
+partial def padDigits8 : List Int -> Nat -> List Int
+  | _, 0 => []
+  | [], n + 1 => 0 :: padDigits8 [] n
+  | d :: ds, n + 1 => d :: padDigits8 ds n
+
+def litW64 (digits : List Int) : List Int := 64 :: padDigits8 digits 8
+
+def natLit32W : List Int := natMagnitudeLiteralWire [0, 0, 0, 0, 1]
+
+-- Nat to the 64-bit word, by halves through the existing 32-bit bound: (n / 2^32 mod 2^32) << 32 + (n mod 2^32)
+def natToW64 (n : List Int) : List Int :=
+  let lo : List Int := [4] ++ natMagnitudeTyW ++ n ++ magnitudeNatWordBound 32;
+  let hi : List Int := [4] ++ natMagnitudeTyW ++ magnitudeApply2W natMagnitudeTyW (magnitudeNatBinaryBound 4) n natLit32W ++ magnitudeNatWordBound 32;
+  [65] ++ ([76] ++ hi ++ litW64 [32]) ++ lo
+
+-- the 64-bit word to Nat: hi * 2^32 + lo with both halves below 2^32 (ordinary i64 words)
+def w64ToNat (w : List Int) : List Int :=
+  let hi : List Int := magnitudeMetadataNatW ([77] ++ w ++ litW64 [32]);
+  let lo : List Int := magnitudeMetadataNatW ([72] ++ w ++ litW64 [255, 255, 255, 255]);
+  magnitudeApply2W natMagnitudeTyW (magnitudeNatBinaryBound 1)
+    (magnitudeApply2W natMagnitudeTyW (magnitudeNatBinaryBound 3) hi natLit32W) lo
+
 def wordConvert : Bw -> Int -> Bw
   | a, ret =>
     let bs : List Int :=
-      if a.ty == 4 && isWordTy ret then [4] ++ natMagnitudeTyW ++ a.bs ++ magnitudeNatWordBound (wordWidth ret)
+      if a.ty == 4 && ret == 12 then natToW64 a.bs
+      else if a.ty == 12 && ret == 4 then w64ToNat a.bs
+      else if a.ty == 12 && ret != 12 then [72] ++ a.bs ++ litW64 (if ret == 9 then [255] else if ret == 10 then [255, 255] else [255, 255, 255, 255])
+      else if ret == 12 then a.bs
+      else if a.ty == 4 && isWordTy ret then [4] ++ natMagnitudeTyW ++ a.bs ++ magnitudeNatWordBound (wordWidth ret)
       else if ret == 4 then magnitudeMetadataNatW a.bs
       else if isWordTy ret && wordWidth a.ty > wordWidth ret then [11] ++ a.bs ++ litI (wordModulus ret)
       else a.bs;
@@ -12905,6 +13822,21 @@ def wordConvert : Bw -> Int -> Bw
 def wordArgsW : List (List Int) -> List Int
   | [] => [0]
   | a :: rest => [1] ++ magnitudeMetadataNatW a ++ wordArgsW rest
+
+def wordResidueW (ty : Int) (value : List Int) : List Int :=
+  [11] ++ value ++ litI (wordModulus ty)
+
+-- Lean's UInt32.mul is modulo 2^32. Signed representatives of both
+-- operands are congruent and their product fits in the wire's signed i64.
+def wordSigned32W (value : List Int) : List Int :=
+  let half : List Int := litI 2147483648;
+  [7] ++ wordResidueW 11 ([6] ++ wordResidueW 11 value ++ half) ++ half
+
+def wordArithW (ty op : Int) (a b : List Int) : List Int :=
+  let prim : Int := if op == 1 then 6 else if op == 2 then 7 else 8;
+  if ty == 11 && op == 3 then
+    wordResidueW ty ([prim] ++ wordSigned32W a ++ wordSigned32W b)
+  else wordResidueW ty ([prim] ++ wordResidueW ty a ++ wordResidueW ty b)
 
 
 -- Lean 4.14 pure Char.ofNat Unicode equation (SEM-ALIGN §6); no general inliner.
@@ -13083,8 +14015,7 @@ partial def lowBase : St -> List Int -> List Fn -> List Int -> Int -> Int -> Bw
                   let w : Bw := lowArgs st hd fs ctx [] [] f.usesA kx;
                   if w.err != 0 then w
                   else
-                    let modIx : Int := fn0 + nPreOf hd;
-                    let callBs : List Int := [52] ++ leb modIx ++ w.bs;
+                    let callBs : List Int := callIxW st hd f fn0 ++ w.bs;
                     if f.resA == 0 then bwOk 0 w.pre w.ctx w.moved callBs f.ret
                     else
                       let pre1 : List Int := w.pre ++ [4] ++ wrapResTy hd f.ret ++ callBs;
@@ -13124,8 +14055,7 @@ partial def lowBase : St -> List Int -> List Fn -> List Int -> Int -> Int -> Bw
                           let w : Bw := lowArgs st hd fs ctx [] [] f.usesA kx;
                           if w.err != 0 then w
                           else
-                            let modIx : Int := fn2 + nPreOf hd;
-                            let callBs : List Int := [52] ++ leb modIx ++ w.bs;
+                            let callBs : List Int := callIxW st hd f fn2 ++ w.bs;
                             if f.resA == 0 then
                               bwOk 0 w.pre w.ctx w.moved ([35] ++ rt ++ leb k ++ callBs) fty
                             else
@@ -13176,6 +14106,7 @@ partial def lowBase : St -> List Int -> List Fn -> List Int -> Int -> Int -> Bw
           let ty : Int := if fd 0 st id 1 < 0 then 6 else if isWordTy exp then exp else if exp == 1 then 1 else 4;
           let wire : List Int := if ty == 4 then natMagnitudeLiteralWire (numeralMagnitude st id)
             else if ty == 1 then intMagnitudeLiteralWire false (numeralMagnitude st id)
+            else if ty == 12 then litW64 (numeralMagnitude st id)
             else litI (if isWordTy ty then fd 0 st id 3 % wordModulus ty else fd 0 st id 3);
           bwOk 0 [] ctx 0 wire ty
       else if t == 3 then
@@ -13273,9 +14204,8 @@ partial def lowBase : St -> List Int -> List Fn -> List Int -> Int -> Int -> Bw
               let w : Bw := lowArgs st hd fs ctx args f.ps f.usesA kx;
               if w.err != 0 then w
               else
-                let modIx : Int := ix + nPreOf hd;
                 let folded : Int := if fd 0 st fn 3 != -9 && look st ctx na nb < 0 && lenI args == 1 && closedCharWrapper st hd fs f then closedCharLiteral st hd (nthI args 0) else -1;
-                let callBs : List Int := if folded >= 0 then litI folded else [52] ++ leb modIx ++ w.bs;
+                let callBs : List Int := if folded >= 0 then litI folded else callIxW st hd f ix ++ w.bs;
                 if f.resA == 0 then
                   bwOk 0 w.pre w.ctx w.moved callBs f.ret
                 else
@@ -13289,8 +14219,9 @@ partial def lowBase : St -> List Int -> List Fn -> List Int -> Int -> Int -> Bw
           let ix : Int := wordHelperIx st fs 10;
           let u : Bw := low st hd fs ctx (fd 0 st id 2) ty;
           if u.err != 0 then u
+          else if ty == 12 then bwOk 0 u.pre u.ctx u.moved ([75] ++ u.bs) 12
           else if !(isWordTy ty) || ix < 0 then bwErr 0 15
-          else bwOk 0 u.pre u.ctx u.moved ([4] ++ natMagnitudeTyW ++ [52] ++ leb (ix + nPreOf hd) ++ wordArgsW [litI (wordModulus ty), u.bs] ++ magnitudeNatWordBound (wordWidth ty)) ty
+          else bwOk 0 u.pre u.ctx u.moved ([4] ++ natMagnitudeTyW ++ callIxW st hd (nthFn fs (Int.toNat ix)) ix ++ wordArgsW [litI (wordModulus ty), u.bs] ++ magnitudeNatWordBound (wordWidth ty)) ty
         else if fd 0 st id 1 == 2 then
           let u : Bw := low st hd fs ctx (fd 0 st id 2) 2;
           if u.err != 0 then u
@@ -13657,10 +14588,11 @@ partial def lowMx : St -> List Int -> List Fn -> Mx -> List Int -> Int -> Bw
               let tw : List Int := tyW hd ty;
               if hasTyErr 400 tw then bwErr 0 9
               else
-                let z : Bw := lowMx st hd fs zmx (-1 :: -1 :: ty :: ctx) ret;
+                -- Also shift the inherited refinement aliases for the new bindings.
+                let z : Bw := lowMx st hd fs zmx (-1 :: -1 :: ty :: shiftTrailer ctx 1) ret;
                 if z.err != 0 then z
                 else
-                  let sb : Bw := lowMx st hd fs smx (-1 :: -1 :: 4 :: (-1 :: -1 :: ty :: ctx)) ret;
+                  let sb : Bw := lowMx st hd fs smx (-1 :: -1 :: 4 :: (-1 :: -1 :: ty :: shiftTrailer ctx 2)) ret;
                   if sb.err != 0 then sb
                   else
                     let tst : List Int := magnitudeNatZeroW (varB 0);
@@ -13685,10 +14617,10 @@ partial def lowMx : St -> List Int -> List Fn -> Mx -> List Int -> Int -> Bw
             let ew : List Int := tyW hd elem;
             if hasTyErr 400 tw || hasTyErr 400 ew then bwErr 0 9
             else
-              let nb : Bw := lowMx st hd fs nmx (-1 :: -1 :: ty :: ctx) ret;
+              let nb : Bw := lowMx st hd fs nmx (-1 :: -1 :: ty :: shiftTrailer ctx 1) ret;
               if nb.err != 0 then nb
               else
-                let cb : Bw := lowMx st hd fs cmx (-1 :: -1 :: ty :: (-1 :: -1 :: elem :: (-1 :: -1 :: ty :: ctx))) ret;
+                let cb : Bw := lowMx st hd fs cmx (-1 :: -1 :: ty :: (-1 :: -1 :: elem :: (-1 :: -1 :: ty :: shiftTrailer ctx 3))) ret;
                 if cb.err != 0 then cb
                 else
                   let tst : List Int := [14, 0] ++ ([24] ++ tw ++ [3, 0]) ++ litI 0;
@@ -13868,7 +14800,9 @@ partial def lowHeapArgs : St -> List Int -> List Fn -> List Int -> List Int -> I
         let ctx1 : List Int := -1 :: -1 :: w.ty :: shiftTrailer w.ctx 1;
         let r : RecFlds := lowHeapArgs st hd fs ctx1 args ci (j + 1);
         if r.err != 0 then r
-        else { err := 0, pre := w.pre ++ [4] ++ tyW hd w.ty ++ w.bs ++ r.pre, ctx := r.ctx, moved := w.moved + 1 + r.moved, ks := slot :: r.ks, bs := varB r.moved :: r.bs : RecFlds }
+        else
+          let value : List Int := if ty == 11 then wordResidueW 11 w.bs else w.bs;
+          { err := 0, pre := w.pre ++ [4] ++ tyW hd w.ty ++ value ++ r.pre, ctx := r.ctx, moved := w.moved + 1 + r.moved, ks := slot :: r.ks, bs := varB r.moved :: r.bs : RecFlds }
 
 partial def lowArgs : St -> List Int -> List Fn -> List Int -> List Int -> List Int -> Int -> Int -> Bw
 
@@ -13958,6 +14892,10 @@ partial def lowPrim : St -> List Int -> List Fn -> List Int -> Int -> Int -> Bw
       let elem : Int := if isListTy 0 ret then elemTy 0 ret else 0;
       if !(ListReplicateNF.admit { arguments := lenI (getArgs st id), countType := 4, element := elem }) then bwErr 0 6
       else lowContainerArgs st hd fs ctx (getArgs st id) [4, elem] 31 ret ret (-1) []
+    else if callNamed st id "decide" && fd 0 st fn 3 != -9 &&
+      look st ctx (fd 0 st fn 1) (fd 0 st fn 2) < 0 && fnIx st fs (fd 0 st fn 1) (fd 0 st fn 2) < 0 then
+      -- Lean 4.14 Init/Prelude.lean Decidable.decide: a proposition here is its Bool test.
+      low st hd fs ctx (argAt st id 0) 2
     else if callNamed st id "Int.toNat" then
       let x : Bw := low st hd fs ctx (argAt st id 0) 1;
       if x.err != 0 then x
@@ -13992,7 +14930,7 @@ partial def lowBin : St -> List Int -> List Fn -> List Int -> Int -> Int -> Int 
     let base : Int := op0 % 100;
     let hint : Int := if isWordTy (op0 / 100) then op0 / 100 else 0;
     let op : Int := if base == 16 then 6 else if base == 17 then 9 else if base == 18 then 10 else base;
-    if wordHelper hint op > 0 then lowWordBin st hd fs ctx hint op l r
+    if wordBinAllowed hint op then lowWordBin st hd fs ctx hint op l r
     else if op == 11 || op == 12 then
       let a : Bw := low st hd fs ctx l 2;
       if a.err != 0 then a
@@ -14138,6 +15076,8 @@ partial def lowBin : St -> List Int -> List Fn -> List Int -> Int -> Int -> Int 
           let resBs : List Int :=
             if a.ty == 4 || a.ty == 5 then magnitudeNatOrderW op aBs b.bs
             else if a.ty == 1 then magnitudeIntOrderW op aBs b.bs
+            else if a.ty == 12 then
+              (if op == 7 then [70] ++ aBs ++ b.bs else if op == 8 then [70] ++ b.bs ++ aBs else if op == 9 then [71] ++ aBs ++ b.bs else [71] ++ b.bs ++ aBs)
             else if op == 7 then [12] ++ aBs ++ b.bs
             else if op == 8 then [12] ++ b.bs ++ aBs
             else if op == 9 then [17, 12] ++ b.bs ++ aBs
@@ -14181,16 +15121,41 @@ partial def lowBin : St -> List Int -> List Fn -> List Int -> Int -> Int -> Int 
         else lowArith st hd fs ctx op l r exp a b
     else bwErr 0 6
 
+-- UINT64-0: a binary operator of the 64-bit word is one wire tag (docs/EMITTER.md, W row): + - * / % to 65 .. 69,
+-- &&& ||| ^^^ to 72 .. 74, <<< >>> to 76 77. The evaluation order and the kept left operand are those of lowWordBin.
+partial def lowW64Bin : St -> List Int -> List Fn -> List Int -> Int -> Int -> Int -> Bw
+  | st, hd, fs, ctx, op, l, r =>
+    let tag : Int :=
+      if op == 1 then 65 else if op == 2 then 66 else if op == 3 then 67 else if op == 4 then 68
+      else if op == 15 then 69 else if op == 19 then 72 else if op == 20 then 73 else if op == 21 then 74
+      else if op == 22 then 76 else 77;
+    let a : Bw := low st hd fs ctx l 12;
+    if a.err != 0 then a
+    else
+      let keep : Bool := a.moved != 0;
+      let nextCtx : List Int := if keep then -1 :: -1 :: a.ty :: shiftTrailer a.ctx 1 else a.ctx;
+      let b : Bw := low st hd fs nextCtx r 12;
+      if b.err != 0 then b
+      else
+        let aBs : List Int :=
+          if keep then varB b.moved
+          else if b.moved == 0 then a.bs
+          else (low st hd fs b.ctx l 12).bs;
+        let saved : List Int := if keep then [4] ++ tyW hd a.ty ++ a.bs else [];
+        bwOk 0 (a.pre ++ saved ++ b.pre) b.ctx (a.moved + (if keep then 1 else 0) + b.moved) ([tag] ++ aBs ++ b.bs) 12
+
 partial def lowWordBin : St -> List Int -> List Fn -> List Int -> Int -> Int -> Int -> Int -> Bw
   | st, hd, fs, ctx, ty, op, l, r =>
+    if ty == 12 then lowW64Bin st hd fs ctx op l r else
     let h : Int := wordHelper ty op;
-    let ix : Int := wordHelperIx st fs h;
-    if h == 0 || ix < 0 then bwErr 0 15
+    let scalar : Bool := wordScalarOp ty op;
+    let ix : Int := if scalar then -1 else wordHelperIx st fs h;
+    if !scalar && (h == 0 || ix < 0) then bwErr 0 15
     else
       let a : Bw := low st hd fs ctx l ty;
       if a.err != 0 then a
       else
-        let keep : Bool := a.moved != 0;
+        let keep : Bool := a.moved != 0 || op == 15;
         let nextCtx : List Int := if keep then -1 :: -1 :: a.ty :: shiftTrailer a.ctx 1 else a.ctx;
         let b : Bw := low st hd fs nextCtx r ty;
         if b.err != 0 then b
@@ -14199,17 +15164,31 @@ partial def lowWordBin : St -> List Int -> List Fn -> List Int -> Int -> Int -> 
             if keep then varB b.moved
             else if b.moved == 0 then a.bs
             else (low st hd fs b.ctx l ty).bs;
-          let saved : List Int := if keep then [4] ++ tyW hd a.ty ++ a.bs else [];
-          let m : List Int := litI (wordModulus ty);
-          let w : List Int := litI (wordWidth ty);
-          let args : List (List Int) :=
-            if op == 1 then [m, aBs, b.bs]
-            else if op == 2 then [m, aBs, [7] ++ m ++ [11] ++ b.bs ++ m]
-            else if h == 2 then [m, aBs, b.bs]
-            else if h == 7 then [w, aBs, b.bs]
-            else if h == 9 then [m, w, aBs, b.bs]
-            else [aBs, b.bs];
-          bwOk 0 (a.pre ++ saved ++ b.pre) b.ctx (a.moved + (if keep then 1 else 0) + b.moved) ([4] ++ natMagnitudeTyW ++ [52] ++ leb (ix + nPreOf hd) ++ wordArgsW args ++ magnitudeNatWordBound (wordWidth ty)) ty
+          let saved : List Int :=
+            if keep then [4] ++ tyW hd a.ty ++ (if op == 15 then wordResidueW ty a.bs else a.bs)
+            else [];
+          let bs : List Int :=
+            if op == 15 then
+              -- BitVec.umod_zero returns the dividend. Bind each operand once.
+              let dividend : List Int := varB (b.moved + 1);
+              [4,0] ++ wordResidueW ty b.bs ++
+                [5,14,0] ++ varB 0 ++ litI 0 ++ dividend ++ [11] ++ dividend ++ varB 0
+            else if scalar then wordArithW ty op aBs b.bs
+            else
+              let m : List Int := litI (wordModulus ty);
+              let w : List Int := litI (wordWidth ty);
+              let args : List (List Int) :=
+                if h == 7 then [w, aBs, b.bs]
+                else if h == 9 then [m, w, aBs, b.bs]
+                else [aBs, b.bs];
+              [4] ++ natMagnitudeTyW ++ [52] ++ leb (ix + nPreOf hd) ++
+                wordArgsW args ++ magnitudeNatWordBound (wordWidth ty);
+          -- A modulus whose operands bind nothing keeps the dividend binder inside the expression (no hoisted binder),
+          -- so the arms of a sum match stay unmoved (a hoisted one made the arms disagree on the arena wrapper).
+          if op == 15 && a.moved == 0 && b.moved == 0 then
+            bwOk 0 a.pre a.ctx 0 ([4] ++ tyW hd a.ty ++ wordResidueW ty a.bs ++ bs) ty
+          else
+            bwOk 0 (a.pre ++ saved ++ b.pre) b.ctx (a.moved + (if keep then 1 else 0) + b.moved) bs ty
 
 partial def lowArith : St -> List Int -> List Fn -> List Int -> Int -> Int -> Int -> Int -> Bw -> Bw -> Bw
   | st, hd, fs, ctx, op, l, r, exp, a, b =>
@@ -14340,7 +15319,8 @@ partial def lowRecArenaFlds : St -> List Int -> List Fn -> List Int -> Int -> Na
                 else if r.moved == 0 then w1.bs
                 else (low st hd fs r.ctx eid fty).bs;
               let saved : List Int := if keep then [4] ++ tyW hd w1.ty ++ w1.bs else [];
-              { err := 0, pre := w1.pre ++ saved ++ r.pre, ctx := r.ctx, moved := w1.moved + (if keep then 1 else 0) + r.moved, ks := ks :: r.ks, bs := wBs :: r.bs : RecFlds }
+              let value : List Int := if fty == 11 then wordResidueW 11 wBs else wBs;
+              { err := 0, pre := w1.pre ++ saved ++ r.pre, ctx := r.ctx, moved := w1.moved + (if keep then 1 else 0) + r.moved, ks := ks :: r.ks, bs := value :: r.bs : RecFlds }
 
 partial def lowRec : St -> List Int -> List Fn -> List Int -> Int -> Nat -> Nat -> Int -> Bw
 
@@ -14587,7 +15567,9 @@ def checkPosParsed : Nat -> St -> Int
   | n + 1, st => checkPosParsed n st
 
 def checkSrcPos : Nat -> List Int -> Int
-  | 0, bs => checkPosParsed 0 (parseSrc 0 bs)
+  | 0, bs =>
+    let st : St := parseSrc 0 bs;
+    specPos st (checkPosParsed 0 st)
   | n + 1, bs => checkSrcPos n bs
 
 -- Body-stage refusal position: the first def whose body fails to lower
@@ -14745,6 +15727,7 @@ structure EmitResult where
   pos : Int
   stage : Nat
   bytes : List Int
+  deriving Inhabited
 
 -- One body per used arithmetic/comparison/conversion/node-packing operation, after the source table.
 -- Existing pair/let binding evaluates operands once. The template environment
@@ -15047,8 +16030,1267 @@ def emitResultParsedB : Nat -> Int -> St -> EmitResult
                                   bytes := [82, 83, 67, 77, 1] ++ leb totalMods ++ sigBytes ++ arithmeticSigs pk arithmetic ++ preBodsW pk nPre linked.bs : EmitResult }
   | n + 1, bud, st => emitResultParsedB n bud st
 
+-- ======================= MODULE SETS (hole 7, i1-i3) =======================
+-- rsdc reads a module-set blob ("RMOD1"), resolves each module's header,
+-- compiles it against the interfaces of its imports alone, and links the
+-- objects into an RSCM image. Spec: semantics/Module/Spec.rsd. Object
+-- relocation is a single marker class: [52] ++ [-700044] ++ leb len ++
+-- qualified-name bytes, spliced to `leb (4 + global index)` at link; the
+-- -12 flag cell on pk pins the nPre=4 handle conventions, and -600XXX
+-- arithmetic keys stay inline for the existing arithmeticLink pass.
+
+partial def unlebGo : Nat -> List Int -> Nat -> Int -> Int -> List Int
+  | 0, _, _, _, _ => []
+  | k + 1, bs, i, acc, m =>
+    match bs with
+    | [] => []
+    | b :: rest =>
+      let a2 : Int := acc + (b % 128) * m;
+      if b < 128 then [a2, Int.ofNat i + 1] else unlebGo k rest (i + 1) a2 (m * 128)
+
+def unleb : List Int -> Nat -> List Int
+  | bs, i => unlebGo 10 (dropI bs i) i 0 1
+
+-- artifact q inside the compiler: a position-sensitive byte fold, identical
+-- in both front ends (single accumulator mod 2^31-1, emitted as leb).
+def qFold : List Int -> Int -> Int
+  | [], h => h
+  | b :: rest, h => qFold rest ((h * 131 + b) % 2147483647)
+
+def q8 : List Int -> List Int
+  | bs => leb (qFold bs 7)
+
+-- Module header scan: comments (-- and nested /- -/), `prelude`,
+-- `import M[.N]*` and `import runtime M` before any content line.
+def kwImport : List Int := [105, 109, 112, 111, 114, 116]
+def kwRuntime : List Int := [114, 117, 110, 116, 105, 109, 101]
+def kwPrelude : List Int := [112, 114, 101, 108, 117, 100, 101]
+
+def hdrSp : Int -> Bool
+  | b => b == 32 || b == 9 || b == 13
+
+def hdrWsB : Int -> Bool
+  | b => hdrSp b || b == 10
+
+def hdrIdent : Int -> Bool
+  | b => (b >= 97 && b <= 122) || (b >= 65 && b <= 90) || (b >= 48 && b <= 57) || b == 95 || b == 39
+
+partial def hdrNl : Nat -> List Int -> Nat -> Nat
+  | 0, _, i => i
+  | n + 1, bs, i =>
+    if i >= lenI bs || nthI bs i == 10 then i else hdrNl n bs (i + 1)
+
+partial def hdrBlock : Nat -> List Int -> Nat -> Nat -> Nat
+  | 0, _, i, _ => i
+  | n + 1, bs, i, depth =>
+    if i >= lenI bs then i
+    else
+      let b : Int := nthI bs i;
+      let c : Int := nthI bs (i + 1);
+      if b == 47 && c == 45 then hdrBlock n bs (i + 2) (depth + 1)
+      else if b == 45 && c == 47 then (if depth <= 1 then i + 2 else hdrBlock n bs (i + 2) (depth - 1))
+      else hdrBlock n bs (i + 1) depth
+
+partial def hdrSkip : Nat -> List Int -> Nat -> Nat
+  | 0, _, i => i
+  | n + 1, bs, i =>
+    if i >= lenI bs then i
+    else
+      let b : Int := nthI bs i;
+      let c : Int := nthI bs (i + 1);
+      if hdrWsB b then hdrSkip n bs (i + 1)
+      else if b == 45 && c == 45 then hdrSkip n bs (hdrNl n bs i)
+      else if b == 47 && c == 45 then hdrSkip n bs (hdrBlock n bs (i + 2) 1)
+      else i
+
+partial def hdrSkipLn : Nat -> List Int -> Nat -> Nat
+  | 0, _, i => i
+  | n + 1, bs, i =>
+    if i >= lenI bs then i
+    else
+      let b : Int := nthI bs i;
+      let c : Int := nthI bs (i + 1);
+      if b == 10 then i
+      else if hdrSp b then hdrSkipLn n bs (i + 1)
+      else if b == 45 && c == 45 then hdrSkipLn n bs (hdrNl n bs i)
+      else if b == 47 && c == 45 then hdrSkipLn n bs (hdrBlock n bs (i + 2) 1)
+      else i
+
+def hdrEolOk : List Int -> Nat -> Bool
+  | bs, i =>
+    let j : Nat := hdrSkipLn (lenI bs) bs i;
+    j >= lenI bs || nthI bs j == 10
+
+partial def hdrWord : Nat -> List Int -> Nat -> List Int -> List Int
+  | 0, _, _, acc => revI [] acc
+  | n + 1, bs, i, acc =>
+    if i >= lenI bs then revI [] acc
+    else
+      let b : Int := nthI bs i;
+      if hdrIdent b then hdrWord n bs (i + 1) (b :: acc) else revI [] acc
+
+structure HdrName where
+  nm : List Int
+  nx : Nat
+  deriving Inhabited
+
+partial def hdrNameGo : Nat -> List Int -> Nat -> List Int -> HdrName
+  | 0, _, i, acc => { nm := acc, nx := i : HdrName }
+  | n + 1, bs, i, acc =>
+    let w : List Int := hdrWord (lenI bs) bs i [];
+    let i2 : Nat := i + lenI w;
+    if lenI w == 0 then { nm := acc, nx := i : HdrName }
+    else if nthI bs i2 == 46 then hdrNameGo n bs (i2 + 1) (acc ++ w ++ [46])
+    else { nm := acc ++ w, nx := i2 : HdrName }
+
+structure ModHdr where
+  imports : List (List Int)
+  runtime : List (List Int)
+  bodyAt : Nat
+  err : Int
+  deriving Inhabited
+
+partial def hdrGo : Nat -> List Int -> Nat -> Bool -> List (List Int) -> List (List Int) -> ModHdr
+  | 0, _, i, _, im, rt => { imports := im, runtime := rt, bodyAt := i, err := 0 : ModHdr }
+  | n + 1, bs, i, pre, im, rt =>
+    let j : Nat := hdrSkip (lenI bs) bs i;
+    if j >= lenI bs then { imports := im, runtime := rt, bodyAt := j, err := 0 : ModHdr }
+    else
+      let w : List Int := hdrWord (lenI bs) bs j [];
+      let e : Nat := j + lenI w;
+      if eqListI w kwPrelude then
+        if pre || lenLL im != 0 || lenLL rt != 0 || !(hdrEolOk bs e) then
+          { imports := im, runtime := rt, bodyAt := j, err := 20 : ModHdr }
+        else hdrGo n bs e true im rt
+      else if eqListI w kwImport then
+        let k : Nat := hdrSkipLn (lenI bs) bs e;
+        let w2 : List Int := hdrWord (lenI bs) bs k [];
+        let isRt : Bool := eqListI w2 kwRuntime;
+        let k2 : Nat := if isRt then hdrSkipLn (lenI bs) bs (k + lenI w2) else k;
+        let hn : HdrName := hdrNameGo (lenI bs) bs k2 [];
+        if lenI hn.nm == 0 || !(hdrEolOk bs hn.nx) then
+          { imports := im, runtime := rt, bodyAt := j, err := 20 : ModHdr }
+        else hdrGo n bs hn.nx false (if isRt then im else im ++ [hn.nm]) (if isRt then rt ++ [hn.nm] else rt)
+      else { imports := im, runtime := rt, bodyAt := j, err := 0 : ModHdr }
+
+def parseHeader : List Int -> ModHdr
+  | bs => hdrGo (lenI bs) bs 0 false [] []
+
+structure ModSrc where
+  nm : List Int
+  src : List Int
+  cif : List Int    -- cached interface, [] when absent
+  cob : List Int    -- cached object, [] when absent
+  hdr : ModHdr
+  deriving Inhabited
+
+def nthMod : List ModSrc -> Nat -> ModSrc
+  | m :: _, 0 => m
+  | _ :: ms, k + 1 => nthMod ms k
+  | [], _ => { nm := [], src := [], cif := [], cob := [], hdr := { imports := [], runtime := [], bodyAt := 0, err := 0 : ModHdr } : ModSrc }
+
+def revM : List ModSrc -> List ModSrc -> List ModSrc
+  | acc, [] => acc
+  | acc, x :: xs => revM (x :: acc) xs
+
+def lenMod : List ModSrc -> Nat
+  | [] => 0
+  | _ :: xs => lenMod xs + 1
+
+def revLL : List (List Int) -> List (List Int) -> List (List Int)
+  | acc, [] => acc
+  | acc, x :: xs => revLL (x :: acc) xs
+
+def lenSig : List Sig -> Nat
+  | [] => 0
+  | _ :: xs => lenSig xs + 1
+
+def takeSig : List Sig -> Nat -> List Sig
+  | _, 0 => []
+  | [], _ => []
+  | x :: xs, k + 1 => x :: takeSig xs k
+
+-- cached artifact cells carry emitted value streams, which may hold
+-- negative marker cells ([52 -700044], -600XXX arith keys), -1 ctx
+-- sentinels, and budget fields (fuelBudget = 2^61). The cell bytes
+-- encode each value: b in 0..254 as one byte; the byte 255 as
+-- [255, 0]; any v >= 256 as [255, 1] ++ leb v; any v < 0 as
+-- [255, 2] ++ leb (0 - v).
+partial def decSleb : Nat -> List Int -> List Int -> List Int
+  | 0, _, acc => revI [] acc
+  | _, [], acc => revI [] acc
+  | n + 1, 255 :: 0 :: rest, acc => decSleb n rest (255 :: acc)
+  | n + 1, 255 :: 1 :: rest, acc =>
+    let u : List Int := unleb rest 0;
+    if lenI u != 2 then revI [] acc
+    else decSleb n (dropI rest (Int.toNat (nthI u 1))) (nthI u 0 :: acc)
+  | n + 1, 255 :: 2 :: rest, acc =>
+    let u : List Int := unleb rest 0;
+    if lenI u != 2 then revI [] acc
+    else decSleb n (dropI rest (Int.toNat (nthI u 1))) ((0 - nthI u 0) :: acc)
+  | n + 1, 255 :: _ :: _, acc => revI [] acc
+  | n + 1, b :: rest, acc => decSleb n rest (b :: acc)
+
+-- one leb-length-prefixed cell off the front of a byte stream.
+structure CellR where
+  v : List Int
+  rest : List Int
+  ok : Bool
+  deriving Inhabited
+
+def rdCell : List Int -> CellR
+  | bs =>
+    let a : List Int := unleb bs 0;
+    if lenI a != 2 then { v := [], rest := [], ok := false : CellR }
+    else
+      let nl : Nat := Int.toNat (nthI a 0);
+      let i1 : Nat := Int.toNat (nthI a 1);
+      let v : List Int := takeI (dropI bs i1) nl;
+      if lenI v != nl then { v := [], rest := [], ok := false : CellR }
+      else { v := v, rest := dropI bs (i1 + nl), ok := true : CellR }
+
+partial def modSetGo : Nat -> List Int -> Nat -> List ModSrc -> List ModSrc
+  | 0, _, _, acc => revM [] acc
+  | k + 1, bs, n, acc =>
+    if lenMod acc >= n then revM [] acc
+    else
+      let nm : CellR := rdCell bs;
+      let src : CellR := rdCell nm.rest;
+      let ienc : CellR := rdCell src.rest;
+      let enc : CellR := rdCell ienc.rest;
+      if !(nm.ok && src.ok && ienc.ok && enc.ok) then []
+      else modSetGo k enc.rest n ({ nm := nm.v, src := src.v, cif := decSleb (lenI ienc.v) ienc.v [], cob := decSleb (lenI enc.v) enc.v [], hdr := parseHeader src.v : ModSrc } :: acc)
+
+def parseModSet : List Int -> List ModSrc
+  | bs =>
+    if takeI bs 5 != [82, 77, 79, 68, 49] then []
+    else
+      let c : List Int := unleb bs 5;
+      if lenI c != 2 then [] else modSetGo (lenI bs) (dropI bs (Int.toNat (nthI c 1))) (Int.toNat (nthI c 0)) []
+
+-- import graph: DFS post-order, refusal on unknown name, cycle, dup.
+def findModB : List ModSrc -> Nat -> List Int -> Int
+  | [], _, _ => -1
+  | m :: ms, i, nm => if eqListI m.nm nm then Int.ofNat i else findModB ms (i + 1) nm
+
+def dupMods : List ModSrc -> Bool
+  | [] => false
+  | m :: ms => findModB ms 0 m.nm >= 0 || dupMods ms
+
+def zeros : Nat -> List Int
+  | 0 => []
+  | n + 1 => 0 :: zeros n
+
+def setIx : List Int -> Nat -> Int -> List Int
+  | _ :: xs, 0, v => v :: xs
+  | x :: xs, k + 1, v => x :: setIx xs k v
+  | [], _, _ => []
+
+structure DfsS where
+  st : List Int
+  ord : List Int
+  err : Int
+  deriving Inhabited
+
+mutual
+partial def modVisit : Nat -> List ModSrc -> Nat -> DfsS -> DfsS
+  | 0, _, _, s => { st := s.st, ord := s.ord, err := if s.err == 0 then 21 else s.err : DfsS }
+  | n + 1, mods, i, s =>
+    let c : Int := nthI s.st i;
+    if s.err != 0 || c == 2 then s
+    else if c == 1 then { st := s.st, ord := s.ord, err := 22 : DfsS }
+    else
+      let m : ModSrc := nthMod mods i;
+      let s1 : DfsS := visitImps n mods (m.hdr.imports ++ m.hdr.runtime) ({ st := setIx s.st i 1, ord := s.ord, err := s.err : DfsS });
+      if s1.err != 0 then s1
+      else { st := setIx s1.st i 2, ord := s1.ord ++ [Int.ofNat i], err := 0 : DfsS }
+
+partial def visitImps : Nat -> List ModSrc -> List (List Int) -> DfsS -> DfsS
+  | _, _, [], s => s
+  | n, mods, nm :: rest, s =>
+    if s.err != 0 then s
+    else
+      let j : Int := findModB mods 0 nm;
+      if j < 0 then { st := s.st, ord := s.ord, err := 23 : DfsS }
+      else visitImps n mods rest (modVisit n mods (Int.toNat j) s)
+end
+
+partial def modOrderAll : Nat -> List ModSrc -> Nat -> DfsS -> DfsS
+  | fuel, mods, i, s =>
+    if i >= lenMod mods then s else modOrderAll fuel mods (i + 1) (modVisit fuel mods i s)
+
+def modOrder : List ModSrc -> DfsS
+  | mods => modOrderAll (lenMod mods + 1) mods 0 ({ st := zeros (lenMod mods), ord := [], err := 0 : DfsS })
+
+-- name-indexed head lookup used while resolving imported tyrefs
+partial def findHeadIxB : St -> List Int -> Nat -> List Int -> Int
+  | st, hs, i, nm =>
+    if i >= lenI hs / 4 then -1
+    else if eqListI (spanBytes 0 st (nthI hs (Int.toNat i * 4)) (nthI hs (Int.toNat i * 4 + 1))) nm then Int.ofNat i
+    else findHeadIxB st hs (i + 1) nm
+
+def headNameB : St -> List Int -> Int -> List Int
+  | st, hs, i => spanBytes 0 st (nthI hs (Int.toNat i * 4)) (nthI hs (Int.toNat i * 4 + 1))
+
+-- tyref: the typeBits encoding with head leaves carrying qualified names
+-- (tag 9/10 ++ leb len ++ name) instead of positional indices.
+partial def tyrefW : St -> List Int -> Int -> List Int
+  | st, hs, c =>
+    if c >= 1 && c <= 8 then [c]
+    else if isWordTy c then [15, c - 9]
+    else if c >= 100 && c < 1000 then
+      let nm : List Int := headNameB st hs (c - 100);
+      9 :: leb (Int.ofNat (lenI nm)) ++ nm
+    else if c >= 30000 && c < 31000 then
+      let nm : List Int := headNameB st hs (c - 30000);
+      10 :: leb (Int.ofNat (lenI nm)) ++ nm
+    else if c == 2000 then [11]
+    else if isListTy 0 c then 12 :: tyrefW st hs (elemTy 0 c)
+    else if isOptionTy 0 c then 13 :: tyrefW st hs (elemTy 0 c)
+    else if isProductTy 0 c then 14 :: tyrefW st hs (productLeft 0 c) ++ tyrefW st hs (productRight 0 c)
+    else if isBasicTy 0 c then
+      let k : Int := basicKind 0 c;
+      if k == 4 then [15, 3, 4] ++ tyrefW st hs (basicFirst 0 c)
+      else if k == 5 then [15, 3, 5] ++ tyrefW st hs (basicFirst 0 c) ++ tyrefW st hs (basicSecond 0 c)
+      else [15, 3, k]
+    else []
+
+structure TyRes where
+  ty : Int
+  rest : List Int
+  err : Int
+  deriving Inhabited
+
+partial def readTyRef : St -> List Int -> List Int -> TyRes
+  | _, _, [] => { ty := -2, rest := [], err := 25 : TyRes }
+  | st, hs, b :: bs =>
+    if b >= 1 && b <= 8 then { ty := b, rest := bs, err := 0 : TyRes }
+    else if b == 9 || b == 10 then
+      let u : List Int := unleb bs 0;
+      if lenI u != 2 then { ty := -2, rest := [], err := 25 : TyRes }
+      else
+        let nl : Nat := Int.toNat (nthI u 0);
+        let i1 : Nat := Int.toNat (nthI u 1);
+        let nm : List Int := takeI (dropI bs i1) nl;
+        let i : Int := findHeadIxB st hs 0 nm;
+        if lenI nm != nl || i < 0 then { ty := -2, rest := [], err := 25 : TyRes }
+        -- written without `decide`: the committed seed's front end (cut 7aec17aa) does not have it, and the seed must
+        -- compile this file (bootstrap/README.md). The same truth table.
+        else if (if nthI hs (Int.toNat i * 4 + 2) < 0 then b != 10 else b == 10) then { ty := -2, rest := [], err := 25 : TyRes }
+        else { ty := (if b == 9 then 100 else 30000) + i, rest := dropI bs (i1 + nl), err := 0 : TyRes }
+    else if b == 11 then { ty := 2000, rest := bs, err := 0 : TyRes }
+    else if b == 12 || b == 13 then
+      let r : TyRes := readTyRef st hs bs;
+      if r.err != 0 then r else { ty := if b == 12 then listTy 0 r.ty else optionTy 0 r.ty, rest := r.rest, err := 0 : TyRes }
+    else if b == 14 then
+      let l : TyRes := readTyRef st hs bs;
+      let r : TyRes := readTyRef st hs l.rest;
+      if l.err != 0 || r.err != 0 then { ty := -2, rest := [], err := 25 : TyRes }
+      else
+        let c : Int := productTy 0 l.ty r.ty;
+        { ty := c, rest := r.rest, err := if c < 0 then 25 else 0 : TyRes }
+    else if b == 15 then
+      let w : Int := nthI bs 0;
+      if lenI bs == 0 then { ty := -2, rest := [], err := 25 : TyRes }
+      else if w >= 0 && w <= 2 then { ty := w + 9, rest := dropI bs 1, err := 0 : TyRes }
+      else if w != 3 || lenI bs < 2 then { ty := -2, rest := [], err := 25 : TyRes }
+      else
+        let k : Int := nthI bs 1;
+        let body : List Int := dropI bs 2;
+        if k >= 1 && k <= 3 then { ty := basicTy 0 k [], rest := body, err := 0 : TyRes }
+        else if k == 4 then
+          let e : TyRes := readTyRef st hs body;
+          if e.err != 0 then e else { ty := basicTy 0 4 (typeBits e.ty), rest := e.rest, err := 0 : TyRes }
+        else if k == 5 then
+          let kv : TyRes := readTyRef st hs body;
+          let vv : TyRes := readTyRef st hs kv.rest;
+          if kv.err != 0 || vv.err != 0 then { ty := -2, rest := [], err := 25 : TyRes }
+          else { ty := basicTy 0 5 (typeBits kv.ty ++ typeBits vv.ty), rest := vv.rest, err := 0 : TyRes }
+        else { ty := -2, rest := [], err := 25 : TyRes }
+    else { ty := -2, rest := [], err := 25 : TyRes }
+
+-- ---------------- interface serialization ----------------
+-- IFACE 'RIF2':
+--   leb nHeads; per head: leb len+name, kind(0 struct|1 ind), leb nSub;
+--     then per head (same order): nSub members — struct field:
+--     leb len+name, tyref; inductive ctor: leb len+name, leb nArgs, tyref*
+--   leb nSigs;  per: leb len+name, leb nPs, tyref*, tyref, usesA, resA, scc, bud
+--   leb nAbs;   per: leb len+name, tyref
+-- head metas precede all member rows so a member tyref may name any head
+-- of this module, including ones declared after it (forward reference).
+
+def lebName : List Int -> List Int
+  | nm => leb (Int.ofNat (lenI nm)) ++ nm
+
+partial def ifaceFields : St -> List Int -> List Int -> Nat -> List Int
+  | _, _, [], _ => []
+  | st, hs, fa :: fb :: fc :: rest, i =>
+    lebName (spanBytes 0 st fa fb) ++ tyrefW st hs fc ++ ifaceFields st hs rest (i + 1)
+  | _, _, _, _ => []
+
+partial def ifaceArgs : St -> List Int -> List Int -> List Int
+  | _, _, [] => []
+  | st, hs, c :: rest => tyrefW st hs c ++ ifaceArgs st hs rest
+
+partial def ifaceCtors : St -> List Int -> List Int -> List Int -> Nat -> List Int
+  | _, _, _, [], _ => []
+  | st, hs, ia, ca :: cb :: hi :: ac :: fa :: rest, i =>
+    let args : List Int := takeI (dropI ia (Int.toNat fa)) (Int.toNat ac);
+    lebName (spanBytes 0 st ca cb) ++ leb ac ++ ifaceArgs st hs args ++ ifaceCtors st hs ia rest (i + 1)
+  | _, _, _, _, _ => []
+
+partial def ifaceMetas : St -> List Int -> List Int
+  | _, [] => []
+  | st, a :: b :: cnt :: _ :: rest =>
+    lebName (spanBytes 0 st a b) ++ [if cnt >= 0 then 0 else 1]
+      ++ leb (if cnt >= 0 then cnt else -1 - cnt) ++ ifaceMetas st rest
+  | _, _ => []
+
+partial def ifaceMems : St -> Env -> List Int -> List Int
+  | _, _, [] => []
+  | st, e, _ :: _ :: cnt :: first :: rest =>
+    (if cnt >= 0 then
+      ifaceFields st e.heads (takeI (dropI e.fields (Int.toNat first * 3)) (Int.toNat cnt * 3)) 0
+    else
+      ifaceCtors st e.heads e.iargs (takeI (dropI e.icts (Int.toNat first * 5)) (Int.toNat (-1 - cnt) * 5)) 0)
+      ++ ifaceMems st e rest
+  | _, _, _ => []
+
+partial def fnBySpan : St -> List Fn -> Int -> Int -> Fn
+  | _, [], _, _ => { na := -1, nb := -1, ps := [], ret := 0, node := -9, cals := [], usesA := 0, resA := 0, part := 0, bud := 0 : Fn }
+  | st, f :: fs, a, b => if spanSame 0 st a b f.na f.nb then f else fnBySpan st fs a b
+
+partial def ifaceSigs : St -> List Int -> List Fn -> List Sig -> List Int
+  | _, _, _, [] => []
+  | st, hs, fs, sg :: rest =>
+    let f : Fn := fnBySpan st fs sg.a sg.b;
+    lebName (spanBytes 0 st sg.a sg.b) ++ leb (Int.ofNat (lenI sg.ps)) ++ ifaceArgs st hs sg.ps
+      ++ tyrefW st hs sg.ret ++ [f.usesA, f.resA, if f.part != 0 then -1 else 0, f.bud]
+      ++ ifaceSigs st hs fs rest
+
+-- aliases carry a type AST node in abs; decode through decTy (sa=-1
+-- disables self-reference) and write the resolved code as a tyref.
+partial def ifaceAbs : St -> List Int -> List Int -> List Int
+  | _, _, [] => []
+  | st, hs, a :: b :: tn :: rest =>
+    let c : Int := decTy st hs (-1) (-1) 0 tn;
+    lebName (spanBytes 0 st a b) ++ tyrefW st hs c ++ ifaceAbs st hs rest
+  | _, _, _ => []
+
+def provCells : List (List Int) -> List Int
+  | [] => []
+  | q :: rest => lebName q ++ provCells rest
+
+def ifaceOf : St -> Env -> List Int -> List (List Int) -> List Int -> List Int -> List Fn -> List Sig -> List Int
+  | st, e, srcQ, prov, ownHeads, ownAbs, fs, ownSigs =>
+    [82, 73, 70, 50] ++ lebName srcQ ++ leb (Int.ofNat (lenLL prov)) ++ provCells prov
+      ++ leb (Int.ofNat (lenI ownHeads) / 4) ++ ifaceMetas st ownHeads ++ ifaceMems st e ownHeads
+      ++ leb (Int.ofNat (lenSig ownSigs)) ++ ifaceSigs st e.heads fs ownSigs
+      ++ leb (Int.ofNat (lenI ownAbs) / 3) ++ ifaceAbs st e.heads ownAbs
+
+-- ---------------- imported-env merge ----------------
+-- The seed carries everything an importer needs, in the same shapes the
+-- env fields use, so `walk` appends the module's own decls after them.
+
+structure ImpSeed where
+  heads : List Int
+  fields : List Int
+  icts : List Int
+  iargs : List Int
+  abs : List Int
+  scopeSigs : List Sig
+  scopeIcts : List Int
+  ctorSigs : List Sig
+  sigs : List Sig
+  phantoms : List Fn
+  deriving Inhabited
+
+def emptySeed : ImpSeed :=
+  { heads := [], fields := [], icts := [], iargs := [], abs := [],
+    scopeSigs := [], scopeIcts := [], ctorSigs := [], sigs := [], phantoms := [] : ImpSeed }
+
+structure Rd where
+  bs : List Int
+  rest : List Int  -- suffix of bs at the cursor; reads consume it, never re-index bs
+  deriving Inhabited
+
+structure ImpAcc where
+  st : St
+  sd : ImpSeed
+  r : Rd
+  err : Int
+  deriving Inhabited
+
+structure RI where
+  v : Int
+  r : Rd
+  deriving Inhabited
+
+structure RL where
+  v : List Int
+  r : Rd
+  deriving Inhabited
+
+def rdByte : Rd -> RI
+  | r => { v := nthI r.rest 0, r := { bs := r.bs, rest := dropI r.rest 1 : Rd } : RI }
+
+def rdLeb : Rd -> RI
+  | r =>
+    let u : List Int := unleb r.rest 0;
+    if lenI u != 2 then { v := -1, r := r : RI }
+    else { v := nthI u 0, r := { bs := r.bs, rest := dropI r.rest (Int.toNat (nthI u 1)) : Rd } : RI }
+
+def rdBytes : Rd -> RL
+  | r =>
+    let u : RI := rdLeb r;
+    let nl : Nat := Int.toNat u.v;
+    { v := takeI u.r.rest nl, r := { bs := r.bs, rest := dropI u.r.rest nl : Rd } : RL }
+
+-- a name read off an artifact becomes a synthetic ident; its span is the
+-- qualified-name bytes so every span lookup is uniform. The new state
+-- must be threaded back (the span lives in st.pool).
+structure SynR where
+  st : St
+  a : Int
+  b : Int
+  deriving Inhabited
+
+def synthName : St -> List Int -> SynR
+  | st, nm =>
+    let s2 : St := synthIdent 0 st nm;
+    { st := s2, a := fd 0 s2 s2.ret 1, b := fd 0 s2 s2.ret 2 : SynR }
+
+structure TyArgsR where
+  cs : List Int
+  r : Rd
+  err : Int
+  deriving Inhabited
+
+partial def rdTyRefN : St -> List Int -> Rd -> Nat -> TyArgsR
+  | _, _, r, 0 => { cs := [], r := r, err := 0 : TyArgsR }
+  | st, hs, r, n + 1 =>
+    let t : TyRes := readTyRef st hs r.rest;
+    if t.err != 0 then { cs := [], r := r, err := 25 : TyArgsR }
+    else
+      let rest : TyArgsR := rdTyRefN st hs ({ bs := r.bs, rest := t.rest : Rd }) n;
+      { cs := t.ty :: rest.cs, r := rest.r, err := rest.err : TyArgsR }
+
+-- The merge walks each iface byte stream once. ImpAcc carries the cursor
+-- (r), the evolving module St (synthetic spans), the seed, and err.
+def accWith : ImpAcc -> St -> Rd -> ImpSeed -> Int -> ImpAcc
+  | _, st, r, sd, err => { st := st, r := r, sd := sd, err := err : ImpAcc }
+
+def sdUp : ImpSeed -> List Int -> List Int -> List Int -> List Int -> List Int -> List Sig -> List Int -> List Sig -> List Sig -> List Fn -> ImpSeed
+  | _, heads, fields, icts, iargs, abs, ss, si, cs, sg, ph =>
+    { heads := heads, fields := fields, icts := icts, iargs := iargs, abs := abs,
+      scopeSigs := ss, scopeIcts := si, ctorSigs := cs, sigs := sg, phantoms := ph : ImpSeed }
+
+def accErr : ImpAcc -> Int -> ImpAcc
+  | acc, e => { st := acc.st, r := acc.r, sd := acc.sd, err := e : ImpAcc }
+
+-- field row: lebName + tyref -> fields += [a, b, code]
+def mergeFieldRow : ImpAcc -> ImpAcc
+  | acc =>
+    let nb : RL := rdBytes acc.r;
+    let sp : SynR := synthName acc.st nb.v;
+    let t : TyRes := readTyRef sp.st acc.sd.heads nb.r.rest;
+    if t.err != 0 then accErr acc 25
+    else
+      let sd : ImpSeed := acc.sd;
+      accWith acc sp.st ({ bs := nb.r.bs, rest := t.rest : Rd })
+        (sdUp sd sd.heads (sd.fields ++ [sp.a, sp.b, t.ty]) sd.icts sd.iargs sd.abs sd.scopeSigs sd.scopeIcts sd.ctorSigs sd.sigs sd.phantoms) 0
+
+partial def mergeFieldsN : ImpAcc -> Nat -> ImpAcc
+  | acc, 0 => acc
+  | acc, n + 1 => if acc.err != 0 then acc else mergeFieldsN (mergeFieldRow acc) n
+
+-- ctor row: lebName + leb nArgs + tyrefs -> ict + iargs + ctor sig + scope
+-- entries (sig ret=1 and ict head=-1). hi is the merged head index.
+def mergeCtorRow : ImpAcc -> Int -> ImpAcc
+  | acc, hi =>
+    let nb : RL := rdBytes acc.r;
+    let sp : SynR := synthName acc.st nb.v;
+    let ac : RI := rdLeb nb.r;
+    let ta : TyArgsR := rdTyRefN sp.st acc.sd.heads ac.r (Int.toNat ac.v);
+    let sd : ImpSeed := acc.sd;
+    if ac.v < 0 || ta.err != 0 then accErr acc 25
+    else
+      let fa : Int := Int.ofNat (lenI sd.iargs);
+      accWith acc sp.st ta.r
+        (sdUp sd sd.heads sd.fields (sd.icts ++ [sp.a, sp.b, hi, ac.v, fa]) (sd.iargs ++ ta.cs) sd.abs
+          (sd.scopeSigs ++ [{ a := sp.a, b := sp.b, ret := 1, ps := [] : Sig }])
+          (sd.scopeIcts ++ [sp.a, sp.b, -1, 0, 0])
+          (sd.ctorSigs ++ [{ a := sp.a, b := sp.b, ret := 30000 + hi, ps := ta.cs : Sig }])
+          sd.sigs sd.phantoms) 0
+
+partial def mergeCtorsN : ImpAcc -> Int -> Nat -> ImpAcc
+  | acc, _, 0 => acc
+  | acc, hi, n + 1 => if acc.err != 0 then acc else mergeCtorsN (mergeCtorRow acc hi) hi n
+
+-- head metas merge first (RIF2): every head lands in sd.heads before any
+-- member tyref is resolved, so a member may name a later head of the same
+-- module. fb/ib are the running bases this head's members will occupy.
+structure MetasR where
+  acc : ImpAcc
+  metas : List Int
+  deriving Inhabited
+
+partial def mergeMetasN : ImpAcc -> Int -> Int -> Nat -> MetasR
+  | acc, _, _, 0 => { acc := acc, metas := [] : MetasR }
+  | acc, fb, ib, n + 1 =>
+    if acc.err != 0 then { acc := acc, metas := [] : MetasR }
+    else
+      let nb : RL := rdBytes acc.r;
+      let sp : SynR := synthName acc.st nb.v;
+      let kd : RI := rdByte nb.r;
+      let ns : RI := rdLeb kd.r;
+      let sd : ImpSeed := acc.sd;
+      if ns.v < 0 then { acc := accErr acc 25, metas := [] : MetasR }
+      else
+        let mr : MetasR := mergeMetasN
+          (accWith acc sp.st ns.r
+            (sdUp sd (sd.heads ++ [sp.a, sp.b, if kd.v == 0 then ns.v else -1 - ns.v,
+                                    if kd.v == 0 then fb else ib])
+              sd.fields sd.icts sd.iargs sd.abs sd.scopeSigs sd.scopeIcts sd.ctorSigs sd.sigs sd.phantoms) 0)
+          (if kd.v == 0 then fb + ns.v else fb) (if kd.v == 0 then ib else ib + ns.v) n;
+        { acc := mr.acc, metas := kd.v :: ns.v :: mr.metas : MetasR }
+
+-- member rows decode in head order against the complete merged head table;
+-- gi is the merged-table index of the head whose members are being read.
+partial def mergeMemsN : ImpAcc -> List Int -> Int -> ImpAcc
+  | acc, [], _ => acc
+  | acc, kd :: ns :: rest, gi =>
+    if acc.err != 0 then acc
+    else if kd == 0 then mergeMemsN (mergeFieldsN acc (Int.toNat ns)) rest (gi + 1)
+    else mergeMemsN (mergeCtorsN acc gi (Int.toNat ns)) rest (gi + 1)
+  | acc, _, _ => accErr acc 25
+
+-- def-sig row: name + leb nPs + tyrefs + ret + usesA resA scc bud ->
+-- Sig for e2 and a phantom Fn for call emission.
+def mergeSigRow : ImpAcc -> ImpAcc
+  | acc =>
+    let nb : RL := rdBytes acc.r;
+    let sp : SynR := synthName acc.st nb.v;
+    let np : RI := rdLeb nb.r;
+    let ta : TyArgsR := rdTyRefN sp.st acc.sd.heads np.r (Int.toNat np.v);
+    let rt : TyRes := readTyRef sp.st acc.sd.heads ta.r.rest;
+    let sd : ImpSeed := acc.sd;
+    if np.v < 0 || ta.err != 0 || rt.err != 0 then accErr acc 25
+    else
+      let r2 : Rd := { bs := ta.r.bs, rest := rt.rest : Rd };
+      let ua : RI := rdByte r2;
+      let ra : RI := rdByte ua.r;
+      let sc : RI := rdByte ra.r;
+      let bd : RI := rdByte sc.r;
+      accWith acc sp.st bd.r
+        (sdUp sd sd.heads sd.fields sd.icts sd.iargs sd.abs sd.scopeSigs sd.scopeIcts sd.ctorSigs
+          (sd.sigs ++ [{ a := sp.a, b := sp.b, ret := rt.ty, ps := ta.cs : Sig }])
+          (sd.phantoms ++ [{ na := sp.a, nb := sp.b, ps := ta.cs, ret := rt.ty, node := -9,
+                             cals := [], usesA := ua.v, resA := ra.v,
+                             part := if sc.v != 0 then -1 else 0, bud := bd.v : Fn }])) 0
+
+partial def mergeSigsN : ImpAcc -> Nat -> ImpAcc
+  | acc, 0 => acc
+  | acc, n + 1 => if acc.err != 0 then acc else mergeSigsN (mergeSigRow acc) n
+
+-- alias row: name + tyref -> abs += [a, b, code-node(tag 56)]
+def mergeAbsRow : ImpAcc -> ImpAcc
+  | acc =>
+    let nb : RL := rdBytes acc.r;
+    let sp : SynR := synthName acc.st nb.v;
+    let t : TyRes := readTyRef sp.st acc.sd.heads nb.r.rest;
+    if t.err != 0 then accErr acc 25
+    else
+      let s2 : St := alloc 0 sp.st 56 t.ty 0 0;
+      let sd : ImpSeed := acc.sd;
+      accWith acc s2 ({ bs := nb.r.bs, rest := t.rest : Rd })
+        (sdUp sd sd.heads sd.fields sd.icts sd.iargs (sd.abs ++ [sp.a, sp.b, s2.ret]) sd.scopeSigs sd.scopeIcts sd.ctorSigs sd.sigs sd.phantoms) 0
+
+partial def mergeAbsN : ImpAcc -> Nat -> ImpAcc
+  | acc, 0 => acc
+  | acc, n + 1 => if acc.err != 0 then acc else mergeAbsN (mergeAbsRow acc) n
+
+-- provenance section (G2): every interface records the source q of the
+-- compile that produced it and the q of every interface it read. A present
+-- interface without this chain is a miss; a stale source q is refused.
+structure ProvV where
+  srcQ : List Int
+  err : Int
+  deriving Inhabited
+
+def rdProv : Rd -> ProvV
+  | r =>
+    let q1 : RL := rdBytes r;
+    let nq : RI := rdLeb q1.r;
+    if nq.v < 0 then { srcQ := [], err := 25 : ProvV }
+    else { srcQ := q1.v, err := 0 : ProvV }
+
+def ifaceProv : List Int -> ProvV
+  | raw =>
+    if takeI raw 4 != [82, 73, 70, 50] then { srcQ := [], err := 25 : ProvV }
+    else rdProv { bs := raw, rest := dropI raw 4 : Rd }
+
+partial def skipProv : Rd -> Nat -> Rd
+  | r, 0 => r
+  | r, n + 1 => skipProv (rdBytes r).r n
+
+-- the interface's semantic payload: everything after the provenance
+-- section. Provenance entries record the q of the payload an importer
+-- read, so an implementation-only edit (same sigs) does not propagate.
+def ifacePay : List Int -> List Int
+  | raw =>
+    if takeI raw 4 != [82, 73, 70, 50] then []
+    else
+      let q1 : RL := rdBytes { bs := raw, rest := dropI raw 4 : Rd };
+      let nq : RI := rdLeb q1.r;
+      if nq.v < 0 then [] else (skipProv nq.r (Int.toNat nq.v)).rest
+
+def qsOf : List (List Int) -> List (List Int)
+  | [] => []
+  | x :: xs => q8 (ifacePay x) :: qsOf xs
+
+def mergeIface : ImpAcc -> List Int -> ImpAcc
+  | acc, raw =>
+    if acc.err != 0 then acc
+    else if takeI raw 4 != [82, 73, 70, 50] then accErr acc 25
+    else
+      let q1 : RL := rdBytes { bs := raw, rest := dropI raw 4 : Rd };
+      let nq : RI := rdLeb q1.r;
+      if nq.v < 0 then accErr acc 25
+      else
+        let nh : RI := rdLeb (skipProv nq.r (Int.toNat nq.v));
+        let acc1 : ImpAcc := accWith acc acc.st nh.r acc.sd acc.err;
+        let mr : MetasR := mergeMetasN acc1 (Int.ofNat (lenI acc.sd.fields / 3))
+          (Int.ofNat (lenI acc.sd.icts / 5)) (Int.toNat nh.v);
+        let acc2 : ImpAcc := mergeMemsN mr.acc mr.metas (Int.ofNat (lenI acc.sd.heads / 4));
+        if acc2.err != 0 then acc2
+        else
+          let nsg : RI := rdLeb acc2.r;
+          let acc3 : ImpAcc := mergeSigsN (accWith acc2 acc2.st nsg.r acc2.sd acc2.err) (Int.toNat nsg.v);
+          if acc3.err != 0 then acc3
+          else
+            let nab : RI := rdLeb acc3.r;
+            mergeAbsN (accWith acc3 acc3.st nab.r acc3.sd acc3.err) (Int.toNat nab.v)
+
+partial def mergeIfaces : ImpAcc -> List (List Int) -> ImpAcc
+  | acc, [] => acc
+  | acc, raw :: rest => if acc.err != 0 then acc else mergeIfaces (mergeIface acc raw) rest
+
+def mkAcc : St -> ImpAcc
+  | st => { st := st, sd := emptySeed, r := { bs := [], rest := [] : Rd }, err := 0 : ImpAcc }
+
+def envOf : List Sig -> List Int -> List Int -> List Int -> List Int -> List Int -> Env
+  | sigs, heads, fields, abs, icts, iargs =>
+    { err := 0, sigs := sigs, heads := heads, fields := fields, abs := abs,
+      icts := icts, iargs := iargs, indexed := false, sigNames := emptySigNameIndex,
+      headNames := emptyIntsNameIndex, aliasNames := emptyIntsNameIndex : Env }
+
+-- specializeData with the import-seeded environment: the check walks over
+-- `checked` must resolve names the module's own decl signatures take from its
+-- imports, which the bundle's emptyEnv seeding cannot provide.
+def specializeDataM (st : St) (top : Int) (sd : ImpSeed) : St :=
+  let templates : List Int := dataTemplates st top;
+  if lenI templates == 0 then st
+  else if !(dataSourceNamesUnique (dataSourceNames st top)) || !(dataUniformTemplates st templates) then setErr 0 st 6
+  else
+    let m : DataMono := dataMonoWalk { st := st, templates := templates, specs := [] : DataMono } top;
+    if (m.st).err != 0 then m.st
+    else
+      let arg : St := synthIdent 0 m.st [73, 110, 116];
+      let probes : DataMono := dataProbeTemplates (dataMonoSt m arg) templates arg.ret;
+      let checked : St := dataInstall probes.st top probes.specs;
+      let heads : Env := indexEnv checked (walk checked 0 top (envOf [] sd.heads [] sd.abs [] []));
+      let fields : Env := walk checked 1 top (envOf sd.ctorSigs heads.heads sd.fields heads.abs sd.icts heads.iargs);
+      if checked.err != 0 then setErr 0 m.st checked.err
+      else if fields.err != 0 then setErr 0 m.st (Int.toNat fields.err)
+      else dataInstall m.st top m.specs
+
+def prepStM : Nat -> St -> Int -> ImpSeed -> St
+  | 0, st, top, sd =>
+    let st1 : St := qualDecls st top [];
+    let e0 : Env := indexEnv st1 (walk st1 0 top (envOf [] sd.heads [] sd.abs [] []));
+    if e0.err != 0 then st1
+    else
+      let sc : Env := envOf sd.scopeSigs e0.heads e0.fields e0.abs sd.scopeIcts e0.iargs;
+      let scope : Env := indexEnv st1 (dataCtorScope st1 top sc);
+      let typed : St := qExB st1 scope top [] [] [];
+      let st2 : St := specializeDataM typed top sd;
+      let heads2 : Env := indexEnv st2 (walk st2 0 top (envOf [] sd.heads [] sd.abs [] []));
+      let base1 : Env := envOf sd.ctorSigs heads2.heads sd.fields heads2.abs sd.icts sd.iargs;
+      let e1 : Env := walk st2 1 top base1;
+      if e1.err != 0 then st2
+      else
+        let e2 : Env := indexEnv st2 (walk st2 2 top (envOf (e1.sigs ++ sd.sigs) e1.heads e1.fields e1.abs e1.icts e1.iargs));
+        if e2.err != 0 then st2
+        else
+          let st3 : St := qExC st2 e2 top [] [] [] [];
+          desugar st3 e2 top top [] 0
+  | n + 1, st, top, sd => prepStM n st top sd
+
+structure ModOut where
+  res : EmitResult
+  iface : List Int
+  obj : List Int
+  deriving Inhabited
+
+def modErr : St -> Nat -> Nat -> Int -> ModOut
+  | st, err, stage, pos =>
+    { res := emitRefused st err stage pos, iface := [], obj := [] : ModOut }
+
+-- the object header carries the module's defined names in placed order.
+partial def defsOf : St -> List Fn -> List Int
+  | _, [] => []
+  | st, f :: fs => lebName (spanBytes 0 st f.na f.nb) ++ defsOf st fs
+
+structure BodL where
+  err : Int
+  bods : List (List Int)
+  deriving Inhabited
+
+partial def bodyEach : St -> List Int -> List Fn -> Nat -> Nat -> BodL
+  | st, pk, fs, i, n =>
+    if i >= n then { err := 0, bods := [] : BodL }
+    else
+      let b : Bw := lowDef st pk fs (nthFn fs i);
+      if b.err != 0 then { err := b.err, bods := [] : BodL }
+      else
+        let r : BodL := bodyEach st pk fs (i + 1) n;
+        { err := 0, bods := b.bs :: r.bods : BodL }
+
+partial def concatBods : List (List Int) -> List Int
+  | [] => []
+  | b :: rest => lebName b ++ concatBods rest
+
+-- one module compiles from its body parse plus the merged import seed.
+-- Objects keep [-700044] call markers and -600XXX arith keys for the link.
+-- The interface records srcQ (q8 of the module source) and the q of every
+-- interface it read, in read order.
+def emitModule : Int -> List Int -> List Int -> List (List Int) -> ModOut
+  | bud, srcQ, body, ifaces =>
+    let st0 : St := parseSrc 0 body;
+    if st0.err != 0 then modErr st0 st0.err 1 (Int.ofNat st0.pos)
+    else if st0.root < 0 then modErr st0 1 1 (Int.ofNat st0.pos)
+    else
+      let acc : ImpAcc := mergeIfaces (mkAcc st0) ifaces;
+      if acc.err != 0 then modErr acc.st (Int.toNat acc.err) 14 0
+      else
+        let sd : ImpSeed := acc.sd;
+        let st : St := injectDfltDefs acc.st (fd 0 acc.st acc.st.root 1);
+        let top : Int := fd 0 st st.root 1;
+        let stq : St := prepStM 0 st top sd;
+        if stq.err != 0 then modErr stq stq.err 2 (Int.ofNat stq.pos)
+        else
+          let e0 : Env := indexEnv stq (walk stq 0 top (envOf [] sd.heads [] sd.abs [] []));
+          if e0.err != 0 then modErr stq (Int.toNat e0.err) 3 (walkPos stq 0 top (envOf [] sd.heads [] sd.abs [] []))
+          else
+            let b1 : Env := envOf sd.ctorSigs e0.heads sd.fields e0.abs sd.icts sd.iargs;
+            let e1 : Env := indexEnv stq (walk stq 1 top b1);
+            if e1.err != 0 then modErr stq (Int.toNat e1.err) 4 (walkPos stq 1 top b1)
+            else
+              let e2 : Env := indexEnv stq (walk stq 2 top (envOf (e1.sigs ++ sd.sigs) e1.heads e1.fields e1.abs e1.icts e1.iargs));
+              if e2.err != 0 then modErr stq (Int.toNat e2.err) 5 (walkPos stq 2 top e1)
+              else
+                let ckResult : Ans := ckFileResult stq e2 top;
+                if ckResult.err != 0 then modErr stq (Int.toNat ckResult.err) 6 ckResult.ty
+                else
+                  let scc : TjState := recStructsOf e2.heads e2.fields e2.icts e2.iargs;
+                  let recs : List Int := scc.recs;
+                  if scc.err != 0 then modErr stq (Int.toNat scc.err) 7 (nthF 0 e2.heads 0)
+                  else
+                    let heap : Int := checkHeapTypes e2 recs;
+                    if heap != 0 then modErr stq (Int.toNat heap) 8 (arenaErrPos e2.heads e2.fields recs)
+                    else
+                      let pk : List Int := packEF (e2.fields ++ [-10, 4] ++ recs ++ [-12, 1, 1]) e2.heads e2.icts e2.iargs;
+                      let raw : List Fn := gather stq e2 top;
+                      let fs0 : List Fn := fillC stq raw raw;
+                      let depth : Int := checkTypeDepth pk e2.heads e2.sigs;
+                      if depth != 0 then modErr stq (Int.toNat depth) 9 (depthErrPos pk e2.heads e2.sigs)
+                      else
+                        let summary : FnScc := fnSccSummary fs0;
+                        let mixed : Int := ckMixedWith summary fs0;
+                        if mixed != 0 then modErr stq (Int.toNat mixed) 10 (mixedErrPosWith summary fs0 fs0 0)
+                        else
+                          let fs1 : List Fn := directUsesA stq pk fs0;
+                          let fixed : List Fn := fixUsesA fs1;
+                          let fs : List Fn := setPartWith summary fixed fixed 0 bud;
+                          let reachable : List Int :=
+                            if fd 0 stq stq.root 2 <= 0 then rangeI (lenFn fs) 0
+                            else wordReach fs (wordRoots stq fs 0) [];
+                          let ord : List Int := orderI stq fs reachable [];
+                          let n : Nat := lenI ord;
+                          let placed : List Fn := pickFn ord fs;
+                          let fsx : List Fn := fs ++ sd.phantoms;
+                          let placedX : List Fn := placed ++ sd.phantoms;
+                          let sigBytes : List Int := sigAll pk fsx ord;
+                          if hasTyErr 80000 sigBytes then modErr stq 9 11 (depthSigPos pk e2.sigs)
+                          else
+                            let bl : BodL := bodyEach stq pk placedX 0 n;
+                            if bl.err != 0 then modErr stq (Int.toNat bl.err) 12 (bodyErrPos stq pk placedX (rangeI n 0))
+                            else
+                              let ownSigs : List Sig := takeSig e2.sigs (lenSig e2.sigs - lenSig e1.sigs - lenSig sd.sigs);
+                              let ownHeads : List Int := dropI e2.heads (lenI sd.heads);
+                              let ownAbs : List Int := dropI e2.abs (lenI sd.abs);
+                              let iface : List Int := ifaceOf stq e2 srcQ (qsOf ifaces) ownHeads ownAbs fs ownSigs;
+                              let defs : List Int := defsOf stq placed;
+                              let obj : List Int := [77, 79, 66, 49] ++ lebName defs
+                                ++ leb (Int.ofNat (lenI iface)) ++ iface
+                                ++ leb (Int.ofNat (lenI sigBytes)) ++ sigBytes
+                                ++ leb (Int.ofNat n) ++ concatBods bl.bods;
+                              { res := { err := 0, pos := -1, stage := 0, bytes := [] : EmitResult },
+                                iface := iface, obj := obj : ModOut }
+
+-- ---------------- link ----------------
+
+structure ObjD where
+  defs : List Int              -- lebName cells, concatenated
+  iface : List Int
+  sigs : List Int
+  bods : List (List Int)
+  err : Int
+  deriving Inhabited
+
+def revObj : List ObjD -> List ObjD -> List ObjD
+  | acc, [] => acc
+  | acc, x :: xs => revObj (x :: acc) xs
+
+partial def rdBods : Rd -> Nat -> List (List Int) -> List (List Int)
+  | _, 0, acc => revLL [] acc
+  | r, n + 1, acc =>
+    let b : RL := rdBytes r;
+    rdBods b.r n (b.v :: acc)
+
+def adv : Rd -> Nat -> Rd
+  | r, n => { bs := r.bs, rest := dropI r.rest n : Rd }
+
+def rdObj : List Int -> ObjD
+  | raw =>
+    if takeI raw 4 != [77, 79, 66, 49] then { defs := [], iface := [], sigs := [], bods := [], err := 25 : ObjD }
+    else
+      let d : RI := rdLeb { bs := raw, rest := dropI raw 4 : Rd };
+      let defs : List Int := takeI d.r.rest (Int.toNat d.v);
+      let f : RI := rdLeb (adv d.r (Int.toNat d.v));
+      let iface : List Int := takeI f.r.rest (Int.toNat f.v);
+      let s : RI := rdLeb (adv f.r (Int.toNat f.v));
+      let sigs : List Int := takeI s.r.rest (Int.toNat s.v);
+      let b : RI := rdLeb (adv s.r (Int.toNat s.v));
+      let bods : List (List Int) := rdBods b.r (Int.toNat b.v) [];
+      { defs := defs, iface := iface, sigs := sigs, bods := bods, err := 0 : ObjD }
+
+partial def defsNames : Rd -> List (List Int) -> List (List Int)
+  | r, acc =>
+    if r.rest == [] then revLL [] acc
+    else
+      let n : RL := rdBytes r;
+      defsNames n.r (n.v :: acc)
+
+structure Lk where
+  bs : List Int
+  err : Int
+  deriving Inhabited
+
+partial def findNameB : List (List Int) -> List Int -> Nat -> Int
+  | [], _, _ => -1
+  | x :: xs, nm, i => if eqListI x nm then Int.ofNat i else findNameB xs nm (i + 1)
+
+partial def nthLLL : List (List (List Int)) -> Nat -> List (List Int)
+  | x :: xs, 0 => x
+  | x :: xs, k + 1 => nthLLL xs k
+  | [], _ => []
+
+partial def setLLL : List (List (List Int)) -> Nat -> List (List Int) -> List (List (List Int))
+  | x :: xs, 0, v => v :: xs
+  | x :: xs, k + 1, v => x :: setLLL xs k v
+  | [], _, _ => []
+
+partial def revLLL : List (List (List Int)) -> List (List (List Int)) -> List (List (List Int))
+  | [], acc => acc
+  | x :: xs, acc => revLLL xs (x :: acc)
+
+partial def emptyB : Nat -> List (List (List Int)) -> List (List (List Int))
+  | 0, acc => acc
+  | n + 1, acc => emptyB n ([] :: acc)
+
+partial def buckSum : List Int -> Nat -> Nat
+  | [], acc => acc
+  | b :: rest, acc => buckSum rest (acc + Int.toNat b)
+
+def buckKey : List Int -> Nat
+  | nm => (buckSum nm 256) % 257
+
+partial def nmBucketsGo : List (List Int) -> Nat -> List (List (List Int)) -> List (List (List Int))
+  | [], i, bs => bs
+  | nm :: rest, i, bs =>
+    let b : Nat := buckKey nm;
+    nmBucketsGo rest (i + 1) (setLLL bs b ((Int.ofNat i :: nm) :: nthLLL bs b))
+
+partial def revBuckets : List (List (List Int)) -> List (List (List Int)) -> List (List (List Int))
+  | [], acc => acc
+  | b :: rest, acc => revBuckets rest (revLL [] b :: acc)
+
+def nmBuckets : List (List Int) -> List (List (List Int))
+  | nms => revLLL (revBuckets (nmBucketsGo nms 0 (emptyB 257 [])) []) []
+
+partial def findInBuck : List (List Int) -> List Int -> Int
+  | [], nm => -1
+  | e :: rest, nm => if eqListI (dropI e 1) nm then nthI e 0 else findInBuck rest nm
+
+def findNameBk : List (List (List Int)) -> List Int -> Int
+  | bs, nm => findInBuck (nthLLL bs (buckKey nm)) nm
+
+partial def spliceBody : Nat -> List Int -> List (List (List Int)) -> List Int -> Lk
+  | _, [], _, acc => { bs := revI [] acc, err := 0 : Lk }
+  | 0, _, _, acc => { bs := revI [] acc, err := 21 : Lk }
+  | n + 1, 52 :: -700044 :: rest, bks, acc =>
+    let u : List Int := unleb rest 0;
+    if lenI u != 2 then { bs := [], err := 26 : Lk }
+    else
+      let nl : Nat := Int.toNat (nthI u 0);
+      let i1 : Nat := Int.toNat (nthI u 1);
+      let nm : List Int := takeI (dropI rest i1) nl;
+      let j : Int := findNameBk bks nm;
+      if lenI nm != nl || j < 0 then { bs := [], err := 26 : Lk }
+      else spliceBody n (dropI rest (i1 + nl)) bks (revI acc ([52] ++ leb (j + 4)))
+  | n + 1, b :: rest, bks, acc => spliceBody n rest bks (b :: acc)
+
+-- duplicate define rows are admitted only when the emitted bodies are
+-- byte-identical (the per-module word bridge), else refused.
+partial def dupDefsScan : Nat -> List Int -> List Int -> List (List Int) -> List (List Int) -> Int
+  | 0, _, _, _, _ => 21
+  | n + 1, _, _, [], _ => 0
+  | n + 1, _, _, _, [] => 0
+  | n + 1, ni, bi, nj :: nrest, bj :: brest =>
+    if eqListI ni nj && !(eqListI bi bj) then 27
+    else dupDefsScan n ni bi nrest brest
+
+partial def dupDefsGo : Nat -> List (List Int) -> List (List Int) -> Nat -> Nat -> Int
+  | 0, _, _, _, _ => 21
+  | n + 1, [], _, _, _ => 0
+  | n + 1, _, [], _, _ => 0
+  | n + 1, ni :: nrest, bi :: brest, _, _ =>
+    let e : Int := dupDefsScan (lenLL nrest + 4) ni bi nrest brest;
+    if e != 0 then e else dupDefsGo n nrest brest 0 0
+
+partial def catL : List (List Int) -> List Int -> List Int
+  | [], acc => revI [] acc
+  | x :: xs, acc => catL xs (revI acc x)
+
+partial def catLL : List (List (List Int)) -> List (List Int) -> List (List Int)
+  | [], acc => revLL [] acc
+  | x :: xs, acc => catLL xs (revLL acc x)
+
+-- transitive closure of module i's imports, restricted to global order
+partial def impIxGo : List ModSrc -> List (List Int) -> List Int -> List Int
+  | _, [], acc => revI [] acc
+  | mods, nm :: rest, acc =>
+    let j : Int := findModB mods 0 nm;
+    impIxGo mods rest (if j >= 0 then j :: acc else acc)
+
+def impIxLis : List ModSrc -> Int -> List Int
+  | mods, j =>
+    let m : ModSrc := nthMod mods (Int.toNat j);
+    impIxGo mods (m.hdr.imports ++ m.hdr.runtime) []
+
+partial def freshImps : List Int -> List Int -> List Int -> List Int -> List Int
+  | [], _, _, acc => revI [] acc
+  | x :: xs, seen, rest, acc => freshImps xs seen rest (if hasI x seen || hasI x rest || hasI x acc then acc else x :: acc)
+
+partial def reachImps : Nat -> List ModSrc -> List Int -> List Int -> List Int
+  | 0, _, _, acc => acc
+  | n + 1, _, [], acc => acc
+  | n + 1, mods, j :: rest, acc =>
+    if hasI j acc then reachImps n mods rest acc
+    else reachImps n mods (freshImps (impIxLis mods j) acc rest [] ++ rest) (j :: acc)
+
+partial def filterIn : List Int -> List Int -> List Int -> List Int
+  | [], _, acc => revI [] acc
+  | j :: rest, reach, acc => filterIn rest reach (if hasI j reach then j :: acc else acc)
+
+def closureOrd : List ModSrc -> List Int -> Int -> List Int
+  | mods, ord, i =>
+    let reach : List Int := reachImps (lenMod mods) mods (freshImps (impIxLis mods i) [] [] []) [];
+    filterIn ord reach []
+
+-- compile every module in DFS order; each module sees only its own source
+-- and the interfaces of its transitive imports.  `ixs`/`outs` keep the
+-- module index -> artifact mapping in compile order.
+structure CompAcc where
+  ixs : List Int
+  outs : List ModOut
+  err : EmitResult
+  deriving Inhabited
+
+def posOfI : List Int -> Int -> Nat -> Int
+  | x :: xs, j, i => if x == j then Int.ofNat i else posOfI xs j (i + 1)
+  | [], _, _ => -1
+
+def nthOut : List ModOut -> Nat -> ModOut
+  | x :: _, 0 => x
+  | _ :: xs, k + 1 => nthOut xs k
+  | [], _ => { res := { err := 21, pos := -1, stage := 14, bytes := [] : EmitResult }, iface := [], obj := [] : ModOut }
+
+partial def ifacesFor : List Int -> List ModOut -> List Int -> List (List Int) -> List (List Int)
+  | _, _, [], acc => revLL [] acc
+  | ixs, outs, j :: rest, acc =>
+    let k : Int := posOfI ixs j 0;
+    ifacesFor ixs outs rest (if k >= 0 then (nthOut outs (Int.toNat k)).iface :: acc else acc)
+
+-- one module's artifacts: reuse a present interface whose provenance is
+-- well formed and whose recorded source q matches the module's; a chainless
+-- or object-less cache is a miss (the module compiles from its source); a
+-- recorded source q that differs from the module's is refused (28).
+def compOne : Int -> St -> List Int -> ModSrc -> List (List Int) -> ModOut
+  | bud, st, sq, m, ifs =>
+    if lenI m.cif == 0 then emitModule bud sq (dropI m.src m.hdr.bodyAt) ifs
+    else
+      let pv : ProvV := ifaceProv m.cif;
+      if pv.err != 0 || lenI m.cob == 0 then emitModule bud sq (dropI m.src m.hdr.bodyAt) ifs
+      else if !(eqListI pv.srcQ sq) then
+        { res := emitRefused st 28 14 0, iface := [], obj := [] : ModOut }
+      else { res := { err := 0, pos := -1, stage := 0, bytes := [] : EmitResult }, iface := m.cif, obj := m.cob : ModOut }
+
+partial def compAll : Int -> St -> List ModSrc -> List Int -> List Int -> CompAcc -> CompAcc
+  | _, _, _, _, [], acc => acc
+  | bud, st, mods, ord, i :: rest, acc =>
+    if acc.err.err != 0 then acc
+    else
+      let m : ModSrc := nthMod mods (Int.toNat i);
+      let close : List Int := closureOrd mods ord i;
+      let ifs : List (List Int) := ifacesFor acc.ixs acc.outs close [];
+      let out : ModOut := compOne bud st (q8 m.src) m ifs;
+      if out.res.err != 0 then
+        { ixs := acc.ixs, outs := acc.outs, err := out.res : CompAcc }
+      else
+        compAll bud st mods ord rest
+          ({ ixs := acc.ixs ++ [i], outs := acc.outs ++ [out], err := acc.err : CompAcc })
+
+-- ---------------- module-set driver and link ----------------
+
+partial def rdObjs : List (List Int) -> List ObjD -> List ObjD
+  | [], acc => revObj [] acc
+  | raw :: rest, acc => rdObjs rest (rdObj raw :: acc)
+
+partial def objsErr : List ObjD -> Int
+  | [] => 0
+  | o :: rest => if o.err != 0 then o.err else objsErr rest
+
+partial def defsAll : List ObjD -> List (List Int) -> List (List Int)
+  | [], acc => revLL [] acc
+  | o :: rest, acc =>
+    defsAll rest (revLL acc (defsNames { bs := o.defs, rest := o.defs : Rd } []))
+
+partial def sigsAll : List ObjD -> List Int -> List Int
+  | [], acc => revI [] acc
+  | o :: rest, acc => sigsAll rest (revI acc o.sigs)
+
+partial def bodsAll : List ObjD -> List (List Int) -> List (List Int)
+  | [], acc => revLL [] acc
+  | o :: rest, acc => bodsAll rest (revLL acc o.bods)
+
+partial def ifacesOfObjs : List ObjD -> List (List Int) -> List (List Int)
+  | [], acc => revLL [] acc
+  | o :: rest, acc => ifacesOfObjs rest (o.iface :: acc)
+
+partial def objsOfOuts : List ModOut -> List (List Int) -> List (List Int)
+  | [], acc => revLL [] acc
+  | o :: rest, acc => objsOfOuts rest (o.obj :: acc)
+
+partial def hdrErrs : List ModSrc -> Int
+  | [] => 0
+  | m :: rest => if m.hdr.err != 0 then m.hdr.err else hdrErrs rest
+
+partial def markBods : List (List Int) -> List (List Int) -> List (List Int)
+  | [], acc => revLL [] acc
+  | b :: rest, acc => markBods rest ((1 :: b) :: acc)
+
+-- link a list of objects (in compile order) into a finished RSCM image.
+-- The shared seed is rebuilt from all interfaces once; the body's
+-- [-700044 name] markers resolve to 4 + global define index, and the
+-- arith -600XXX keys close against the shared packed environment.
+def linkObjs : Int -> List Int -> List (List Int) -> EmitResult
+  | bud, bs, objs =>
+    let st : St := initSt 0 bs;
+    let ods : List ObjD := rdObjs objs [];
+    let oerr : Int := objsErr ods;
+    if oerr != 0 then emitRefused st (Int.toNat oerr) 14 0
+    else
+      let gacc : ImpAcc := mergeIfaces ({ st := st, sd := emptySeed, r := { bs := [], rest := [] : Rd }, err := 0 : ImpAcc }) (ifacesOfObjs ods []);
+      if gacc.err != 0 then emitRefused gacc.st (Int.toNat gacc.err) 14 0
+      else
+        let gst : St := gacc.st;
+        let gsd : ImpSeed := gacc.sd;
+        let grecs : TjState := recStructsOf gsd.heads gsd.fields gsd.icts gsd.iargs;
+        if grecs.err != 0 then emitRefused gst (Int.toNat grecs.err) 7 0
+        else
+          let gpk : List Int := packEF (gsd.fields ++ [-10, 4] ++ grecs.recs ++ [-12, 1, 1])
+            gsd.heads gsd.icts gsd.iargs;
+          let nms : List (List Int) := defsAll ods [];
+          let bods : List (List Int) := bodsAll ods [];
+          if dupDefsGo (lenLL nms * lenLL nms + 4) nms bods 0 0 != 0 then emitRefused gst 27 14 0
+          else
+            let blob : List Int := catL (markBods bods [] ++ [[0]]) [];
+            let sp : Lk := spliceBody (lenI blob) blob (nmBuckets nms) [];
+            if sp.err != 0 then emitRefused gst (Int.toNat sp.err) 14 0
+            else
+              let used : ArithmeticUse := arithmeticUsed sp.bs [];
+              if used.err != 0 then emitRefused gst 6 12 0
+              else
+                let legacy : List (List Int) := arithmeticClose used.keys;
+                let arith : List (List Int) :=
+                  if legacy.any (fun key => nthF 0 key 0 == 44) then arithmeticDiscover gpk legacy legacy else legacy;
+                let totalMods : Nat := 4 + lenLL nms + lenLL arith;
+                let linked : Bw := if lenLL arith == 0 then bwOk 0 [] [] 0 sp.bs 0
+                  else arithmeticLink gpk sp.bs arith (Int.ofNat (4 + lenLL nms));
+                if linked.err != 0 then emitRefused gst (Int.toNat linked.err) 12 0
+                else
+                  let sigBytes : List Int := preSigsW gpk 4 ++ sigsAll ods [];
+                  if hasTyErr 80000 sigBytes then emitRefused gst 9 11 (depthSigPos gpk gsd.sigs)
+                  else
+                    { err := 0, pos := -1, stage := 0,
+                      bytes := [82, 83, 67, 77, 1] ++ leb (Int.ofNat totalMods)
+                        ++ sigBytes ++ arithmeticSigs gpk arith ++ preBodsW gpk 4 linked.bs : EmitResult }
+
+-- the module-set driver: parse RMOD1, refuse malformed headers, compile
+-- in DFS order, and link the resulting objects.
+def emitResultModuleSet : Int -> List Int -> EmitResult
+  | bud, bs =>
+    let st : St := initSt 0 bs;
+    let mods : List ModSrc := parseModSet bs;
+    if lenMod mods == 0 then emitRefused st 26 14 0
+    else if dupMods mods then emitRefused st 24 14 0
+    else
+      let herr : Int := hdrErrs mods;
+      if herr != 0 then emitRefused st (Int.toNat herr) 14 0
+      else
+        let dfs : DfsS := modOrder mods;
+        if dfs.err != 0 then emitRefused st (Int.toNat dfs.err) 14 0
+        else
+          let ca : CompAcc := compAll bud st mods dfs.ord dfs.ord
+            ({ ixs := [], outs := [], err := { err := 0, pos := -1, stage := 0, bytes := [] : EmitResult } } : CompAcc);
+          if ca.err.err != 0 then ca.err
+          else linkObjs bud bs (objsOfOuts ca.outs [])
+
+-- i2 artifacts: compile a module set and expose each module's
+-- interface and object (compile order).
+def moduleIfaceObjs : Int -> List Int -> CompAcc
+  | bud, bs =>
+    let st : St := initSt 0 bs;
+    let mods : List ModSrc := parseModSet bs;
+    if lenMod mods == 0 then
+      { ixs := [], outs := [], err := emitRefused st 26 14 0 : CompAcc }
+    else if dupMods mods then
+      { ixs := [], outs := [], err := emitRefused st 24 14 0 : CompAcc }
+    else
+      let dfs : DfsS := modOrder mods;
+      if dfs.err != 0 then
+        { ixs := [], outs := [], err := emitRefused st (Int.toNat dfs.err) 14 0 : CompAcc }
+      else
+        compAll bud st mods dfs.ord dfs.ord
+          ({ ixs := [], outs := [], err := { err := 0, pos := -1, stage := 0, bytes := [] : EmitResult } } : CompAcc)
+
 def emitResultSrcB : Nat -> Int -> List Int -> EmitResult
-  | 0, bud, bs => emitResultParsedB 0 bud (parseSrc 0 bs)
+  | 0, bud, bs =>
+    if takeI bs 5 == [82, 77, 79, 68, 49] then emitResultModuleSet bud bs
+    else emitResultParsedB 0 bud (parseSrc 0 bs)
   | n + 1, bud, bs => emitResultSrcB n bud bs
 
 def emitResultSrc : Nat -> List Int -> EmitResult

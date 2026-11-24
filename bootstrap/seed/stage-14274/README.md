@@ -1,149 +1,140 @@
-# Stage-14274 CPU bootstrap
+# Stage-14274 bootstrap on a wasm runtime
 
 The two Wasm files in this directory are the seed cut from the fixed point at
-`7aec17aa416092e45f595c0b13c607ff8120b812`. The public entries are `f779`
-for rsdc at word 0 and `f1971` for rsc at construction word 14274. The S2
-and S4 reports record the producer commands, the four fixed-point comparisons
-and the original seed hashes. S4's result has SHA-256
-`b0b7f28742905445b2d4bfc46c2200979130cbfd6259c219dcf79515d3504226`.
+`fc0fb23a3a0710436d35290149f966d18171bb01`. The public entries are `f832`
+for rsdc at word 0 and `f2268` for rsc at construction word 14274; the recipe
+below reads them from `CUT.tsv`, which is the cut's record of itself. The
+seed-recut check at that head recorded the four fixed-point comparisons; the
+producer commands and their receipts are in reports/seed-recut/
+(repository-side, not in this archive). From this cut the
+wasm route compiles with the `narrow` layer as its default; the native
+route stays 64-bit.
 
 The two whole-module inputs in `sources/` are the exact RSD byte streams
 from that run. They include generated runtime definitions from the original
 assembly. Their hashes are in `SHA256SUMS`. The live member checks bind the
-cut to 54 source references across the two roots, with 53 distinct files.
+cut to 55 source references across the two roots, with 54 distinct files.
 A changed source member requires a new cut. rsdc emits both RSCM inputs
 during the run.
 
-The recipe runs on two hosts. On a clean Linux x86-64 checkout with GCC, GNU
-binutils and coreutils, Bash, curl and tar; or on a clean macOS arm64 account
-with Apple clang and the base system (shasum, bsdtar), Bash, curl and tar.
-Enter a shell using `env -i PATH=/usr/bin:/bin bash --noprofile --norc` and
-run the following commands at the repository root. The commands fetch the
-host's pinned WABT 1.0.42 asset and byte-pinned runtime sources. If cached,
-verify them against the same hashes. WABT translates the Wasm executors into
-C and the host's compiler builds them locally. All four compiler calls run
-in the resulting CPU executables. Use a fresh output directory for each run.
+## The execution route
 
-Compile the first split unit at GCC `-O0`. Its large functions dominate
-optimization time even when the generated file is below the size cutoff.
+All four compiler calls run **in the seed's own Wasm form** on a pinned
+wasmtime release through a small C host (`seed-host.c`, in this directory,
+pinned by `SEED-HOST-SHA256SUMS`). There is no wasm-to-C translation and no C
+compiler optimization of the seed anywhere in this recipe; the only host
+compile is the import bridge itself.
+
+Two fetched tools are pinned byte-exact, downloaded by the user rather than
+shipped:
+
+- **wasmtime v50.0.1 C API** (`WASMTIME-SHA256SUMS`): the release's
+  `*-c-api` archives for Linux x86-64 and macOS arm64. The host compiles
+  against the fetched headers and static `libwasmtime.a`.
+- **binaryen version_133** (`BINARYEN-SHA256SUMS`): the release archives
+  for the same two platforms. `wasm-opt` is used for exactly one
+  encoding change: the seed modules carry *legacy* exception-handling
+  instructions (the `try`/`catch` encoding browsers implemented first),
+  which wasmtime does not implement — wasmtime's exceptions proposal is
+  the current `exnref`/`try_table` encoding. `wasm-opt
+  --translate-to-exnref` rewrites that one instruction form; it is a
+  specified wasm→wasm recoding, not an optimization pass and not a
+  different toolchain for the seed's semantics. The untranslated seed
+  bytes are what `SHA256SUMS` pins; translation runs inside the recipe
+  on already-verified input, and the recipe records the translated
+  module's sha256 in the run log.
+
+## The recipe
+
+On a clean Linux x86-64 host with GCC, GNU binutils and coreutils, Bash,
+curl and tar — or on macOS arm64 with clang, Bash, curl and tar — enter a
+shell using `env -i PATH=/usr/bin:/bin bash --noprofile --norc` and run
+the following commands at the archive root (the repository root in a
+checkout). The commands fetch the two pinned releases and check them
+against the sum files. Use a fresh output directory for each run.
 
 ```bash
 set -euo pipefail
 export LC_ALL=C
 seed=$PWD/bootstrap/seed/stage-14274
-host=$PWD/reports/codex4-assign5-stage-word/Wasm2CHost.c
+host=$seed/seed-host.c
 out=$PWD/out/bootstrap/stage-14274
-case "$(uname -s)-$(uname -m)" in
+platform=$(uname -s)-$(uname -m)
+case "$platform" in
     Linux-x86_64)
-        sha256() { sha256sum "$@"; }
-        stat_size() { stat -c %s "$1"; }
-        wabt_url=https://github.com/WebAssembly/wabt/releases/download/1.0.42/wabt-1.0.42-linux-x64.tar.gz
-        wabt_sums=$seed/WABT-SHA256SUMS
-        wabt_untar() { tar -xzf "$1" --strip-components=2 --wildcards '*/bin/wasm2c' '*/bin/wasm-validate'; }
-        boot_id() { cat /proc/sys/kernel/random/boot_id; }
-        platform_flags=-D_GNU_SOURCE
-        exec_flags=(-fno-optimize-sibling-calls -frounding-math -fsignaling-nans)
-        cc_accept() { cc --version | sed -n '1p' | grep -Fv clang; }
-        ;;
+        SHASUM=sha256sum
+        binaryen_tar=binaryen-version_133-x86_64-linux.tar.gz
+        wasmtime_tar=wasmtime-v50.0.1-x86_64-linux-c-api.tar.xz
+        LDL=-ldl ;;
     Darwin-arm64)
-        sha256() { shasum -a 256 "$@"; }
-        stat_size() { stat -f %z "$1"; }
-        wabt_url=https://github.com/WebAssembly/wabt/releases/download/1.0.42/wabt-1.0.42-macos-arm64.tar.gz
-        wabt_sums=$seed/WABT-MACOS-ARM64-SHA256SUMS
-        wabt_untar() { bsdtar -xzf "$1" --strip-components=2 '*/bin/wasm2c' '*/bin/wasm-validate'; }
-        boot_id() { ( PATH=/usr/bin:/bin:/usr/sbin:/sbin; sysctl -n kern.bootsessionuuid 2>/dev/null || sysctl -n kern.boottime ); }
-        platform_flags=-D_DARWIN_C_SOURCE
-        exec_flags=(-fno-optimize-sibling-calls -frounding-math)
-        cc_accept() { cc --version | sed -n '1p' | grep -F clang; }
-        ;;
-    *) printf 'unsupported host: %s
-' "$(uname -s)-$(uname -m)" >&2; exit 1;;
+        SHASUM="shasum -a 256"
+        binaryen_tar=binaryen-version_133-arm64-macos.tar.gz
+        wasmtime_tar=wasmtime-v50.0.1-aarch64-macos-c-api.tar.xz
+        LDL= ;;
+    *) printf 'unsupported host: %s\n' "$platform" >&2; exit 1 ;;
 esac
 for tool in lean elan lake node ocaml; do
     if command -v "$tool"; then printf 'unexpected tool: %s\n' "$tool" >&2; exit 1; fi
 done
-test -z "$(git status --porcelain --untracked-files=all)"
+if test -d .git; then
+    test -z "$(git status --porcelain --untracked-files=all)"
+    git rev-parse HEAD
+fi
 test ! -e "$out"
-mkdir -p "$out"/{evidence,rebuilt,tools/runtime}
+mkdir -p "$out"/{evidence,rebuilt,translated,tools}
 exec > >(tee "$out/evidence/run.log") 2>&1
-git rev-parse HEAD
 uname -a
-boot_id
+test ! -e /proc/sys/kernel/random/boot_id || cat /proc/sys/kernel/random/boot_id
 cc --version
-cc_accept
 printf 'bootstrap start %s\n' "$(date -u +%FT%TZ)"
-( cd "$seed" && sha256 -c SHA256SUMS )
-sha256 -c "$seed/SOURCE-MEMBERS-SHA256SUMS"
-sha256 -c "$seed/EXECUTOR-SHA256SUMS"
+( cd "$seed" && $SHASUM -c SHA256SUMS )
+$SHASUM -c "$seed/SOURCE-MEMBERS-SHA256SUMS"
+$SHASUM -c "$seed/SEED-HOST-SHA256SUMS"
+rsdc_entry=$(awk -F'\t' '$1=="rsdc_entry"{print $2}' "$seed/CUT.tsv")
+rsc_entry=$(awk -F'\t' '$1=="rsc_entry"{print $2}' "$seed/CUT.tsv")
+test -n "$rsdc_entry" && test -n "$rsc_entry"
 tools=$out/tools
-runtime=$tools/runtime
-curl -fsSL --retry 3 -o "$tools/wabt.tar.gz" "$wabt_url"
-(
-    cd "$tools"
-    sed -n '1p' "$wabt_sums" | sha256 -c
-    wabt_untar wabt.tar.gz
-    sha256 -c "$wabt_sums"
-)
-while read -r hash name; do
-    curl -fsSL --retry 3 -o "$runtime/$name" \
-        "https://raw.githubusercontent.com/WebAssembly/wabt/ff0ef7e0009402740c805a9744c09b05be063e48/wasm2c/$name"
-done < "$seed/WABT-RUNTIME-SHA256SUMS"
-( cd "$runtime" && sha256 -c "$seed/WABT-RUNTIME-SHA256SUMS" )
-"$tools/wasm2c" --version
-"$tools/wasm-validate" "$seed/rsdc.wasm"
-"$tools/wasm-validate" "$seed/rsc.wasm"
+curl -fsSL --retry 3 -o "$tools/$binaryen_tar" \
+    "https://github.com/WebAssembly/binaryen/releases/download/version_133/$binaryen_tar"
+curl -fsSL --retry 3 -o "$tools/$wasmtime_tar" \
+    "https://github.com/bytecodealliance/wasmtime/releases/download/v50.0.1/$wasmtime_tar"
+grep " $binaryen_tar\$" "$seed/BINARYEN-SHA256SUMS" > "$tools/pins"
+grep " $wasmtime_tar\$" "$seed/WASMTIME-SHA256SUMS" >> "$tools/pins"
+( cd "$tools" && $SHASUM -c pins && tar -xf "$binaryen_tar" && tar -xf "$wasmtime_tar" )
+wasmopt=$tools/binaryen-version_133/bin/wasm-opt
+capi=$(printf '%s\n' "$tools"/wasmtime-v50.0.1-*-c-api)
+"$wasmopt" --version
 
-build_cpu_executor() (
+translate_module() (
     module=$1
-    entry=$2
-    frontend=$3
-    mkdir -p "$out/$module"/{generated,objects}
-    cd "$out/$module"
-    "$tools/wasm2c" "$seed/$module.wasm" -n seed --num-outputs=128 -o generated/seed.c
-    test "$(grep -Fc "w2c_seed_$entry(" generated/seed.h)" = 1
-    for i in {0..127}; do test -s "generated/seed_$i.c"; done
-    flags=("${exec_flags[@]}")
-    sources=(generated/seed_*.c)
-    if test -f generated/seed.c; then sources+=(generated/seed.c); fi
-    for src in "${sources[@]}"; do
-        if test "$src" = generated/seed_0.c; then
-            level=-O0
-        elif test "$(stat_size "$src")" -gt 16777216; then
-            level=-O1
-        else
-            level=-O2
-        fi
-        printf '%s\0' "$level" "$src" "objects/$(basename "$src" .c).o"
-    done | xargs -0 -n3 -P4 bash -ec '
-        printf "compile %s %s %s\n" "$1" "$2" "$(date -u +%FT%TZ)"
-        cc "$1" "${exec_flags[@]}" -I generated -I "$0" -c "$2" -o "$3"
-    ' "$runtime"
-    for unit in wasm-rt-impl wasm-rt-exceptions-impl wasm-rt-mem-impl; do
-        cc -O2 "$platform_flags" -I generated -I "$runtime" -c "$runtime/$unit.c" -o "objects/$unit.o"
-    done
-    cc -O2 -std=c11 -Wall -Wextra -Werror "$platform_flags" -D_POSIX_C_SOURCE=200809L \
-        "-DSEED_ENTRY=w2c_seed_$entry" "-DSEED_FRONTEND=$frontend" \
-        "${flags[@]}" -I generated -I "$runtime" -c "$host" -o objects/host.o
-    cc objects/*.o -lpthread -lm -o run
-    sha256 run
+    printf 'translate %s %s\n' "$module" "$(date -u +%FT%TZ)"
+    "$wasmopt" --all-features "$seed/$module.wasm" --translate-to-exnref \
+        -o "$out/translated/$module.wasm"
+    ( cd "$out/translated" && $SHASUM "$module.wasm" )
 )
-build_cpu_executor rsdc f779 1 2>&1 | tee "$out/evidence/build-rsdc.log" &
+translate_module rsdc &
 front=$!
-build_cpu_executor rsc f1971 0 2>&1 | tee "$out/evidence/build-rsc.log" &
+translate_module rsc &
 back=$!
 wait "$front"
 wait "$back"
-printf 'C executors built %s\n' "$(date -u +%FT%TZ)"
+
+cc -O2 -std=c11 -Wall -Wextra -Werror -I "$capi/include" \
+    -c "$host" -o "$out/seed-host.o"
+cc "$out/seed-host.o" "$capi/lib/libwasmtime.a" -lpthread -lm $LDL -o "$out/run"
+$SHASUM "$out/run"
+printf 'runtime executor built %s\n' "$(date -u +%FT%TZ)"
 
 rebuild_root() (
     root=$1
     printf 'emit %s %s\n' "$root" "$(date -u +%FT%TZ)"
-    "$out/rsdc/run" rsdc "$seed/sources/$root.rsd" "$out/rebuilt/$root.rscm" 0 cons |
+    "$out/run" rsdc "$rsdc_entry" "$out/translated/rsdc.wasm" \
+        "$seed/sources/$root.rsd" "$out/rebuilt/$root.rscm" 0 cons |
         tee "$out/evidence/emit-$root.json"
     printf 'lower %s %s\n' "$root" "$(date -u +%FT%TZ)"
-    "$out/rsc/run" rsc "$out/rebuilt/$root.rscm" "$out/rebuilt/$root.wasm" 14274 cons |
+    "$out/run" rsc "$rsc_entry" "$out/translated/rsc.wasm" \
+        "$out/rebuilt/$root.rscm" "$out/rebuilt/$root.wasm" 14274 cons |
         tee "$out/evidence/lower-$root.json"
-    "$tools/wasm-validate" "$out/rebuilt/$root.wasm"
     grep -qF '"tag":"0","status":"0","detail":"0"' "$out/evidence/emit-$root.json"
     grep -qF '"tag":"0","status":"0","detail":"0"' "$out/evidence/lower-$root.json"
     cmp "$seed/$root.wasm" "$out/rebuilt/$root.wasm"
@@ -154,33 +145,47 @@ rebuild_root rsc &
 back=$!
 wait "$front"
 wait "$back"
-( cd "$out/rebuilt" && sha256 -c "$seed/REBUILT-SHA256SUMS" )
-( cd "$seed" && sha256 -c SHA256SUMS )
-sha256 -c "$seed/SOURCE-MEMBERS-SHA256SUMS"
-sha256 -c "$seed/EXECUTOR-SHA256SUMS"
+( cd "$out/rebuilt" && $SHASUM -c "$seed/REBUILT-SHA256SUMS" )
+( cd "$seed" && $SHASUM -c SHA256SUMS )
+$SHASUM -c "$seed/SOURCE-MEMBERS-SHA256SUMS"
+$SHASUM -c "$seed/SEED-HOST-SHA256SUMS"
 
-cp "$seed/rsdc.wasm" "$out/evidence/corrupt.wasm"
-printf '\0' >> "$out/evidence/corrupt.wasm"
+# mutant control: a one-byte change in rsdc.wasm must be refused by the
+# seed digest gate before any compiler call. Replay that gate — and only
+# that gate — in a scratch seed copy; the recipe's `set -e` aborts the
+# whole run at the same point, before translation, host build or calls.
+cp -R "$seed" "$out/evidence/mutant"
+printf '\x01' | dd of="$out/evidence/mutant/rsdc.wasm" bs=1 seek=64 conv=notrunc 2>/dev/null
 code=0
-cmp -s "$out/evidence/corrupt.wasm" "$out/rebuilt/rsdc.wasm" || code=$?
-test "$code" = 1
-rm "$out/evidence/corrupt.wasm"
-printf 'bootstrap complete %s seed_roundtrip=2/2 images=2/2 changed_wasm_cmp_exit=%s\n' \
+( cd "$out/evidence/mutant" && $SHASUM -c SHA256SUMS ) \
+    > "$out/evidence/mutant-check.log" 2>&1 || code=$?
+test "$code" != 0
+grep -q 'rsdc.wasm.*FAILED' "$out/evidence/mutant-check.log"
+printf 'bootstrap complete %s seed_roundtrip=2/2 images=2/2 mutant_digest_exit=%s\n' \
     "$(date -u +%FT%TZ)" "$code"
 ```
 
 Expect exit 0, two zero-status emissions, two zero-status lowerings, four
-rebuilt hashes and two seed byte comparisons. The altered-Wasm control
-must produce comparison exit 1. Byte comparisons and hashing are linear in
-the files they read. The C runtime bridge and pinned acquisition inputs
-come from ASSIGN-5's S2 executor.
+rebuilt hashes and two seed byte comparisons. The mutant control must
+produce a nonzero digest-check exit while the scratch directory holds
+only the copied seed files — refusal before any compiler call.
+Byte comparisons and hashing are linear in
+the files they read. The wasmtime C host keeps the import protocol of
+the former executor host unchanged.
 
-- S2 fixed-point report: `reports/codex4-assign5-stage-word/S2-ARENA.md` (repository-side)
-- S4 seed-cut report: `reports/codex4-assign5-stage-word/S4-ARENA.md` (repository-side)
+Per-call costs on the acceptance hosts: translating one module is a few
+minutes of `wasm-opt`; the host's first call per module pays one wasmtime
+module compile (~1 min) and caches the result as `<module>.cwasm`; the
+compiler calls themselves dominate the wall and are recorded as
+`wall_ns` in the evidence JSON.
 
 Between cuts, `check` (`lean --run bootstrap/seed/Check.rsd FRESH_OUT`, stock
 Lean as the tool host) says whether this seed still builds the head's source
 members to a compiler that reproduces itself, and `cut`
 (`lean --run bootstrap/seed/Cut.rsd CHECK_OUT NEW_SEED_DIR`) writes the seed
 of a head that check passed. A landing that changes a source member does not
-cut the seed; the seed is cut again at each version's candidate.
+cut the seed; the seed is cut again at each version's candidate. The `check`
+tool is a chain-internal instrument and keeps its own wasm2c executor route
+(the `WABT-*-SHA256SUMS` and `EXECUTOR-SHA256SUMS` manifests in this
+directory pin that route, which is repository-side and not the release's
+route).

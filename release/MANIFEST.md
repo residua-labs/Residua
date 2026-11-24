@@ -1,7 +1,9 @@
 # Release manifest: closure roles and pending files
 
-This is the inventory for release 0.1, the minimal self-bootstrap
-closure, not a publishable file list. The requirements are
+This file is the release inventory, one section per version (0.1,
+0.2, 0.3 below). The 0.1 section is the inventory for release 0.1,
+the minimal self-bootstrap closure, not a publishable file list. The
+requirements are
 the public-release-0 requirement revisions 4e and 4f and the
 `MinimalBootstrap` closure plan. The 0.1 candidate contains the committed wasm seed
 (`bootstrap/seed/stage-14274/`), the source closure of `rsdc` and `rsc`
@@ -10,8 +12,12 @@ the runtime (`lib/rt` and the `lib/Runtime*` members, plus the C host
 bridges the seed recipe and execution host use), and the stranger
 documents (`docs/`, `bootstrap/README.md`, `LICENSE`, `NOTICE`,
 `lean-toolchain`, `README.md`, `README.zh-CN.md`, `CHANGELOG.md`,
-`CHANGELOG.zh-CN.md`, `release/notes/`, `release/licenses/`,
-`release/NOTICES.md`, `release/PROVENANCE.tsv`).
+`CHANGELOG.zh-CN.md`, `ACKNOWLEDGEMENTS.md`, `ACKNOWLEDGEMENTS.zh-CN.md`,
+`CONTRIBUTING.md`, `CONTRIBUTING.zh-CN.md`, `CODE_OF_CONDUCT.md`,
+`SECURITY.md`, `TESTING.md`, `TESTING.zh-CN.md`, `.github/`, `perf/`,
+`reports/nf-compose/`,
+`release/notes/`, `release/licenses/`, `release/checks/`,
+`release/TERMS.tsv`, `release/NOTICES.md`, `release/PROVENANCE.tsv`).
 
 The closure is met: seed -> rsdc, rsc -> fixpoint byte-equal in a clean
 environment without Lean, elan, lake, Node or OCaml
@@ -37,16 +43,16 @@ omitted artifact or an equal pair. The 0.1 seed pair
 (`stage-14274/rsdc.wasm`, `stage-14274/rsc.wasm`) is bound by the seed
 recipe's own clean-environment reproduction
 (clean-environment reproduction recorded repository-side;
-`bootstrap/seed/stage-14274/{SHA256SUMS,EXECUTOR-SHA256SUMS,
-REBUILT-SHA256SUMS,SOURCE-MEMBERS-SHA256SUMS,WABT-SHA256SUMS,
-WABT-RUNTIME-SHA256SUMS}`), plus the 53/53 member verification from git
-objects recorded at the branch cut. The combined declared/prerequisite/
+`bootstrap/seed/stage-14274/{SHA256SUMS,REBUILT-SHA256SUMS,
+SOURCE-MEMBERS-SHA256SUMS,SEED-HOST-SHA256SUMS,WASMTIME-SHA256SUMS,
+BINARYEN-SHA256SUMS}` at 0.3; the 0.1 recipe pinned a WABT route that 0.3
+replaces), plus the member verification of each cut from git objects. The combined declared/prerequisite/
 build closure is tracked in `BUILD-INPUTS.tsv`. The offline replay
 checks the named receipt facts and then compares the inputs against the
 current tree. The older pinned seed pair (`bootstrap/seed/{rsdc,rsc}.wasm`,
-`rsc.rscm`, `manifest.json`, `bootstrap/sources.json`) ships as
-committed seed material for the alternate bootstrap route; it is seed
-input, not a rebuilt artifact of this candidate.
+`rsc.rscm`, `manifest.json`, `bootstrap/sources.json`) shipped until 0.2
+as seed material of an alternate bootstrap route; from 0.3 it stays in the
+development repository.
 
 `SHIP-RULES.tsv` declares the ordered component rules (first match
 wins); `SOURCE-ROLES.tsv` is the complete component-to-file map
@@ -74,12 +80,12 @@ The name-form check still examines every tracked `.rsd`/`.lean` outside the root
 0.1 counter is the ship-set files that *declare* an NF instance (an NF
 shell or Model/Profile instance) and fail NFCheck — files declaring no
 instance are outside that check. At this head the count is 3, each row named
-with its NFCheck classes in `release/FINDINGS.tsv` (ships as-is; a fix
-is a new seed cut, routed to owners for a 0.1.x update). For the
+with its NFCheck classes repository-side (ships as-is; a fix
+is a new seed cut). For the
 path-scan checks the
 current global census is diagnostic until each manifest path is
 classified; the 43 seat-name rows inside q-pinned spec, seed and
-generated manifest files are likewise named in `release/FINDINGS.tsv`.
+generated manifest files are likewise named repository-side.
 No zero-finding or
 complete-provenance claim follows from this draft inventory.
 
@@ -113,8 +119,8 @@ of the pinned spec, not claims checked inside 0.1.
 ## 0.2
 
 0.2 is a feature release on the same 0.1.2 source closure: the 53
-stage-14274 members are unchanged at the `be7c7608c9` member-map bytes,
-and the seed round-trip is unchanged. In the packet, in closing order:
+committed-seed members are unchanged at the `be7c7608c9` member-map bytes,
+and the seed round-trip is unchanged. In the release archive, in closing order:
 
 - the typed content address (q format v1), landed at 6d700789eb, with
   its specification (`docs/QFORMAT.md`), conformance check
@@ -136,3 +142,36 @@ sources need post-cut `UInt64`/`USize` members; both move to 0.3 with
 the recut seed), and internal dogfood targets. The macOS arm64 host is
 bound by the same seed recipe, run under `env -i` with base-system
 tools only (`bootstrap/seed/stage-14274/README.md`).
+
+## 0.3
+
+0.3 is a feature release on a recut seed (`fc0fb23a3a`): the committed
+seed is rebuilt at this release's sources and carries `UInt64`/`USize`
+and the current 54-member source closure
+(`bootstrap/seed/stage-14274/SOURCE-MEMBERS-SHA256SUMS` — 54 members,
+`SHA256SUMS` digests `1aeacfb6b097…`/`b7db967608fe…`). In the release
+archive, in closing order:
+
+- the `rsd` build tool's sources (`rsd/`, `lib/rsd/`, `lib/Rsd.rsd`,
+  `lib/laws/RsdScheduleLaws.rsd`), its documentation (`docs/BUILD.md`),
+  check suite (`release/checks/rsd-tool/`) and release note
+  (`release/notes/rsd-tool.md`) — sources ship; part of the tool's
+  build closure is repository-side (`release/GAPS.tsv`);
+- the three-surface work (`docs/surfaces/`, `examples/surfaces/`,
+  `semantics/Rsx/Lower.rsd`'s revised adequacy statements, the added
+  `rsv.syn` grammar productions) and the root testing guide
+  (`TESTING.md`, `TESTING.zh-CN.md`);
+- the restored 0.1.2 suites dropped by 0.2 (`benchmarks/`,
+  `instruments/lrc-host/`, `perf/`) plus the Koka tables
+  (`benchmarks/koka/{entries,images,modules}.tsv`);
+- the MST-NF composition package (`lean/nf-compose/`, pinned model
+  included, proofs held by `github.com/residua-labs/MST-NF` @ `4432a34`)
+  with its audit report (`reports/nf-compose/REPORT.md`), and the
+  admission `ExecModel` instances (`semantics/Effect/AdmissionNF.lean`
+  ships for audit; its imports are repository-side).
+
+Held out of 0.3: Cedar (its close audit refused), the internal
+dogfood targets, the URL parser (a separate repository's work), compiled
+dispatcher binaries, modules, proof checking and the application
+suites. macOS arm64 remains a named gap: the generated seed recipe is
+Linux x86-64 only (`release/GAPS.tsv`).

@@ -1,153 +1,157 @@
-# OVERVIEW — Residua 是什么，0.2 提供什么，它的局限
+# OVERVIEW — Residua 是什么、0.3 提供什么、它的边界
 
 [English](OVERVIEW.md) | 中文
 
-本文档是发布归档的一部分。标注*仓库侧*的引用所指文件不在本归档内；
-它们写在这里，供同时持有源码仓库的审计者查阅。未带提交的引用，
-即为本文件随附的那个头部。
+本文是长文档：设计、动机、证据、边界与参考文献。短版见
+[`README.zh-CN.md`](../README.zh-CN.md)。
 
-## 一句话
+## 它是什么
 
-Residua 是一套基础设施，让人无需信任对方，就能使用对方的计算或证明：
-结果按内容（q）识别，只凭机械检查准入，建立在一张形式化定义的
-语义网络之上。Residua 的设计是计算和证明一体：在它的语言 rsd 中，
-程序和证明是同一个依赖类型论中的项——同一个对象既被编译成原生
-代码或 WebAssembly，又由内核检查，而不是两个靠同步维持的系统。
-这一点是设计，尚未端到端证实；0.2 交付的是编译这一半——证明检查
-那一半（R-CIC 内核）在下文"版本局限"和"0.2 之后的顺序"中列名。
+Residua 是一个关于在互不信任的各方之间复用计算与演绎结果的研究项目。结果以内容地址
+（[q](GLOSSARY.zh-CN.md)：对结果字节计算的带类型 SHA-256）标识，而非以生产者或构建它的
+工具链版本标识；结果只有通过相对形式定义语义的机械检查才被接受。
 
-为什么——三个事实，首页不写使命宣言：形式化结果的成本主要花在
-重复检查、上游变化后的修补、协调和审查上（内核检查只占一小部分）；
-将来的结果大多由不可信的机器产出，能扩展的只有机械检查和按内容
-识别；形式语义彼此割裂（Lean、Rocq、K、wasm、EVM），结果无法跨越
-它们组合。
+项目的语言 [rsd](GLOSSARY.zh-CN.md) 的设计是：程序与证明是同一依赖类型论中的项——同一个
+项既被编译为本机或 WebAssembly 代码，也被证明内核检查。已发布版本交付该设计的编译一半：
+一条任何第三方都能从提交的 [seed](GLOSSARY.zh-CN.md) 验证其来源的自举编译器链，连同工具链的内容标识格式、
+语法引擎与执行边界的形式语义。证明检查的一半（[R-CIC](GLOSSARY.zh-CN.md) 内核）属于后续版本。
 
-## 0.2 提供什么——且只有这些
+## 为什么——四个事实
 
-可验证来源的编译：给定一份源码和一份产物，任何人都可以从提交的
-wasm 种子出发，只用 C 编译器、不需要别的工具链，逐字节重建并核验
-这份产物来自这份源码——既不必信任发布者，也不必信任庞大的二进制
-工具链。
+1. **维护主导了形式结果的成本。** 上游变更后的重检、修复、协调与评审，
+   花费远高于内核检查本身。
+2. **生产者日益自动化。** 自动化代理的产出不能凭生产者的话接受；
+   只有机械检查与内容标识能适应这一情形。
+3. **语义彼此孤立。** 结果存在于分离的系统（Lean、Rocq、K、WebAssembly、
+   EVM），无法跨系统携带。
+4. **结果绑定工具链版本。** 编译出的库绑死在构建它的工具链版本上
+   （如 Lean 的 `.olean`）；版本一变，下游全部重建重检。以内容标识的
+   结果跨版本仍是同一结果。
 
-支撑它的：
+## 方法
 
-- rsd 编译器链 `rsd -> rscm -> wasm`（`rsdc`、`rsc`），自举：两个
-  编译器都以 wasm 种子发货，见 `bootstrap/seed/stage-14274/`
-  （sha256 `dcd40993dcda…` 与 `ce2cff5b42fd…`，
-  `bootstrap/seed/stage-14274/SHA256SUMS`），连同其 54 个成员的
-  源码闭包（`SOURCE-MEMBERS-SHA256SUMS`）及成员到 bundle 的链接
-  （`ASSEMBLY.tsv`：哪个成员在两个整模块源文件里位于哪个
-  `RscSourceModule_` 节，按顺序）。
-- 引导配方 `bootstrap/seed/stage-14274/README.md`：一台干净的
-  Linux x86-64，装有 GCC/binutils/coreutils/Bash/curl/tar，
-  且没有 Lean、elan、lake、Node、OCaml，即可重建两个编译器；配方
-  重建出的映像与已提交的种子逐字节一致（`seed_roundtrip=2/2`）。
-  本归档上该配方的一次第三方运行到达了不动点（证据在仓库侧）。
-- 逐层冻结的形式语义（scm、lambda-RC、wasm0），按内容地址钉住：
-  `lean/rsd-cert/Residua/Bootstrap/Semantics.lean` 的 `evalLF`
-  （`1fef580a3`，q `4ffcb7d990e8c77fa5dce42bcb4e1ae798e3cddd04803ac7c1fcbd2cb7fa46d2`，
-  冻结腰部 scm 行）。整个 `Residua.Bootstrap` 规范集发货（9 个文件），
-  连同它导入的 `Residua.SHA256`，使被钉规范的 `import` 行在归档
-  内部全部可解；这些文本里的 `theorem` 声明是被钉的规范内容，
-  不是证明检查。
-- 每版本一份的性能记录（`docs/PERF-RECORD.md` +
-  `PERF-RECORD.tsv`，随本归档发货）。
-- 发布标签的两族封签，以及该配方的第三方复现（证据在仓库侧）。
+- **以内容标识。** 产物或结果以其内容地址 q 标识。q 相等是复用的
+  判据；名称、位置、生产者都不是。
+- **以检查准入。** 结果只能通过相对形式语义的机械检查进入系统。
+  生产者——人、编译器或自动化代理——都在可信基之外
+  （de Bruijn 准则 [9]）。
+- **程序与证明同一语言。** 按设计，rsd 项既被编译也被同一内核检查，
+  因此关于程序的陈述就是关于所运行项的陈述。
+- **可验证的工具链。** 产生其他一切产物的编译器本身可从提交的
+  seed 复现，其来源是被检查的而非被假定的。
 
-0.2 新增：
+## 0.3 提供什么——且只有这些
 
-- 最终的带类型内容标识 `q`（格式 v1）：被寻址内容的种类进入哈希
-  字节内部；裸 SHA-256 保留为 `digest`，仅用于文件完整性
-  （`docs/QFORMAT.zh-CN.md`；向量 `release/checks/qformat/`）。
-- 语法引擎，在其文法类上闭合：引擎源 `rsdc/syntax/`、含参照判
-  定器与正确性证明的类 `semantics/Syntax/`、作为数据发货的表面
-  profile `rsdc/profiles/*.syn`，以及在生成文法上的验收套件。
-- 执行边界形式语义 E0–E4（`semantics/Effect/`）：线格式、准入
-  与封签判断、一致性分类器以及录制的传输会话；验收证据
-  `reports/effect-sem/`（仓库侧）。
+**可验证来源的编译。** 给定一份源码与一个产物，任何人都能用 C 编译器和
+钉住的 wasm 运行时（wasmtime v50.0.1 加 binaryen version_133 的
+`wasm-opt`，均由用户下载），从提交的 WebAssembly seed 重建编译器，
+并逐字节核对产物来自该源码——既不信任发布者，也不信任大型二进制
+工具链。配方在 Linux x86-64 与 macOS arm64 上运行。
 
-## 本归档中的链
+本版本携带：
 
-- `rsdc` 把 `.rsd` 源码编成 `.rscm`（scm 层的二进制形式；magic
-  `52 53 43 4d` + 版本字节，写于 `rsdc/Compile.rsd`，读于 `rsc/rsc.rsd`）。
-- `rsc` 在该阶段钉住的字（14274）把 `.rscm` 降成 `.wasm`。
-- `execution-bridge` 组件的 C 宿主桥（文件名见
-  `bootstrap/seed/stage-14274/EXECUTOR-SHA256SUMS`）加上
-  `bootstrap/seed/stage-14274/WABT-SHA256SUMS` 钉住的外部拉取 wabt
-  运行时执行种子；`bootstrap/Wasm2CHost.c` 与
-  `bootstrap/ProcWasm2CHost.c` 是通用宿主变体。
-- 调用即阶段宿主的文件契约：
-  `"$out/rsdc/run" rsdc <in.rsd> <out.rscm> 0 cons` 与
-  `"$out/rsc/run" rsc <in.rscm> <out.wasm> 14274 cons`
-  （`docs/RSD-COMMAND.md`）。
+- rsd 编译器链 `rsd → `[rscm](GLOSSARY.zh-CN.md)` → wasm`（前端 `rsdc`、后端 `rsc`），自举：
+  两个编译器以提交的 seed 形式随附于 `bootstrap/seed/`，连同钉住的
+  源码成员表与重建配方。
+- `rsd` 构建工具（`rsd/` 与 `lib/rsd/`）：`rsd build` 经内容寻址存储
+  编译程序、只重编译变化的部分；`rsd test` 跑端到端套件；
+  `rsd run` 执行；`rsd cache` 即内容存储本身。见 `docs/BUILD.md`。
+- 带类型的内容地址 `q`（格式 v1）：被寻址内容的类别在哈希字节之内，
+  不同类别的地址不可能碰撞（`docs/QFORMAT.md`，检查
+  `release/checks/qformat/`）。
+- 语法引擎，在其文法类上闭合：文法数据上的一个函数，与机械验证的
+  参考判定器核对一致（`semantics/Syntax/`；轮廓 `rsdc/profiles/*.syn`）。
+- 自举语法检查：编译器自身的六个源文件去掉 `import` 行后按成员顺序
+  拼成 1,325,136 字节的束，OCaml 参考前端解析无错（语料判定见
+  `docs/LANGUAGE.md`）。
+- 执行边界语义：线格式、准入与封签判断、一致性分类器与录制的传输
+  会话，以 Lean 4.14 命题表述（`semantics/Effect/`）。
+- 语言中的 `UInt64`。
+- 各编译层的冻结形式语义（scm、[lambda-RC](GLOSSARY.zh-CN.md)、[wasm0](GLOSSARY.zh-CN.md)），按内容摘要钉住；
+  其 `.lean`/`.rsd` 文本作为钉住的规范随附。其中的 `theorem` 声明是钉住的
+  规范，不是被检查的证明；`semantics/Effect/AdmissionNF.lean` 为审计随附，
+  其 import（`Lib.Exec9Core`、`Lib.Receipt`）为仓库侧——检查它需要开发仓库。
+- 基准与差分测试套件（`benchmarks/`、`instruments/lrc-host/`）及逐版本
+  性能记录（`perf/`、`docs/PERF-RECORD.md` 与 `.tsv`）。
+- seed 按本版本源码重切（携带 `UInt64` 与当前编译器成员集）；
+  新的 `bootstrap/seed/stage-*` 目录取代 0.1 时代的目录。
 
-## 文件格式
+## 各层如何衔接
 
-| 格式 | 是什么 | 出处 | 0.2 发货 |
-|---|---|---|---|
-| `.rsd` | 精化前树的文本拼写；0.2 前缘接受的是引导子集 | `docs/LANGUAGE.md` | 是——源码成员加上 `semantics/`/`gates/semalign/` 规范文本 |
-| `.rsj` | 同一棵树的文本拼写，Reason 风格 | 仓库侧文法描述 | 否——仅仓库 |
-| `.rsm` | 同一棵树的文本拼写，Racket 系（由 `.rsl` 改名） | 仓库侧文法描述 | 否——仅仓库 |
-| `.rsx` | 规范内核形式：源码级 AST 的规范 S 表达式的 csexp | 仓库侧文法 | 否——仅仓库 |
-| `.scm` | scm 语言的文本程序；也是规范树上的具名 Scheme 视图 | 仓库侧文法 | 否——仅仓库 |
-| `.rscm` | 二进制 scm 层接口 | `docs/EMITTER.md` | 是——`bootstrap/seed/rsc.rscm`，配方重建时也会产出 `.rscm` |
-| `.wasm` | 提交的编译器种子 | `bootstrap/seed/stage-14274/{rsdc,rsc}.wasm`、`bootstrap/seed/{rsdc,rsc}.wasm` | 是——4 个文件 |
-| `.lean` | 冻结语义的 Lean 4.14 规范文本 | `lean/rsd-cert/Residua/Bootstrap/`、`lean/rsd-cert/Residua/SHA256.lean` | 是——仅此规范集；其余 `.lean` 均为仅仓库 |
+- `rsdc` 把 `.rsd` 源码编译为 `.rscm`——scm 层的二进制接口
+  （`docs/EMITTER.md`）。
+- `rsc` 在 seed 钉住的构造字上把 `.rscm` 降为 `.wasm`。
+- C seed 宿主 `bootstrap/seed/stage-14274/seed-host.c` 把 seed 模块
+  嵌入钉住的 wasmtime 引擎运行；`bootstrap/seed/stage-14274/` 携带
+  宿主、钉文件与配方。
+- 调用形态是 `docs/RSD-COMMAND.md` 记载的执行器文件契约。
 
-`semantics/` 与 `gates/semalign/` 下的语义 `.rsd` 文件是作为规范
-发货的 Lean 4.14 程序文本（`docs/SPECS.md` 标该行 GATED；
-`gates/semalign/METHOD.md` 载明规程）。0.2 的 `rsdc` 前缘不接受
-它们——0.2 的 `.rsd` 文法是 `docs/LANGUAGE.md` 的引导子集，
-拒绝 `theorem`、`axiom`、`class`、`abbrev`、`variable`、`opaque`、
-`by` 与 `import`。
+## 声明的边界
 
-## 0.2 的版本局限
+- 仅单模块程序：前端拒绝 `import`。
+- 无 I/O 执行层：程序输入输出是宿主的文件契约，不是语言效应。
+- 无证明检查：R-CIC 内核与证书不在本版本；随附的 `theorem` 文本是
+  钉住的规范。
+- 无结果的发布/查询入口。
+- 无可导入的标准库（`docs/STDLIB.md`）。
+- 前端接受的 `.rsd` 表面是 `docs/LANGUAGE.md` 的自举子集，拒绝
+  `theorem`、`axiom`、`class`、`abbrev`、`variable`、`opaque`、`by`、`import`。
 
-- 单模块程序：前缘拒绝 `import`。
-- 没有 I/O 执行层：程序的输入输出是阶段宿主的文件契约，不是语言效果。
-- 没有证明检查：R-CIC 检查器、`rsd_proofs` 和证书都不在本版本；
-  随附的 `theorem` 文本是被钉的规范，不是被检查的断言。
-- 没有 UInt64；4 GiB 地址空间。
-- 没有结果的发布/查询入口；没有调度器命令。
-- 没有可导入的标准库（`docs/STDLIB.md`）。
+0.3 面向：可复现、可审计的编译——供应链与可验证、可自举编译器研究。
+它不是通用语言。
 
-0.2 面向谁：可复现、可审计的编译——供应链、可信执行之前的那一步——
-以及可验证、可自举编译器的研究。它不以通用语言的面目发布。
+## 证据
 
-## 0.2 之后的顺序
+- **独立复现。** seed 配方由无项目先验知识的独立 agent 仅凭文档在
+  新装 Linux 虚拟机上复现：两个编译器均重建为与 seed 逐字节一致。
+- **独立评审。** 本版本经两个独立模型族评审。
+- **归档一致性。** 发布 tag 处的仓库树与已发布源码归档逐字节一致。
+- **逐目标审计。** 本版本每个新特性各有一份独立签名审计；
+  记录存于仓库侧。
 
-每项都带验收对象；不写日期。
+## 研究议程
 
-1. 不信任对方即可使用其结果，第一个实例：R-CIC 内核（Lean Kernel
-   Arena：任何非法输入都不被接受，然后 init/std，再然后 16 GiB 内的
-   mathlib）加上结果的发布/查询入口——这是陌生人第一次能
-   找到、检查并复用他人结果的点；排在编程特性之前。R-CIC 内核规则
-   面向当前 Lean，含 4.32–4.34 健全性修复；输入是 4.35 导出格式。
-2. 编程完备性：模块、真实程序、UInt64、执行层（I/O 作类型化效果）、
-   64 位寻址，以及应用套件（Cedar、SQLite 等）作为
-   验收。基本数据表示从 0.2 起跟随当前 Lean（Int8..Int64/ISize、
-   Float32、String 作 UTF-8 ByteArray、Std.TreeMap），每类型一张卡。
-3. 廉价的执行确认：wasm0 -> AIR -> zk。
-4. 网络：通往外部语义的通用连接器（K/KORE、Lean/Rocq 导入），按一座
-   桥能打开多少语义排序。
+特性版本按目标完成顺序编号 0.3、0.4、…；没有目标预先绑定编号，
+  也不承诺日期：
 
-## 命名与面拼写
+- **检查他人结果。** R-CIC 证明内核、q 格式终版、结果的发布与查询入口。
+- **编程完备性。** 模块、64 位寻址、I/O 执行层、真实应用套件。
+- **廉价的执行确认。** wasm0 → AIR → 零知识证明。
+- **连接外部语义。** K/KORE、Lean 与 Rocq 导入。
 
-Residua 是项目；`rsd` 是语言和工具链。
+## 相关工作
 
-仓库侧，Residua 源码以同一棵精化前树的三种面拼写存在——`surface rsd`
-文法（Lean 4.14.0 语法子集，移植自 stock Lean 4.14.0 提交
-`410fab7284703f41660ca2454218dcca9b2ec896`）、一个 Reason 风格拼写
-和一个 Racket 系拼写——加上规范内核形式 `.rsx`。0.2 只发 `.rsd`
-拼写，且只接受它的引导子集（`docs/LANGUAGE.md`：链自身源码
-parse err=0，6/6 文件加 1,208,186 字节拼接 bundle；refuse 语料逐行
-拒绝，54/54——证据在仓库侧）。
+基于 seed 的自举处理 trusting-trust 问题 [1]；相关途径有 diverse
+double-compiling [2] 与 bootstrappable builds [3]；编译器的可验证自举
+由 CakeML [4] 确立。后端按引用计数加复用管理内存，源自 "Counting
+Immutable Beans" [6] 与 Perceus [5]；其各 pass 移植自 Lean 4 编译器 [11]，
+目标为 WebAssembly [12]。凭可检查证据接受不可信生产者的结果属于
+proof-carrying code [8] 传统；逐层翻译检查属于 translation
+validation [10] 传统。计划中的证明内核与 Lean4Lean [7] 比较。
+`release/NOTICES.md` 与 `release/PROVENANCE.tsv` 列出本项目移植的代码、
+用作测试 oracle 的工具与研究过的设计。
 
-逐层的设计——语义链、表面语法、身份与信任——见
-`docs/ARCHITECTURE.md`。面向外部读者的
-`docs/{TRUST.md,GLOSSARY.md,STABILITY.md,FAQ.md,RELATED-WORK.md,
-CONTRIBUTING-SECURITY.md}` 说明 0.2 信任什么、其用语、承诺与关系，
-均以中英双语发货。
+## 参考文献
 
-`closure_claim=0`（`release/MANIFEST.md`："No release tag, seal or
-author attestation is made here"）。
+1. K. Thompson. Reflections on trusting trust. *Communications of the
+   ACM* 27(8), 1984.
+2. D. A. Wheeler. Countering trusting trust through diverse
+   double-compiling. *ACSAC*, 2005.
+3. Bootstrappable Builds. https://bootstrappable.org
+4. R. Kumar, M. O. Myreen, M. Norrish, S. Owens. CakeML: a verified
+   implementation of ML. *POPL*, 2014.
+5. A. Reinking, N. Xie, L. de Moura, D. Leijen. Perceus: garbage free
+   reference counting with reuse. *PLDI*, 2021.
+6. S. Ullrich, L. de Moura. Counting immutable beans: reference
+   counting optimized for purely functional programming. *IFL*, 2019.
+7. M. Carneiro. Lean4Lean: verifying a typechecker for Lean, in Lean.
+   arXiv:2403.14064, 2024.
+8. G. C. Necula. Proof-carrying code. *POPL*, 1997.
+9. H. Barendregt, F. Wiedijk. The challenge of computer mathematics.
+   *Philosophical Transactions of the Royal Society A* 363, 2005.
+10. A. Pnueli, M. Siegel, E. Singerman. Translation validation.
+    *TACAS*, 1998.
+11. L. de Moura, S. Ullrich. The Lean 4 theorem prover and programming
+    language. *CADE*, 2021.
+12. A. Haas et al. Bringing the web up to speed with WebAssembly.
+    *PLDI*, 2017.

@@ -1,0 +1,630 @@
+-- RVal v1 encode and decode. docs/FORMAT.md recipe q1.
+-- Record keys are in the type bytes, in declared order, and are not
+-- repeated in the value. A byte list is the in-memory carrier.
+-- closure_claim = 0.
+namespace Lib.Rsd.Codec
+
+inductive Ty where
+  | i64
+  | bool
+  | str
+  | bytes
+  | list (t : Ty)
+  | pair (a b : Ty)
+  | sum (ts : List Ty)
+  | record (fs : List (String × Ty))
+  | option (t : Ty)
+  | residue (t : Ty)
+  deriving BEq
+
+inductive Val where
+  | int (n : Int)
+  | bool (b : Bool)
+  | str (s : String)
+  | bytes (p : List Int)
+  | list (vs : List Val)
+  | pair (x y : Val)
+  | sum (i : Nat) (v : Val)
+  | record (fs : List (String × Val))
+  | none
+  | some (v : Val)
+  | ok (v : Val)
+  | res (c : Int)
+
+structure RVal where
+  ty : Ty
+  val : Val
+
+/-- maxBytes refuses an input or a canon longer than the bound.
+    fuel is the recursion budget. maxDepth is part of the bound record
+    and this encoder does not consult it. -/
+structure Bounds where
+  maxBytes : Nat
+  maxDepth : Nat
+  fuel : Nat
+
+def defaultBounds : Bounds :=
+  { maxBytes := 1048576, maxDepth := 64, fuel := 1000000 }
+
+structure Out where
+  ok : Bool
+  residue : String
+  bytes : List Int
+
+def fail (r : String) : Out :=
+  { ok := false, residue := r, bytes := [] }
+
+def good (b : List Int) : Out :=
+  { ok := true, residue := "", bytes := b }
+
+def header : List Int :=
+  [0x52, 0x56, 0x41, 0x4c, 1]
+
+def i64Min : Int := -9223372036854775808
+def i64Max : Int := 9223372036854775807
+def two63 : Nat := 9223372036854775808
+def two64 : Nat := 18446744073709551616
+
+def uleb (n : Nat) : List Int :=
+  let rec go (fuel k : Nat) : List Int :=
+    match fuel with
+    | 0 => [0]
+    | f + 1 =>
+      let x := k % 128
+      let k := k / 128
+      if k == 0 then [(x : Int)] else ((x + 128 : Nat) : Int) :: go f k
+  go 16 n
+
+def utf8Char (c : Char) : List Int :=
+  let n := c.toNat
+  if n < 128 then [(n : Int)]
+  else if n < 2048 then [((192 + n / 64 : Nat) : Int), ((128 + n % 64 : Nat) : Int)]
+  else if n < 65536 then
+    [((224 + n / 4096 : Nat) : Int), ((128 + (n / 64) % 64 : Nat) : Int), ((128 + n % 64 : Nat) : Int)]
+  else
+    [((240 + n / 262144 : Nat) : Int), ((128 + (n / 4096) % 64 : Nat) : Int),
+     ((128 + (n / 64) % 64 : Nat) : Int), ((128 + n % 64 : Nat) : Int)]
+
+def utf8 : List Char → List Int
+  | [] => []
+  | c :: cs => utf8Char c ++ utf8 cs
+
+def bytesOk : List Int → Bool
+  | [] => true
+  | b :: bs => 0 ≤ b && b < 256 && bytesOk bs
+
+def banned (c : Char) : Bool :=
+  c == ' ' || c == '"' || c == '\\' || c == ';' || c == '(' || c == ')'
+    || c == '\n' || c == '\t' || c == '\r'
+
+def allDigit : List Char → Bool
+  | [] => true
+  | c :: cs => '0' ≤ c && c ≤ '9' && allDigit cs
+
+/-- GRAMMAR.md 5.2: non-empty, at most 1024 characters, not numeric-like,
+    not `#t`/`#f`, not a reserved head, and none of the forbidden characters. -/
+def noBan : List Char → Bool
+  | [] => true
+  | c :: cs => !banned c && noBan cs
+
+def keyOk (s : String) : Bool :=
+  let cs := s.data
+  cs ≠ [] && cs.length ≤ 1024 && !allDigit cs && !(match cs with | c :: _ => '0' ≤ c && c ≤ '9' | _ => false)
+    && s ≠ "#t" && s ≠ "#f" && s ≠ "call" && s ≠ "field" && s ≠ "and" && s ≠ "not"
+    && s ≠ "=" && s ≠ "record" && s ≠ "if" && s ≠ "let" && s ≠ "fold"
+    && noBan cs
+
+def leaf (p : List Int) : List Int :=
+  (1 : Int) :: uleb p.length ++ p
+
+def u64Of (n : Int) : Nat :=
+  if n < 0 then ((two64 : Int) + n).toNat else n.toNat
+
+def le8 (u : Nat) : List Int :=
+  [((u % 256 : Nat) : Int), (((u / 256) % 256 : Nat) : Int), (((u / 65536) % 256 : Nat) : Int),
+   (((u / 16777216) % 256 : Nat) : Int), (((u / 4294967296) % 256 : Nat) : Int),
+   (((u / 1099511627776) % 256 : Nat) : Int), (((u / 281474976710656) % 256 : Nat) : Int),
+   (((u / 72057594037927936) % 256 : Nat) : Int)]
+
+def i64Bytes (n : Int) : Option (List Int) :=
+  if n < i64Min || n > i64Max then none else some ((0 : Int) :: le8 (u64Of n))
+
+def hasTy (fs : List (String × Ty)) (k : String) : Bool :=
+  match fs with
+  | [] => false
+  | (n, _) :: rest => n == k || hasTy rest k
+
+def dupTy : List (String × Ty) → Bool
+  | [] => false
+  | (k, _) :: rest => hasTy rest k || dupTy rest
+
+def lookupVal (fs : List (String × Val)) (k : String) : Option Val :=
+  match fs with
+  | [] => none
+  | (n, v) :: rest => if n == k then some v else lookupVal rest k
+
+def countKey : List (String × Val) → String → Nat
+  | [], _ => 0
+  | (n, _) :: rest, k => (if n == k then 1 else 0) + countKey rest k
+
+def noExtra (fs : List (String × Ty)) : List (String × Val) → Bool
+  | [] => true
+  | (k, _) :: rest => hasTy fs k && noExtra fs rest
+
+def keysOk : List (String × Ty) → Bool
+  | [] => true
+  | (k, _) :: rest => keyOk k && keysOk rest
+
+def encodeTy (fuel : Nat) (t : Ty) : Out :=
+  match fuel, t with
+  | 0, _ => fail "budget_exhausted"
+  | _ + 1, .i64 => good [0]
+  | _ + 1, .bool => good [1]
+  | _ + 1, .str => good [2]
+  | _ + 1, .bytes => good [3]
+  | n + 1, .list t =>
+    let a := encodeTy n t
+    if a.ok then good ((4 : Int) :: a.bytes) else a
+  | n + 1, .pair a b =>
+    let x := encodeTy n a
+    let y := encodeTy n b
+    if x.ok && y.ok then good ((5 : Int) :: x.bytes ++ y.bytes) else if x.ok then y else x
+  | n + 1, .sum ts =>
+    let rec goSum (fuel : Nat) (ts : List Ty) : Out :=
+      match fuel, ts with
+      | _, [] => good []
+      | 0, _ => fail "budget_exhausted"
+      | f + 1, t :: rest =>
+        let a := encodeTy f t
+        let b := goSum f rest
+        if a.ok && b.ok then good (a.bytes ++ b.bytes) else if a.ok then b else a
+    let body := goSum n ts
+    if body.ok then good ((6 : Int) :: uleb ts.length ++ body.bytes) else body
+  | n + 1, .record fs =>
+    if dupTy fs || !keysOk fs then fail "encoding_invalid"
+    else
+      let rec goTyFields (fuel : Nat) (fs : List (String × Ty)) : Out :=
+        match fuel, fs with
+        | _, [] => good []
+        | 0, _ => fail "budget_exhausted"
+        | f + 1, (k, t) :: rest =>
+          let a := encodeTy f t
+          let b := goTyFields f rest
+          if a.ok && b.ok then good (leaf (utf8 k.data) ++ a.bytes ++ b.bytes) else if a.ok then b else a
+      let body := goTyFields n fs
+      if body.ok then good ((7 : Int) :: uleb fs.length ++ body.bytes) else body
+  | n + 1, .option t =>
+    let a := encodeTy n t
+    if a.ok then good ((8 : Int) :: a.bytes) else a
+  | n + 1, .residue t =>
+    let a := encodeTy n t
+    if a.ok then good ((9 : Int) :: a.bytes) else a
+
+def encodeVal (fuel : Nat) (t : Ty) (v : Val) : Out :=
+  match fuel with
+  | 0 => fail "budget_exhausted"
+  | n + 1 =>
+    match t, v with
+    | .i64, .int k =>
+      match i64Bytes k with
+      | none => fail "encoding_invalid"
+      | some b => good b
+    | .bool, .bool b => good [if b then 1 else 0]
+    | .str, .str s =>
+      if s.data.length > fuel then fail "budget_exhausted" else good (leaf (utf8 s.data))
+    | .bytes, .bytes p =>
+      if !bytesOk p then fail "encoding_invalid"
+      else if p.length > fuel then fail "budget_exhausted"
+      else good (leaf p)
+    | .list et, .list vs =>
+      -- One element, then the rest, into an accumulator. The fuel decreases,
+      -- so a sysroot row list does not build a recursive spine of appends.
+      -- The bytes are the length, then each element in order.
+      if vs.length > fuel then fail "budget_exhausted"
+      else
+        let rec goElems (fuel : Nat) (vs : List Val) (acc : Array Int) : Out :=
+          match fuel, vs with
+          | _, [] => good acc.toList
+          | 0, _ => fail "budget_exhausted"
+          | f + 1, x :: rest =>
+            let a := encodeVal f et x
+            if a.ok then goElems f rest (acc ++ a.bytes.toArray) else a
+        let body := goElems n vs #[]
+        if body.ok then good (uleb vs.length ++ body.bytes) else body
+    | .pair a b, .pair x y =>
+      let p := encodeVal n a x
+      let q := encodeVal n b y
+      if p.ok && q.ok then good (p.bytes ++ q.bytes) else if p.ok then q else p
+    | .sum ts, .sum i x =>
+      match ts.get? i with
+      | none => fail "encoding_invalid"
+      | some et =>
+        let body := encodeVal n et x
+        if body.ok then good (uleb i ++ body.bytes) else body
+    | .record fs, .record vs =>
+      if !noExtra fs vs then fail "encoding_invalid"
+      else
+        let rec goValFields (fuel : Nat) (fs : List (String × Ty)) : Out :=
+          match fuel, fs with
+          | _, [] => good []
+          | 0, _ => fail "budget_exhausted"
+          | f + 1, (k, et) :: rest =>
+            if countKey vs k != 1 then fail "encoding_invalid"
+            else
+              match lookupVal vs k with
+              | none => fail "encoding_invalid"
+              | some x =>
+                let a := encodeVal f et x
+                let b := goValFields f rest
+                if a.ok && b.ok then good (a.bytes ++ b.bytes) else if a.ok then b else a
+        goValFields n fs
+    | .option _, .none => good [0]
+    | .option et, .some x =>
+      let a := encodeVal n et x
+      if a.ok then good ((1 : Int) :: a.bytes) else a
+    | .residue et, .ok x =>
+      let a := encodeVal n et x
+      if a.ok then good ((0 : Int) :: a.bytes) else a
+    | .residue _, .res c =>
+      match i64Bytes c with
+      | none => fail "encoding_invalid"
+      | some b => good ((1 : Int) :: b)
+    | _, _ => fail "encoding_invalid"
+
+def encodeRVal (rv : RVal) (b : Bounds) : Out :=
+  let t := encodeTy b.fuel rv.ty
+  if !t.ok then t
+  else
+    let v := encodeVal b.fuel rv.ty rv.val
+    if !v.ok then v
+    else
+      let bytes := header ++ t.bytes ++ v.bytes
+      if bytes.length > b.maxBytes then fail "budget_exhausted" else good bytes
+
+structure NOut where
+  ok : Bool
+  residue : String
+  pos : Nat
+  n : Nat
+
+def nfail (r : String) (i : Nat) : NOut :=
+  { ok := false, residue := r, pos := i, n := 0 }
+
+def readUleb (bs : List Int) (i maxB : Nat) : NOut :=
+  let rec go (fuel shift i acc : Nat) : NOut :=
+    match fuel with
+    | 0 => nfail "encoding_invalid" i
+    | f + 1 =>
+      match bs.get? i with
+      | none => nfail "encoding_invalid" i
+      | some b =>
+        if b < 0 || b ≥ 256 then nfail "encoding_invalid" i
+        else
+          let piece := b.toNat % 128
+          let acc := acc + piece * (2 ^ shift)
+          let j := i + 1
+          if acc > maxB then nfail "budget_exhausted" j
+          else if b < 128 then
+            if b == 0 && shift != 0 then nfail "encoding_invalid" j
+            else { ok := true, residue := "", pos := j, n := acc }
+          else if shift ≥ 28 then nfail "budget_exhausted" j
+          else go f (shift + 7) j acc
+  go 8 0 i 0
+
+def readSlice (bs : List Int) (i n : Nat) : Option (List Int × Nat) :=
+  let rec go (k i : Nat) (acc : List Int) : Option (List Int × Nat) :=
+    match k with
+    | 0 => some (acc.reverse, i)
+    | k + 1 =>
+      match bs.get? i with
+      | none => none
+      | some b =>
+        if b < 0 || b ≥ 256 then none else go k (i + 1) (b :: acc)
+  go n i []
+
+def isCont (b : Int) : Bool :=
+  128 ≤ b && b < 192
+
+def decodeUtf8 (bs : List Int) : Option String :=
+  let rec go (fuel : Nat) (xs : List Int) (acc : List Char) : Option (List Char) :=
+    match fuel, xs with
+    | _, [] => some acc.reverse
+    | 0, _ => none
+    | f + 1, b :: rest =>
+      if b < 0 || b > 255 then none
+      else if b < 128 then go f rest (Char.ofNat b.toNat :: acc)
+      else if b < 194 then none
+      else if b < 224 then
+        match rest with
+        | c :: rest2 =>
+          if !isCont c then none
+          else
+            let n := (b.toNat - 192) * 64 + (c.toNat - 128)
+            if n < 128 then none else go f rest2 (Char.ofNat n :: acc)
+        | _ => none
+      else if b < 240 then
+        match rest with
+        | c :: d :: rest3 =>
+          if !isCont c || !isCont d then none
+          else
+            let n := (b.toNat - 224) * 4096 + (c.toNat - 128) * 64 + (d.toNat - 128)
+            if n < 2048 || (55296 ≤ n && n ≤ 57343) then none
+            else go f rest3 (Char.ofNat n :: acc)
+        | _ => none
+      else if b ≤ 244 then
+        match rest with
+        | c :: d :: e :: rest4 =>
+          if !isCont c || !isCont d || !isCont e then none
+          else
+            let n := (b.toNat - 240) * 262144 + (c.toNat - 128) * 4096 + (d.toNat - 128) * 64 + (e.toNat - 128)
+            if n < 65536 || n > 1114111 then none
+            else go f rest4 (Char.ofNat n :: acc)
+        | _ => none
+      else none
+  match go (bs.length + 1) bs [] with
+  | none => none
+  | some cs => some (String.mk cs)
+
+structure VOut where
+  ok : Bool
+  residue : String
+  pos : Nat
+  val : Val
+
+def vfail (r : String) (i : Nat) : VOut :=
+  { ok := false, residue := r, pos := i, val := .int 0 }
+
+def vok (i : Nat) (v : Val) : VOut :=
+  { ok := true, residue := "", pos := i, val := v }
+
+def readLeaf (bs : List Int) (i maxB : Nat) : Option (List Int × Nat) :=
+  match bs.get? i with
+  | some 1 =>
+    let n := readUleb bs (i + 1) maxB
+    if n.ok then readSlice bs n.pos n.n else none
+  | _ => none
+
+def fromLE8 (xs : List Int) : Int :=
+  let rec acc : List Int → Nat → Nat → Nat
+    | [], _, n => n
+    | b :: rest, shift, n => acc rest (shift + 8) (n + b.toNat * (2 ^ shift))
+  let u := acc xs 0 0
+  if u ≥ two63 then (u : Int) - (two64 : Int) else (u : Int)
+
+structure TOut where
+  ok : Bool
+  residue : String
+  pos : Nat
+  ty : Ty
+
+def tfail (r : String) (i : Nat) : TOut :=
+  { ok := false, residue := r, pos := i, ty := .i64 }
+
+def tok (i : Nat) (t : Ty) : TOut :=
+  { ok := true, residue := "", pos := i, ty := t }
+
+def decodeTy (fuel : Nat) (bs : List Int) (i maxB : Nat) : TOut :=
+  match fuel with
+  | 0 => tfail "budget_exhausted" i
+  | n + 1 =>
+    match bs.get? i with
+    | none => tfail "encoding_invalid" i
+    | some 0 => tok (i + 1) .i64
+    | some 1 => tok (i + 1) .bool
+    | some 2 => tok (i + 1) .str
+    | some 3 => tok (i + 1) .bytes
+    | some 4 =>
+      let a := decodeTy n bs (i + 1) maxB
+      if a.ok then tok a.pos (.list a.ty) else a
+    | some 5 =>
+      let a := decodeTy n bs (i + 1) maxB
+      if !a.ok then a
+      else
+        let b := decodeTy n bs a.pos maxB
+        if b.ok then tok b.pos (.pair a.ty b.ty) else b
+    | some 6 =>
+      let c := readUleb bs (i + 1) maxB
+      if !c.ok then tfail c.residue c.pos
+      else
+        let rec goDecSum (fuel i k : Nat) (acc : List Ty) : TOut :=
+          match fuel, k with
+          | _, 0 => tok i (.sum acc.reverse)
+          | 0, _ => tfail "budget_exhausted" i
+          | f + 1, k + 1 =>
+            let a := decodeTy f bs i maxB
+            if a.ok then goDecSum f a.pos k (a.ty :: acc) else a
+          termination_by fuel
+        goDecSum n c.pos c.n []
+    | some 7 =>
+      let c := readUleb bs (i + 1) maxB
+      if !c.ok then tfail c.residue c.pos
+      else
+        let rec goDecFields (fuel i k : Nat) (acc : List (String × Ty)) : TOut :=
+          match fuel, k with
+          | _, 0 =>
+            if dupTy acc then tfail "encoding_invalid" i else tok i (.record acc.reverse)
+          | 0, _ => tfail "budget_exhausted" i
+          | f + 1, k + 1 =>
+            match readLeaf bs i maxB with
+            | none => tfail "encoding_invalid" i
+            | some (raw, j) =>
+              match decodeUtf8 raw with
+              | none => tfail "encoding_invalid" i
+              | some name =>
+                if !keyOk name then tfail "encoding_invalid" i
+                else
+                  let a := decodeTy f bs j maxB
+                  if a.ok then goDecFields f a.pos k ((name, a.ty) :: acc) else a
+          termination_by fuel
+        goDecFields n c.pos c.n []
+    | some 8 =>
+      let a := decodeTy n bs (i + 1) maxB
+      if a.ok then tok a.pos (.option a.ty) else a
+    | some 9 =>
+      let a := decodeTy n bs (i + 1) maxB
+      if a.ok then tok a.pos (.residue a.ty) else a
+    | some _ => tfail "encoding_invalid" i
+termination_by fuel
+
+def decodeVal (fuel : Nat) (bs : List Int) (i maxB : Nat) (t : Ty) : VOut :=
+  match fuel with
+  | 0 => vfail "budget_exhausted" i
+  | n + 1 =>
+    match t with
+    | .i64 =>
+      match bs.get? i with
+      | some 0 =>
+        match readSlice bs (i + 1) 8 with
+        | none => vfail "encoding_invalid" i
+        | some (xs, j) => vok j (.int (fromLE8 xs))
+      | _ => vfail "encoding_invalid" i
+    | .bool =>
+      match bs.get? i with
+      | some 0 => vok (i + 1) (.bool false)
+      | some 1 => vok (i + 1) (.bool true)
+      | _ => vfail "encoding_invalid" i
+    | .str =>
+      match readLeaf bs i maxB with
+      | none => vfail "encoding_invalid" i
+      | some (raw, j) =>
+        match decodeUtf8 raw with
+        | none => vfail "encoding_invalid" i
+        | some s => vok j (.str s)
+    | .bytes =>
+      match readLeaf bs i maxB with
+      | none => vfail "encoding_invalid" i
+      | some (raw, j) => vok j (.bytes raw)
+    | .list et =>
+      let c := readUleb bs i maxB
+      if !c.ok then vfail c.residue c.pos
+      else
+        let rec goDecElems (fuel i k : Nat) (acc : List Val) : VOut :=
+          match fuel, k with
+          | _, 0 => vok i (.list acc.reverse)
+          | 0, _ => vfail "budget_exhausted" i
+          | f + 1, k + 1 =>
+            let a := decodeVal f bs i maxB et
+            if a.ok then goDecElems f a.pos k (a.val :: acc) else a
+          termination_by fuel
+        goDecElems n c.pos c.n []
+    | .pair a b =>
+      let x := decodeVal n bs i maxB a
+      if !x.ok then x
+      else
+        let y := decodeVal n bs x.pos maxB b
+        if y.ok then vok y.pos (.pair x.val y.val) else y
+    | .sum ts =>
+      let c := readUleb bs i maxB
+      if !c.ok then vfail c.residue c.pos
+      else
+        match ts.get? c.n with
+        | none => vfail "encoding_invalid" c.pos
+        | some et =>
+          let a := decodeVal n bs c.pos maxB et
+          if a.ok then vok a.pos (.sum c.n a.val) else a
+    | .record fs =>
+      let rec goDecRec (fuel i : Nat) (fs : List (String × Ty)) (acc : List (String × Val)) : VOut :=
+        match fuel, fs with
+        | _, [] => vok i (.record acc.reverse)
+        | 0, _ => vfail "budget_exhausted" i
+        | f + 1, (k, et) :: rest =>
+          let a := decodeVal f bs i maxB et
+          if a.ok then goDecRec f a.pos rest ((k, a.val) :: acc) else a
+        termination_by fuel
+      goDecRec n i fs []
+    | .option et =>
+      match bs.get? i with
+      | some 0 => vok (i + 1) .none
+      | some 1 =>
+        let a := decodeVal n bs (i + 1) maxB et
+        if a.ok then vok a.pos (.some a.val) else a
+      | _ => vfail "encoding_invalid" i
+    | .residue et =>
+      match bs.get? i with
+      | some 0 =>
+        let a := decodeVal n bs (i + 1) maxB et
+        if a.ok then vok a.pos (.ok a.val) else a
+      | some 1 =>
+        let a := decodeVal n bs (i + 1) maxB .i64
+        match a.val with
+        | .int c => if a.ok then vok a.pos (.res c) else a
+        | _ => a
+      | _ => vfail "encoding_invalid" i
+termination_by fuel
+
+structure Dec where
+  ok : Bool
+  residue : String
+  rval : RVal
+  pos : Nat
+
+def decodeRVal (bs : List Int) (b : Bounds) : Dec :=
+  if bs.length > b.maxBytes then
+    { ok := false, residue := "budget_exhausted", rval := { ty := .i64, val := .int 0 }, pos := 0 }
+  else if bs.take 5 != header then
+    { ok := false, residue := "encoding_invalid", rval := { ty := .i64, val := .int 0 }, pos := 0 }
+  else
+    let t := decodeTy b.fuel bs 5 b.maxBytes
+    if !t.ok then
+      { ok := false, residue := t.residue, rval := { ty := .i64, val := .int 0 }, pos := t.pos }
+    else
+      let v := decodeVal b.fuel bs t.pos b.maxBytes t.ty
+      if !v.ok then
+        { ok := false, residue := v.residue, rval := { ty := t.ty, val := .int 0 }, pos := v.pos }
+      else if v.pos != bs.length then
+        { ok := false, residue := "encoding_invalid", rval := { ty := t.ty, val := v.val }, pos := v.pos }
+      else
+        { ok := true, residue := "", rval := { ty := t.ty, val := v.val }, pos := v.pos }
+
+def tyI64 : Ty := .i64
+
+def v7 : RVal := { ty := .i64, val := .int 7 }
+
+def recTy : Ty := .record [("a", .i64), ("b", .option .str)]
+
+def recVal : RVal :=
+  { ty := recTy, val := .record [("a", .int 1), ("b", .some (.str "x"))] }
+
+end Lib.Rsd.Codec
+
+#guard (Lib.Rsd.Codec.encodeRVal Lib.Rsd.Codec.v7 Lib.Rsd.Codec.defaultBounds).ok
+#guard (Lib.Rsd.Codec.encodeRVal Lib.Rsd.Codec.v7 Lib.Rsd.Codec.defaultBounds).bytes
+  == [0x52, 0x56, 0x41, 0x4c, 1, 0, 0, 7, 0, 0, 0, 0, 0, 0, 0]
+#guard (Lib.Rsd.Codec.encodeRVal Lib.Rsd.Codec.recVal Lib.Rsd.Codec.defaultBounds).bytes
+  == [0x52, 0x56, 0x41, 0x4c, 1, 7, 2, 1, 1, 0x61, 0, 1, 1, 0x62, 8, 2,
+      0, 1, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 0x78]
+#guard !(Lib.Rsd.Codec.encodeRVal { ty := .i64, val := .int 9223372036854775808 }
+    Lib.Rsd.Codec.defaultBounds).ok
+#guard (Lib.Rsd.Codec.encodeRVal { ty := .i64, val := .int 9223372036854775808 }
+    Lib.Rsd.Codec.defaultBounds).residue == "encoding_invalid"
+#guard Lib.Rsd.Codec.keyOk "recipe"
+#guard !Lib.Rsd.Codec.keyOk ""
+#guard !Lib.Rsd.Codec.keyOk "1"
+#guard (Lib.Rsd.Codec.decodeRVal
+    (Lib.Rsd.Codec.encodeRVal Lib.Rsd.Codec.v7 Lib.Rsd.Codec.defaultBounds).bytes
+    Lib.Rsd.Codec.defaultBounds).ok
+#guard !(Lib.Rsd.Codec.decodeRVal [0x52, 0x56, 0x41, 0x4c] Lib.Rsd.Codec.defaultBounds).ok
+#guard (Lib.Rsd.Codec.decodeRVal
+    ((Lib.Rsd.Codec.encodeRVal Lib.Rsd.Codec.v7 Lib.Rsd.Codec.defaultBounds).bytes ++ [0])
+    Lib.Rsd.Codec.defaultBounds).residue == "encoding_invalid"
+#guard (Lib.Rsd.Codec.decodeRVal
+    [0x52, 0x56, 0x41, 0x4c, 1, 3, 1, 0x80, 0]
+    Lib.Rsd.Codec.defaultBounds).residue == "encoding_invalid"
+#guard (Lib.Rsd.Codec.decodeRVal
+    [0x52, 0x56, 0x41, 0x4c, 1, 1, 2]
+    Lib.Rsd.Codec.defaultBounds).residue == "encoding_invalid"
+#guard (Lib.Rsd.Codec.decodeRVal
+    [0x52, 0x56, 0x41, 0x4c, 1, 2, 1, 1, 0xFF]
+    Lib.Rsd.Codec.defaultBounds).residue == "encoding_invalid"
+#guard (Lib.Rsd.Codec.decodeRVal
+    [0x52, 0x56, 0x41, 0x4c, 1, 0, 0, 7, 0, 0, 0, 0, 0, 0, 0]
+    { maxBytes := 4, maxDepth := 64, fuel := 1000000 }).residue == "budget_exhausted"
+#guard (Lib.Rsd.Codec.encodeRVal { ty := .str, val := .str "" } Lib.Rsd.Codec.defaultBounds).bytes
+  == [0x52, 0x56, 0x41, 0x4c, 1, 2, 1, 0]
+#guard (Lib.Rsd.Codec.encodeRVal { ty := .bytes, val := .bytes [] } Lib.Rsd.Codec.defaultBounds).bytes
+  == [0x52, 0x56, 0x41, 0x4c, 1, 3, 1, 0]
+#guard (Lib.Rsd.Codec.encodeRVal
+    { ty := Lib.Rsd.Codec.recTy,
+      val := .record [("b", .some (.str "x")), ("a", .int 1)] }
+    Lib.Rsd.Codec.defaultBounds).bytes
+  == (Lib.Rsd.Codec.encodeRVal Lib.Rsd.Codec.recVal Lib.Rsd.Codec.defaultBounds).bytes

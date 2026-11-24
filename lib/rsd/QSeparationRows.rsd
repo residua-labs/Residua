@@ -1,0 +1,62 @@
+namespace Lib.Rsd.QSeparationRows
+
+-- Q-FORMAT 1 planted rows: one per concrete collision of reports/qformat/
+-- QKINDS.tsv (PROPOSAL "Concrete cross-kind equal-hash cases" 1-7) plus the
+-- negative controls of FORMAT.md section 10 step 2.  Each row names the two
+-- domains that previously shared one sha256 value; under the kind header
+-- they must differ.  Case 4 asserts the inverse by design: the `blob`
+-- content stores answer the same q for the same bytes.
+
+def hexOf (bs : List Int) : String :=
+  String.join (bs.map fun b =>
+    String.mk [Lib.Rsd.QFloorJson.hexChar (b.toNat / 16),
+      Lib.Rsd.QFloorJson.hexChar (b.toNat % 16)])
+
+def qHex (kind : String) (bytes : List Int) : String :=
+  hexOf (Lib.Sha256.qOf kind bytes).bytes
+
+def dHex (bytes : List Int) : String :=
+  hexOf (Lib.Sha256.contentHashBytes bytes).bytes
+
+def check (name : String) (ok : Bool) : IO Unit := do
+  if ok then IO.println s!"{name} ok" else throw (IO.userError (name ++ " fail"))
+
+def main : IO UInt32 := do
+  let hello := Lib.Sha256.bytesOf "5:hello"
+  let bytes := Lib.Sha256.bytesOf "compiler-worker-bytes"
+  let canon := Lib.Sha256.bytesOf "RVAL\x01receipt-canon"
+  let profile := Lib.Sha256.bytesOf "rsd.profile/1\n"
+  let source := Lib.Sha256.bytesOf "def main := ()"
+
+  -- Case 1: rsc compilerQ vs release/ARTIFACTS compile-worker file digest.
+  check "case1-compilerQ-vs-artifact-digest" (qHex "blob" bytes != dHex bytes)
+  -- Case 2: seed manifest rsc.rscm pin vs rsd store input q.
+  check "case2-manifest-vs-store-input" (qHex "blob" source != dHex source)
+  -- Case 3: 7-byte "5:hello" file/object vs sxq of atom hello (three-way).
+  check "case3-sxq-vs-blob" (qHex "rsx-atom" hello != qHex "blob" hello)
+  check "case3-sxq-vs-digest" (qHex "rsx-atom" hello != dHex hello)
+  check "case3-blob-vs-digest" (qHex "blob" hello != dHex hello)
+  -- Case 4 (inverse): the `blob` stores agree by design — one function.
+  check "case4-blob-stores-agree" (
+    Lib.Sha256.eqBytes (Lib.Rsd.Store.qFast "blob" hello).bytes
+      (Lib.Sha256.qOf "blob" hello).bytes)
+  -- Case 5: receipt preimage bytes vs a file digest of the same bytes.
+  check "case5-receipt-vs-file-digest" (qHex "receipt" canon != dHex canon)
+  -- Case 6: fixed-text digest vs a file of the same text.
+  check "case6-textQ-vs-file-digest" (qHex "text" profile != dHex profile)
+  -- Case 7: SourceBundle object name vs the class-(a) source digest.
+  check "case7-sourcebundle-vs-digest" (qHex "blob" source != dHex source)
+
+  -- Negative controls: sibling kinds separate on identical bytes; the raw
+  -- digest itself is byte-identical to sha256sum (interop control).
+  check "nf-ctx-vs-nf-profile" (qHex "nf-ctx" bytes != qHex "nf-profile" bytes)
+  check "nf-sig-vs-nf-node" (qHex "nf-sig" bytes != qHex "nf-node" bytes)
+  check "rval-vs-blob" (qHex "rval" bytes != qHex "blob" bytes)
+  check "rsx-list-vs-rsx-atom" (qHex "rsx-list" hello != qHex "rsx-atom" hello)
+  check "digest-untouched" (dHex hello ==
+    "a3a285698dc7dbfe23947339ee187d471f643617f88b4af70209bb1a01edd9d9")
+  return 0
+
+end Lib.Rsd.QSeparationRows
+
+def main : IO UInt32 := Lib.Rsd.QSeparationRows.main

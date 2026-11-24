@@ -1,0 +1,272 @@
+-- Sans-IO module builder. Graph chooses a frontier; Schedule admits complete
+-- memo classes; Store verifies content and publishes actions; CommandDevice
+-- replays the raw process protocol. No process or filesystem effect here.
+-- Commands return canonical RVAL {interface : bytes, object : bytes} on stdout.
+-- An interface port is an explicit driver contract, never a kernel-verdict key.
+-- Published design: Mokhov/Mitchell/Peyton Jones, Build Systems a la Carte
+-- (ICFP 2018), sections 4.1.1, 4.2.2 and 4.2.3 (topological scheduling,
+-- verifying traces and constructive traces). List operations follow CLRS,
+-- Introduction to Algorithms, 3rd ed., section 10.2; SHA-256 is FIPS 180-4
+-- section 6.2. This validates a supplied dependency order and recomputes
+-- Graph.nextReady at each frontier; it does not implement linear-time Kahn.
+-- For V modules, E dependency ports, maximum name length L and S source
+-- bytes, manifest validation costs O((V^2 + V*E)*L + S). Replay makes at
+-- most V+1 nextReady calls, hence includes (V+1)*Tready, the same quadratic
+-- list-work terms, and delegated restoration, encoding/hashing, command
+-- replay and Store work. Tready includes Graph's closure/SCC/index costs.
+-- closure_claim = 0.
+namespace Lib.Rsd.BuildSession
+
+structure Dependency where
+  name : String
+  facet : String := "object"
+  deriving BEq
+
+structure Module where
+  name : String
+  source : List Int
+  command : Lib.Rsd.CommandDevice.Plan
+  dependencies : List Dependency := []
+  deriving BEq
+
+structure Observation where
+  name : String
+  events : List Lib.Rsd.CommandDevice.Event
+  deriving BEq
+
+structure Request where
+  modules : List Module
+  roots : List String
+  objects : List Lib.Rsd.Store.Obj := []
+  actions : List Lib.Rsd.Store.Action := []
+  observations : List Observation := []
+  -- Empty keeps the historical lexicographic serial schedule.
+  serialOrder : List String := []
+  maxModules : Nat := 128
+  maxCommands : Nat := 128
+  graphFuel : Nat := 100000
+  deriving BEq
+
+inductive Residue where
+  | manifest | capacity | graph | key | command | exit | output | store | extraObservation
+
+def residueName : Residue -> String
+  | Residue.manifest => "nf_rsd_build_manifest"
+  | Residue.capacity => "nf_rsd_build_capacity"
+  | Residue.graph => "nf_rsd_build_graph"
+  | Residue.key => "nf_rsd_build_key"
+  | Residue.command => "nf_rsd_build_command"
+  | Residue.exit => "nf_rsd_build_exit"
+  | Residue.output => "nf_rsd_build_output"
+  | Residue.store => "nf_rsd_build_store"
+  | Residue.extraObservation => "nf_rsd_build_extra_observation"
+
+structure Established where
+  name : String
+  interfaceQ : List Int
+  objectQ : List Int
+  deriving BEq
+
+structure State where
+  established : List Established := []
+  ran : List String := []
+  cached : List String := []
+  store : Lib.Rsd.Store.Store := Lib.Rsd.Store.declare "rval" "rval"
+  pendingName : String := ""
+  pendingPlan : Option Lib.Rsd.CommandDevice.Plan := none
+  pending : List Int := []
+  done : Bool := false
+  detail : String := ""
+  unknown : Bool := false
+
+structure Result where
+  state : State
+  residue : Option Residue := none
+
+def failed (s : State) (e : Residue) (detail : String := "") : Result :=
+  { state := { s with pendingName := "", pendingPlan := none, pending := [], detail }, residue := some e }
+
+def nameOk (s : String) : Bool := Lib.Rsd.Keys.tokenOk s
+
+def distinct (ss : List String) : Bool := ss.eraseDups.length == ss.length
+
+def manifestOk (r : Request) : Bool :=
+  !r.modules.isEmpty && !r.roots.isEmpty && distinct (r.modules.map (fun x => x.name)) && distinct r.roots &&
+  (r.serialOrder.isEmpty || (distinct r.serialOrder && r.serialOrder.length == r.modules.length &&
+    r.serialOrder.all (fun n => r.modules.any (fun m => m.name == n)))) &&
+  r.roots.all (fun n => r.modules.any (fun m => m.name == n)) &&
+  r.modules.all (fun m => nameOk m.name && Lib.Rsd.Codec.bytesOk m.source &&
+    m.dependencies.all (fun d => (d.facet == "object" || d.facet == "interface") &&
+      r.modules.any (fun x => x.name == d.name)))
+
+def capacityOk (r : Request) : Bool :=
+  r.maxModules > 0 && r.maxModules <= 128 && r.modules.length <= r.maxModules &&
+  r.maxCommands > 0 && r.maxCommands <= 128 && r.graphFuel > 0 && r.graphFuel <= 1000000 &&
+  r.observations.length <= r.maxCommands && r.objects.length <= 4096 && r.actions.length <= 4096 &&
+  r.modules.all (fun m => m.source.length <= 1048576 && m.dependencies.length <= 128)
+
+def graph (r : Request) : List Lib.Rsd.Graph.Mod := r.modules.map fun m =>
+  { name := m.name, imps := m.dependencies.map fun d => { name := d.name, kind := "import" } }
+
+def findModule (r : Request) (n : String) : Option Module := r.modules.find? (fun x => x.name == n)
+
+def ports (m : Module) (est : List Established) : Option (List (Prod String (Prod String (List Int)))) :=
+  m.dependencies.mapM fun d =>
+    match est.find? (fun x => x.name == d.name) with
+    | none => none
+    | some a => some (d.name, d.facet, if d.facet == "interface" then a.interfaceQ else a.objectQ)
+
+def planFor (m : Module) (sourceQ : List Int) (ps : List (Prod String (Prod String (List Int)))) : Lib.Rsd.CommandDevice.Plan :=
+  { m.command with inputQs := m.command.inputQs ++ [sourceQ] ++ ps.map (fun x => x.2.2) }
+
+def planTy : Lib.Rsd.Codec.Ty := .record [
+  ("recipe", .str), ("module", .str), ("name", .str), ("argv", .list .str),
+  ("namespace", .bytes), ("config", .bytes), ("executable", .bytes),
+  ("inputs", .list .bytes), ("environment", .list (.pair .str .str)), ("cwd", .str),
+  ("msize", .i64), ("max_args", .i64), ("max_output", .i64), ("max_status", .i64),
+  ("max_steps", .i64), ("timeout_ms", .i64), ("graph_fuel", .i64),
+  ("ports", .list (.record [("name", .str), ("facet", .str), ("q", .bytes)]))]
+
+def planRVal (name : String) (p : Lib.Rsd.CommandDevice.Plan) (ps : List (Prod String (Prod String (List Int)))) (fuel : Nat) : Lib.Rsd.Codec.RVal :=
+  { ty := planTy, val := .record [
+    ("recipe", .str "rsd.build-environment/1"), ("module", .str name),
+    ("name", .str p.name), ("argv", .list (p.argv.map .str)),
+    ("namespace", .bytes p.namespaceQ), ("config", .bytes p.configQ),
+    ("executable", .bytes p.executableQ), ("inputs", .list (p.inputQs.map .bytes)),
+    ("environment", .list (p.environment.map fun x => .pair (.str x.1) (.str x.2))),
+    ("cwd", .str p.cwd), ("msize", .int p.msize), ("max_args", .int p.maxArgs),
+    ("max_output", .int p.maxOutput), ("max_status", .int p.maxStatus),
+    ("max_steps", .int p.maxSteps), ("timeout_ms", .int p.timeoutMs), ("graph_fuel", .int fuel),
+    ("ports", .list (ps.map fun x => .record [
+      ("name", .str x.1), ("facet", .str x.2.1), ("q", .bytes x.2.2)]))] }
+
+structure Job where
+  module : Module
+  plan : Lib.Rsd.CommandDevice.Plan
+  memo : Lib.Rsd.Schedule.MemoKey
+  keyBytes : List Int
+  keyQ : List Int
+
+def job (r : Request) (m : Module) (est : List Established) : Option Job := do
+  let ps <- ports m est
+  let sourceQ := Lib.Rsd.Keys.hashOf "blob" m.source
+  if !sourceQ.ok then none else do
+    let p := planFor m sourceQ.bytes ps
+    if !(Lib.Rsd.CommandDevice.decision { plan := p, events := [] }).residue.isNone then none else do
+      let environment := Lib.Rsd.Keys.ofRVal (planRVal m.name p ps r.graphFuel)
+      if !environment.ok then none else do
+        let key := Lib.Rsd.Codec.encodeRVal (Lib.Rsd.Keys.artifactRVal sourceQ.bytes p.executableQ environment.bytes) Lib.Rsd.Codec.defaultBounds
+        let hashed := Lib.Rsd.Keys.hashOf "rval" key.bytes
+        if !key.ok || !hashed.ok then none else
+          some { module := m, plan := p, keyBytes := key.bytes, keyQ := hashed.bytes, memo := { bodyQ := p.executableQ, fuel := r.graphFuel, inputQs := [sourceQ.bytes, environment.bytes] } }
+
+def outputTy : Lib.Rsd.Codec.Ty := .record [("interface", .bytes), ("object", .bytes)]
+
+def outputBytes (interfaceBytes objectBytes : List Int) : List Int :=
+  (Lib.Rsd.Codec.encodeRVal { ty := outputTy, val := .record [
+    ("interface", .bytes interfaceBytes), ("object", .bytes objectBytes)] } Lib.Rsd.Codec.defaultBounds).bytes
+
+def decodeOutput (bs : List Int) : Option (Prod (List Int) (List Int)) :=
+  let d := Lib.Rsd.Codec.decodeRVal bs Lib.Rsd.Codec.defaultBounds
+  if !d.ok || d.rval.ty != outputTy then none else
+    match d.rval.val with
+    | .record [("interface", .bytes i), ("object", .bytes o)] =>
+      if outputBytes i o == bs then some (i, o) else none
+    | _ => none
+
+-- Persisted objects/actions, not caller-provided AVL indices, are the input.
+-- Every hit rehashes the canonical action and both output objects.
+def restored (r : Request) : Lib.Rsd.Store.Store :=
+  let objects := r.objects.filter fun o => Lib.Rsd.Store.readQForm "rval" o.q o.bytes != "mismatch"
+  let actions := r.actions.filter fun a =>
+    Lib.Rsd.Store.readQForm "rval" a.key a.keyBytes != "mismatch" &&
+    r.actions.all (fun b => b.key != a.key || b == a)
+  Lib.Rsd.Store.merge (Lib.Rsd.Store.declare "rval" "rval")
+    { Lib.Rsd.Store.empty with objects, actions }
+
+def cacheHit (s : State) (j : Job) : Option Established := do
+  let a <- Lib.Rsd.Store.lookupAction s.store j.keyQ
+  if a.key != j.keyQ || a.keyBytes != j.keyBytes || Lib.Rsd.Store.hashOk s.store.actKind a.key a.keyBytes != "" then none else do
+    let [.mk "interface" iq, .mk "object" oq] := a.outputs | none
+    if !(Lib.Rsd.Store.get s.store iq).ok || !(Lib.Rsd.Store.get s.store oq).ok then none else do
+      let stored : Lib.Rsd.Schedule.MemoKey := { bodyQ := j.plan.executableQ, fuel := j.memo.fuel, inputQs := j.memo.inputQs }
+      let hit := Lib.Rsd.Schedule.lookup stored { valueQ := oq, residue := "", fuelUsed := 0 } j.memo
+      if !hit.hit then none else some { name := j.module.name, interfaceQ := iq, objectQ := hit.outcome.valueQ }
+
+def publish (s : State) (j : Job) (raw : List Int) : Option (Prod State Established) := do
+  let (ib, ob) <- decodeOutput raw
+  let iq := Lib.Rsd.Keys.hashOf "rval" ib
+  let oq := Lib.Rsd.Keys.hashOf "rval" ob
+  if !iq.ok || !oq.ok then none else do
+    let (s1, a) := Lib.Rsd.Store.commit (Lib.Rsd.Store.stage s.store { q := iq.bytes, bytes := ib }) iq.bytes
+    let (s2, b) := Lib.Rsd.Store.commit (Lib.Rsd.Store.stage s1 { q := oq.bytes, bytes := ob }) oq.bytes
+    let (s3, c) := Lib.Rsd.Store.putAction s2 { key := j.keyQ, keyBytes := j.keyBytes, outputs := [("interface", iq.bytes), ("object", oq.bytes)] }
+    if !a.ok || !b.ok || !c.ok then none else
+      some ({ s with store := s3 }, { name := j.module.name, interfaceQ := iq.bytes, objectQ := oq.bytes })
+
+-- Replay complete observations in graph order. An incomplete command suspends
+-- on its exact pending wire request; no output/action is published before EOF.
+def replay (r : Request) : Nat -> State -> List Observation -> Result
+  | 0, s, _ => failed s .capacity "module_steps"
+  | left + 1, s, obs =>
+    let bound := if r.serialOrder.isEmpty then 1 else r.maxModules
+    let ready := Lib.Rsd.Graph.nextReady (graph r) r.roots (s.established.map (fun x => x.name)) ["import"] bound r.graphFuel
+    if !ready.ok then failed s .graph ready.residue else
+    let chosen := if r.serialOrder.isEmpty then ready.names.head? else r.serialOrder[s.established.length]?
+    if ready.names.isEmpty then
+      if !r.serialOrder.isEmpty && s.established.length != r.serialOrder.length then failed s .graph "order_unreachable"
+      else if !obs.isEmpty then failed s .extraObservation else { state := { s with done := true } }
+    else match chosen with
+    | none => failed s .graph "order_incomplete"
+    | some name =>
+      if !ready.names.contains name then failed s .graph "order_dependency" else
+      match findModule r name with
+      | none => failed s .manifest name
+      | some m =>
+        match job r m s.established with
+        | none => failed s .key name
+        | some j =>
+          match cacheHit s j with
+          | some a => replay r left { s with established := s.established ++ [a], cached := s.cached ++ [name] } obs
+          | none =>
+            match obs with
+            | [] =>
+              if s.ran.length >= r.maxCommands then failed s .capacity "commands" else
+              let c := Lib.Rsd.CommandDevice.decision { plan := j.plan, events := [] }
+              { state := { s with pendingName := name, pendingPlan := some j.plan, pending := c.state.pending } }
+            | o :: os =>
+              if s.ran.length >= r.maxCommands then failed s .capacity "commands"
+              else if o.name != name then failed s .extraObservation o.name else
+              let c := Lib.Rsd.CommandDevice.decision { plan := j.plan, events := o.events }
+              if let some e := c.residue then failed { s with unknown := c.state.unknown } .command (Lib.Rsd.CommandDevice.residueName e)
+              else if !c.state.done then
+                if !os.isEmpty then failed { s with unknown := c.state.execSent && c.state.exit.isNone && c.state.signal.isNone } .extraObservation "after_incomplete" else
+                { state := { s with pendingName := name, pendingPlan := some j.plan, pending := c.state.pending, unknown := c.state.unknown } }
+              else if c.state.exit != some 0 || !c.state.signal.isNone then failed s .exit name
+              else if (decodeOutput c.state.output).isNone then failed s .output name
+              else match publish s j c.state.output with
+                | none => failed s .store name
+                | some (s1, a) => replay r left { s1 with established := s1.established ++ [a], ran := s1.ran ++ [name] } os
+
+def decision (r : Request) : Result :=
+  let s : State := { store := restored r }
+  if !capacityOk r then failed s .capacity
+  else if !manifestOk r then failed s .manifest
+  else replay r (r.modules.length + 1) s r.observations
+
+-- State is a replay result, never authority to launch or reuse a module.
+
+
+def residue? (r : Request) (_s : State) : Option Residue := (decision r).residue
+def admissible (r : Request) (s : State) : Bool := (residue? r (id s)).isNone
+def runNF (r : Request) (_s : State) : Result := decision r
+
+-- NF-CORRECT-0 r2: the checked decision; runNF retains the original
+-- transition and its failure-state observations for existing callers.
+def decide (r : Request) (_s : State) : Except Residue State :=
+  let answer := runNF r _s
+  match answer.residue with
+  | some residue => .error residue
+  | none => .ok answer.state
+
+end Lib.Rsd.BuildSession

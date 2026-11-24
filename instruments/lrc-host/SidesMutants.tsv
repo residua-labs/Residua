@@ -1,0 +1,167 @@
+# FILE	FROM	TO
+# The rows only instruments/lrc-host/Sides.rsd sees (the file is named so that `Diff.rsd mutants`, which takes every Mutants*.tsv, leaves it). A wrong fuel depth in lib/lrc/FromWire.rsd changes no value and no comparison of
+# Diff.rsd, which sets the pipeline's IR against the translated IR. Replay of a row: plant it in a copy of the tree, build the compiler
+# of that copy (`rsd --store S --home COPY t.rsd`), run `lean --run instruments/lrc-host/Sides.rsd S/build/rsc-native 40`; the row is
+# caught when that exits 1.
+# The guard of a child read inside a call translated in place, without the depth of that call (recatb: an integer field, child 7).
+lib/lrc/FromWire.rsd	            items := xs.items ++ [mkGuard (i.toNat + 1 + cx.inlOn.length) mkUnreachable,	            items := xs.items ++ [mkGuard (i.toNat + 1) mkUnreachable,
+# The guard of every child read one short (wideatb: a node field, child 7, read where it stands).
+lib/lrc/FromWire.rsd	            items := xs.items ++ [mkGuard (i.toNat + 1 + cx.inlOn.length) mkUnreachable,	            items := xs.items ++ [mkGuard (i.toNat + cx.inlOn.length) mkUnreachable,
+# lib/lrc/Emit.rsd, which Diff.rsd never runs (AUDIT-LAND-LRC r1, R2): a guard that lets the last refused budget pass, and a call that
+# hands its callee one unit of fuel too many.
+lib/lrc/Emit.rsd	    let guard := lg em.fuel ++ i64Const n.b ++ wLeU ++ wIf ++ emRefuse em.addr64 em.conv profile.tagFuel profile.detNone ++ wEnd	    let guard := lg em.fuel ++ i64Const n.b ++ wLtU ++ wIf ++ emRefuse em.addr64 em.conv profile.tagFuel profile.detNone ++ wEnd
+lib/lrc/Emit.rsd	  lg 0 ++ (if same || isOwnFn em.nImg f then lg em.fuel else lg em.fuel ++ i64Const (1 + depth : Nat) ++ wSub)	  lg 0 ++ (if same || isOwnFn em.nImg f then lg em.fuel else lg em.fuel ++ i64Const (depth : Nat) ++ wSub)
+# lib/lrc/Emit.rsd, a wrong value with the same status: a product that is the square of its left operand. Shown by the rows whose VALUE
+# is read back from a module, not by the statuses alone.
+lib/lrc/Emit.rsd	  else if p == primMul then codeOk (emMul em.addr64 em.conv a b d)	  else if p == primMul then codeOk (emMul em.addr64 em.conv a a d)
+# rsc/rsc.rsd, the refusal's code as the compiler prints it (the row litlong): the function left out; the residue's code replaced by the
+# present lowering's code for a bad body.
+rsc/rsc.rsd	  lrcRefusedBase + ((Lrc.refusalClass e * 1000 + (if Lrc.refusalFn e < 1000 then Lrc.refusalFn e else 999) : Nat) : Int)	  lrcRefusedBase + ((Lrc.refusalClass e * 1000 : Nat) : Int)
+rsc/rsc.rsd	  | Except.error e => outFail (lrcRefused e)	  | Except.error _ => outFail profile.cBody
+# Rows 8 to 17, the arrays' runtime and the boundary's entry (lib/lrc/Emit.rsd "Arrays", `emitFns`): the read of an element one
+# word off, a push in place that does not count its element, a copy that does not count the elements it shares (seen when the copy
+# is dropped and the first array read again: row arrkeep), a list cell with the list in the place of its head, a list counted
+# twice (row arrof), a slice of one element more, a large cell taken from the list of another capacity (row arrbig), the public entry that runs
+# the function and not its twin (the values then are the stage's own forms), a write in place one word off, and an array of
+# objects not taken for an array. Each is shown by the value the reader of instruments/lrc-host/Sides.rsd reads from the stage's module.
+# Not rows, and why: a count that is not taken back, an element that is not released, or a large cell freed onto a list no
+# allocation reads, in these functions leaves cells live and changes no value; the module keeps no count of live cells, so
+# nothing here sees such a leak.
+# The write in place one word off (row 16) is reached by the rows over, overfirst and overlast only (instruments/lrc-host/ProgOver.rsd:
+# an array of objects that nothing else holds, the element written over an object); since LAND-INLOOP the caller writes every
+# other case itself (lib/lrc/Emit.rsd `wArrSetInPlace`), and from then until those rows no row reached the line. The array of
+# objects not taken for an array (row 17) gives a module that does not end, as several of these do on rows they are not named
+# for (a cell that is misread or released is taken for a list, and the walk goes on): a replay over the whole table ends at
+# its time limit, so these rows are replayed on the rows that show them.
+lib/lrc/Emit.rsd	    codeOk (lg a ++ lg b ++ i64Const 3 ++ wShl ++ wAdd ++ wasmAddr em.addr64 ++ i64LoadAt 24 ++ ls d ++ (if imm == 0 then [] else wIncLoc em.addr64 d em.t0))	    codeOk (lg a ++ lg b ++ i64Const 3 ++ wShl ++ wAdd ++ wasmAddr em.addr64 ++ i64LoadAt 16 ++ ls d ++ (if imm == 0 then [] else wIncLoc em.addr64 d em.t0))
+lib/lrc/Emit.rsd	          ++ lg 1 ++ wasmAddr addr64 ++ lg 4 ++ i64Const 1 ++ wAdd ++ i64StoreAt 8	          ++ lg 1 ++ wasmAddr addr64 ++ lg 4 ++ i64StoreAt 8
+lib/lrc/Emit.rsd	      ++ lg obj ++ wEqz ++ wI32Eqz ++ wIf ++ wIncLoc addr64 e t ++ wEnd	      ++ lg obj ++ wEqz ++ wI32Eqz ++ wIf ++ wEnd
+lib/lrc/Emit.rsd	          ++ lg 8 ++ wasmAddr addr64 ++ lg 7 ++ i64StoreAt 8	          ++ lg 8 ++ wasmAddr addr64 ++ lg 5 ++ i64StoreAt 8
+lib/lrc/Emit.rsd	        ++ lg 3 ++ i64Const 1 ++ wAdd ++ ls 3	        ++ lg 3 ++ i64Const 2 ++ wAdd ++ ls 3
+lib/lrc/Emit.rsd	      ++ lg 3 ++ lg 2 ++ wSub ++ ls 5	      ++ lg 3 ++ lg 2 ++ wSub ++ i64Const 1 ++ wAdd ++ ls 5
+lib/lrc/Emit.rsd	        ++ lg 4 ++ lg 1 ++ wCtz ++ i64Const 3 ++ wShl ++ wAdd ++ i64Const hpBigAt ++ wAdd ++ ls 6	        ++ lg 4 ++ i64Const 9 ++ i64Const 3 ++ wShl ++ wAdd ++ i64Const hpBigAt ++ wAdd ++ ls 6
+lib/lrc/Emit.rsd	        let t := pubEntry pubs d.f	        let t := d.f
+lib/lrc/Emit.rsd	        ++ lg 1 ++ lg 2 ++ i64Const 3 ++ wShl ++ wAdd ++ wasmAddr addr64 ++ lg 3 ++ i64StoreAt 24	        ++ lg 1 ++ lg 2 ++ i64Const 3 ++ wShl ++ wAdd ++ wasmAddr addr64 ++ lg 3 ++ i64StoreAt 16
+lib/lrc/Emit.rsd	  lg x ++ i64Const 1 ++ wAnd ++ wEqz ++ wIfI32 ++ lg x ++ wasmAddr addr64 ++ wLoad8 7 ++ i64Const (tagArr : Int) ++ wGeU ++ wElse ++ [65, 0] ++ wEnd	  lg x ++ i64Const 1 ++ wAnd ++ wEqz ++ wIfI32 ++ lg x ++ wasmAddr addr64 ++ wLoad8 7 ++ i64Const (tagArr : Int) ++ wGtU ++ wElse ++ [65, 0] ++ wEnd
+# Row 18, lib/lrc/FromWire.rsd: the write at an index of the empty list that asks for its index. The loop the front end writes
+# asks for nothing on an empty list, so the run needs no call there (row arremptyset: a value at fuel 1 under the present
+# lowering, a refusal for want of fuel when the index is asked for).
+lib/lrc/FromWire.rsd	    let split := mkSplit j [pT r] (mkIfW e (mkJmp j [(a : Int)]) some1)	    let split := mkSplit j [pT r] (mkIfW e some1 some1)
+# lib/lrc/FromWire.rsd "Numbers in nodes": the guard of a number's node one short. The image's `hold` allocates one call down, so the
+# place refused on one budget more than the guard of `hold` alone (rows num* of Images.tsv).
+lib/lrc/FromWire.rsd	          items := v.items ++ ar.items ++ [mkGuard (cx.inlOn.length + 2) mkUnreachable, mkVDecl x tyTObj node mkUnreachable],	          items := v.items ++ ar.items ++ [mkGuard (cx.inlOn.length + 1) mkUnreachable, mkVDecl x tyTObj node mkUnreachable],
+# A test and the case that reads it written as one branch (lib/lrc/Emit.rsd `emTest`, `emTestCase`): `lt` written as `gt`, the two
+# bodies of the branch exchanged, and the branch taken although the test's word is read again below. The last row is in
+# lib/lrc/JoinOnce.rsd: a test moved down to its case although a join point reads its word too (the row `tests`: `twice`); the emitter
+# then makes no word and the join point reads none.
+lib/lrc/Emit.rsd	  else if primOp e == primLt then lg a ++ lg b ++ wLtS	  else if primOp e == primLt then lg a ++ lg b ++ wGtS
+lib/lrc/Emit.rsd	      { ok := a.ok && z.ok, code := emTest em.addr64 e ++ wIf ++ a.code ++ wElse ++ z.code ++ wEnd }	      { ok := a.ok && z.ok, code := emTest em.addr64 e ++ wIf ++ z.code ++ wElse ++ a.code ++ wEnd }
+lib/lrc/Emit.rsd	    && !hasFreeVar (emTwo (caseAlts k)).zero n.a.toNat && !hasFreeVar (emTwo (caseAlts k)).one n.a.toNat	    && !hasFreeVar (emTwo (caseAlts k)).zero n.a.toNat
+lib/lrc/JoinOnce.rsd	if n.ys.isEmpty && cdIsTest e && k.op == opJDecl && cdCaseBelow n.a k && cdCount n.a k == 1 then	if n.ys.isEmpty && cdIsTest e && k.op == opJDecl && cdCaseBelow n.a k then
+# Object fields of four bytes (rsc's layer `narrow`; lib/lrc/Emit.rsd "The width of an object field"). Sides.rsd runs every row's
+# module of narrow fields against the stage's module, so each of these is caught there and nowhere else: a field read as 8 bytes
+# whatever its width; a field written as 8 bytes; an index of a field counted in steps of 8 bytes (the release of an object, a write
+# at an index in a variable, a list cell's tail); a word of the scalar area read, and one written, where it stands after fields of 8
+# bytes; the fields of a new object written 8 bytes apart; the number of an integer's word read without its sign; the list cells that
+# an array's elements become, each said to have one object field (row 31; since a scalar head is an object word there, lib/lrc/FromWire.rsd
+# "A scalar head where an object field is four bytes", every cell has two); a list's heads read into an array, a scalar's as an
+# object's and an object's as a scalar's (row 32); and the module of narrow fields without the export that says so (the reader then
+# reads fields of 8).
+# Not a row: the word of an integer below zero left with its upper 32 bits (`primBoxS` without its mask). A field keeps the low half
+# whatever stands above it, and every reader of an integer's word in a variable takes the number out of the low half with its sign, so
+# no run shows the difference; the mask is there so that the word in a variable is the word a field gives back.
+lib/lrc/Emit.rsd	def fldLoad (fw off : Nat) : List Int := if fw == 4 then wLoad32 off else i64LoadAt (off : Int)	def fldLoad (fw off : Nat) : List Int := if fw == 0 then wLoad32 off else i64LoadAt (off : Int)
+lib/lrc/Emit.rsd	def fldStore (fw off : Nat) : List Int := if fw == 4 then wStore32 off else i64StoreAt (off : Int)	def fldStore (fw off : Nat) : List Int := if fw == 0 then wStore32 off else i64StoreAt (off : Int)
+lib/lrc/Emit.rsd	def fldShift (fw : Nat) : Int := if fw == 4 then 2 else 3	def fldShift (fw : Nat) : Int := if fw == 0 then 2 else 3
+lib/lrc/Emit.rsd	      ++ scRead em.fw (sprojWidth e) (8 + em.fw * sprojN e + sprojOff e)	      ++ scRead em.fw (sprojWidth e) (8 + 8 * sprojN e + sprojOff e)
+lib/lrc/Emit.rsd	    let pos : Nat := 8 + em.fw * ssetN n + ssetOff n	    let pos : Nat := 8 + 8 * ssetN n + ssetOff n
+lib/lrc/Emit.rsd	  | i, y :: ys => lg d ++ wasmAddr addr64 ++ emArg y ++ fldStore fw (8 + fw * i) ++ emFields addr64 fw d (i + 1) ys	  | i, y :: ys => lg d ++ wasmAddr addr64 ++ emArg y ++ fldStore fw (8 + 8 * i) ++ emFields addr64 fw d (i + 1) ys
+lib/lrc/Emit.rsd	    codeOk (if em.fw == 4 then lg a ++ i64Const 32 ++ wShl ++ i64Const 33 ++ wShrS ++ ls d else lg a ++ i64Const 1 ++ wShrS ++ ls d)	    codeOk (if em.fw == 0 then lg a ++ i64Const 32 ++ wShl ++ i64Const 33 ++ wShrS ++ ls d else lg a ++ i64Const 1 ++ wShrS ++ ls d)
+lib/lrc/Emit.rsd	          ++ lg 8 ++ wWrap ++ i64Const (emHeader 1 2 + 16 * 4294967296) ++ i64StoreAt 0	          ++ lg 8 ++ wWrap ++ i64Const (emHeader 1 1 + 16 * 4294967296) ++ i64StoreAt 0
+lib/lrc/Emit.rsd	              ++ lg 2 ++ wEqz ++ wIfI64	              ++ lg 2 ++ wEqz ++ wI32Eqz ++ wIfI64
+rsc/rsc.rsd	    let exps := shiftExps rtBase (expsFor n) ++ (if fw == 4 then [{ name := Lrc.narrowName, idx := last }] else [])	    let exps := shiftExps rtBase (expsFor n)
+# Scalar fields of two and of four bytes in a module (lib/lrc/Emit.rsd `scRead`, `scWrite`; lib/lrc/Pack.rsd): a field of four
+# bytes read as two; one written as a byte; a field of two bytes written as a byte; and a constructor's scalar area sized
+# without its fields of four bytes, so that its last fields are written past the cell (the interpreter keeps no bytes and
+# cannot show that one). The fields exist under the layer `narrow` only, so the third module of a row is where each shows.
+# Rows: pack, rbtree.
+lib/lrc/Emit.rsd	  if w == 1 then wLoad8 pos else if w == 2 then wLoad16 pos else if w == 4 then wLoad32 pos else scLoad fw pos	  if w == 1 then wLoad8 pos else if w == 2 then wLoad16 pos else if w == 4 then wLoad16 pos else scLoad fw pos
+lib/lrc/Emit.rsd	  if w == 1 then wStore8 pos else if w == 2 then [61, 1] ++ lebU pos else if w == 4 then wStore32 pos else scStore fw pos	  if w == 1 then wStore8 pos else if w == 2 then [61, 1] ++ lebU pos else if w == 4 then wStore8 pos else scStore fw pos
+lib/lrc/Emit.rsd	  if w == 1 then wStore8 pos else if w == 2 then [61, 1] ++ lebU pos else if w == 4 then wStore32 pos else scStore fw pos	  if w == 1 then wStore8 pos else if w == 2 then wStore8 pos else if w == 4 then wStore32 pos else scStore fw pos
+lib/lrc/Pack.rsd	  8 * pkCount s c 8 k + 4 * pkCount s c 4 k + 2 * pkCount s c 2 k + pkCount s c 1 k	  8 * pkCount s c 8 k + 2 * pkCount s c 2 k + pkCount s c 1 k
+# A function with one caller written at its call (lib/lrc/Emit.rsd "A function with one caller"; nothing of it is in the IR,
+# so Sides.rsd alone sees it): the callee counting the caller's fuel down and not its own; entered with one unit of fuel
+# too many; its entry's test refusing nothing; a `ret` that leaves its values on the stack and not in the variables the
+# call binds; and the regions of a caller beginning inside the caller's own locals. Rows: inl, inlempty (ProgInl.rsd),
+# nqueenskk.
+# Not rows. Two functions' regions in one caller laid over each other: neither lives while the other runs, so no value
+# shows it. The one level (`inlTable`: what a function written at its call calls stays a call): the front end takes no
+# program yet in which such a function has a caller that is one too and is none of the image's functions (a fold
+# inside a fold's body is refused, rsdc_type), so no row has the shape.
+lib/lrc/Emit.rsd	      let em2 := { em with self := d.f, params := ps.xs, fuel := s, inl := true, rets := binds }	      let em2 := { em with self := d.f, params := ps.xs, fuel := em.fuel, inl := true, rets := binds }
+lib/lrc/Emit.rsd	        code := lg em.fuel ++ (if fapSame e then [] else i64Const (1 + fapDepth e : Nat) ++ wSub) ++ ls s	        code := lg em.fuel ++ (if fapSame e then [] else i64Const (fapDepth e : Nat) ++ wSub) ++ ls s
+lib/lrc/Emit.rsd	          ++ lg s ++ wEqz ++ wIf ++ emRefuse em.addr64 em.conv profile.tagFuel profile.detNone ++ wEnd	          ++ lg s ++ wEqz ++ wIf ++ wEnd
+lib/lrc/Emit.rsd	    if em.inl then codeOk (emRetVals (retArgs n) ++ emPops em.rets ++ wBr (labelDepth (-3) labels))	    if em.inl then codeOk (emRetVals (retArgs n) ++ wBr (labelDepth (-3) labels))
+lib/lrc/Emit.rsd	      let first := declMaxIndex g + 4	      let first := declMaxIndex g + 1
+# lib/lrc/Emit.rsd, the list of an array and the array of a list where an object field is four bytes: there the head of a list of
+# scalars is an object word (lib/lrc/FromWire.rsd "A scalar head where an object field is four bytes"), and the two functions of
+# the runtime that walk and build cells take it out and put it in (`arrOfListFn`, `arrToListFn`). Shown by the rows of
+# instruments/lrc-host/ProgHead.rsd (head, headback) under the layer narrow: a box's pointer taken for a boxed number; every
+# cell's tail taken for the empty list; a word of 2^31 boxed in line; the box's word written beside the box; a word boxed without
+# its mark; the tail written over the head; a box said to have a field.
+# Not a row: the tail read from the head's field (`fldLoad fw 8` in `tail`). The walk then does not end, and a run that does not
+# end is no mismatch this file's differential reports: the replay of that row ended at its time limit.
+lib/lrc/Emit.rsd	                ++ lg 12 ++ i64Const 1 ++ wAnd ++ wEqz ++ wIfI64 ++ lg 12 ++ wWrap ++ i64LoadAt 8 ++ wElse ++ lg 12 ++ i64Const 1 ++ wShrU ++ wEnd	                ++ lg 12 ++ i64Const 1 ++ wShrU
+lib/lrc/Emit.rsd	  let tail := if fw == 4 then lg 4 ++ wWrap ++ fldLoad fw 12	  let tail := if fw == 4 then i64Const 1
+lib/lrc/Emit.rsd	            ++ lg 7 ++ i64Const 31 ++ wShrU ++ wEqz ++ wIf	            ++ lg 7 ++ i64Const 32 ++ wShrU ++ wEqz ++ wIf
+lib/lrc/Emit.rsd	              ++ lg 8 ++ wWrap ++ lg 7 ++ scStore fw 8	              ++ lg 8 ++ wWrap ++ lg 7 ++ scStore fw 16
+lib/lrc/Emit.rsd	              ++ lg 7 ++ i64Const 1 ++ wShl ++ i64Const 1 ++ wOr ++ ls 7	              ++ lg 7 ++ i64Const 1 ++ wShl ++ ls 7
+lib/lrc/Emit.rsd	          ++ lg 8 ++ wWrap ++ lg 5 ++ fldStore fw 12	          ++ lg 8 ++ wWrap ++ lg 5 ++ fldStore fw 8
+lib/lrc/Emit.rsd	              ++ lg 8 ++ wWrap ++ i64Const (emHeader 0 0 + 16 * 4294967296) ++ i64StoreAt 0	              ++ lg 8 ++ wWrap ++ i64Const (emHeader 0 1 + 16 * 4294967296) ++ i64StoreAt 0
+
+# ADDR64-0: the same row is admitted at width 32. Each fault is observed in its fourth module.
+# arrsum: the address of an element read is narrowed to i32.
+lib/lrc/Emit.rsd	    codeOk (lg a ++ lg b ++ i64Const 3 ++ wShl ++ wAdd ++ wasmAddr em.addr64 ++ i64LoadAt 24 ++ ls d ++ (if imm == 0 then [] else wIncLoc em.addr64 d em.t0))	    codeOk (lg a ++ lg b ++ i64Const 3 ++ wShl ++ wAdd ++ wWrap ++ i64LoadAt 24 ++ ls d ++ (if imm == 0 then [] else wIncLoc em.addr64 d em.t0))
+# arrset: the address of an element written is narrowed to i32.
+lib/lrc/Emit.rsd	        ++ lg 1 ++ lg 2 ++ i64Const 3 ++ wShl ++ wAdd ++ wasmAddr addr64 ++ lg 3 ++ i64StoreAt 24	        ++ lg 1 ++ lg 2 ++ i64Const 3 ++ wShl ++ wAdd ++ wWrap ++ lg 3 ++ i64StoreAt 24
+# arrbig: memory.grow is read as i32, which cannot supply the i64 failure test.
+rsc/rsc.rsd	      else if !p.memory then rt64Expand fuel (p.opcode :: acc) i.rest	      else if !p.memory then rt64Expand fuel ((p.opcode ++ (if p.name == "RT.memoryGrow" then [167] else [])) :: acc) i.rest
+# rbtree: an i64 memory module without the export that identifies it to its host.
+rsc/rsc.rsd	      ++ (if lay.addr64 then [{ name := Lrc.addr64Name, idx := last }] else [])	      ++ (if false then [{ name := Lrc.addr64Name, idx := last }] else [])
+# rbtree: the link of the list of dead objects stored in bytes where it is read in words of eight bytes (lib/lrc/Emit.rsd
+# `relOne`, `heapReleaseOf`). A link is written when an object dies with two of its fields, and the walk then goes to
+# eight times an address: 32 of the 80 rows of Images.tsv end in a trap of the fourth module (rbtree is the first). The
+# large-heap program ProgAddr64 does not see it: its arrays die after its value is made, and the walk stays in mapped memory.
+lib/lrc/Emit.rsd	          ++ lg 6 ++ wasmAddr addr64 ++ lg 2 ++ (if addr64 then i64Const 3 ++ wShrU else []) ++ wStore32 0	          ++ lg 6 ++ wasmAddr addr64 ++ lg 2 ++ wStore32 0
+
+# A call marked cold (lib/lrc/Ir.rsd `fapCold`; lib/lrc/JoinOnce.rsd "A counter that is a small number": the calls of the body a
+# counting function keeps for numbers of limbs). countbig: `outer` is entered with a number of limbs and its old body calls the
+# clone of `walk`, which is written at its one other call, in the second form of `outer`.
+# The function a cold call calls loses its body (the dead stub at its place); a cold call is taken for the place where the
+# function is written, in a function that has no locals for it.
+# Not a row: a cold call counted as any call. The loop is then written nowhere and called from both places: every value and
+# every budget's outcome stay, the rounds cost a call each.
+lib/lrc/Emit.rsd	  d.f >= nImg + nHelpers && imContains inl.reg d.f && !imContains inl.cold d.f	  d.f >= nImg + nHelpers && imContains inl.reg d.f
+lib/lrc/Emit.rsd	    else if e.op == opFap && !fapCold e && imContains em.inlAt (fapFn e) then	    else if e.op == opFap && imContains em.inlAt (fapFn e) then
+# W operators in the stage's emitter, in wire-tag order (65–77).
+lib/lrc/Emit.rsd	  else if p == primWAdd then codeOk (lg a ++ lg b ++ [124] ++ ls d)	  else if p == primWAdd then codeOk (lg a ++ lg b ++ [125] ++ ls d)
+lib/lrc/Emit.rsd	  else if p == primWSub then codeOk (lg a ++ lg b ++ [125] ++ ls d)	  else if p == primWSub then codeOk (lg a ++ lg b ++ [124] ++ ls d)
+lib/lrc/Emit.rsd	  else if p == primWMul then codeOk (lg a ++ lg b ++ wMul ++ ls d)	  else if p == primWMul then codeOk (lg a ++ lg b ++ [124] ++ ls d)
+lib/lrc/Emit.rsd	  else if p == primWDiv then codeOk (lg b ++ wEqz ++ wIfI64 ++ i64Const 0 ++ wElse ++ lg a ++ lg b ++ wDivU ++ wEnd ++ ls d)	  else if p == primWDiv then codeOk (lg b ++ wEqz ++ wIfI64 ++ i64Const 0 ++ wElse ++ lg a ++ lg b ++ wDivS ++ wEnd ++ ls d)
+lib/lrc/Emit.rsd	  else if p == primWMod then codeOk (lg b ++ wEqz ++ wIfI64 ++ lg a ++ wElse ++ lg a ++ lg b ++ wRemU ++ wEnd ++ ls d)	  else if p == primWMod then codeOk (lg b ++ wEqz ++ wIfI64 ++ lg a ++ wElse ++ lg a ++ lg b ++ wRemS ++ wEnd ++ ls d)
+lib/lrc/Emit.rsd	  else if p == primWLt then codeOk (lg a ++ lg b ++ wLtU ++ wExtend ++ ls d)	  else if p == primWLt then codeOk (lg a ++ lg b ++ wLtS ++ wExtend ++ ls d)
+lib/lrc/Emit.rsd	  else if p == primWLe then codeOk (lg a ++ lg b ++ wLeU ++ wExtend ++ ls d)	  else if p == primWLe then codeOk (lg a ++ lg b ++ [87] ++ wExtend ++ ls d)
+lib/lrc/Emit.rsd	  else if p == primWAnd then codeOk (lg a ++ lg b ++ wAnd ++ ls d)	  else if p == primWAnd then codeOk (lg a ++ lg b ++ wOr ++ ls d)
+lib/lrc/Emit.rsd	  else if p == primWOr then codeOk (lg a ++ lg b ++ wOr ++ ls d)	  else if p == primWOr then codeOk (lg a ++ lg b ++ wXor ++ ls d)
+lib/lrc/Emit.rsd	  else if p == primWXor then codeOk (lg a ++ lg b ++ wXor ++ ls d)	  else if p == primWXor then codeOk (lg a ++ lg b ++ wOr ++ ls d)
+lib/lrc/Emit.rsd	  else if p == primWNot then codeOk (lg a ++ i64Const (-1) ++ wXor ++ ls d)	  else if p == primWNot then codeOk (lg a ++ i64Const 0 ++ wXor ++ ls d)
+lib/lrc/Emit.rsd	  else if p == primWShl then codeOk (lg a ++ lg b ++ wShl ++ ls d)	  else if p == primWShl then codeOk (lg a ++ lg b ++ wShrU ++ ls d)
+lib/lrc/Emit.rsd	  else if p == primWShr then codeOk (lg a ++ lg b ++ wShrU ++ ls d)	  else if p == primWShr then codeOk (lg a ++ lg b ++ wShrS ++ ls d)
+# The splitting of a function that calls itself (lib/lrc/Inline.rsd "Splitting"), where only the emitted module shows the fault
+# (instruments/lrc-host/MutantsSplit.tsv, head): the new function's variables not renumbered (its parameters are then not
+# locals 2, 3, ...), the new functions in another order than their numbers, their numbers begun one too high; and the module's
+# table of the functions that stay functions (lib/RscBase.rsd `WMod.kept`) too small for its segment, which no engine instantiates.
+lib/lrc/Inline.rsd	      let g : Decl := declNormalizeIds { f := st.next, xs := ps.ps, rets := cx.rets, body := n, ext := false }	      let g : Decl := { f := st.next, xs := ps.ps, rets := cx.rets, body := n, ext := false }
+lib/lrc/Inline.rsd	    r.decls ++ r.st.added.reverse	    r.decls ++ r.st.added
+lib/lrc/Inline.rsd	    let r := spDecls (callScc decls) lim cap decls { next := decls.length, fresh := 0, added := [] }	    let r := spDecls (callScc decls) lim cap decls { next := decls.length + 1, fresh := 0, added := [] }
+lib/RscBase.rsd	  let tableSec := if m.kept.isEmpty then [] else wsec 4 ([1, 112, 0] ++ lebU m.kept.length)	  let tableSec := if m.kept.isEmpty then [] else wsec 4 ([1, 112, 0] ++ lebU 0)

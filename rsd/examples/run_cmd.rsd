@@ -1,0 +1,7 @@
+import Lib.Proc
+def main : Proc UInt8 :=
+  bind (request (topen "/cmd/echo" 1)) fun fid =>
+  bind (request (twrite fid "hello from /cmd")) fun _ =>
+  bind (request (tread fid 0 4096)) fun out =>
+  bind (request (twrite 1 out)) fun _ =>
+  pure 0

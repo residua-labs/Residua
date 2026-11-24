@@ -1,0 +1,57 @@
+-- Compiled boundary rows. Legacy file bytes are read from the frozen
+-- generator's actual output, never reimplemented SCM quotations.
+namespace Lib.Rsd.EngineAssemblyRows
+open Lib.Rsd.EngineAssembly
+
+def legacyNames : List String := ["body.scm", "prepare.scm", "linked_step.scm",
+  "stabilize_core.scm", "stabilize.scm", "root.json", "programs.json", "modules.json"]
+def zero : String := String.mk (List.replicate 64 '0')
+def requests : List (String × Request) := [
+  ("zero", { bodyQ := zero, stepQ := zero, coreQ := zero }),
+  ("pinned", {
+    bodyQ := "66c146a73a7ee1cf1873c7cb89792d31071f06ad4ca55dcf9ab8b027b3eb3c7f",
+    stepQ := "cf371df896900fcee335f5acbf8cf87c295516be1ce8809c060d0bd95647ce1a",
+    coreQ := "3d9a26b91690a30a7d066a3e14b6c9890e3385fb5b3ba86444e0469d3c0ac160" })]
+
+def named (r : Request) (files : List (String × String)) (expected : String) : Bool :=
+  match (runNF r { files }).residue with
+  | none => expected == "accepted"
+  | some cause => residueName cause == expected
+
+def rows (r : Request) (legacy : List (String × String)) : List (String × Bool) := Id.run do
+  let mut checks := [
+    ("legacy-inventory", legacy.map Prod.fst == legacyNames),
+    ("legacy-accepted", named r legacy "accepted"),
+    ("generation-error", match checkFiles legacy (.error "oracle") with | some .generation => true | _ => false),
+    ("inventory-priority", match checkFiles [] (.error "oracle") with | some .inventory => true | _ => false),
+    ("noise-accepted", admissible r { files := legacy, replayNoise := 17 }),
+    ("noise-key", q r { files := legacy, replayNoise := 17 } == q r { files := legacy }),
+    ("canonical-state", (runNF r { files := legacy, replayNoise := 17 }).state == ({ files := legacy } : State))]
+  match outputs r with
+  | .error _ => checks := checks ++ [("generator-error",false)]
+  | .ok generated => checks := checks ++ [("legacy-bytes",generated == legacy)]
+  for (i, (name, bytes)) in legacy.enum do
+    let tag := toString i
+    let missing := (legacy.take i) ++ (legacy.drop (i + 1))
+    let changedName := legacy.enum.map fun (j, pair) => if j == i then (name ++ ".extra",bytes) else pair
+    let changedBytes := legacy.enum.map fun (j, pair) => if j == i then (name,bytes ++ " ") else pair
+    let extra := legacy.take i ++ [(name,bytes)] ++ legacy.drop i
+    checks := checks ++ [
+      ("missing/" ++ tag, named r missing "nf_engine_assembly_inventory"),
+      ("extra/" ++ tag, named r extra "nf_engine_assembly_inventory"),
+      ("rename/" ++ tag, named r changedName "nf_engine_assembly_output"),
+      ("bytes/" ++ tag, named r changedBytes "nf_engine_assembly_output"),
+      ("key-bytes/" ++ tag, q r { files := changedBytes } != q r { files := legacy })]
+    if i + 1 < legacy.length then
+      let swapped := legacy.take i ++ (legacy.drop (i + 1)).take 1 ++
+        (legacy.drop i).take 1 ++ legacy.drop (i + 2)
+      checks := checks ++ [("order/" ++ tag, named r swapped "nf_engine_assembly_output")]
+  for (label, changed) in [
+      ("body", { r with bodyQ := "1" ++ r.bodyQ.drop 1 }),
+      ("step", { r with stepQ := "1" ++ r.stepQ.drop 1 }),
+      ("core", { r with coreQ := "1" ++ r.coreQ.drop 1 })] do
+    checks := checks ++ [("key-request/" ++ label, q r { files := legacy } != q changed { files := legacy }),
+      ("pin-substitution/" ++ label, !(admissible changed { files := legacy }))]
+  return checks
+
+end Lib.Rsd.EngineAssemblyRows

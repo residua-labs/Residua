@@ -1,0 +1,31 @@
+-- Laws over the imported executable assembly, not a duplicate.
+namespace Rsd.BuildAssembly
+theorem sigma_idempotent (s : State) : normalizeOutput (normalizeOutput s) = normalizeOutput s := rfl
+theorem q_sigma (s : State) : outputIdentity (normalizeOutput s) = outputIdentity s := rfl
+theorem admit_iff (s : State) : admissible s = true ↔ (runNF s).residue = none := by
+  simp [admissible, runNF, Option.isNone_iff_eq_none]
+
+-- Exactness concerns this assembly decision, not compiler correctness.
+theorem residue_sigma (s : State) : residue? (normalizeOutput s) = none := by
+  simp [residue?, normalizeOutput]
+
+theorem soundness (s : State) (h : admissible s = true) : s.lines = expected s.request := by
+  simpa [admissible, residue?] using h
+
+theorem completeness (s : State) (h : s.lines = expected s.request) : admissible s = true := by
+  simp [admissible, residue?, h]
+
+theorem exactness (a b : State) : normalizeOutput a = normalizeOutput b ↔ outputIdentity a = outputIdentity b := by
+  cases a
+  cases b
+  simp [normalizeOutput, outputIdentity, State.mk.injEq]
+
+end Rsd.BuildAssembly
+
+namespace Rsd.BuildAssemblyRows
+theorem sigma_idempotent (s : State) : id (id s) = id s := rfl
+theorem q_sigma (r : Request) (s : State) : (fun value (_state : Rsd.BuildAssemblyRows.State) => value) r (id s) = (fun value (_state : Rsd.BuildAssemblyRows.State) => value) r s := rfl
+theorem admit_iff (r : Request) (s : State) : admissible r s = true ↔ (runNF r s).residue = none := by
+  simp [admissible, residue?, runNF, id, Option.isNone_iff_eq_none]
+
+end Rsd.BuildAssemblyRows

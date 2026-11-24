@@ -2,8 +2,7 @@
 
 [English](qformat-1.md) | 中文
 
-状态：**随 0.2 版发货**；摘要另见 `docs/RELEASE-NOTES.zh-CN.md`。
-`closure_claim = 0`。
+状态：**随 0.3 版发货**；摘要另见 `docs/RELEASE-NOTES.zh-CN.md`。
 
 ## 提供的内容
 
@@ -22,9 +21,7 @@
 
 - 源修订：`6d700789ebbf04825ab7d1c3f1baa715a124a051`
   （在开发 `main` 分支上）。
-- 独立审计：该 sha 处结论 **SIGN**，尝试了 8 组攻击，无反例；记录在
-  `reports/release-02/evidence/AUDIT-QFORMAT-1.6d700789eb.md`
-  （自开发 contracts 仓库复制入本包）。
+- 独立审计：该 sha 处结论 an independent audit passed，尝试了 8 组攻击，无反例；审计记录存于仓库侧证据集。
 - 落地头处的对照（负对照全部就位）：清点 349 处哈希站点，批次后无
   未加标签的身份；分离向量两两相异；互操作对照（`digest` ==
   `sha256sum`）不变；手工原像变异体被带类型比较拒绝；落地头处各类别

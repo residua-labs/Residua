@@ -1,0 +1,45 @@
+-- S1a choices. docs/RSD.md C6 binds over the earlier open choices.
+-- closure_claim = 0.
+namespace Lib.Rsd.S1a
+
+/-- C6.1. A second build compiles nothing only when the first ran in the
+    deny-by-default read sandbox. Publication requires that run. -/
+def hermeticBySandbox : Bool := true
+def publishRequiresSandbox : Bool := true
+
+/-- C6.2. Staging without a commit is not a hit. The next reader builds.
+    The dead staging directory is not adopted. -/
+def adoptTornStaging : Bool := false
+def tornMeansBuild : Bool := true
+
+/-- C6.3. A native read outside the declared environment is nonhermetic_tool.
+    An .rsd effect outside the declared environment is undeclared_input. -/
+def nativeUndeclaredResidue : String := "nonhermetic_tool"
+def rsdUndeclaredResidue : String := "undeclared_input"
+
+/-- C6.4. A lease avoids duplicate work. It is not a correctness lock.
+    Heartbeat 10 s, expiry 60 s. On expiry the waiter builds.
+    A live lock is not stolen. The build verb grows no timeout flag. -/
+def buildTimeoutFlag : Bool := false
+def leaseWaitField : String := "limits.timeout_ms"
+def heartbeatS : Nat := 10
+def expiryS : Nat := 60
+def onExpiryBuild : Bool := true
+def stealLiveLock : Bool := false
+def leaseIsCorrectness : Bool := false
+
+end Lib.Rsd.S1a
+
+#guard Lib.Rsd.S1a.hermeticBySandbox
+#guard Lib.Rsd.S1a.publishRequiresSandbox
+#guard Lib.Rsd.S1a.adoptTornStaging == false
+#guard Lib.Rsd.S1a.tornMeansBuild
+#guard Lib.Rsd.S1a.nativeUndeclaredResidue == "nonhermetic_tool"
+#guard Lib.Rsd.S1a.rsdUndeclaredResidue == "undeclared_input"
+#guard Lib.Rsd.S1a.buildTimeoutFlag == false
+#guard Lib.Rsd.S1a.leaseWaitField == "limits.timeout_ms"
+#guard Lib.Rsd.S1a.heartbeatS == 10
+#guard Lib.Rsd.S1a.expiryS == 60
+#guard Lib.Rsd.S1a.onExpiryBuild
+#guard Lib.Rsd.S1a.stealLiveLock == false
+#guard Lib.Rsd.S1a.leaseIsCorrectness == false

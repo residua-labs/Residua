@@ -20,16 +20,22 @@ Copyright (c) 2024 Lean FRO, LLC. All rights reserved.
 Copyright (c) 2025 Lean FRO, LLC. All rights reserved.
 Portions authored by Leonardo de Moura.
 
-https://github.com/koka-lang/koka @ unspecified
+https://github.com/koka-lang/koka @ facb7932ce6871fdb063f762a304bd8238f35fba, unspecified
 licence: Apache-2.0
 Copyright 2012-2023, Microsoft Research, Daan Leijen.
 Ported programs: test/bench/{koka,ocaml} suite sources.
 
-https://github.com/cedar-policy/cedar-spec @ 86da7cb18be25e0fbcd5ce6e976970a2c1d24ff8
-licence: Apache-2.0
-Copyright Cedar Contributors
+https://salsa.debian.org/benchmarksgame-team/benchmarksgame @ 40296663ed350d5fe4a6ab5e367bab61cb77c219
+licence: BSD-3-Clause
+Copyright © 2004-2008 Brent Fulgham, 2005-2024 Isaac Gouy
+Ported programs: OCaml/Rust entries and expected-output files.
 
-https://github.com/WebAssembly/wabt @ 1.0.39
+https://github.com/bendlang/bend @ be236f324ed0338fe907fe50474468e4d3b94157
 licence: Apache-2.0
+Copyright 2026 HigherOrderCO
+Ported programs: bench/runtime/*.bend sources.
+
+https://github.com/EthicalSource/contributor_covenant @ 2.1
+licence: CC-BY-4.0
 Copyright the upstream authors.
 

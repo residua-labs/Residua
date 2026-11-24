@@ -22,6 +22,30 @@ def primNot : Nat := 17
 def primListLen : Nat := 24
 def primListAppend : Nat := 26
 def primListDrop : Nat := 27
+
+-- UINT64-0 (docs/EMITTER.md W row). Operands and results carry the bits of a word.
+-- These arithmetic results are reduced modulo 2^64.
+def primWAdd : Nat := 65
+def primWSub : Nat := 66
+def primWMul : Nat := 67
+-- Unsigned quotient and remainder, with x / 0 = 0 and x % 0 = x.
+def primWDiv : Nat := 68
+def primWMod : Nat := 69
+-- Unsigned comparison, returning 0 or 1. Equality (14) already compares the bits.
+def primWLt : Nat := 70
+def primWLe : Nat := 71
+-- Bitwise operations on all 64 bits, including complement.
+def primWAnd : Nat := 72
+def primWOr : Nat := 73
+def primWXor : Nat := 74
+def primWNot : Nat := 75
+-- Left shift dropping bits above 63, and logical right shift. Counts are modulo 64.
+def primWShl : Nat := 76
+def primWShr : Nat := 77
+
+-- A scalar store's layout annotation in N.s. Pack consumes it before later passes.
+def ssetWord64 : String := "w64"
+
 -- the constructor index of a node value, as a word
 def primTagOf : Nat := 100
 -- always refuses, as stuck with the type-mismatch reason: `unwrap` of an absent option
@@ -115,6 +139,6 @@ def primTotal (p : Nat) : Bool :=
     || p == primAddW || p == primSubW || p == primMulW || p == primMask
     || p == primIsScalar || p == primBox || p == primUnbox || p == primShrW
     || p == primIsArr || p == primArrSize || p == primArrPush || p == primArrOfList || p == primArrToList || p == primArrSlice
-    || p == primBoxS || p == primUnboxS
+    || p == primBoxS || p == primUnboxS || (p >= primWAdd && p <= primWShr)
 
 end Lrc

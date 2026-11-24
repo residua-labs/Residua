@@ -1,0 +1,447 @@
+import rsd.BuildAssembly
+-- rsd/build.rsd — build the three RSD-0 artifacts (replaces the
+-- build.sh that rode the lanes; AGENTS.md: no .sh in the repo):
+--   rsdc-<sha>  — the compiler: REF-Q closure → rsdc → RSCM → rsc → wasm
+--                    (+mod record). Module set = the RefQRun closure + the
+--                    shared rsd/common.rsd + rsd/rsdc.rsd +
+--                    rsd/suite.rsd.
+--   rsd-<sha>   — the dispatcher: common.rsd + shell.rsd only, so it stays
+--                    a few MB and warm runs start in ms. It execs rsdc on
+--                    a cache miss.
+--   rsd-host    — the wasmtime execution host (C), built when the
+--                    wasmtime C API is reachable; else the node runhost the
+--                    store generates (common.rsd runHostJs) is the fallback.
+--
+-- Usage: `lean --run rsd/build.rsd` — a host tool needing stock Lean IO
+-- (process spawn); rsd's own pipeline has no spawn surface.
+-- Recipe (contract TEST-LOOP-0 / rsc-native-build.sh): `lean -c` then
+-- `leanc -O3 -DNDEBUG`; LEAN_CC=/usr/bin/clang on macOS links with Apple ld
+-- (the bundled ld64.lld emits a bad __DATA_CONST segment). Cache key =
+-- sha256 of all input bytes, so a byte move anywhere rebuilds.
+-- `rsd`/`rsdc`/`rsd-host` symlinks in <store>/build track the
+-- newest builds.
+--
+-- The concat is order-sensitive (Lean elaborates in order). The rsdc set
+-- follows lib/rsd/RefQRun.rsd's documented order, with
+-- lib/rsd/Closure.rsd where its header lists it — after refq.rsd,
+-- before rsdc/Compile.rsd (the resolver was extracted there on main;
+-- RefQRun keeps only the readQ wrapper). `import X` lines are rsd-level
+-- (stripped for the concat; real Lean imports are emitted at the top).
+-- RefQRun.rsd's post-namespace row drivers are dropped (`def main` is each
+-- binary's own) — a build-time assembly choice, same class as
+-- import-stripping.
+--
+-- Env: RSD_BUILD (build dir, default $HOME/.cache/rsd/build),
+--      RSD_LEANROOT (toolchain root; else the lean that launched this
+--        script — IO.appPath under --run — else `command -v` on PATH),
+--      RSD_HOME / --home (repo root; else walk up from cwd to lib/ +
+--        rsc/rsc.rsd),
+--      WASMTIME_INC / WASMTIME_LIB (wasmtime C API; else pkg-config),
+--      RSD_NO_APPLE_LD (set = link with the toolchain's own ld).
+-- closure_claim = 0.
+
+-- ============================================================================
+-- Module sets (paths are repo-relative)
+-- ============================================================================
+
+def rsdcMods : List String := [
+  "lib/Session.rsd", "lib/Word32.rsd", "lib/Word64.rsd", "lib/Sha256.rsd",
+  "lib/rsd/store.rsd", "lib/rsd/DirStoreData.rsd", "lib/rsd/DirEntry.rsd", "lib/rsd/DirStore.rsd", "lib/OrderedMap.rsd", "lib/Hyper.rsd",
+  "lib/rsd/graph.rsd", "lib/AvlMap.rsd", "lib/rsd/refq.rsd",
+  "lib/rsd/Closure.rsd",
+  "lib/Tarjan.rsd", "lib/ObjectLayout.rsd", "lib/RuntimeIR.rsd", "rsdc/RuntimeFront.rsd", "rsdc/RuntimeScope.lean",
+  "rsc/SourceBundle.lean",
+  "lib/Fuel.rsd",
+  "lib/ownership/Borrow.rsd",
+  "lib/RscBase.rsd", "lib/WasmDecode.rsd", "lib/ObjectStorage.rsd", "lib/ShortCutFusion.rsd", "lib/TypeFacts.rsd",
+  "lib/RuntimeLower.rsd", "lib/RuntimeInline.rsd", "lib/RuntimeAlloc.rsd",
+  "lib/rt/V1.rsd", "lib/rt/Reuse.rsd", "lib/rt/AllocFast.rsd", "lib/StaticGround.rsd",
+  -- LRC, the lambda-RC stage rsc/rsc.rsd calls under its word, in dependency order (as rsc/NativeSplit.lean)
+  "lib/lrc/Ir.rsd", "lib/lrc/Set.rsd", "lib/lrc/CallGraph.rsd", "lib/lrc/FreeVars.rsd", "lib/lrc/LiveVars.rsd", "lib/lrc/NormIds.rsd", "lib/lrc/AlphaEqv.rsd", "lib/lrc/Prim.rsd",
+  "lib/lrc/Classes.rsd", "lib/lrc/FromWire.rsd", "lib/lrc/Inline.rsd", "lib/lrc/Cse.rsd", "lib/lrc/GuardElim.rsd", "lib/lrc/ElimDeadBranches.rsd", "lib/lrc/PushProj.rsd", "lib/lrc/ElimDead.rsd",
+  "lib/lrc/SimpCase.rsd", "lib/lrc/Borrow.rsd", "lib/lrc/RC.rsd", "lib/lrc/ResetReuse.rsd", "lib/lrc/ExpandResetReuse.rsd", "lib/lrc/DropSpec.rsd", "lib/lrc/Trmc.rsd", "lib/lrc/Pack.rsd",
+  "lib/lrc/SinkProj.rsd", "lib/lrc/SinkInc.rsd", "lib/lrc/Closed.rsd", "lib/lrc/Range.rsd", "lib/lrc/JoinOnce.rsd", "lib/lrc/Closures.rsd", "lib/lrc/Pipeline.rsd", "lib/lrc/Emit.rsd",
+  "rsc/rsc.rsd",
+  "lib/ArrayWireNF.rsd", "rsdc/Compile.rsd",
+  "lib/fnnf/Memo.rsd", "lib/FnNF.rsd", "rsdc/RsdcNF.rsd", "lib/rsd/ninep.rsd",
+  "lib/rsd/NinepIO.rsd", "lib/rsd/RefQRun.rsd",
+  "rsd/sha256.rsd", "rsd/common.rsd", "rsd/rsdc.rsd",
+  "rsd/suite.rsd"]
+
+def rsdMods : List String := [
+  "rsd/sha256.rsd", "rsd/common.rsd", "rsd/shell.rsd"]
+
+def hostSrc : String := "rsd/rsd-host.c"
+def buildSrc : String := "rsd/build.rsd"
+def buildSources : List String := [buildSrc, "rsd/BuildAssembly.rsd"]
+
+-- ============================================================================
+-- The per-module concat edits (port of build.sh's sed rules)
+-- ============================================================================
+
+-- Existing stock-Lean host adapter. Proc/file effects remain a separate
+-- frontier; this extraction does not claim a seed-produced builder.
+def cutMod (root m : String) : IO (List String) := do
+  if m == "lib/rt/Reuse.rsd" then return []
+  let source ← IO.FS.readFile s!"{root}/{m}"
+  let reuse ← if m == "lib/rt/V1.rsd" then
+    IO.FS.readFile s!"{root}/lib/rt/Reuse.rsd" else pure ""
+  return Rsd.BuildAssembly.assemble
+    { modulePath := m, source := source, reuseSource := reuse }
+
+-- ============================================================================
+-- Toolchain discovery (no absolute paths committed)
+-- ============================================================================
+
+-- `lean --print-prefix` on the lean that launched this script (IO.appPath
+-- under `lean --run` is that binary; --print-prefix resolves elan shims to
+-- the real toolchain dir). Else whatever `lean` resolves on PATH.
+def findLeanRoot (root : String) : IO (Option String) := do
+  match ← IO.getEnv "RSD_LEANROOT" with
+  | some r => return some r
+  | none => pure ()
+  let exe ← IO.appPath
+  let leanExe := if exe.fileName == some "lean" then exe.toString else "lean"
+  let r ← IO.Process.output
+    { cmd := "sh", args := #["-c", s!"'{leanExe}' --print-prefix 2>/dev/null || lean --print-prefix 2>/dev/null || true"],
+      cwd := some root }
+  match r.stdout.trim with
+  | "" => return none
+  | p => return some p
+
+-- R015: the repo pins its toolchain in `lean-toolchain`
+-- (leanprover/lean4:v4.14.0); the build checks `lean --version` and
+-- refuses a mismatch by name with both versions, instead of failing deep
+-- in generated C on whatever `lean` the machine defaults to.
+def toolchainPin : String := "leanprover/lean4:v4.14.0"
+
+def toolchainPinVer : String := "4.14.0"
+
+def leanVersionOf (leanBin : String) : IO String := do
+  let r ← IO.Process.output { cmd := "sh", args := #["-c", s!"'{leanBin}' --version 2>/dev/null || true"] }
+  -- `Lean (version 4.14.0, arm64-apple-darwin24.5.0, Release)`
+  let ws := (r.stdout.trim.splitOn "version ").getD 1 ""
+  pure ((ws.splitOn ",").headD "").trim
+
+-- some iff leanBin's version matches the pin; none = mismatch or absent.
+def toolchainOk (leanRoot : String) : IO (Option String) := do
+  let leanBin := if leanRoot == "" then "lean" else s!"{leanRoot}/bin/lean"
+  let v ← leanVersionOf leanBin
+  if v == "" then return none
+  if v != toolchainPinVer then return none
+  return some v
+
+def toolchainGate (leanRoot : String) : IO Bool := do
+  let tv ← toolchainOk leanRoot
+  match tv with
+  | some v => do
+    IO.eprintln s!"[toolchain] lean {v} ({if leanRoot == "" then "PATH" else leanRoot}; pin {toolchainPin})"
+    return true
+  | none => do
+    let leanBin := if leanRoot == "" then "lean" else s!"{leanRoot}/bin/lean"
+    let got ← leanVersionOf leanBin
+    IO.eprintln s!"[toolchain_mismatch] have={if got == "" then "none" else got} want={toolchainPinVer} ({toolchainPin})"
+    return false
+
+-- R015: when env/pkg-config say nothing, probe where the wasmtime C API
+-- is installed (Homebrew: /opt/homebrew; Intel Macs: /usr/local).
+def probeWasmtime : IO (String × String) := do
+  let mut found : String × String := ("", "")
+  for (i, l) in [("/opt/homebrew/include", "/opt/homebrew/lib"),
+                  ("/usr/local/include", "/usr/local/lib")] do
+    if found.1 == "" then
+      if ← System.FilePath.pathExists s!"{i}/wasmtime.h" then
+        found := (i, l)
+  return found
+
+def findHome0 : IO (Option String) := do
+  match ← IO.getEnv "RSD_HOME" with
+  | some h => return some h
+  | none => pure ()
+  let mut dir : Option String := some ((← IO.currentDir).toString)
+  for _ in [0:12] do
+    match dir with
+    | none => return none
+    | some d =>
+      if (← System.FilePath.pathExists s!"{d}/lib") && (← System.FilePath.pathExists s!"{d}/rsc/rsc.rsd") then
+        return some d
+      dir := (System.FilePath.mk d).parent.map (·.toString)
+  return none
+
+-- ============================================================================
+-- sha256 of the input byte stream (cat | shasum -a 256, one spawn)
+-- ============================================================================
+
+def shaInputs (root : String) (files : List String) : IO String := do
+  let paths := files.map (fun f =>
+    if f.startsWith "/" then f else s!"{root}/{f}")
+  let quoted := String.intercalate " " (paths.map (fun p => s!"'{p}'"))
+  let r ← IO.Process.output
+    { cmd := "sh", args := #["-c", s!"cat {quoted} | shasum -a 256 | cut -d' ' -f1"] }
+  if r.exitCode != 0 then
+    IO.eprintln s!"build.rsd: shasum failed: {r.stderr.trim}"
+    return ""
+  return r.stdout.trim
+
+-- ============================================================================
+-- Build steps
+-- ============================================================================
+
+def genConcat (root out hdr : String) (mods : List String) : IO Bool := do
+  let mut body := if hdr == "" then "" else hdr ++ "\n"
+  for m in mods do
+    body := body ++ String.intercalate "\n" (← cutMod root m) ++ "\n"
+  IO.FS.writeFile out body
+  return true
+
+def leanBuild (leanRoot bin gen : String) : IO Bool := do
+  let leanBin := if leanRoot == "" then "lean" else s!"{leanRoot}/bin/lean"
+  let leancBin := if leanRoot == "" then "leanc" else s!"{leanRoot}/bin/leanc"
+  -- `lean -c` requires the input under its root dir: run with cwd = the
+  -- build dir and relative names.
+  let genName := (System.FilePath.mk gen).fileName.getD gen
+  let bdir := (System.FilePath.mk gen).parent.map (·.toString)
+  let r1 ← IO.Process.output
+    { cmd := "nice", args := #["-n", "15", leanBin, "-M", "6144", "-c", s!"{genName.dropRight 5}.c", genName],
+      cwd := bdir }
+  if r1.exitCode != 0 then
+    IO.eprintln s!"build.rsd: lean -c failed for {gen}\n{r1.stderr.trim}{r1.stdout.trim}"
+    return false
+  -- RSD-OPT-1 §7: -dead_strip (Mach-O; --gc-sections on ELF) lets the
+  -- linker drop unreferenced objects; strip removes the symbol table.
+  -- Both matter with a small import cone: after the Lean-frontend import
+  -- went away the remaining bulk was the linker's keep-everything default
+  -- plus ~100 k symbols.
+  let stripFlag := if System.Platform.getIsOSX () then "-Wl,-dead_strip" else "-Wl,--gc-sections"
+  let largs := if leanRoot == "" then #["-O3", "-DNDEBUG", stripFlag]
+    else #["-O3", "-DNDEBUG", stripFlag, s!"-L{leanRoot}/lib"]
+  let ccEnv : Array (String × Option String) :=
+    if (← IO.getEnv "RSD_NO_APPLE_LD").isSome then #[] else #[("LEAN_CC", some "/usr/bin/clang")]
+  let r2 ← IO.Process.output
+    { cmd := "nice", args := #["-n", "15", leancBin] ++ largs ++ #[s!"{gen.dropRight 5}.c", "-o", s!"{bin}.tmp"],
+      env := ccEnv }
+  if r2.exitCode != 0 then
+    IO.eprintln s!"build.rsd: leanc failed for {gen}\n{r2.stderr.trim}"
+    try IO.FS.removeFile s!"{bin}.tmp" catch _ => pure ()
+    return false
+  let rs ← IO.Process.output { cmd := "strip", args := #[s!"{bin}.tmp"] }
+  if rs.exitCode != 0 then
+    IO.eprintln s!"build.rsd: strip failed for {gen}\n{rs.stderr.trim}"
+    try IO.FS.removeFile s!"{bin}.tmp" catch _ => pure ()
+    return false
+  let r3 ← IO.Process.output { cmd := "mv", args := #[s!"{bin}.tmp", bin] }
+  return r3.exitCode == 0
+
+def linkAs (target link : String) : IO Unit := do
+  let _ ← IO.Process.output { cmd := "ln", args := #["-sfn", target, link] }
+  pure ()
+
+def execOk (p : String) : IO Bool := do
+  let r ← IO.Process.output { cmd := "sh", args := #["-c", s!"test -x '{p}'"] }
+  return r.exitCode == 0
+
+-- ============================================================================
+-- main
+-- ============================================================================
+
+def legacyBuildMain (argv : List String) : IO UInt32 := do
+  let homeEnv ← IO.getEnv "RSD_HOME"
+  -- `--gen` emits the concat .lean files only (no lean -c / leanc), for
+  -- chunked builds through a wall-capped gate (RSD-OPT-1).
+  -- Lean 4.14 treats `--gen` as its own option unless `--` precedes it.
+  -- `RSD_GEN=1` is the form a wall-capped driver can set without
+  -- fighting that parser. `gen` / `--gen` remain accepted in argv.
+  -- Lean lifts `←` out of `&&`, so a gate written as
+  -- `if !genOnly && !(← act)` still runs `act` on a concat-only pass.
+  let genOnly := (← IO.getEnv "RSD_GEN").isSome || argv.elem "--gen" || argv.elem "gen"
+  -- One artifact per shot. Empty builds all three (rsdc, then the
+  -- dispatcher, then rsd-host).
+  let part := (← IO.getEnv "RSD_PART").getD ""
+  if part != "" && part != "rsdc" && part != "rsd" && part != "host" then
+    IO.eprintln s!"build.rsd: [rsd_part] unknown {part}"
+    return 2
+  let homeArg := match argv with
+    | "--home" :: h :: _ => h
+    | _ => homeEnv.getD ""
+  let home ← if homeArg != "" then pure (some homeArg) else findHome0
+  match home with
+  | none =>
+    IO.eprintln "build.rsd: no repo home (set --home or RSD_HOME)"
+    return 2
+  | some root => do
+    let homeE := (← IO.getEnv "HOME").getD "."
+    let build0 := (← IO.getEnv "RSD_BUILD").getD s!"{homeE}/.cache/rsd/build"
+    IO.FS.createDirAll build0
+    let build := (← IO.FS.realPath build0).toString
+    let leanRoot := (← findLeanRoot root).getD ""
+    -- R015: refuse a toolchain mismatch by name with both versions
+    -- (--gen only concatenates sources and needs no toolchain).
+    if !genOnly then
+      if !(← toolchainGate leanRoot) then return 1
+    -- rsdc -------------------------------------------------------------
+    let csha ← shaInputs root (buildSources ++ rsdcMods)
+    if csha == "" then return 1
+    let cbin := s!"{build}/rsdc-{csha.take 12}"
+    if part == "" || part == "rsdc" then
+      if !(← execOk cbin) then
+        let cgen := s!"{build}/rsdc-{csha.take 12}.lean"
+        -- Compile.rsd's `import Lean.Data.HashMap` is stripped with the other
+        -- rsd imports. Lean 4.14 does not put Lean.HashMap in the prelude.
+        -- The concat form also elaborates the rsc emitter's mutual block in
+        -- one file: 200 000 default heartbeats are not enough there.
+        if !(← genConcat root cgen "import Lean.Data.HashMap\nset_option maxHeartbeats 1600000" rsdcMods) then return 1
+        if !genOnly then
+          if !(← leanBuild leanRoot cbin cgen) then return 1
+        IO.println cbin
+      linkAs ((System.FilePath.mk cbin).fileName.getD cbin) s!"{build}/rsdc"
+    -- rsd (dispatcher, small) ------------------------------------------
+    let dsha ← shaInputs root (buildSources ++ rsdMods)
+    if dsha == "" then return 1
+    let dbin := s!"{build}/rsd-{dsha.take 12}"
+    if part == "" || part == "rsd" then
+      if !(← execOk dbin) then
+        let dgen := s!"{build}/rsd-{dsha.take 12}.lean"
+        if !(← genConcat root dgen "" rsdMods) then return 1
+        if !genOnly then
+          if !(← leanBuild leanRoot dbin dgen) then return 1
+        IO.println dbin
+      linkAs ((System.FilePath.mk dbin).fileName.getD dbin) s!"{build}/rsd"
+    if genOnly then return 0
+    if part != "" && part != "host" then
+      IO.println dbin
+      IO.eprintln cbin
+      return 0
+    -- rsd-host (wasmtime; optional) -------------------------------------
+    let wtInc0 ← IO.getEnv "WASMTIME_INC"
+    let wtLib0 ← IO.getEnv "WASMTIME_LIB"
+    let (wtInc, wtLib) ←
+      match wtInc0, wtLib0 with
+      | some i, some l => pure (i, l)
+      | _, _ => do
+        let pc ← IO.Process.output
+          { cmd := "sh",
+            args := #["-c", "command -v pkg-config >/dev/null 2>&1 && pkg-config --variable=includedir wasmtime && pkg-config --variable=libdir wasmtime || true"] }
+        let pcil := pc.stdout.trim.splitOn "\n"
+        if pcil.length == 2 then
+          pure (wtInc0.getD (pcil.getD 0 ""), wtLib0.getD (pcil.getD 1 ""))
+        else
+          let (i, l) ← probeWasmtime
+          pure (wtInc0.getD i, wtLib0.getD l)
+    if wtInc != "" && (← System.FilePath.pathExists s!"{wtInc}/wasmtime.h") then
+      let libDir := s!"{wtLib}/libwasmtime"
+      let cand ← IO.Process.output
+        { cmd := "sh", args := #["-c", s!"ls '{wtLib}'/libwasmtime.a '{wtLib}'/libwasmtime.dylib '{wtLib}'/libwasmtime.so 2>/dev/null | head -1"] }
+      let wtlib := cand.stdout.trim
+      if wtlib == "" then
+        IO.eprintln "[host] node runhost.cjs (wasmtime C library not found under the probed lib dirs)"
+      else
+        let wtlink := if wtlib.endsWith ".a" then wtlib else s!"-L{wtLib} -lwasmtime"
+        let hdrF := s!"{wtInc}/wasmtime.h"
+        let _ := libDir
+        let hsha ← shaInputs root (buildSources ++ [hostSrc, hdrF, wtlib])
+        if hsha == "" then return 1
+        let hbin := s!"{build}/rsd-host-{hsha.take 12}"
+        if !(← execOk hbin) then
+          let ccBin := (← IO.getEnv "CC").getD "cc"
+          let r ← IO.Process.output
+            { cmd := "sh",
+              args := #["-c", s!"{ccBin} -O2 -I'{wtInc}' '{root}/{hostSrc}' {wtlink} -o '{hbin}.tmp' && mv '{hbin}.tmp' '{hbin}'"] }
+          if r.exitCode != 0 then
+            IO.eprintln s!"build.rsd: rsd-host build failed\n{r.stderr.trim}"
+            try IO.FS.removeFile s!"{hbin}.tmp" catch _ => pure ()
+        if ← execOk hbin then
+          linkAs ((System.FilePath.mk hbin).fileName.getD hbin) s!"{build}/rsd-host"
+          IO.eprintln s!"[host] rsd-host-{hsha.take 12} (wasmtime C API: {wtlib})"
+    else
+      IO.eprintln "[host] node runhost.cjs (no wasmtime.h under pkg-config dirs, /opt/homebrew or /usr/local)"
+    IO.println dbin
+    IO.eprintln cbin
+    return 0
+
+-- BEGIN RSD BUILD VERB
+-- Pure routing only. The existing FileBuildSession owns scheduling and cache
+-- admission. This boundary does not claim a physical Proc/9P device.
+namespace Rsd.BuildVerb
+
+structure Request where
+  args : List String
+
+structure State where
+  legacy : Bool := false
+  childArgs : List String := []
+  deriving BEq
+
+inductive Residue where
+  | capacity | usage
+  deriving BEq
+
+def residueName : Residue -> String
+  | .capacity => "nf_rsd_build_verb_capacity"
+  | .usage => "nf_rsd_build_verb_usage"
+
+structure Result where
+  state : State := {}
+  residue : Option Residue := none
+
+def hostOk (host : String) : Bool := host == "lean" || host == "ocaml"
+
+def decision (r : Request) : Result :=
+  if !(r.args.headD "" == "build" || r.args.headD "" == "test") then
+    { state := { legacy := true } }
+  else if r.args.length > 8 || r.args.any (fun a => a.length > 4096) then
+    { residue := some .capacity }
+  else match r.args with
+    | ["build", "--seed", host, mode] =>
+      if hostOk host && ["init", "cold", "warm", "edit"].contains mode then
+        { state := { childArgs := if mode == "init" then ["init", host] else [host, mode] } }
+      else { residue := some .usage }
+    | ["test", "--seed", host] =>
+      if hostOk host then { state := { childArgs := [host, "warm"] } }
+      else { residue := some .usage }
+    | _ => { residue := some .usage }
+
+
+
+def residue? (r : Request) (_s : State) : Option Residue := (decision r).residue
+def admissible (r : Request) (s : State) : Bool := (residue? r (id s)).isNone
+def runNF (r : Request) (_s : State) : Result := decision r
+
+-- NF-CORRECT-0 r2: the checked decision; runNF retains the original
+-- transition and its failure-state observations for existing callers.
+def decide (r : Request) (_s : State) : Except Residue State :=
+  let answer := runNF r _s
+  match answer.residue with
+  | some residue => .error residue
+  | none => .ok answer.state
+
+
+theorem sigma_idempotent (s : State) : id (id s) = id s := rfl
+theorem q_sigma (r : Request) (s : State) : (fun value (_state : Rsd.BuildVerb.State) => value) r (id s) = (fun value (_state : Rsd.BuildVerb.State) => value) r s := rfl
+theorem admit_iff (r : Request) (s : State) : admissible r s = true <-> (runNF r s).residue = none := by
+  simp [admissible, residue?, id, runNF, Option.isNone_iff_eq_none]
+theorem state_independent (r : Request) (a b : State) : runNF r a = runNF r b := rfl
+
+end Rsd.BuildVerb
+-- END RSD BUILD VERB
+
+-- The established stock-Lean oracle adapter. Legacy artifact assembly stays
+-- in legacyBuildMain; the seed route calls the existing compiled session.
+-- One frontier per invocation. Phase-1 closure has no author wall cap; the
+-- outer registered observer supplies progress and the heavy machine guard.
+def main (argv : List String) : IO UInt32 := do
+  let routed := Rsd.BuildVerb.decision { args := argv }
+  if let some e := routed.residue then
+    IO.eprintln (Rsd.BuildVerb.residueName e)
+    return 2
+  if routed.state.legacy then return ← legacyBuildMain argv
+  let command := "out/rsd/file-build-session/session"
+  if !(← System.FilePath.pathExists command) then
+    IO.eprintln "nf_rsd_build_session_unavailable"
+    return 70
+  let child ← IO.Process.spawn {
+    cmd := command
+    args := routed.state.childArgs.toArray
+    stdin := .null
+    stdout := .inherit
+    stderr := .inherit }
+  return ← child.wait

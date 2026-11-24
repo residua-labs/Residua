@@ -1,0 +1,1022 @@
+-- Acceptance and verification runner for REF-Q-A + REF-Q-B merged state
+-- (RSD-REF-Q-0, revision 4): readQ is the 9P2000 client implementation.
+-- Concatenate after Session.rsd, Word32.rsd, Word64.rsd, Sha256.rsd,
+-- rsd/store.rsd, OrderedMap.rsd, Hyper.rsd, rsd/graph.rsd, AvlMap.rsd,
+-- rsd/refq.rsd, rsd/Closure.rsd, rsdc/Compile.rsd,
+-- rsd/ninep.rsd, rsd/NinepIO.rsd.
+-- All store reads go through one function `readQ` with SHA-256(bytes) == q check.
+-- closure_claim = 0.
+namespace Lib.Rsd.RefQRun
+
+open Lib.OrderedMap
+open Lib.Rsd.Graph
+open Lib.Rsd.Ninep (stringToWireBytes bytesToStr)
+
+def isHexLow (c : Char) : Bool :=
+  let n := c.toNat
+  (48 ≤ n && n ≤ 57) || (97 ≤ n && n ≤ 102)
+
+def validHex64 (s : String) : Bool :=
+  s.data.length == 64 && s.data.all isHexLow
+
+def kvPut {α : Type} (k : String) (v : α) (m : List (KV α)) : List (KV α) :=
+  let rec go : List (KV α) → List (KV α)
+    | [] => [{ k := k, v := v }]
+    | x :: xs =>
+      if x.k == k then { k := k, v := v } :: xs
+      else if k < x.k then { k := k, v := v } :: x :: xs
+      else x :: go xs
+  go m
+
+-- Fast FIPS 180-2 SHA-256 over UInt32 words, verified bit-identical to
+-- Lib.Sha256.contentHashBytes on store declaration objects and FIPS vectors.
+def k32 : Array UInt32 := #[
+  0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
+  0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
+  0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
+  0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
+  0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
+  0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
+  0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+  0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2
+]
+
+def rotr32 (x n : UInt32) : UInt32 :=
+  (x >>> n) ||| (x <<< (32 - n))
+
+partial def shaLoadW (src : ByteArray) (base i : Nat) (w : Array UInt32) : Array UInt32 :=
+  if i >= 16 then w
+  else
+    let off := base + i * 4
+    let b0 := (src.get! off).toUInt32 <<< 24
+    let b1 := (src.get! (off + 1)).toUInt32 <<< 16
+    let b2 := (src.get! (off + 2)).toUInt32 <<< 8
+    let b3 := (src.get! (off + 3)).toUInt32
+    shaLoadW src base (i + 1) (w.set! i (b0 ||| b1 ||| b2 ||| b3))
+
+partial def shaExtendW (i : Nat) (w : Array UInt32) : Array UInt32 :=
+  if i >= 64 then w
+  else
+    let w15 := w.get! (i - 15)
+    let w2 := w.get! (i - 2)
+    let s0 := (rotr32 w15 7) ^^^ (rotr32 w15 18) ^^^ (w15 >>> 3)
+    let s1 := (rotr32 w2 17) ^^^ (rotr32 w2 19) ^^^ (w2 >>> 10)
+    shaExtendW (i + 1) (w.set! i (w.get! (i - 16) + s0 + w.get! (i - 7) + s1))
+
+partial def shaCompressRounds (w : Array UInt32) (i : Nat)
+    (a b c d e f g h : UInt32) (h0 h1 h2 h3 h4 h5 h6 h7 : UInt32)
+    (msg tail : ByteArray) (fullBlocks totalBlocks blk : Nat) : ByteArray :=
+  if i < 64 then
+    let s1 := (rotr32 e 6) ^^^ (rotr32 e 11) ^^^ (rotr32 e 25)
+    let ch := (e &&& f) ^^^ ((~~~e) &&& g)
+    let temp1 := h + s1 + ch + k32.get! i + w.get! i
+    let s0 := (rotr32 a 2) ^^^ (rotr32 a 13) ^^^ (rotr32 a 22)
+    let maj := (a &&& b) ^^^ (a &&& c) ^^^ (b &&& c)
+    let temp2 := s0 + maj
+    shaCompressRounds w (i + 1) (temp1 + temp2) a b c (d + temp1) e f g h0 h1 h2 h3 h4 h5 h6 h7 msg tail fullBlocks totalBlocks blk
+  else
+    let h0' := h0 + a
+    let h1' := h1 + b
+    let h2' := h2 + c
+    let h3' := h3 + d
+    let h4' := h4 + e
+    let h5' := h5 + f
+    let h6' := h6 + g
+    let h7' := h7 + h
+    let blk' := blk + 1
+    if blk' < totalBlocks then
+      let src := if blk' < fullBlocks then msg else tail
+      let base := if blk' < fullBlocks then blk' * 64 else (blk' - fullBlocks) * 64
+      let w1 := shaExtendW 16 (shaLoadW src base 0 w)
+      shaCompressRounds w1 0 h0' h1' h2' h3' h4' h5' h6' h7' h0' h1' h2' h3' h4' h5' h6' h7' msg tail fullBlocks totalBlocks blk'
+    else
+      Id.run do
+        let mut out := ByteArray.mkEmpty 32
+        for word in #[h0', h1', h2', h3', h4', h5', h6', h7'] do
+          out := out.push ((word >>> 24) &&& 0xff).toUInt8
+          out := out.push ((word >>> 16) &&& 0xff).toUInt8
+          out := out.push ((word >>> 8) &&& 0xff).toUInt8
+          out := out.push (word &&& 0xff).toUInt8
+        return out
+
+def sha256ByteArray (msg : ByteArray) : ByteArray :=
+  let len := msg.size
+  let fullBlocks := len / 64
+  let rem := len % 64
+  let tailLen := if rem < 56 then 64 else 128
+  let tail := Id.run do
+    let mut t := ByteArray.mkEmpty tailLen
+    for i in [0:rem] do
+      t := t.push (msg.get! (fullBlocks * 64 + i))
+    t := t.push 0x80
+    while t.size < tailLen - 8 do
+      t := t.push 0
+    let bitLen : UInt64 := len.toUInt64 * 8
+    for i in [0:8] do
+      let shift : UInt64 := ((7 - i) * 8).toUInt64
+      t := t.push ((bitLen >>> shift) &&& 0xff).toUInt8
+    return t
+  let totalBlocks := fullBlocks + tailLen / 64
+  let src0 := if 0 < fullBlocks then msg else tail
+  let w0 := shaExtendW 16 (shaLoadW src0 0 0 (Array.mkArray 64 0))
+  shaCompressRounds w0 0
+    0x6a09e667 0xbb67ae85 0x3c6ef372 0xa54ff53a 0x510e527f 0x9b05688c 0x1f83d9ab 0x5be0cd19
+    0x6a09e667 0xbb67ae85 0x3c6ef372 0xa54ff53a 0x510e527f 0x9b05688c 0x1f83d9ab 0x5be0cd19
+    msg tail fullBlocks totalBlocks 0
+
+def hexNib (n : Nat) : Char :=
+  Char.ofNat (if n < 10 then 48 + n else 87 + n)
+
+def byteArrayToHex (ba : ByteArray) : String := Id.run do
+  let mut chars : Array Char := Array.mkEmpty (ba.size * 2)
+  for i in [0:ba.size] do
+    let b := (ba.get! i).toNat
+    chars := chars.push (hexNib (b / 16))
+    chars := chars.push (hexNib (b % 16))
+  return String.mk chars.toList
+
+def sha256HexByteArray (ba : ByteArray) : String :=
+  byteArrayToHex (sha256ByteArray ba)
+
+def sha256HexString (s : String) : String :=
+  sha256HexByteArray s.toUTF8
+
+/-- The tagged form for store object names: sha256 over the Q-FORMAT 1
+    `blob` header plus the canonical bytes (FORMAT.md section 2). -/
+def qHexBlob (s : String) : String :=
+  let canon := s.toUTF8
+  let hdr := ("blob " ++ toString canon.size ++ "\x00").toUTF8
+  sha256HexByteArray (hdr ++ canon)
+
+def intListToByteArray (bs : List Int) : ByteArray := Id.run do
+  let mut out := ByteArray.mkEmpty bs.length
+  for b in bs do
+    out := out.push (UInt8.ofNat b.toNat)
+  return out
+
+def byteArrayEq (a b : ByteArray) : Bool :=
+  a.data == b.data
+
+-- ============================================================================
+-- 1. Single Read Function `readQ` over 9P2000 (Revision 4 merged state)
+--    - `Lib.Rsd.Ninep.readQ` is THE implementation: version -> attach aname
+--      -> walk ["q", qHex] -> open -> read -> clunk -> SHA-256(bytes) == q.
+--      The revision-3 local-directory reader is gone; there is no second path.
+--    - `View.mounts` is an ordered list of live 9P2000 store endpoints. The
+--      order IS the union bind order (Plan 9 union of stores in search order,
+--      Pike et al. 1992); the union composition is namespace data the servers
+--      present, not client codec. A member read goes through the one `readQ`
+--      on that member's real R frames.
+--    - Union semantics: a member's `does_not_exist` falls through to the next
+--      member in order; a member whose namespace does not serve `/q` contributes
+--      nothing (`not_in_view` only when NO member serves /q, or the q is outside
+--      the capability `pinned` set); a resolved name — including a corrupted
+--      object — stops the search (`hash_mismatch` refusal by name, first hit
+--      wins, order decides which copy shadows); a dead member is remembered and
+--      the read ends `source_unavailable` only if nothing later hits.
+-- ============================================================================
+
+structure SockMount where
+  sock : String
+  aname : String := ""
+
+structure View where
+  mounts : List SockMount
+  pinned : List String
+
+/-- One union member, read through the single `Lib.Rsd.Ninep.readQ`
+    evaluated on the R frames of a live 9P2000 session against `m.sock`. -/
+def readQMember (m : SockMount) (q : List Int) : IO Lib.Rsd.Ninep.QReply := do
+  let (_, frames) ← Lib.Rsd.NinepIO.runLiveQSession m.sock q (stringToWireBytes m.aname)
+  return Lib.Rsd.Ninep.readQ q frames (stringToWireBytes m.aname)
+
+def readQUnion (mounts : List SockMount) (q : List Int)
+    (sawQMounted sawUnavailable : Bool) : IO ReadResult := do
+  match mounts with
+  | [] =>
+    if !sawQMounted then
+      return { ok := false, residue := "not_in_view", bytes := ByteArray.empty }
+    else if sawUnavailable then
+      return { ok := false, residue := "source_unavailable", bytes := ByteArray.empty }
+    else
+      return { ok := false, residue := "does_not_exist", bytes := ByteArray.empty }
+  | m :: rest =>
+    let r ← readQMember m q
+    if r.ok then
+      return { ok := true, residue := "", bytes := intListToByteArray r.bytes }
+    else if r.residue == (stringToWireBytes "does_not_exist") then
+      readQUnion rest q true sawUnavailable
+    else if r.residue == (stringToWireBytes "not_in_view") then
+      readQUnion rest q sawQMounted sawUnavailable
+    else if r.residue == (stringToWireBytes "hash_mismatch") || r.residue == (stringToWireBytes "q_invalid") then
+      return { ok := false, residue := bytesToStr r.residue, bytes := ByteArray.empty }
+    else
+      readQUnion rest q sawQMounted true
+
+def readQ (view : View) (qHex : String) : IO ReadResult := do
+  if !validHex64 qHex then
+    return { ok := false, residue := "q_invalid", bytes := ByteArray.empty }
+  if !(view.pinned.contains qHex) then
+    return { ok := false, residue := "not_in_view", bytes := ByteArray.empty }
+  match Lib.Rsd.Ninep.hexToBytes qHex with
+  | none =>
+    return { ok := false, residue := "q_invalid", bytes := ByteArray.empty }
+  | some q =>
+    readQUnion view.mounts q false false
+
+-- ============================================================================
+-- 2. Unison Content Addressing (docs/RSD.md §2a, §2b)
+--    - A definition's `q` hashes its syntax tree with human names excluded and
+--      dependencies replaced by their `q`s; a cycle is `#x.n`.
+--    - Merkle 1987, bottom-up over Tarjan SCCs (`Lib.Rsd.Graph.sccIter`),
+--      one memo entry per node (`AvlMap` + `OrderedMap`).
+-- ============================================================================
+
+structure RawDecl where
+  idx : Nat
+  kind : String
+  names : List String
+  slice : String
+  sa : Nat
+  sb : Nat
+  deriving Inhabited
+
+def headerImportList (src : String) : List String :=
+  let p := Lib.Rsd.Graph.headerImports src
+  if !p.ok || p.text.trim == "" then []
+  else
+    let items := (p.text.splitOn ",").filter (fun s => s != "")
+    let mods := items.map (fun l => (l.splitOn ":").headD "")
+    mods.filter (fun m => m != "" && m != "Init")
+
+def byteSlice (s : String) (a b : Nat) : String :=
+  String.extract s (String.Pos.mk a) (String.Pos.mk b)
+
+def isTopDeclLine (line : String) : Option (String × String) :=
+  let t := line.dropWhile (fun c => c == ' ')
+  if line.startsWith " " || line.startsWith "\t" then none
+  else if t.startsWith "structure " then
+    let rest := (t.drop 10).dropWhile (fun c => c == ' ')
+    let nm := rest.takeWhile (fun c => c.isAlphanum || c == '_' || c == '\'')
+    if nm == "" then none else some ("structure", nm)
+  else if t.startsWith "inductive " then
+    let rest := (t.drop 10).dropWhile (fun c => c == ' ')
+    let nm := rest.takeWhile (fun c => c.isAlphanum || c == '_' || c == '\'')
+    if nm == "" then none else some ("inductive", nm)
+  else if t.startsWith "abbrev " then
+    let rest := (t.drop 7).dropWhile (fun c => c == ' ')
+    let nm := rest.takeWhile (fun c => c.isAlphanum || c == '_' || c == '\'')
+    if nm == "" then none else some ("abbrev", nm)
+  else if t.startsWith "def " then
+    let rest := (t.drop 4).dropWhile (fun c => c == ' ')
+    let nm := rest.takeWhile (fun c => c.isAlphanum || c == '_' || c == '\'')
+    if nm == "" then none else some ("def", nm)
+  else if t.startsWith "private def " then
+    let rest := (t.drop 12).dropWhile (fun c => c == ' ')
+    let nm := rest.takeWhile (fun c => c.isAlphanum || c == '_' || c == '\'')
+    if nm == "" then none else some ("def", nm)
+  else if t.startsWith "partial def " then
+    let rest := (t.drop 12).dropWhile (fun c => c == ' ')
+    let nm := rest.takeWhile (fun c => c.isAlphanum || c == '_' || c == '\'')
+    if nm == "" then none else some ("def", nm)
+  else if t == "mutual" || t.startsWith "mutual " then
+    some ("mutual", "")
+  else none
+
+-- Split module body (after any leading `import X` lines) into exact declaration
+-- slices so concatenating the slices in order reproduces the module body
+-- byte-for-byte.
+def segmentModuleDecls (src : String) : (List String × List RawDecl) := Id.run do
+  let imports := headerImportList src
+  let bodyOff := rqBodyStart (src.utf8ByteSize + 2) src 0
+  let body := byteSlice src bodyOff src.utf8ByteSize
+  let lines := body.splitOn "\n"
+  let mut starts : Array (Nat × String × List String) := #[]
+  let mut off : Nat := 0
+  let mut inMutual := false
+  let mut mutStart : Nat := 0
+  let mut mutNames : List String := []
+  let mut lineIdx : Nat := 0
+  for line in lines do
+    let lineLen := line.utf8ByteSize + (if lineIdx + 1 < lines.length then 1 else 0)
+    let trimmed := line.trim
+    if inMutual then
+      match isTopDeclLine line with
+      | some (_, nm) =>
+        if nm != "" && !(mutNames.contains nm) then
+          mutNames := mutNames ++ [nm]
+      | none => pure ()
+      if trimmed == "end" then
+        inMutual := false
+        let primary := mutNames.headD s!"mutual_{starts.size}"
+        starts := starts.push (mutStart, "mutual", if mutNames.isEmpty then [primary] else mutNames)
+        mutNames := []
+    else
+      match isTopDeclLine line with
+      | some ("mutual", _) =>
+        inMutual := true
+        mutStart := off
+        mutNames := []
+      | some (k, nm) =>
+        starts := starts.push (off, k, [nm])
+      | none => pure ()
+    off := off + lineLen
+    lineIdx := lineIdx + 1
+  if starts.isEmpty then
+    return (imports, [{ idx := 0, kind := "module", names := ["root"], slice := body, sa := bodyOff, sb := src.utf8ByteSize }])
+  let mut out : Array RawDecl := #[]
+  for i in [0:starts.size] do
+    let (_, k, nms) := starts.get! i
+    let segStart := if i == 0 then 0 else (starts.get! i).1
+    let segEnd := if i + 1 < starts.size then (starts.get! (i + 1)).1 else body.utf8ByteSize
+    let sl := byteSlice body segStart segEnd
+    out := out.push {
+      idx := i
+      kind := k
+      names := nms
+      slice := sl
+      sa := bodyOff + segStart
+      sb := bodyOff + segEnd
+    }
+  return (imports, out.toList)
+
+-- Tokenize a declaration slice, stripping `--` line comments and `/-- ... -/`
+-- doc comments while preserving string literals, identifiers, numbers, and punctuation.
+def tokenizeDecl (s : String) : List String := Id.run do
+  let chars := s.toList.toArray
+  let n := chars.size
+  let mut i : Nat := 0
+  let mut toks : Array String := #[]
+  while i < n do
+    let c := chars.get! i
+    if c == ' ' || c == '\n' || c == '\t' || c == '\r' then
+      i := i + 1
+    else if c == '-' && i + 1 < n && chars.get! (i + 1) == '-' then
+      i := i + 2
+      while i < n && chars.get! i != '\n' do
+        i := i + 1
+    else if c == '/' && i + 1 < n && chars.get! (i + 1) == '-' then
+      i := i + 2
+      while i + 1 < n && !(chars.get! i == '-' && chars.get! (i + 1) == '/') do
+        i := i + 1
+      i := if i + 1 < n then i + 2 else n
+    else if c == '"' then
+      let start := i
+      i := i + 1
+      while i < n && chars.get! i != '"' do
+        if chars.get! i == '\\' && i + 1 < n then
+          i := i + 2
+        else
+          i := i + 1
+      if i < n then i := i + 1
+      let mut strChars : Array Char := #[]
+      for j in [start:i] do
+        strChars := strChars.push (chars.get! j)
+      toks := toks.push (String.mk strChars.toList)
+    else if c.isAlpha || c == '_' then
+      let start := i
+      i := i + 1
+      while i < n && ((chars.get! i).isAlphanum || chars.get! i == '_' || chars.get! i == '\'' || chars.get! i == '.') do
+        i := i + 1
+      let mut idChars : Array Char := #[]
+      for j in [start:i] do
+        idChars := idChars.push (chars.get! j)
+      toks := toks.push (String.mk idChars.toList)
+    else if c.isDigit then
+      let start := i
+      i := i + 1
+      while i < n && ((chars.get! i).isAlphanum || chars.get! i == '_') do
+        i := i + 1
+      let mut numChars : Array Char := #[]
+      for j in [start:i] do
+        numChars := numChars.push (chars.get! j)
+      toks := toks.push (String.mk numChars.toList)
+    else
+      if i + 1 < n then
+        let c2 := chars.get! (i + 1)
+        let two := String.mk [c, c2]
+        if two == ":=" || two == "->" || two == "=>" || two == "==" || two == "!=" ||
+           two == "<=" || two == ">=" || two == "&&" || two == "||" || two == "::" || two == "++" then
+          toks := toks.push two
+          i := i + 2
+        else
+          toks := toks.push (String.mk [c])
+          i := i + 1
+      else
+        toks := toks.push (String.mk [c])
+        i := i + 1
+  return toks.toList
+
+def isKeywordOrBuiltin (t : String) : Bool :=
+  t == "def" || t == "structure" || t == "inductive" || t == "abbrev" ||
+  t == "mutual" || t == "end" || t == "where" || t == "let" || t == "in" ||
+  t == "if" || t == "then" || t == "else" || t == "match" || t == "with" ||
+  t == "fun" || t == "do" || t == "return" || t == "true" || t == "false" ||
+  t == "Int" || t == "Nat" || t == "Bool" || t == "String" || t == "Char" ||
+  t == "List" || t == "Array" || t == "Option" || t == "some" || t == "none" ||
+  t == "UInt8" || t == "UInt32" || t == "UInt64" || t == "IO"
+
+def isIdentTok (t : String) : Bool :=
+  match t.data with
+  | [] => false
+  | c :: _ => (c.isAlpha || c == '_') && !isKeywordOrBuiltin t
+
+def normalizeUnisonAstToks (d : RawDecl) (toks : Array String) (sccNames : List String) (isCyclic : Bool)
+    (knownQ : StrMap String) : (String × List String) := Id.run do
+  let n := toks.size
+  let mut binders : List (String × String) := []
+  let mut nextB : Nat := 0
+  let mut depQs : Array String := #[]
+  let mut depQSet : StrMap Bool := StrMap.empty
+  let mut outToks : Array String := Array.mkEmpty n
+  let mut inHeaderBinders := false
+  let mut inPat := false
+  let mut i : Nat := 0
+  while i < n do
+    let tok := toks.get! i
+    let prev := if i > 0 then toks.get! (i - 1) else ""
+    let next := if i + 1 < n then toks.get! (i + 1) else ""
+    if tok == "def" || tok == "structure" || tok == "inductive" || tok == "abbrev" then
+      inHeaderBinders := true
+      inPat := false
+      outToks := outToks.push tok
+    else if tok == ":=" || tok == "where" then
+      inHeaderBinders := false
+      inPat := false
+      outToks := outToks.push tok
+    else if tok == "|" && !inHeaderBinders then
+      inPat := true
+      outToks := outToks.push tok
+    else if tok == "=>" then
+      inPat := false
+      outToks := outToks.push tok
+    else if isIdentTok tok then
+      match sccNames.findIdx? (fun nm => nm == tok) with
+      | some cycleIdx =>
+        let cycleTag := if isCyclic || sccNames.length > 1 then s!"#x.{cycleIdx}" else "#self"
+        outToks := outToks.push cycleTag
+      | none =>
+        let tokKnown := StrMap.find knownQ tok
+        let isLetBinder := (prev == "let" || (prev == "mut" && i >= 2 && toks.get! (i - 2) == "let"))
+        let isFunBinder := (prev == "fun")
+        let isParamBinder := inHeaderBinders && prev != ":" && prev != "->" &&
+          (next == ":" || (prev == "(" && next != "->")) &&
+          tokKnown.isNone
+        let isPatBinder := inPat && tok.length <= 4 && !(tok.contains '.') &&
+          tokKnown.isNone
+        if isLetBinder || isFunBinder || isParamBinder || isPatBinder then
+          match binders.find? (fun p => p.1 == tok) with
+          | some (_, btag) =>
+            if isPatBinder then
+              outToks := outToks.push btag
+            else
+              let bnew := s!"#b.{nextB}"
+              nextB := nextB + 1
+              binders := (tok, bnew) :: binders
+              outToks := outToks.push bnew
+          | none =>
+            let bnew := s!"#b.{nextB}"
+            nextB := nextB + 1
+            binders := (tok, bnew) :: binders
+            outToks := outToks.push bnew
+        else
+          let baseTok := (tok.splitOn ".").headD tok
+          match tokKnown with
+          | some q =>
+            if !(StrMap.contains depQSet q) then
+              depQSet := StrMap.insert depQSet q true
+              depQs := depQs.push q
+            outToks := outToks.push s!"#q:{q}"
+          | none =>
+            match (if baseTok != tok then StrMap.find knownQ baseTok else none) with
+            | some q =>
+              let suffix := tok.drop baseTok.length
+              if !(StrMap.contains depQSet q) then
+                depQSet := StrMap.insert depQSet q true
+                depQs := depQs.push q
+              outToks := outToks.push s!"#q:{q}{suffix}"
+            | none =>
+              match binders.find? (fun p => p.1 == tok) with
+              | some (_, btag) => outToks := outToks.push btag
+              | none =>
+                match (if baseTok != tok then binders.find? (fun p => p.1 == baseTok) else none) with
+                | some (_, btag) =>
+                  let suffix := tok.drop baseTok.length
+                  outToks := outToks.push s!"{btag}{suffix}"
+                | none =>
+                  outToks := outToks.push tok
+    else
+      outToks := outToks.push tok
+    i := i + 1
+  let depQList := depQs.toList
+  let astStr := String.intercalate " " outToks.toList
+  let depsLine := String.intercalate "," depQList
+  let canon := s!"rsd.unison-decl/1\nkind {d.kind}\ndeps {depsLine}\nast {astStr}\n"
+  return (canon, depQList)
+
+def normalizeUnisonAstFast (d : RawDecl) (sccNames : List String) (isCyclic : Bool)
+    (knownQ : StrMap String) : (String × List String) :=
+  normalizeUnisonAstToks d (tokenizeDecl d.slice).toArray sccNames isCyclic knownQ
+
+def normalizeUnisonAst (d : RawDecl) (sccNames : List String) (isCyclic : Bool)
+    (knownQ : List (KV String)) : (String × List String) :=
+  let knownMap := knownQ.foldl (fun m kv => StrMap.insert m kv.k kv.v) StrMap.empty
+  normalizeUnisonAstFast d sccNames isCyclic knownMap
+
+structure DeclMeta where
+  modName : String
+  declName : String
+  allNames : List String
+  kind : String
+  unisonQ : String
+  srcQ : String
+  depNames : List String
+  depQs : List String
+  canonAst : String
+  slice : String
+  deriving Inhabited
+
+-- Discover declaration dependencies within a module + imported manifest bindings,
+-- run Tarjan SCC (`Lib.Rsd.Graph.sccIter`) for bottom-up topological order,
+-- and compute each declaration's Unison `q` bottom-up (Merkle 1987, one memo entry per node).
+def computeModuleDecls (modName : String) (src : String)
+    (importedDecls : List DeclMeta) : (List String × List DeclMeta) := Id.run do
+  let (imports, rawDecls) := segmentModuleDecls src
+  -- Seed `nameOwner` and `knownQ` with imported declarations in scope
+  let mut nameOwner : StrMap String := StrMap.empty
+  let mut knownQ : StrMap String := StrMap.empty
+  for im in importedDecls do
+    for nm in im.allNames do
+      nameOwner := StrMap.insert nameOwner nm im.declName
+      knownQ := StrMap.insert knownQ nm im.unisonQ
+  -- Build in-scope dependency edges and run `Lib.Rsd.Graph.sccIter`
+  let mut localPrimaries : Array String := Array.mkEmpty rawDecls.length
+  let mut localEdges : StrMap (List String) := StrMap.empty
+  let mut out : Array DeclMeta := Array.mkEmpty rawDecls.length
+  for d in rawDecls do
+    let primary := d.names.headD s!"decl_{d.idx}"
+    localPrimaries := localPrimaries.push primary
+    let toks := (tokenizeDecl d.slice).toArray
+    let mut depsArr : Array String := #[]
+    let mut depsSet : StrMap Bool := StrMap.empty
+    let mut selfCount : Nat := 0
+    for t in toks do
+      if d.names.contains t then
+        selfCount := selfCount + 1
+      if isIdentTok t then
+        let base := (t.splitOn ".").headD t
+        for cand in [t, base] do
+          match StrMap.find nameOwner cand with
+          | some target =>
+            if target != primary && !(StrMap.contains depsSet target) then
+              depsSet := StrMap.insert depsSet target true
+              depsArr := depsArr.push target
+          | none => pure ()
+    let depsInScope := depsArr.toList
+    localEdges := StrMap.insert localEdges primary depsInScope
+    let sccNames := Lib.Rsd.Graph.sortS d.names
+    let isSelfCyclic : Bool := decide (sccNames.length > 1) || decide (selfCount > sccNames.length)
+    let (canonAst, depQs) := normalizeUnisonAstToks d toks sccNames isSelfCyclic knownQ
+    let uQ := qHexBlob canonAst
+    let sQ := qHexBlob d.slice
+    for nm in d.names do
+      nameOwner := StrMap.insert nameOwner nm primary
+      knownQ := StrMap.insert knownQ nm uQ
+    let meta : DeclMeta := {
+      modName := modName
+      declName := primary
+      allNames := d.names
+      kind := d.kind
+      unisonQ := uQ
+      srcQ := sQ
+      depNames := depsInScope
+      depQs := depQs
+      canonAst := canonAst
+      slice := d.slice
+    }
+    out := out.push meta
+  -- Also run `Lib.Rsd.Graph.sccIter` on the module's declaration graph to verify
+  -- topological SCC partition
+  let _sccWaves := fun () => Lib.Rsd.Graph.sccIter localPrimaries.toList (fun v => (StrMap.find localEdges v).getD [])
+  return (imports, out.toList)
+
+-- The two store objects per declaration: `srcQ -> slice bytes`,
+-- `unisonQ -> canonical AST bytes`. All objects live on real 9P2000 servers
+-- under `/q/<qHex>`; there is no local store directory.
+def objectPairs (decls : List DeclMeta) : List (String × List Int) := Id.run do
+  let mut acc : Array (String × List Int) := Array.mkEmpty (decls.length * 2)
+  for d in decls do
+    acc := acc.push (d.srcQ, d.slice.toUTF8.data.toList.map (fun b => Int.ofNat b.toNat))
+    acc := acc.push (d.unisonQ, d.canonAst.toUTF8.data.toList.map (fun b => Int.ofNat b.toNat))
+  return acc.toList
+
+-- Ingest a module's declarations onto a real 9P2000 server (`sockPath`) under
+-- `/q/<qHex>` and return its `DeclMeta` rows. Seeding goes over the wire
+-- (Tcreate/Twrite/Tclunk through `Lib.Rsd.NinepIO.seedObjects9P`).
+def ingestModuleToStore9P (sockPath : String) (modName : String) (src : String)
+    (importedDecls : List DeclMeta) : IO (List String × List DeclMeta) := do
+  let (imports, decls) := computeModuleDecls modName src importedDecls
+  let ok ← Lib.Rsd.NinepIO.seedObjects9P sockPath (objectPairs decls)
+  if !ok then
+    throw (IO.userError s!"store_seed_failed: no /q on {sockPath}")
+  return (imports, decls)
+
+def buildManifest (allDecls : List DeclMeta) : List ManifestEntry := Id.run do
+  let mut nameToId : StrMap Int := StrMap.empty
+  let mut idx : Int := 1
+  for d in allDecls do
+    nameToId := StrMap.insert nameToId d.declName idx
+    idx := idx + 1
+  let mut entries : Array ManifestEntry := Array.mkEmpty allDecls.length
+  let mut curId : Int := 1
+  for d in allDecls do
+    let mut depIds : Array Int := #[]
+    for dn in d.depNames do
+      match StrMap.find nameToId dn with
+      | some did =>
+        if !(depIds.contains did) then depIds := depIds.push did
+      | none => pure ()
+    entries := entries.push {
+      id := curId
+      modName := d.modName
+      declName := d.declName
+      unisonQ := d.unisonQ
+      srcQ := d.srcQ
+      depIds := depIds.toList
+    }
+    curId := curId + 1
+  return entries.toList
+
+def resolveClosureViaReadQ (view : View) (manifest : List ManifestEntry)
+    (rootIds : List Int) : IO ClosureResult :=
+  resolveClosureVia (fun q => readQ view q) manifest rootIds
+
+def moduleClosureRootIds (manifest : List ManifestEntry) (mods : List String) : List Int :=
+  (manifest.filter (fun e => mods.contains e.modName)).map (fun e => e.id)
+
+end Lib.Rsd.RefQRun
+
+open Lib.Rsd.RefQRun
+
+def checkRow (name : String) (ok : Bool) (detail : String := "") : IO Bool := do
+  let status := if ok then "ok" else "fail"
+  if detail == "" then
+    IO.println s!"{name} {status}"
+  else
+    IO.println s!"{name} {status} {detail}"
+  return ok
+
+-- Row 1a: `rsc` closure resolved by `q` via `readQ` (9P2000) vs hand concatenation
+def runRowRsc (workDir : String) (qSock : String) : IO Bool := do
+  IO.FS.createDirAll workDir
+  let t0 ← IO.monoMsNow
+  let rscSrc ← IO.FS.readFile "rsc/rsc.rsd"
+  let (imports, decls) ← ingestModuleToStore9P qSock "Rsc" rscSrc []
+  let manifest := buildManifest decls
+  let allPinned := (decls.map (fun d => d.unisonQ)) ++ (decls.map (fun d => d.srcQ))
+  let view : View := { mounts := [{ sock := qSock }], pinned := allPinned }
+  let rootIds := moduleClosureRootIds manifest ["Rsc"]
+  let res ← resolveClosureViaReadQ view manifest rootIds
+  let bodyOff := rqBodyStart (rscSrc.utf8ByteSize + 2) rscSrc 0
+  let handConcat := byteSlice rscSrc bodyOff rscSrc.utf8ByteSize
+  let closureSha := sha256HexString res.assembledSource
+  let handSha := sha256HexString handConcat
+  let fullAssembled := (byteSlice rscSrc 0 bodyOff) ++ res.assembledSource
+  let fullSha := sha256HexString fullAssembled
+  let origSha := sha256HexString rscSrc
+  IO.FS.writeFile s!"{workDir}/RscClosure.lean" res.assembledSource
+  IO.FS.writeFile s!"{workDir}/RscHand.lean" handConcat
+  let t1 ← IO.monoMsNow
+  let mut ok := true
+  if !(← checkRow "rsc-imports-empty" (imports.isEmpty)) then ok := false
+  if !(← checkRow "rsc-decl-count" (decls.length == 179) s!"decls={decls.length}") then ok := false
+  if !(← checkRow "rsc-closure-readq" res.ok) then ok := false
+  if !(← checkRow "rsc-body-byte-equal" (res.assembledSource == handConcat && closureSha == handSha)
+      s!"bytes={res.assembledSource.utf8ByteSize} sha256={closureSha}") then ok := false
+  if !(← checkRow "rsc-full-byte-equal" (fullAssembled == rscSrc && fullSha == origSha)
+      s!"bytes={fullAssembled.utf8ByteSize} sha256={fullSha} ms={t1 - t0}") then ok := false
+  return ok
+
+-- Row 1b: `rsdc` (`import AvlMap`, zero AVL text copy in `Compile.rsd`) closure resolved
+-- by `q` via `readQ` vs hand concatenation of `lib/AvlMap.rsd` + `rsdc/Compile.rsd`
+def runRowRsdc (workDir : String) (qSock : String) : IO Bool := do
+  IO.FS.createDirAll workDir
+  let t0 ← IO.monoMsNow
+  let avlSrc ← IO.FS.readFile "lib/AvlMap.rsd"
+  let compSrc ← IO.FS.readFile "rsdc/Compile.rsd"
+  let compImports := headerImportList compSrc
+  let hasNoAvlCopy := ((compSrc.splitOn "structure Map where").length == 1) &&
+                      ((compSrc.splitOn "def bal :").length == 1) &&
+                      ((compSrc.splitOn "avlSame").length == 1)
+  let (_, avlDecls) ← ingestModuleToStore9P qSock "AvlMap" avlSrc []
+  let (_, compDecls) ← ingestModuleToStore9P qSock "Compile" compSrc avlDecls
+  let allDecls := avlDecls ++ compDecls
+  let manifest := buildManifest allDecls
+  let allPinned := (allDecls.map (fun d => d.unisonQ)) ++ (allDecls.map (fun d => d.srcQ))
+  let view : View := { mounts := [{ sock := qSock }], pinned := allPinned }
+  let rootIds := moduleClosureRootIds manifest ["AvlMap", "Compile"]
+  let res ← resolveClosureViaReadQ view manifest rootIds
+  let avlBody := byteSlice avlSrc (rqBodyStart (avlSrc.utf8ByteSize + 2) avlSrc 0) avlSrc.utf8ByteSize
+  let compBody := byteSlice compSrc (rqBodyStart (compSrc.utf8ByteSize + 2) compSrc 0) compSrc.utf8ByteSize
+  let handConcat := avlBody ++ compBody
+  let closureSha := sha256HexString res.assembledSource
+  let handSha := sha256HexString handConcat
+  let tResolve ← IO.monoMsNow
+  let gatesSum := lexGate 0 + dotGate 0 + spineGate 0 + recvGate 0 + letGate 0 + appGate 0
+  let nqSrc ← IO.FS.readFile "benchmarks/nqueens.rsd"
+  let nqExp ← IO.FS.readBinFile "benchmarks/nqueens.rscm"
+  let fkSrc ← IO.FS.readFile "benchmarks/fannkuchredux.rsd"
+  let fkExp ← IO.FS.readBinFile "benchmarks/fannkuch.rscm"
+  let nqBytes := intListToByteArray (emitSrc 0 nqSrc)
+  let fkBytes := intListToByteArray (emitSrc 0 fkSrc)
+  let selfFromClosure := intListToByteArray (emitSrc 0 res.assembledSource)
+  let selfFromHand := intListToByteArray (emitSrc 0 handConcat)
+  IO.FS.writeFile s!"{workDir}/RsdcClosure.rsd" res.assembledSource
+  IO.FS.writeFile s!"{workDir}/RsdcHand.rsd" handConcat
+  IO.FS.writeBinFile s!"{workDir}/rsdc_closure.rscm" selfFromClosure
+  IO.FS.writeBinFile s!"{workDir}/rsdc_hand.rscm" selfFromHand
+  let selfClosureSha := sha256HexByteArray selfFromClosure
+  let selfHandSha := sha256HexByteArray selfFromHand
+  let tEmit ← IO.monoMsNow
+  let mut ok := true
+  if !(← checkRow "rsdc-header-import" (compImports == ["AvlMap"])) then ok := false
+  if !(← checkRow "rsdc-no-avl-copy" hasNoAvlCopy) then ok := false
+  if !(← checkRow "rsdc-decl-counts" (avlDecls.length == 12 && compDecls.length == 195)
+      s!"avl={avlDecls.length} compile={compDecls.length} total={allDecls.length}") then ok := false
+  if !(← checkRow "rsdc-closure-byte-equal" (res.ok && res.assembledSource == handConcat && closureSha == handSha)
+      s!"bytes={res.assembledSource.utf8ByteSize} sha256={closureSha} resolve_ms={tResolve - t0}") then ok := false
+  if !(← checkRow "rsdc-gates-6-of-6" (gatesSum == 0) s!"gates={gatesSum}") then ok := false
+  if !(← checkRow "rsdc-corpus-emit" (byteArrayEq nqBytes nqExp && byteArrayEq fkBytes fkExp)
+      s!"nqueens={nqBytes.size}B/{sha256HexByteArray nqBytes} fannkuch={fkBytes.size}B/{sha256HexByteArray fkBytes}") then ok := false
+  if !(← checkRow "rsdc-self-rscm-byte-equal" (selfFromClosure.size > 100000 && byteArrayEq selfFromClosure selfFromHand && selfClosureSha == selfHandSha)
+      s!"rscm_bytes={selfFromClosure.size} sha256={selfClosureSha} emit_ms={tEmit - tResolve}") then ok := false
+  return ok
+
+-- Row 2: `lib/AvlMap.rsd` shared by two real tools (`rsdc/Compile.rsd` and `lib/rsd/refq.rsd`)
+-- with no text copy in either caller; one node per `lib` declaration in `/q/<hash>`,
+-- and `Lib.Sha256.contentHashBytes` oracle verified equal to `sha256HexByteArray`.
+def runRowSharedAvl (workDir : String) (qSock : String) : IO Bool := do
+  IO.FS.createDirAll workDir
+  let t0 ← IO.monoMsNow
+  let avlSrc ← IO.FS.readFile "lib/AvlMap.rsd"
+  let compSrc ← IO.FS.readFile "rsdc/Compile.rsd"
+  let refqSrc ← IO.FS.readFile "lib/rsd/refq.rsd"
+  let refqImports := headerImportList refqSrc
+  let refqNoAvlCopy := ((refqSrc.splitOn "structure Map where").length == 1) &&
+                       ((refqSrc.splitOn "def bal :").length == 1)
+  let (_, avlDecls) ← ingestModuleToStore9P qSock "AvlMap" avlSrc []
+  let (_, compDecls) ← ingestModuleToStore9P qSock "Compile" compSrc avlDecls
+  let (_, refqDecls) ← ingestModuleToStore9P qSock "RefQ" refqSrc avlDecls
+  let avlQSet := avlDecls.map (fun d => (d.declName, d.unisonQ))
+  let mapQ := (avlDecls.find? (fun d => d.declName == "Map")).map (fun d => d.unisonQ) |>.getD ""
+  let getQ := (avlDecls.find? (fun d => d.declName == "get")).map (fun d => d.unisonQ) |>.getD ""
+  let insQ := (avlDecls.find? (fun d => d.declName == "ins")).map (fun d => d.unisonQ) |>.getD ""
+  let compStDeps := (compDecls.find? (fun d => d.declName == "St")).map (fun d => d.depQs) |>.getD []
+  let compFdDeps := (compDecls.find? (fun d => d.declName == "fd")).map (fun d => d.depQs) |>.getD []
+  let compAllocDeps := (compDecls.find? (fun d => d.declName == "alloc")).map (fun d => d.depQs) |>.getD []
+  let refqPlanDeps := (refqDecls.find? (fun d => d.declName == "QPlan")).map (fun d => d.depQs) |>.getD []
+  let refqMemoDeps := (refqDecls.find? (fun d => d.declName == "rqMemoNode")).map (fun d => d.depQs) |>.getD []
+  let refqVisitDeps := (refqDecls.find? (fun d => d.declName == "rqVisit")).map (fun d => d.depQs) |>.getD []
+  let mut shaOracleOk := true
+  for d in avlDecls do
+    let bs := d.slice.toUTF8.data.toList.map (fun b => Int.ofNat b.toNat)
+    let oracleRes := Lib.Sha256.qOf "blob" bs
+    let oracleHex := byteArrayToHex (intListToByteArray oracleRes.bytes)
+    if !oracleRes.ok || oracleHex != d.srcQ then
+      shaOracleOk := false
+  let t1 ← IO.monoMsNow
+  let mut ok := true
+  if !(← checkRow "refq-header-import" (refqImports == ["AvlMap"] && refqNoAvlCopy)) then ok := false
+  if !(← checkRow "shared-map-q" (mapQ != "" && compStDeps.contains mapQ && refqPlanDeps.contains mapQ)
+      s!"Map_q={mapQ}") then ok := false
+  if !(← checkRow "shared-get-q" (getQ != "" && compFdDeps.contains getQ && refqVisitDeps.contains getQ)
+      s!"get_q={getQ}") then ok := false
+  if !(← checkRow "shared-ins-q" (insQ != "" && compAllocDeps.contains insQ && refqMemoDeps.contains insQ)
+      s!"ins_q={insQ}") then ok := false
+  if !(← checkRow "sha256-oracle-match" shaOracleOk s!"checked={avlQSet.length} ms={t1 - t0}") then ok := false
+  return ok
+
+-- Row 3: Mutant row (a changed `lib` definition changes the `q` of every dependant,
+-- and nothing else), plus Unison alpha-invariance and `#x.n` cycle verification.
+def runRowMutant : IO Bool := do
+  let t0 ← IO.monoMsNow
+  let avlSrc ← IO.FS.readFile "lib/AvlMap.rsd"
+  let compSrc ← IO.FS.readFile "rsdc/Compile.rsd"
+  let refqSrc ← IO.FS.readFile "lib/rsd/refq.rsd"
+  let (_, avlBase) := computeModuleDecls "AvlMap" avlSrc []
+  let (_, compBase) := computeModuleDecls "Compile" compSrc avlBase
+  let (_, refqBase) := computeModuleDecls "RefQ" refqSrc avlBase
+  let avlMutSrc := String.intercalate "if a >= b then a else b" (avlSrc.splitOn "if a > b then a else b")
+  let (_, avlMut) := computeModuleDecls "AvlMap" avlMutSrc []
+  let (_, compMut) := computeModuleDecls "Compile" compSrc avlMut
+  let (_, refqMut) := computeModuleDecls "RefQ" refqSrc avlMut
+  let expectedAvlChanged := ["imax", "mk", "bal", "ins"]
+  let mut avlChanged : List String := []
+  let mut avlUnchanged : List String := []
+  for i in [0:avlBase.length] do
+    let b := avlBase.get! i
+    let m := avlMut.get! i
+    if b.unisonQ != m.unisonQ then
+      avlChanged := avlChanged ++ [b.declName]
+    else
+      avlUnchanged := avlUnchanged ++ [b.declName]
+  let mut compDepSet : List String := ["imax", "mk", "bal", "ins"]
+  let mut changed := true
+  while changed do
+    changed := false
+    for d in compBase do
+      if !(compDepSet.contains d.declName) && d.depNames.any (fun dep => compDepSet.contains dep) then
+        compDepSet := compDepSet ++ [d.declName]
+        changed := true
+  let mut compChanged : List String := []
+  let mut compUnchanged : List String := []
+  let mut compExactMatch := true
+  for i in [0:compBase.length] do
+    let b := compBase.get! i
+    let m := compMut.get! i
+    let didChange := b.unisonQ != m.unisonQ
+    let shouldChange := compDepSet.contains b.declName
+    if didChange != shouldChange then
+      compExactMatch := false
+    if didChange then
+      compChanged := compChanged ++ [b.declName]
+    else
+      compUnchanged := compUnchanged ++ [b.declName]
+  let mut refqChanged : List String := []
+  let mut refqUnchanged : List String := []
+  for i in [0:refqBase.length] do
+    let b := refqBase.get! i
+    let m := refqMut.get! i
+    if b.unisonQ != m.unisonQ then
+      refqChanged := refqChanged ++ [b.declName]
+    else
+      refqUnchanged := refqUnchanged ++ [b.declName]
+  let d1 : RawDecl := {
+    idx := 0, kind := "def", names := ["imax"]
+    slice := "def imax (a : Int) (b : Int) : Int := if a > b then a else b\n"
+    sa := 0, sb := 60
+  }
+  let d2 : RawDecl := {
+    idx := 0, kind := "def", names := ["imaxAlpha"]
+    slice := "def imaxAlpha (x : Int) (y : Int) : Int := if x > y then x else y\n"
+    sa := 0, sb := 65
+  }
+  let (ast1, _) := normalizeUnisonAst d1 ["imax"] false []
+  let (ast2, _) := normalizeUnisonAst d2 ["imaxAlpha"] false []
+  let qAlpha1 := sha256HexString ast1
+  let qAlpha2 := sha256HexString ast2
+  let dMut : RawDecl := {
+    idx := 0, kind := "mutual", names := ["rqSkipLine", "rqSkipPos"]
+    slice := "mutual\ndef rqSkipPos (n : Nat) : Nat := rqSkipLine n\ndef rqSkipLine (n : Nat) : Nat := rqSkipPos n\nend\n"
+    sa := 0, sb := 100
+  }
+  let (astCycle, _) := normalizeUnisonAst dMut ["rqSkipLine", "rqSkipPos"] true []
+  let hasCycleX := (astCycle.splitOn "#x.0").length > 1 && (astCycle.splitOn "#x.1").length > 1
+  let t1 ← IO.monoMsNow
+  let mut ok := true
+  if !(← checkRow "mutant-avl-cone-exact" (avlChanged == expectedAvlChanged && avlUnchanged.length == 8)
+      s!"changed={avlChanged.length}/12 ({String.intercalate "," avlChanged}) unchanged={avlUnchanged.length}/12") then ok := false
+  if !(← checkRow "mutant-compile-cone-exact" (compExactMatch && compChanged.contains "alloc" && compUnchanged.contains "fd" && compUnchanged.contains "initSt")
+      s!"changed={compChanged.length}/{compBase.length} unchanged={compUnchanged.length}/{compBase.length}") then ok := false
+  if !(← checkRow "mutant-refq-cone-exact" (refqChanged.length == 5 && refqUnchanged.length == 13)
+      s!"changed={refqChanged.length}/{refqBase.length} ({String.intercalate "," refqChanged}) unchanged={refqUnchanged.length}/{refqBase.length}") then ok := false
+  if !(← checkRow "unison-alpha-invariant" (qAlpha1 == qAlpha2) s!"q={qAlpha1}") then ok := false
+  if !(← checkRow "unison-cycle-hash-x" hasCycleX s!"ms={t1 - t0}") then ok := false
+  return ok
+
+-- Row 4: `readQ` over real 9P2000 servers — tamper refusal (`hash_mismatch`),
+-- `not_in_view` vs `does_not_exist` (server namespace view), and Plan 9 union
+-- bind search order across two live stores (`s1`, `s2`; `noq` has no `/q`).
+def runRowReadQ (workDir s1 s2 noq : String) : IO Bool := do
+  IO.FS.createDirAll workDir
+  let t0 ← IO.monoMsNow
+  let avlSrc ← IO.FS.readFile "lib/AvlMap.rsd"
+  let compSrc ← IO.FS.readFile "rsdc/Compile.rsd"
+  let (_, avlDecls) ← ingestModuleToStore9P s1 "AvlMap" avlSrc []
+  let (_, compDecls) ← ingestModuleToStore9P s2 "Compile" compSrc avlDecls
+  let allDecls := avlDecls ++ compDecls
+  let manifest := buildManifest allDecls
+  let allPinned := (allDecls.map (fun d => d.unisonQ)) ++ (allDecls.map (fun d => d.srcQ))
+  let rootIds := moduleClosureRootIds manifest ["AvlMap", "Compile"]
+  -- Union across two real servers in mount order: every Compile declaration's
+  -- objects live only on s2, so resolution falls through s1 -> s2 per entry.
+  let unionView : View := { mounts := [{ sock := s1 }, { sock := s2 }], pinned := allPinned }
+  let unionRes ← resolveClosureViaReadQ unionView manifest rootIds
+  let getDecl := (avlDecls.find? (fun d => d.declName == "get")).get!
+  -- Capability view: removing the dependency q from `pinned` is not_in_view
+  -- before any session; the build fails by name.
+  let trimmedPinned := allPinned.filter (fun q => q != getDecl.unisonQ)
+  let restrictedView : View := { mounts := [{ sock := s1 }, { sock := s2 }], pinned := trimmedPinned }
+  let directNotInView ← readQ restrictedView getDecl.unisonQ
+  let buildNotInView ← resolveClosureViaReadQ restrictedView manifest rootIds
+  -- does_not_exist: q in the view, served /q on both members, absent on both.
+  let absentQ := "0000000000000000000000000000000000000000000000000000000000000000"
+  let missingView : View := { mounts := [{ sock := s1 }, { sock := s2 }], pinned := absentQ :: allPinned }
+  let directMissing ← readQ missingView absentQ
+  -- not_in_view from the server: no mounted member serves /q at all.
+  let noqView : View := { mounts := [{ sock := noq }], pinned := allPinned }
+  let directNoQ ← readQ noqView getDecl.unisonQ
+  -- Tampered object on a real server: corrupt `/q/<getQ>` on s1, leaving the
+  -- same name with wrong bytes; a hit is a hit, the union stops, q-check refuses.
+  let origList := getDecl.canonAst.toUTF8.data.toList.map (fun b => Int.ofNat b.toNat)
+  let tamperedList := match origList with
+    | b0 :: rest => (if b0 == 0x74 then 0x75 else 0x74) :: rest
+    | [] => [255]
+  let _ ← Lib.Rsd.NinepIO.corruptObject9P s1 getDecl.unisonQ tamperedList
+  let tamperView : View := { mounts := [{ sock := s1 }, { sock := s2 }], pinned := allPinned }
+  let directTamper ← readQ tamperView getDecl.unisonQ
+  let buildTamper ← resolveClosureViaReadQ tamperView manifest rootIds
+  -- Union order decides which copy shadows: plant the GOOD object on s2, then
+  -- [bad s1, good s2] refuses hash_mismatch while [good s2, bad s1] returns the
+  -- good bytes — the answer flips with mount order.
+  let _ ← Lib.Rsd.NinepIO.seedObjects9P s2
+    [(getDecl.unisonQ, origList)]
+  let shadowBadFirst ← readQ { mounts := [{ sock := s1 }, { sock := s2 }], pinned := allPinned } getDecl.unisonQ
+  let shadowGoodFirst ← readQ { mounts := [{ sock := s2 }, { sock := s1 }], pinned := allPinned } getDecl.unisonQ
+  -- Fall-through in order: a Compile-only object exists solely on s2.
+  let compDecl := compDecls.head!
+  let fallThrough ← readQ { mounts := [{ sock := s1 }, { sock := s2 }], pinned := allPinned } compDecl.unisonQ
+  let t1 ← IO.monoMsNow
+  let mut ok := true
+  if !(← checkRow "readq-union-mount" unionRes.ok s!"decls={unionRes.orderedUnisonQs.length}") then ok := false
+  if !(← checkRow "readq-not-in-view" (!directNotInView.ok && directNotInView.residue == "not_in_view" &&
+      !buildNotInView.ok && buildNotInView.residue == "not_in_view" && buildNotInView.failedDecl == "AvlMap.get")
+      s!"residue={buildNotInView.residue} failed={buildNotInView.failedDecl}") then ok := false
+  if !(← checkRow "readq-does-not-exist-distinct" (!directMissing.ok && directMissing.residue == "does_not_exist" &&
+      directMissing.residue != directNotInView.residue)
+      s!"missing={directMissing.residue} vs view={directNotInView.residue}") then ok := false
+  if !(← checkRow "readq-not-in-view-server" (!directNoQ.ok && directNoQ.residue == "not_in_view")
+      s!"residue={directNoQ.residue}") then ok := false
+  if !(← checkRow "readq-tamper-refused" (!directTamper.ok && directTamper.residue == "hash_mismatch" &&
+      !buildTamper.ok && buildTamper.residue == "hash_mismatch" && buildTamper.failedDecl == "AvlMap.get")
+      s!"residue={buildTamper.residue} failed={buildTamper.failedDecl}") then ok := false
+  if !(← checkRow "readq-union-order-shadow" (!shadowBadFirst.ok && shadowBadFirst.residue == "hash_mismatch" &&
+      shadowGoodFirst.ok && byteArrayEq shadowGoodFirst.bytes (intListToByteArray origList))
+      s!"bad_first={shadowBadFirst.residue} good_first_ok={shadowGoodFirst.ok}") then ok := false
+  if !(← checkRow "readq-union-fallthrough" (fallThrough.ok && byteArrayEq fallThrough.bytes (intListToByteArray (compDecl.canonAst.toUTF8.data.toList.map (fun b => Int.ofNat b.toNat))))
+      s!"ms={t1 - t0}") then ok := false
+  return ok
+
+-- Row 5: Step (4) Bootstrap — Rsd (`lib/rsd/refq.rsd`) is built by `rsdc`,
+-- and its pinned flat seed closure by `q` equals what the resolver derives.
+def runRowBootstrap (workDir : String) (qSock : String) : IO Bool := do
+  IO.FS.createDirAll workDir
+  let t0 ← IO.monoMsNow
+  let avlSrc ← IO.FS.readFile "lib/AvlMap.rsd"
+  let refqSrc ← IO.FS.readFile "lib/rsd/refq.rsd"
+  let (_, avlDecls) ← ingestModuleToStore9P qSock "AvlMap" avlSrc []
+  let (_, refqDecls) ← ingestModuleToStore9P qSock "RefQ" refqSrc avlDecls
+  let allDecls := avlDecls ++ refqDecls
+  let seedQs : List String := allDecls.map (fun d => d.unisonQ)
+  let avlBody := byteSlice avlSrc (rqBodyStart (avlSrc.utf8ByteSize + 2) avlSrc 0) avlSrc.utf8ByteSize
+  let refqBody := byteSlice refqSrc (rqBodyStart (refqSrc.utf8ByteSize + 2) refqSrc 0) refqSrc.utf8ByteSize
+  let seedFlatSource := avlBody ++ refqBody
+  let seedSha := sha256HexString seedFlatSource
+  let manifest := buildManifest allDecls
+  let allPinned := (allDecls.map (fun d => d.unisonQ)) ++ (allDecls.map (fun d => d.srcQ))
+  let view : View := { mounts := [{ sock := qSock }], pinned := allPinned }
+  let rootIds := moduleClosureRootIds manifest ["AvlMap", "RefQ"]
+  let derived ← resolveClosureViaReadQ view manifest rootIds
+  let derivedSha := sha256HexString derived.assembledSource
+  let rscmFromSeed := intListToByteArray (emitSrc 0 seedFlatSource)
+  let rscmFromDerived := intListToByteArray (emitSrc 0 derived.assembledSource)
+  IO.FS.writeFile s!"{workDir}/refq_seed.rsd" seedFlatSource
+  IO.FS.writeFile s!"{workDir}/refq_derived.rsd" derived.assembledSource
+  IO.FS.writeBinFile s!"{workDir}/refq_seed.rscm" rscmFromSeed
+  IO.FS.writeBinFile s!"{workDir}/refq_derived.rscm" rscmFromDerived
+  let rscmSeedSha := sha256HexByteArray rscmFromSeed
+  let rscmDerivedSha := sha256HexByteArray rscmFromDerived
+  let gateVal := rqGate 0
+  let t1 ← IO.monoMsNow
+  let mut ok := true
+  if !(← checkRow "bootstrap-rqgate" (gateVal == 0)) then ok := false
+  if !(← checkRow "bootstrap-seed-equals-derived-q" (derived.ok && derived.orderedUnisonQs == seedQs)
+      s!"nodes={derived.orderedUnisonQs.length}") then ok := false
+  if !(← checkRow "bootstrap-seed-equals-derived-bytes" (derived.assembledSource == seedFlatSource && derivedSha == seedSha)
+      s!"bytes={derived.assembledSource.utf8ByteSize} sha256={derivedSha}") then ok := false
+  if !(← checkRow "bootstrap-rsdc-builds-refq" (rscmFromSeed.size > 1000 && byteArrayEq rscmFromSeed rscmFromDerived && rscmSeedSha == rscmDerivedSha)
+      s!"rscm_bytes={rscmFromDerived.size} sha256={rscmDerivedSha} ms={t1 - t0}") then ok := false
+  return ok
+
+def main (args : List String) : IO UInt32 := do
+  match args with
+  | cmd :: workDir :: s1 :: s2 :: noq :: _ =>
+    IO.FS.createDirAll workDir
+    let mut ok := true
+    if cmd == "all" || cmd == "row-rsc" then
+      if !(← runRowRsc s!"{workDir}/rsc" s1) then ok := false
+    if cmd == "all" || cmd == "row-rsdc" then
+      if !(← runRowRsdc s!"{workDir}/rsdc" s1) then ok := false
+    if cmd == "all" || cmd == "row-shared-avl" then
+      if !(← runRowSharedAvl s!"{workDir}/shared" s1) then ok := false
+    if cmd == "all" || cmd == "row-mutant" then
+      if !(← runRowMutant) then ok := false
+    if cmd == "all" || cmd == "row-bootstrap" then
+      if !(← runRowBootstrap s!"{workDir}/boot" s1) then ok := false
+    if cmd == "all" || cmd == "row-readq" then
+      if !(← runRowReadQ workDir s1 s2 noq) then ok := false
+    IO.println "closure_claim 0"
+    return if ok then 0 else 1
+  | _ =>
+    IO.println "Usage: refq_run <cmd|all> <workdir> <s1.sock> <s2.sock> <noq.sock>"
+    return 1

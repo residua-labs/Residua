@@ -1,0 +1,902 @@
+--Residuaellt
+-- closure_claim = 0
+-- Checkable surface: 9P2000 wire codec (T encode, R decode for EFFECT_ABI profile),
+-- inbound R validation delegating to Lib.validateInbound (lib/Session.rsd),
+-- sans-IO client session state machine, and client-side SHA-256 q check in readQ.
+-- Residuals: live Unix domain socket transport and 9P server are external host glue.
+
+namespace Lib.Rsd.Ninep
+
+-- ============================================================================
+-- 1. 9P2000 Constants (intro(5), docs/EFFECT_ABI.md §1)
+-- ============================================================================
+
+def NOTAG : Int := 65535           -- 0xFFFF (used on Tversion/Rversion)
+def NOFID : Int := 4294967295      -- 0xFFFFFFFF (used for afid on Tattach)
+def DEFAULT_MSIZE : Int := 8192    -- Negotiated maximum message size
+def IOHDRSZ : Int := 24            -- Twrite/Rread header overhead (msize - 24 = 8168)
+def MAXWELEM : Int := 16           -- Maximum walk elements per Twalk (walk(5))
+def W9P2000 : List Int := [57, 80, 50, 48, 48, 48]
+
+def VERSION_9P2000 : String := "9P2000"
+
+-- Message type tags (fcall.h)
+def TVERSION : Int := 100
+def RVERSION : Int := 101
+def TATTACH  : Int := 104
+def RATTACH  : Int := 105
+def RERROR   : Int := 107
+def TWALK    : Int := 110
+def RWALK    : Int := 111
+def TOPEN    : Int := 112
+def ROPEN    : Int := 113
+def TCREATE  : Int := 114
+def RCREATE  : Int := 115
+def TREAD    : Int := 116
+def RREAD    : Int := 117
+def TWRITE   : Int := 118
+def RWRITE   : Int := 119
+def TCLUNK   : Int := 120
+def RCLUNK   : Int := 121
+def TREMOVE  : Int := 122
+def RREMOVE  : Int := 123
+def TSTAT    : Int := 124
+def RSTAT    : Int := 125
+def TWSTAT   : Int := 126
+def RWSTAT   : Int := 127
+
+-- Open modes and permissions (open(5), stat(5))
+def OREAD    : Int := 0
+def OWRITE   : Int := 1
+def ORDWR    : Int := 2
+def OTRUNC   : Int := 16           -- 0x10
+def QTDIR    : Int := 128          -- 0x80
+def QTTMP    : Int := 4            -- 0x04
+def QTAPPEND : Int := 64           -- 0x40
+def QTFILE   : Int := 0            -- 0x00
+def DMDIR    : Int := 2147483648   -- 0x80000000
+def DMAPPEND : Int := 1073741824   -- 0x40000000
+
+-- Reserved client fids (docs/EFFECT_ABI.md §1)
+def FID_ROOT : Int := 0
+def FID_WORK : Int := 1
+
+-- ============================================================================
+-- 2. Hex & Wire Primitives (Little-Endian Integers, Strings, Qid, Stat)
+-- ============================================================================
+
+/-- Nibble (0-15) to ASCII hex byte value: 0-9 -> '0'-'9', 10-15 -> 'a'-'f'. -/
+def nibbleToHexChar (n : Int) : Int :=
+  let v := (n % 16).toNat
+  if v < 10 then 48 + v else 87 + v
+
+def bytesToHex (bs : List Int) : List Int :=
+  bs.foldr (fun b acc => nibbleToHexChar (b / 16) :: nibbleToHexChar (b % 16) :: acc) []
+
+def hexCharToVal (c : Char) : Option Int :=
+  if '0' ≤ c && c ≤ '9' then
+    some ((c.toNat : Int) - ('0'.toNat : Int))
+  else if 'a' ≤ c && c ≤ 'f' then
+    some (10 + (c.toNat : Int) - ('a'.toNat : Int))
+  else if 'A' ≤ c && c ≤ 'F' then
+    some (10 + (c.toNat : Int) - ('A'.toNat : Int))
+  else
+    none
+
+def hexCharsToBytesLoop (cs : List Char) (acc : List Int) : Option (List Int) :=
+  match cs with
+  | [] => some acc.reverse
+  | [_] => none
+  | c1 :: c2 :: rest =>
+    match hexCharToVal c1, hexCharToVal c2 with
+    | some hi, some lo => hexCharsToBytesLoop rest ((hi * 16 + lo) :: acc)
+    | _, _ => none
+
+def hexToBytes (s : String) : Option (List Int) :=
+  hexCharsToBytesLoop s.data []
+
+def getByte (buf : List Int) (idx : Int) : Int :=
+  if idx < 0 then 0 else buf.getD idx.toNat 0
+
+/-- EXEC-HOST-0 r2 G1: every walk over message bytes is tail-recursive, so a
+    full msize frame (8192 B) never overflows the wasm call stack. r1's
+    `List.take`/`List.length` overflowed V8 at ~3.7 KB (AUDIT-EXEC-HOST-0 r1
+    item G1). All helpers below recurse in tail position only. -/
+def revLoop : List Int → List Int → List Int
+  | [], acc => acc
+  | b :: rest, acc => revLoop rest (b :: acc)
+
+/-- Tail-recursive length of a byte list. -/
+def lenTR : List Int → Int → Int
+  | [], n => n
+  | _ :: rest, n => lenTR rest (n + 1)
+
+/-- Tail-recursive prefix take with accumulator reversal. -/
+def takeTR (buf : List Int) (n : Int) (acc : List Int) : List Int :=
+  match buf with
+  | [] => revLoop acc []
+  | b :: rest => if n <= 0 then revLoop acc [] else takeTR rest (n - 1) (b :: acc)
+
+/-- Skip `skip` then take `len`, one tail-recursive pass. -/
+def skipTakeTR (buf : List Int) (skip : Int) (len : Int) (acc : List Int) : List Int :=
+  match buf with
+  | [] => revLoop acc []
+  | b :: rest =>
+    if skip > 0 then skipTakeTR rest (skip - 1) len acc
+    else if len > 0 then skipTakeTR rest 0 (len - 1) (b :: acc)
+    else revLoop acc []
+
+/-- Append as two tail-recursive reversal passes (`revLoop (revLoop a []) b`). -/
+def appendTR (a b : List Int) : List Int :=
+  revLoop (revLoop a []) b
+
+def sliceBytes (buf : List Int) (start len : Int) : List Int :=
+  if start < 0 || len < 0 then [] else skipTakeTR buf start len []
+
+def putU8 (v : Int) : List Int :=
+  [v % 256]
+
+def putU16LE (v : Int) : List Int :=
+  [v % 256, (v / 256) % 256]
+
+def putU32LE (v : Int) : List Int :=
+  [v % 256, (v / 256) % 256, (v / 65536) % 256, (v / 16777216) % 256]
+
+def putU64LE (v : Int) : List Int :=
+  let lo := v % 4294967296
+  let hi := v / 4294967296
+  putU32LE lo ++ putU32LE hi
+
+def readU8 (buf : List Int) (off : Int) : Option (Int × Int) :=
+  if off >= 0 && off + 1 <= lenTR buf 0 then
+    some (getByte buf off, off + 1)
+  else
+    none
+
+def readU16LE (buf : List Int) (off : Int) : Option (Int × Int) :=
+  if off >= 0 && off + 2 <= lenTR buf 0 then
+    let b0 := getByte buf off
+    let b1 := getByte buf (off + 1)
+    some (b0 + b1 * 256, off + 2)
+  else
+    none
+
+def readU32LE (buf : List Int) (off : Int) : Option (Int × Int) :=
+  if off >= 0 && off + 4 <= lenTR buf 0 then
+    let b0 := getByte buf off
+    let b1 := getByte buf (off + 1)
+    let b2 := getByte buf (off + 2)
+    let b3 := getByte buf (off + 3)
+    some (b0 + b1 * 256 + b2 * 65536 + b3 * 16777216, off + 4)
+  else
+    none
+
+def readU64LE (buf : List Int) (off : Int) : Option (Int × Int) :=
+  match readU32LE buf off with
+  | none => none
+  | some (lo, off1) =>
+    match readU32LE buf off1 with
+    | none => none
+    | some (hi, off2) => some (lo + hi * 4294967296, off2)
+
+/-- UTF-8 encoding of one code point, pure Int arithmetic (RFC 3629).
+Matches `String.utf8EncodeChar` byte-for-byte on every valid `Char`. -/
+def encChar (c : Int) : List Int :=
+  if c < 128 then [c]
+  else if c < 2048 then [192 + c / 64, 128 + c % 64]
+  else if c < 65536 then [224 + c / 4096, 128 + (c / 64) % 64, 128 + c % 64]
+  else [240 + c / 131072, 128 + (c / 4096) % 64, 128 + (c / 64) % 64, 128 + c % 64]
+
+def charsToWire : List Char → List Int
+  | [] => []
+  | c :: cs => encChar (c.toNat : Int) ++ charsToWire cs
+
+def stringToWireBytes (s : String) : List Int :=
+  charsToWire s.toList
+
+def putString (s : String) : List Int :=
+  let bs := stringToWireBytes s
+  putU16LE (lenTR bs 0) ++ bs
+
+def putName (bs : List Int) : List Int :=
+  putU16LE (lenTR bs 0) ++ bs
+
+/-- Host-side only: render wire name bytes as a String for messages/logs.
+Assumes each byte is a code point (ASCII-safe); never emitted to wasm. -/
+def bytesToStr (bs : List Int) : String :=
+  String.mk (bs.map (fun b => Char.ofNat b.toNat))
+
+/-- Host-side convenience: map a list of String names to wire byte names. -/
+def strsToWire (ss : List String) : List (List Int) :=
+  ss.map stringToWireBytes
+
+-- Named residue byte constants (ASCII) for the emitted session machine.
+def RES_PROTOCOL_ERROR : List Int := [112, 114, 111, 116, 111, 99, 111, 108, 95, 101, 114, 114, 111, 114]  -- "protocol_error"
+def RES_VERSION_REFUSED : List Int := [118, 101, 114, 115, 105, 111, 110, 95, 114, 101, 102, 117, 115, 101, 100]  -- "version_refused"
+def RES_NOT_IN_VIEW : List Int := [110, 111, 116, 95, 105, 110, 95, 118, 105, 101, 119]  -- "not_in_view"
+def RES_DOES_NOT_EXIST : List Int := [100, 111, 101, 115, 95, 110, 111, 116, 95, 101, 120, 105, 115, 116]  -- "does_not_exist"
+def RES_HASH_MISMATCH : List Int := [104, 97, 115, 104, 95, 109, 105, 115, 109, 97, 116, 99, 104]  -- "hash_mismatch"
+def RES_SESSION_INCOMPLETE : List Int := [115, 101, 115, 115, 105, 111, 110, 95, 105, 110, 99, 111, 109, 112, 108, 101, 116, 101]  -- "session_incomplete"
+def RES_Q_INVALID : List Int := [113, 95, 105, 110, 118, 97, 108, 105, 100]  -- "q_invalid"
+
+/-- Length-prefixed wire name as raw bytes. 9P names are byte strings;
+the reader does not impose UTF-8. -/
+def readName (buf : List Int) (off : Int) : Option (List Int × Int) :=
+  match readU16LE buf off with
+  | none => none
+  | some (n, off1) =>
+    if off1 + n <= lenTR buf 0 && n >= 0 then
+      some (sliceBytes buf off1 n, off1 + n)
+    else
+      none
+
+structure Qid where
+  qtype : Int
+  vers  : Int
+  path  : Int
+  deriving Repr, DecidableEq, BEq, Inhabited
+
+def putQid (q : Qid) : List Int :=
+  putU8 q.qtype ++ putU32LE q.vers ++ putU64LE q.path
+
+def readQid (buf : List Int) (off : Int) : Option (Qid × Int) :=
+  match readU8 buf off with
+  | none => none
+  | some (qt, off1) =>
+    match readU32LE buf off1 with
+    | none => none
+    | some (v, off2) =>
+      match readU64LE buf off2 with
+      | none => none
+      | some (p, off3) => some ({ qtype := qt, vers := v, path := p }, off3)
+
+def readQidsLoop (buf : List Int) (off : Int) (rem : Nat) (acc : List Qid) : Option (List Qid × Int) :=
+  match rem with
+  | 0 => some (acc.reverse, off)
+  | r + 1 =>
+    match readQid buf off with
+    | none => none
+    | some (q, off1) => readQidsLoop buf off1 r (q :: acc)
+
+structure Stat where
+  stype  : Int
+  dev    : Int
+  qid    : Qid
+  mode   : Int
+  atime  : Int
+  mtime  : Int
+  length : Int
+  name   : List Int
+  uid    : List Int
+  gid    : List Int
+  muid   : List Int
+  deriving Repr, DecidableEq, BEq, Inhabited
+
+-- Null ("don't touch") stat for Twstat (stat(5))
+def blankStat : Stat := {
+  stype  := 65535
+  dev    := 4294967295
+  qid    := { qtype := 255, vers := 4294967295, path := 18446744073709551615 }
+  mode   := 4294967295
+  atime  := 4294967295
+  mtime  := 4294967295
+  length := 18446744073709551615
+  name   := []
+  uid    := []
+  gid    := []
+  muid   := []
+}
+
+def putStat (st : Stat) : List Int :=
+  let body :=
+    putU16LE st.stype ++
+    putU32LE st.dev ++
+    putQid st.qid ++
+    putU32LE st.mode ++
+    putU32LE st.atime ++
+    putU32LE st.mtime ++
+    putU64LE st.length ++
+    putName st.name ++
+    putName st.uid ++
+    putName st.gid ++
+    putName st.muid
+  let statBytes := putU16LE (body.length : Int) ++ body
+  putU16LE (statBytes.length : Int) ++ statBytes
+
+def readStat (buf : List Int) (off : Int) : Option (Stat × Int) :=
+  match readU16LE buf off with
+  | none => none
+  | some (nstat, off1) =>
+    match readU16LE buf off1 with
+    | none => none
+    | some (statSize, off2) =>
+      if nstat != statSize + 2 || off2 + statSize > lenTR buf 0 then
+        none
+      else
+        match readU16LE buf off2 with
+        | none => none
+        | some (stype, off3) =>
+          match readU32LE buf off3 with
+          | none => none
+          | some (dev, off4) =>
+            match readQid buf off4 with
+            | none => none
+            | some (qid, off5) =>
+              match readU32LE buf off5 with
+              | none => none
+              | some (mode, off6) =>
+                match readU32LE buf off6 with
+                | none => none
+                | some (atime, off7) =>
+                  match readU32LE buf off7 with
+                  | none => none
+                  | some (mtime, off8) =>
+                    match readU64LE buf off8 with
+                    | none => none
+                    | some (length, off9) =>
+                      match readName buf off9 with
+                      | none => none
+                      | some (name, off10) =>
+                        match readName buf off10 with
+                        | none => none
+                        | some (uid, off11) =>
+                          match readName buf off11 with
+                          | none => none
+                          | some (gid, off12) =>
+                            match readName buf off12 with
+                            | none => none
+                            | some (muid, off13) =>
+                              if off13 != off2 + statSize then
+                                none
+                              else
+                                some ({
+                                  stype := stype
+                                  dev := dev
+                                  qid := qid
+                                  mode := mode
+                                  atime := atime
+                                  mtime := mtime
+                                  length := length
+                                  name := name
+                                  uid := uid
+                                  gid := gid
+                                  muid := muid
+                                }, off13)
+
+-- ============================================================================
+-- 3. 9P2000 Message Types for EFFECT_ABI Profile (TMsg and RMsg)
+-- ============================================================================
+
+inductive TMsg where
+  | version (tag : Int) (msize : Int) (version : List Int)
+  | attach  (tag : Int) (fid : Int) (afid : Int) (uname : List Int) (aname : List Int)
+  | walk    (tag : Int) (fid : Int) (newfid : Int) (wnames : List (List Int))
+  | open_   (tag : Int) (fid : Int) (mode : Int)
+  | create  (tag : Int) (fid : Int) (name : List Int) (perm : Int) (mode : Int)
+  | read    (tag : Int) (fid : Int) (offset : Int) (count : Int)
+  | write   (tag : Int) (fid : Int) (offset : Int) (data : List Int)
+  | clunk   (tag : Int) (fid : Int)
+  | remove  (tag : Int) (fid : Int)
+  | stat    (tag : Int) (fid : Int)
+  | wstat   (tag : Int) (fid : Int) (stat : Stat)
+  deriving Repr, DecidableEq, BEq
+
+inductive RMsg where
+  | version (tag : Int) (msize : Int) (version : List Int)
+  | error   (tag : Int) (ename : List Int)
+  | attach  (tag : Int) (qid : Qid)
+  | walk    (tag : Int) (wqids : List Qid)
+  | open_   (tag : Int) (qid : Qid) (iounit : Int)
+  | create  (tag : Int) (qid : Qid) (iounit : Int)
+  | read    (tag : Int) (data : List Int)
+  | write   (tag : Int) (count : Int)
+  | clunk   (tag : Int)
+  | remove  (tag : Int)
+  | stat    (tag : Int) (stat : Stat)
+  | wstat   (tag : Int)
+  deriving Repr, DecidableEq, BEq
+
+def tTag (m : TMsg) : Int :=
+  match m with
+  | TMsg.version tag _ _       => tag
+  | TMsg.attach tag _ _ _ _    => tag
+  | TMsg.walk tag _ _ _        => tag
+  | TMsg.open_ tag _ _         => tag
+  | TMsg.create tag _ _ _ _    => tag
+  | TMsg.read tag _ _ _        => tag
+  | TMsg.write tag _ _ _       => tag
+  | TMsg.clunk tag _           => tag
+  | TMsg.remove tag _          => tag
+  | TMsg.stat tag _            => tag
+  | TMsg.wstat tag _ _         => tag
+
+def tOp (m : TMsg) : Int :=
+  match m with
+  | TMsg.version _ _ _    => TVERSION
+  | TMsg.attach _ _ _ _ _ => TATTACH
+  | TMsg.walk _ _ _ _     => TWALK
+  | TMsg.open_ _ _ _      => TOPEN
+  | TMsg.create _ _ _ _ _ => TCREATE
+  | TMsg.read _ _ _ _     => TREAD
+  | TMsg.write _ _ _ _    => TWRITE
+  | TMsg.clunk _ _        => TCLUNK
+  | TMsg.remove _ _       => TREMOVE
+  | TMsg.stat _ _         => TSTAT
+  | TMsg.wstat _ _ _      => TWSTAT
+
+def tMaxCount (m : TMsg) : Int :=
+  match m with
+  | TMsg.walk _ _ _ wnames => (wnames.length : Int)
+  | TMsg.read _ _ _ count  => count
+  | TMsg.write _ _ _ data  => lenTR data 0
+  | _                      => 0
+
+def rTag (m : RMsg) : Int :=
+  match m with
+  | RMsg.version tag _ _ => tag
+  | RMsg.error tag _     => tag
+  | RMsg.attach tag _    => tag
+  | RMsg.walk tag _      => tag
+  | RMsg.open_ tag _ _   => tag
+  | RMsg.create tag _ _  => tag
+  | RMsg.read tag _      => tag
+  | RMsg.write tag _     => tag
+  | RMsg.clunk tag       => tag
+  | RMsg.remove tag      => tag
+  | RMsg.stat tag _      => tag
+  | RMsg.wstat tag       => tag
+
+def rMsgCount (m : RMsg) : Int :=
+  match m with
+  | RMsg.walk _ wqids => (wqids.length : Int)
+  | RMsg.read _ data  => lenTR data 0
+  | RMsg.write _ cnt  => cnt
+  | _                 => 0
+
+-- ============================================================================
+-- 4. 9P2000 Client Codec: encodeT and decodeR / decodeRChecked / decodeRForT
+-- ============================================================================
+
+def wrapFrame (mtype : Int) (tag : Int) (payload : List Int) : List Int :=
+  let totalSize := 7 + lenTR payload 0
+  putU32LE totalSize ++ putU8 mtype ++ putU16LE tag ++ payload
+
+def encodeT (m : TMsg) : List Int :=
+  match m with
+  | TMsg.version tag msize version =>
+    wrapFrame TVERSION tag (putU32LE msize ++ putName version)
+  | TMsg.attach tag fid afid uname aname =>
+    wrapFrame TATTACH tag (putU32LE fid ++ putU32LE afid ++ putName uname ++ putName aname)
+  | TMsg.walk tag fid newfid wnames =>
+    let namesBytes := wnames.foldl (fun acc s => acc ++ putName s) []
+    wrapFrame TWALK tag (putU32LE fid ++ putU32LE newfid ++ putU16LE (wnames.length : Int) ++ namesBytes)
+  | TMsg.open_ tag fid mode =>
+    wrapFrame TOPEN tag (putU32LE fid ++ putU8 mode)
+  | TMsg.create tag fid name perm mode =>
+    wrapFrame TCREATE tag (putU32LE fid ++ putName name ++ putU32LE perm ++ putU8 mode)
+  | TMsg.read tag fid offset count =>
+    wrapFrame TREAD tag (putU32LE fid ++ putU64LE offset ++ putU32LE count)
+  | TMsg.write tag fid offset data =>
+    wrapFrame TWRITE tag (putU32LE fid ++ putU64LE offset ++ putU32LE (lenTR data 0) ++ data)
+  | TMsg.clunk tag fid =>
+    wrapFrame TCLUNK tag (putU32LE fid)
+  | TMsg.remove tag fid =>
+    wrapFrame TREMOVE tag (putU32LE fid)
+  | TMsg.stat tag fid =>
+    wrapFrame TSTAT tag (putU32LE fid)
+  | TMsg.wstat tag fid st =>
+    wrapFrame TWSTAT tag (putU32LE fid ++ putStat st)
+
+def decodeRBody (mtype : Int) (tag : Int) (buf : List Int) (off0 : Int) (totalLen : Int) : Option RMsg :=
+  if mtype == RVERSION then
+    match readU32LE buf off0 with
+    | none => none
+    | some (msize, off1) =>
+      match readName buf off1 with
+      | some (ver, off2) => if off2 == totalLen then some (RMsg.version tag msize ver) else none
+      | none => none
+  else if mtype == RERROR then
+    match readName buf off0 with
+    | some (ename, off1) => if off1 == totalLen then some (RMsg.error tag ename) else none
+    | none => none
+  else if mtype == RATTACH then
+    match readQid buf off0 with
+    | some (qid, off1) => if off1 == totalLen then some (RMsg.attach tag qid) else none
+    | none => none
+  else if mtype == RWALK then
+    match readU16LE buf off0 with
+    | none => none
+    | some (nwqid, off1) =>
+      if nwqid < 0 then
+        none
+      else
+        match readQidsLoop buf off1 nwqid.toNat [] with
+        | some (wqids, off2) =>
+          if off2 == totalLen then some (RMsg.walk tag wqids) else none
+        | none => none
+  else if mtype == ROPEN then
+    match readQid buf off0 with
+    | none => none
+    | some (qid, off1) =>
+      match readU32LE buf off1 with
+      | some (iounit, off2) => if off2 == totalLen then some (RMsg.open_ tag qid iounit) else none
+      | none => none
+  else if mtype == RCREATE then
+    match readQid buf off0 with
+    | none => none
+    | some (qid, off1) =>
+      match readU32LE buf off1 with
+      | some (iounit, off2) => if off2 == totalLen then some (RMsg.create tag qid iounit) else none
+      | none => none
+  else if mtype == RREAD then
+    match readU32LE buf off0 with
+    | none => none
+    | some (count, off1) =>
+      if count >= 0 && off1 + count == totalLen then
+        some (RMsg.read tag (sliceBytes buf off1 count))
+      else
+        none
+  else if mtype == RWRITE then
+    match readU32LE buf off0 with
+    | some (count, off1) => if off1 == totalLen then some (RMsg.write tag count) else none
+    | none => none
+  else if mtype == RCLUNK then
+    if off0 == totalLen then some (RMsg.clunk tag) else none
+  else if mtype == RREMOVE then
+    if off0 == totalLen then some (RMsg.remove tag) else none
+  else if mtype == RSTAT then
+    match readStat buf off0 with
+    | some (st, off1) => if off1 == totalLen then some (RMsg.stat tag st) else none
+    | none => none
+  else if mtype == RWSTAT then
+    if off0 == totalLen then some (RMsg.wstat tag) else none
+  else
+    none
+
+/-- Inbound R decoder gated by the single validation definitions in
+    `lib/Session.rsd`. Order (EXEC-HOST-0 r2 G1): msize and length checks
+    (`Lib.validateInboundPre`) run BEFORE any body decode; the body is decoded
+    only after they pass; count checks (`Lib.validateInboundCount`) run last.
+    Result: `(Option RMsg, residue code)`. Code 0 = ok; every other code keeps
+    its own name via `inboundResidue`, never one `protocol_error`. -/
+def decodeRNamed (msize : Int) (fidOk : Bool)
+    (ownerServer ownerInc endServer endInc : Int)
+    (expectedTag : Int) (tOpCode : Int) (maxCount : Int) (buf : List Int) :
+    Option RMsg × Nat :=
+  let totalLen : Int := lenTR buf 0
+  let (sz, mtype, tag) :=
+    match readU32LE buf 0, readU8 buf 4, readU16LE buf 5 with
+    | some (s, _), some (mt, _), some (tg, _) => (s, mt, tg)
+    | _, _, _ => (0, 0, 0)
+  let pre := Lib.validateInboundPre
+    msize.toNat totalLen.toNat sz.toNat
+    fidOk ownerServer.toNat ownerInc.toNat endServer.toNat endInc.toNat
+    expectedTag.toNat tag.toNat tOpCode.toNat mtype.toNat
+  if pre != 0 then (none, pre)
+  else
+    let bodyOpt :=
+      if totalLen >= 7 && sz == totalLen then
+        decodeRBody mtype tag buf 7 totalLen
+      else
+        none
+    match bodyOpt with
+    | none => (none, 11)
+    | some r =>
+      if Lib.decodeAns tOpCode.toNat [mtype.toNat] == 2 then (some r, 0)
+      else
+        let c := Lib.validateInboundCount tOpCode.toNat maxCount.toNat (rMsgCount r).toNat
+        if c != 0 then (none, c) else (some r, 0)
+
+/-- Residue name (wire bytes) for each `decodeRNamed` code. Session codes 1–9
+    are `lib/Session.rsd`'s conjuncts; 11 is this codec's body-decode failure. -/
+def inboundResidue (code : Nat) : List Int :=
+  match code with
+  | 1 => [109,115,105,122,101,95,101,120,99,101,101,100,101,100]            -- "msize_exceeded"
+  | 2 => [102,114,97,109,101,95,115,104,111,114,116]                        -- "frame_short"
+  | 3 => [115,105,122,101,95,109,105,115,109,97,116,99,104]                 -- "size_mismatch"
+  | 4 => [102,105,100,95,105,110,118,97,108,105,100]                        -- "fid_invalid"
+  | 5 => [111,119,110,101,114,95,109,105,115,109,97,116,99,104]             -- "owner_mismatch"
+  | 6 => [116,97,103,95,109,105,115,109,97,116,99,104]                      -- "tag_mismatch"
+  | 7 => [114,116,121,112,101,95,117,110,101,120,112,101,99,116,101,100]    -- "rtype_unexpected"
+  | 8 => [99,111,117,110,116,95,111,118,101,114]                            -- "count_over"
+  | 9 => [119,101,108,101,109,95,111,118,101,114]                           -- "welem_over"
+  | _ => [98,111,100,121,95,109,97,108,102,111,114,109,101,100]             -- "body_malformed" (11)
+
+/-- r1-compatible total decoder: ok or none (names live in `decodeRNamed`). -/
+def decodeRChecked (msize : Int) (fidOk : Bool)
+    (ownerServer ownerInc endServer endInc : Int)
+    (expectedTag : Int) (tOpCode : Int) (maxCount : Int) (buf : List Int) : Option RMsg :=
+  match decodeRNamed msize fidOk ownerServer ownerInc endServer endInc expectedTag tOpCode maxCount buf with
+  | (some r, 0) => some r
+  | _ => none
+
+def decodeRForT (t : TMsg) (buf : List Int) : Option RMsg :=
+  decodeRChecked DEFAULT_MSIZE true 0 0 0 0 (tTag t) (tOp t) (tMaxCount t) buf
+
+-- ============================================================================
+-- 5. QReply, Client Fid Table, Sans-IO Session State Machine & readQ
+-- ============================================================================
+
+/-- Result of reading `/q/<hash>`.
+    Shares `.ok`, `.residue`, `.bytes` with `Lib.Rsd.Store.Reply` while
+    carrying the resolved/refused object identity `.q`, `.qHex`, and `.path`
+    so every refusal refuses by name. -/
+structure QReply where
+  ok      : Bool
+  q       : List Int
+  qHex    : List Int
+  path    : List Int
+  residue : List Int
+  bytes   : List Int
+  deriving Repr, DecidableEq, BEq, Inhabited
+
+def qHit (q : List Int) (qHex : List Int) (data : List Int) : QReply :=
+  { ok := true, q := q, qHex := qHex, path := [47, 113, 47] ++ qHex, residue := [], bytes := data }
+
+def qRefuse (q : List Int) (qHex : List Int) (reason : List Int) : QReply :=
+  { ok := false, q := q, qHex := qHex, path := [47, 113, 47] ++ qHex, residue := reason, bytes := [] }
+
+inductive FidSlot where
+  | unbound
+  | bound (path : List (List Int)) (qid : Qid)
+  | open_ (path : List (List Int)) (qid : Qid) (mode : Int) (iounit : Int)
+  deriving Repr, DecidableEq, BEq, Inhabited
+
+structure FidTable where
+  root : FidSlot  -- fid 0
+  work : FidSlot  -- fid 1
+  deriving Repr, DecidableEq, BEq, Inhabited
+
+def emptyFidTable : FidTable :=
+  { root := FidSlot.unbound, work := FidSlot.unbound }
+
+inductive SessionPhase where
+  | awaitVersion
+  | awaitAttach
+  | awaitWalk
+  | awaitOpen
+  | awaitRead (offset : Int)
+  | awaitClunkDone (acc : List Int)
+  | awaitClunkError (reason : List Int)
+  | done (reply : QReply)
+  deriving Repr, DecidableEq, BEq
+
+structure SessionState where
+  targetQ     : List Int
+  qHex        : List Int
+  aname       : List Int
+  msize       : Int
+  serverId    : Int
+  incarnation : Int
+  fids        : FidTable
+  accBytes    : List Int
+  lastT       : TMsg
+  phase       : SessionPhase
+  verifyQ     : Bool
+  deriving Repr, DecidableEq, BEq
+
+inductive StepOut where
+  | send (state : SessionState) (t : TMsg) (wire : List Int)
+  | done (state : SessionState) (reply : QReply)
+  deriving Repr, DecidableEq, BEq
+
+def fidOkForPhase (st : SessionState) : Bool :=
+  match st.phase with
+  | SessionPhase.awaitVersion => true
+  | SessionPhase.awaitAttach  => st.fids.root == FidSlot.unbound
+  | SessionPhase.awaitWalk    =>
+    match st.fids.root with
+    | FidSlot.bound _ _ => st.fids.work == FidSlot.unbound
+    | _ => false
+  | SessionPhase.awaitOpen =>
+    match st.fids.work with
+    | FidSlot.bound _ _ => true
+    | _ => false
+  | SessionPhase.awaitRead _ =>
+    match st.fids.work with
+    | FidSlot.open_ _ _ _ _ => true
+    | _ => false
+  | SessionPhase.awaitClunkDone _  => st.fids.work != FidSlot.unbound
+  | SessionPhase.awaitClunkError _ => st.fids.work != FidSlot.unbound
+  | SessionPhase.done _ => false
+
+def startSessionOpts (q : List Int) (verifyQ : Bool) (aname : List Int := []) : SessionState × TMsg × List Int :=
+  let qHex := Lib.Sha256.bytesOf "sha256-" ++ bytesToHex q
+  let t0 := TMsg.version NOTAG DEFAULT_MSIZE W9P2000
+  let st : SessionState := {
+    targetQ     := q
+    qHex        := qHex
+    aname       := aname
+    msize       := DEFAULT_MSIZE
+    serverId    := 0
+    incarnation := 0
+    fids        := emptyFidTable
+    accBytes    := []
+    lastT       := t0
+    phase       := SessionPhase.awaitVersion
+    verifyQ     := verifyQ
+  }
+  (st, t0, encodeT t0)
+
+def startSession (q : List Int) (aname : List Int := []) : SessionState × TMsg × List Int :=
+  startSessionOpts q true aname
+
+def finishSession (st : SessionState) (reply : QReply) : StepOut :=
+  let st' := { st with phase := SessionPhase.done reply }
+  StepOut.done st' reply
+
+def emitNextT (st : SessionState) (t : TMsg) (nextPhase : SessionPhase) : StepOut :=
+  let st' := { st with lastT := t, phase := nextPhase }
+  StepOut.send st' t (encodeT t)
+
+-- Pure sans-IO transition step: (state, R wire bytes) -> (state, T | done)
+def step (st : SessionState) (rWire : List Int) : StepOut :=
+  match st.phase with
+  | SessionPhase.done reply => StepOut.done st reply
+  | _ =>
+    let decoded := decodeRChecked
+      st.msize (fidOkForPhase st)
+      st.serverId st.incarnation st.serverId st.incarnation
+      (tTag st.lastT) (tOp st.lastT) (tMaxCount st.lastT) rWire
+    match decoded with
+    | none =>
+      finishSession st (qRefuse st.targetQ st.qHex RES_PROTOCOL_ERROR)
+    | some r =>
+      match st.phase, r with
+      | SessionPhase.awaitVersion, RMsg.version _ srvMsize ver =>
+        if ver != W9P2000 || srvMsize <= IOHDRSZ then
+          finishSession st (qRefuse st.targetQ st.qHex RES_VERSION_REFUSED)
+        else
+          let negotiated := if srvMsize < st.msize then srvMsize else st.msize
+          let tAttach := TMsg.attach 0 FID_ROOT NOFID [107, 108, 97, 117, 115] st.aname
+          emitNextT { st with msize := negotiated } tAttach SessionPhase.awaitAttach
+      | SessionPhase.awaitVersion, RMsg.error _ ename =>
+        finishSession st (qRefuse st.targetQ st.qHex ename)
+
+      | SessionPhase.awaitAttach, RMsg.attach _ rootQid =>
+        let fids' := { st.fids with root := FidSlot.bound [] rootQid }
+        let tWalk := TMsg.walk 0 FID_ROOT FID_WORK [[113], st.qHex]
+        emitNextT { st with fids := fids' } tWalk SessionPhase.awaitWalk
+      | SessionPhase.awaitAttach, RMsg.error _ _ =>
+        -- Unmounted root aname on Tattach -> not_in_view
+        finishSession st (qRefuse st.targetQ st.qHex RES_NOT_IN_VIEW)
+
+      | SessionPhase.awaitWalk, RMsg.walk _ wqids =>
+        -- walk(5): when "q" is mounted in the view but <qHex> is absent inside "q",
+        -- the server returns Rwalk with wqids.length == 1 (< 2) without binding newfid.
+        if wqids.length != 2 then
+          finishSession st (qRefuse st.targetQ st.qHex RES_DOES_NOT_EXIST)
+        else
+          let targetQid := wqids.getD 1 { qtype := 0, vers := 0, path := 0 }
+          let fids' := { st.fids with work := FidSlot.bound [[113], st.qHex] targetQid }
+          let tOpen := TMsg.open_ 0 FID_WORK OREAD
+          emitNextT { st with fids := fids' } tOpen SessionPhase.awaitOpen
+      | SessionPhase.awaitWalk, RMsg.error _ _ =>
+        -- walk(5): when element 0 ("q") fails because /q is not mounted in the server's
+        -- namespace view, the server returns Rerror -> not_in_view.
+        finishSession st (qRefuse st.targetQ st.qHex RES_NOT_IN_VIEW)
+
+      | SessionPhase.awaitOpen, RMsg.open_ _ openQid iounit =>
+        let fids' := { st.fids with work := FidSlot.open_ [[113], st.qHex] openQid OREAD iounit }
+        let maxChunk := st.msize - IOHDRSZ
+        let tRead := TMsg.read 0 FID_WORK 0 maxChunk
+        emitNextT { st with fids := fids', accBytes := [] } tRead (SessionPhase.awaitRead 0)
+      | SessionPhase.awaitOpen, RMsg.error _ _ =>
+        -- fid 1 was bound by Twalk; clunk it before finishing as not_in_view
+        let tClunk := TMsg.clunk 0 FID_WORK
+        emitNextT st tClunk (SessionPhase.awaitClunkError RES_NOT_IN_VIEW)
+
+      | SessionPhase.awaitRead offset, RMsg.read _ chunk =>
+        if chunk.isEmpty then
+          let tClunk := TMsg.clunk 0 FID_WORK
+          emitNextT st tClunk (SessionPhase.awaitClunkDone st.accBytes)
+        else
+          let acc' := st.accBytes ++ chunk
+          let nextOff := offset + lenTR chunk 0
+          let maxChunk := st.msize - IOHDRSZ
+          let tRead := TMsg.read 0 FID_WORK nextOff maxChunk
+          emitNextT { st with accBytes := acc' } tRead (SessionPhase.awaitRead nextOff)
+      | SessionPhase.awaitRead _, RMsg.error _ ename =>
+        let tClunk := TMsg.clunk 0 FID_WORK
+        emitNextT st tClunk (SessionPhase.awaitClunkError ename)
+
+      | SessionPhase.awaitClunkDone data, RMsg.clunk _ =>
+        let fids' := { st.fids with work := FidSlot.unbound }
+        let stClean := { st with fids := fids' }
+        let h := Lib.Sha256.qOf "blob" data
+        if !stClean.verifyQ || (h.ok && h.bytes == stClean.targetQ) then
+          finishSession stClean (qHit stClean.targetQ stClean.qHex data)
+        else
+          finishSession stClean (qRefuse stClean.targetQ stClean.qHex RES_HASH_MISMATCH)
+      | SessionPhase.awaitClunkDone _, RMsg.error _ ename =>
+        finishSession st (qRefuse st.targetQ st.qHex ename)
+
+      | SessionPhase.awaitClunkError reason, RMsg.clunk _ =>
+        let fids' := { st.fids with work := FidSlot.unbound }
+        finishSession { st with fids := fids' } (qRefuse st.targetQ st.qHex reason)
+      | SessionPhase.awaitClunkError reason, RMsg.error _ _ =>
+        let fids' := { st.fids with work := FidSlot.unbound }
+        finishSession { st with fids := fids' } (qRefuse st.targetQ st.qHex reason)
+
+      | _, _ =>
+        finishSession st (qRefuse st.targetQ st.qHex RES_PROTOCOL_ERROR)
+
+def driveSession (st : SessionState) (rFrames : List (List Int)) : QReply :=
+  match st.phase with
+  | SessionPhase.done reply => reply
+  | _ =>
+    match rFrames with
+    | [] => qRefuse st.targetQ st.qHex RES_SESSION_INCOMPLETE
+    | rWire :: rest =>
+      match step st rWire with
+      | StepOut.done _ reply => reply
+      | StepOut.send st' _ _ => driveSession st' rest
+
+def isValidQBytes (q : List Int) : Bool :=
+  q.length == 32 && q.all (fun b => b >= 0 && b < 256)
+
+-- Pure `/q/<hash>` reader over inbound R wire frames from the 9P server, enforcing `contentHashBytes == q`.
+def readQ (q : List Int) (rFrames : List (List Int)) (aname : List Int := []) : QReply :=
+  let qHex := bytesToHex q
+  if !isValidQBytes q then
+    qRefuse q qHex RES_Q_INVALID
+  else
+    let (st0, _, _) := startSessionOpts q true aname
+    driveSession st0 rFrames
+
+-- Mutant for Row 5: identical to `readQ` except it skips the client-side `contentHashBytes == q` check.
+def readQNoCheckMutant (q : List Int) (rFrames : List (List Int)) (aname : List Int := []) : QReply :=
+  let qHex := bytesToHex q
+  if !isValidQBytes q then
+    qRefuse q qHex RES_Q_INVALID
+  else
+    let (st0, _, _) := startSessionOpts q false aname
+    driveSession st0 rFrames
+
+-- ============================================================================
+-- 6. Compile-Time Guards (#guard)
+-- ============================================================================
+
+-- Guard 1: Tversion encode and Rversion decode match real ninep=0.6.0 wire bytes
+#guard encodeT (TMsg.version NOTAG DEFAULT_MSIZE W9P2000) ==
+  [19, 0, 0, 0, 100, 255, 255, 0, 32, 0, 0, 6, 0, 57, 80, 50, 48, 48, 48]
+#guard decodeRForT (TMsg.version NOTAG DEFAULT_MSIZE W9P2000)
+  [19, 0, 0, 0, 101, 255, 255, 0, 32, 0, 0, 6, 0, 57, 80, 50, 48, 48, 48] ==
+  some (RMsg.version NOTAG DEFAULT_MSIZE W9P2000)
+
+-- Guard 2: Inbound R validation via `Lib.validateInbound` (msize, short, size, fid, owner, tag, type, count)
+#guard decodeRChecked 10 true 0 0 0 0 0 TCLUNK 0 [7, 0, 0, 0, 121, 0, 0, 0, 0, 0, 0] == none
+#guard decodeRForT (TMsg.version NOTAG DEFAULT_MSIZE W9P2000) [1, 2, 3] == none
+#guard decodeRForT (TMsg.clunk 0 1) [99, 0, 0, 0, 121, 0, 0] == none
+#guard decodeRChecked DEFAULT_MSIZE false 0 0 0 0 0 TCLUNK 0 [7, 0, 0, 0, 121, 0, 0] == none
+#guard decodeRChecked DEFAULT_MSIZE true 1 0 2 0 0 TCLUNK 0 [7, 0, 0, 0, 121, 0, 0] == none
+#guard decodeRForT (TMsg.clunk 0 1) [7, 0, 0, 0, 121, 1, 0] == none
+#guard decodeRForT (TMsg.clunk 0 1) [7, 0, 0, 0, 123, 0, 0] == none
+
+-- Guard 3 (EXEC-HOST-0 r2 G1/G3): every inbound failure keeps its own name.
+-- decodeRNamed returns Session.rsd's conjunct code, not one protocol_error.
+#guard (decodeRNamed 10 true 0 0 0 0 0 TCLUNK 0 [7, 0, 0, 0, 121, 0, 0, 0, 0, 0, 0]).2 == 1
+#guard (decodeRNamed DEFAULT_MSIZE true 0 0 0 0 0 TCLUNK 0 [1, 2, 3]).2 == 2
+#guard (decodeRNamed DEFAULT_MSIZE true 0 0 0 0 0 TCLUNK 0 [8, 0, 0, 0, 121, 0, 0]).2 == 3
+#guard (decodeRNamed DEFAULT_MSIZE false 0 0 0 0 0 TCLUNK 0 [7, 0, 0, 0, 121, 0, 0]).2 == 4
+#guard (decodeRNamed DEFAULT_MSIZE true 1 0 2 0 0 TCLUNK 0 [7, 0, 0, 0, 121, 0, 0]).2 == 5
+#guard (decodeRNamed DEFAULT_MSIZE true 0 0 0 0 0 TCLUNK 0 [7, 0, 0, 0, 121, 1, 0]).2 == 6
+#guard (decodeRNamed DEFAULT_MSIZE true 0 0 0 0 0 TCLUNK 0 [7, 0, 0, 0, 123, 0, 0]).2 == 7
+#guard (decodeRNamed DEFAULT_MSIZE true 0 0 0 0 0 TREAD 0
+    ([20, 0, 0, 0, 117, 0, 0, 9, 0, 0, 0] ++ [1, 2, 3, 4, 5, 6, 7, 8, 9] : List Int)).2 == 8
+#guard (decodeRNamed DEFAULT_MSIZE true 0 0 0 0 0 TWALK 17
+    (([230, 0, 0, 0, 111, 0, 0, 17, 0] : List Int) ++ List.flatten (List.replicate 17 ((0 : Int) :: List.replicate 12 (0 : Int))))).2 == 9
+#guard (decodeRNamed DEFAULT_MSIZE true 0 0 0 0 NOTAG TVERSION 0
+    [20, 0, 0, 0, 101, 255, 255, 0, 32, 0, 0, 6, 0, 57, 80, 50, 48, 48, 48, 99]).2 == 11
+
+-- Guard 4 (r2 G1): the TR byte toolkit agrees with the classic ops it replaced.
+#guard sliceBytes [0,1,2,3,4,5,6,7,8,9] 3 4 == [3,4,5,6]
+#guard sliceBytes [0,1,2,3] 3 9 == [3]
+#guard sliceBytes [0,1,2,3] 9 2 == []
+#guard sliceBytes [0,1,2,3] (-1) 2 == []
+#guard takeTR [0,1,2,3,4] 3 [] == [0,1,2]
+#guard appendTR [0,1] [2,3] == [0,1,2,3]
+#guard lenTR [0,1,2,3,4,5,6,7] 0 == 8
+#guard revLoop [1,2,3] [] == [3,2,1]
+
+end Lib.Rsd.Ninep

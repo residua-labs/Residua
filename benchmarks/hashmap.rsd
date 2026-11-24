@@ -1,0 +1,172 @@
+-- hashmap: the Bend bench/runtime hashmap program (HigherOrderCO/Bend,
+-- bench/runtime/hashmap/main.bend), ported to P1' Lean 4.14. Same algorithm: a table of 4096
+-- buckets, each a Chain of keys; 2^S independent tables fork as a batch tree; phase 1 inserts D keys
+-- (a present key leaves the bucket untouched, an absent one is consed on and written back), phase 2
+-- looks up D probe keys from a second seed and counts hits, then a bucket sweep mixes the hit count,
+-- the distinct-key count and a position-weighted fold; table checksums sum up the fork tree.
+-- Departures (named): SRC-BEND-U32 — the source's U32 words are modeled exactly in checked Int
+-- arithmetic (wrap mod 2^32, xor bit-decomposed, masks by %; values stay in [0, 2^32)); SRC-BEND-ARR
+-- — the source's Array<Chain> rides as a List Chain here with drop-based read and take/drop write
+-- (the frozen language has no array primitive); the list ops are bespoke monomorphic defs on the
+-- same spine (the emitter's polymorphic-op specialisation at a program-side element type is
+-- refused — named for cc); the source itself documents its Array.get/set read-then-write-back
+-- spelling as the defective-by-design point.
+-- The source's small size (S 2, D 256) expects 4206244792 (verified against the C twin there); its
+-- main() runs (11, 16384), out of reach here.
+-- Source pin (BENCH-SRC-0, 2026-11-06): HigherOrderCO/Bend commit be236f324ed0338fe907fe50474468e4d3b94157
+-- (main), bench/runtime/hashmap/main.bend, sha256
+-- 9c1682c2b495e69aaca895a62fc8a68362c73bb30ae6705ba7088459684e4f6d
+-- (raw.githubusercontent.com/HigherOrderCO/Bend/be236f324ed0338fe907fe50474468e4d3b94157/bench/runtime/hashmap/main.bend).
+
+def W : Int := 4294967296
+
+def w32 (x : Int) : Int := x % W
+
+def bitXorLoop : Nat → Int → Int → Int → Int → Int
+  | 0, _, _, acc, _ => acc
+  | k + 1, a, b, acc, sc => bitXorLoop k (a / 2) (b / 2) (acc + ((a % 2 + b % 2) % 2) * sc) (sc * 2)
+
+def xor32 (a b : Int) : Int := bitXorLoop 32 a b 0 1
+
+def bitAndLoop : Nat → Int → Int → Int → Int → Int
+  | 0, _, _, acc, _ => acc
+  | k + 1, a, b, acc, sc => bitAndLoop k (a / 2) (b / 2) (acc + (a % 2 * b % 2) * sc) (sc * 2)
+
+def and32 (a b : Int) : Int := bitAndLoop 32 a b 0 1
+
+def wAdd (a b : Int) : Int := w32 (a + b)
+-- wMul is split at 16 bits so the intermediates stay under the checked-i64
+-- bound (a_lo * b, a_hi * b < 2^48); a*b mod 2^32 is unchanged
+-- (checkedArithmeticStuck at ~2^63 on the flat form, probe-verified)
+def wMul (a b : Int) : Int :=
+  w32 (w32 (w32 (a % 65536) * b) + w32 (w32 (w32 (a / 65536) * b) % 65536) * 65536)
+def wInc (a : Int) : Int := w32 (a + 1)
+
+def pw2 : Nat → Int
+  | 0 => 1
+  | k + 1 => 2 * pw2 k
+
+def b2u (b : Bool) : Int := if b then 1 else 0
+
+/-- The source's Chain: CNil / CCons{k, t}. -/
+inductive Chain where
+  | cnil
+  | ccons (k : Int) (t : Chain)
+
+/-- The source's Array<Chain>: a list of 4096 buckets (SRC-BEND-ARR). -/
+abbrev Tab := List Chain
+
+-- monomorphic list ops on Tab: the polymorphic-op specialisation at a
+-- program-side element type is refused by the emitter ([typed_call_arity]
+-- in the list_drop module, named for cc); bespoke defs on the same
+-- List Chain spine keep the SRC-BEND-ARR model.
+def dropC : Nat → Tab → Tab
+  | 0, a => a
+  | _ + 1, [] => []
+  | n + 1, _ :: as => dropC n as
+
+def takeC : Nat → Tab → Tab
+  | 0, _ => []
+  | _ + 1, [] => []
+  | n + 1, x :: as => x :: takeC n as
+
+def headC : Tab → Chain
+  | [] => Chain.cnil
+  | c :: _ => c
+
+def appC : Tab → Tab → Tab
+  | [], b => b
+  | x :: xs, b => x :: appC xs b
+
+def repC : Nat → Tab
+  | 0 => []
+  | n + 1 => Chain.cnil :: repC n
+
+-- xorshift: x ^= x<<13; x ^= x>>17; x ^= x<<5
+def prng (x : Int) : Int :=
+  let b := xor32 x (w32 (x * 8192))
+  let d := xor32 b (b / 131072)
+  xor32 d (w32 (d * 32))
+
+-- a key: the hash of a seed and a draw index, masked to 20 bits
+def key (s j : Int) : Int := and32 (prng (xor32 (wMul (wInc j) 2654435761) (wMul s 340573321))) 1048575
+
+-- the chain walk: the last comparison rides in as f, so the walk
+-- stops one node past a found key
+def has : Chain → Int → Bool → Bool
+  | _, _, true => true
+  | Chain.cnil, _, false => false
+  | Chain.ccons h t, k, false => has t k (h == k)
+
+-- a chain's length
+def len : Chain → Int → Int
+  | Chain.cnil, acc => acc
+  | Chain.ccons _ t, acc => len t (wInc acc)
+
+-- bucket read: the chain at index b (drop-based, Arena.read's shape)
+def getAt : Tab → Int → Chain
+  | [], _ => Chain.cnil
+  | a, b => headC (dropC b.toNat a)
+
+-- bucket write: set the chain at index b (take/drop splice)
+def setAt (b : Int) (c : Chain) : Tab → Tab
+  | [] => []
+  | a => appC (takeC b.toNat a) (appC [c] (dropC (b.toNat + 1) a))
+
+-- the insert's decision: a present key leaves the bucket untouched,
+-- an absent one is consed onto the chain and written back
+def ins (b k : Int) (a : Tab) : Tab :=
+  let c0 := getAt a b
+  if has c0 k false then a else setAt b (Chain.ccons k c0) a
+
+-- phase 1: D inserts, key j from the table seed
+def fill : Nat → Int → Int → Tab → Tab
+  | 0, _, _, a => a
+  | p + 1, s, j, a =>
+    let k := key s j
+    let b := and32 k 4095
+    fill p s (wInc j) (ins b k a)
+
+-- phase 2: D lookups, probe key j from the second seed
+def look : Nat → Int → Int → Tab → Int → Tab × Int
+  | 0, _, _, a, hits => (a, hits)
+  | p + 1, s, j, a, hits =>
+    let k := key s j
+    let b := and32 k 4095
+    look p s (wInc j) a (wAdd hits (b2u (has (getAt a b) k false)))
+
+-- one bucket into the sweep: its length adds to the distinct count
+-- and mixes position-weighted into acc
+def bmix (i cnt acc : Int) (a : Tab) : Tab × Int × Int :=
+  let l := len (getAt a i) 0
+  let m := xor32 (wMul acc 2654435761) (wMul l (wAdd i 3))
+  (a, wAdd cnt l, m)
+
+-- the bucket sweep, ascending
+def sweep : Nat → Int → Tab → Int → Int → Int × Int
+  | 0, _, _, cnt, acc => (cnt, acc)
+  | p + 1, i, a, cnt, acc =>
+    let r := bmix i cnt acc a
+    sweep p (wInc i) r.1 r.2.1 r.2.2
+
+-- the table checksum: the sweep's (distinct, acc) pair mixed with the hit count
+def finish (hits : Int) (cnt acc : Int) : Int :=
+  wAdd (xor32 acc (wMul hits 2654435761)) (wMul cnt 340573321)
+
+-- one table: a fresh 4096-bucket array, D inserts from the table seed,
+-- D lookups from the second seed, the bucket sweep
+def table (t : Int) (d : Nat) : Int :=
+  let s := wMul (wInc t) 2654435761
+  let a := fill d s 0 (repC 4096)
+  let r := look d (prng s) 0 a 0
+  let m := sweep 4096 0 r.1 0 0
+  finish r.2 m.1 m.2
+
+-- batch tree over the table index space: table checksums sum up
+def batch : Nat → Int → Nat → Int
+  | 0, t, d => table t d
+  | q + 1, t, d => wAdd (batch q t d) (batch q (wAdd t (pw2 q)) d)
+
+/-- Root: `hashmapMain s d` is batch(s, 0, d); the source's documented
+small size (2, 256) expects 4206244792, its main() runs (11, 16384). -/
+def hashmapMain (s d : Int) : Int := batch s.toNat 0 d.toNat

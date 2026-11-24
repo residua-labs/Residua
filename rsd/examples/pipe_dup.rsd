@@ -1,0 +1,5 @@
+import Lib.Proc
+def main : Proc UInt8 :=
+  bind (request (tread 0 0 4096)) fun bytes =>
+  bind (request (twrite 1 bytes)) fun _ =>
+  pure 0

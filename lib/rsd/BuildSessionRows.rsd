@@ -1,0 +1,131 @@
+namespace Lib.Rsd.BuildSessionRows
+open Lib.Rsd.BuildSession
+
+def pin (n : Int) := List.replicate 32 n
+
+def command : Lib.Rsd.CommandDevice.Plan := { Lib.Rsd.CommandDeviceRows.plan with name := "compiler", argv := ["module.rsd"], maxOutput := 4096 }
+def node (name source : String) (deps : List Dependency := []) : Module :=
+  { name, source := Lib.Rsd.CommandDevice.text source, command, dependencies := deps }
+instance : Inhabited Module := ⟨node "unused" ""⟩
+
+def sample : Request := { modules := [node "A" "a", node "B" "b" [{ name := "A", facet := "interface" }]], roots := ["B"] }
+
+def observe (r : Request) (i o : String) (status := "exit 0\n") : Request :=
+  let s := (decision r).state
+  match s.pendingPlan with
+  | none => r
+  | some p => { r with observations := r.observations ++ [{ name := s.pendingName, events := Lib.Rsd.CommandDeviceRows.trace p [outputBytes (Lib.Rsd.CommandDevice.text i) (Lib.Rsd.CommandDevice.text o)] [Lib.Rsd.CommandDevice.text status] }] }
+
+def built := observe (observe sample "I.A" "O.A") "I.B" "O.B"
+def final := (decision built).state
+
+def warm : Request := { sample with objects := final.store.objects, actions := final.store.actions }
+
+structure Row where
+  name : String
+  ok : Bool
+
+def named (r : Request) := (decision r).residue.map residueName
+
+def rows : List Row := Id.run do
+  let mut xs : List Row := []
+  xs := xs ++ [{ name := "cold-pending", ok := (decision sample).residue.isNone && (decision sample).state.pendingName == "A" },
+    { name := "cold-two", ok := (decision built).residue.isNone && final.done && final.ran == ["A", "B"] && final.cached.isEmpty },
+    { name := "warm-zero", ok := (decision warm).residue.isNone && (decision warm).state.done && (decision warm).state.ran.isEmpty && (decision warm).state.cached == ["A", "B"] }]
+  let changed : Request := { warm with modules := [node "A" "a edited", sample.modules[1]!] }
+  let sameI := observe changed "I.A" "O.A edited"
+  let diffI := observe changed "I.A edited" "O.A edited"
+  let objectRequest : Request := { sample with modules := [node "A" "a", node "B" "b" [{ name := "A" }]] }
+  let objectBuilt := decision (observe (observe objectRequest "I.A" "O.A") "I.B" "O.B")
+  let objectChanged : Request := { objectRequest with objects := objectBuilt.state.store.objects, actions := objectBuilt.state.store.actions, modules := [node "A" "a edited", objectRequest.modules[1]!] }
+  xs := xs ++ [{ name := "interface-cutoff", ok := (decision sameI).residue.isNone && (decision sameI).state.done && (decision sameI).state.ran == ["A"] && (decision sameI).state.cached == ["B"] },
+    { name := "interface-changed", ok := (decision diffI).residue.isNone && (decision diffI).state.pendingName == "B" },
+    { name := "object-change-reruns-consumer", ok := (decision (observe objectChanged "I.A" "O.A edited")).state.pendingName == "B" },
+    { name := "object-not-interface", ok := (decision (observe { changed with modules := [changed.modules[0]!, node "B" "b" [{ name := "A" }]] } "I.A" "O.A edited")).state.pendingName == "B" }]
+  for (name, req, expected) in [
+    ("duplicate", { sample with modules := sample.modules ++ [sample.modules[0]!] }, "nf_rsd_build_manifest"),
+    ("unknown-root", { sample with roots := ["X"] }, "nf_rsd_build_manifest"),
+    ("unknown-import", { sample with modules := [node "B" "b" [{ name := "X" }]] }, "nf_rsd_build_manifest"),
+    ("bad-facet", { sample with modules := [node "B" "b" [{ name := "B", facet := "statement" }]] }, "nf_rsd_build_manifest"),
+    ("cycle", { sample with modules := [node "B" "b" [{ name := "B" }]] }, "nf_rsd_build_graph"),
+    ("module-cap", { sample with maxModules := 1 }, "nf_rsd_build_capacity"),
+    ("zero-command-cap", { sample with maxCommands := 0 }, "nf_rsd_build_capacity"),
+    ("nonzero", observe sample "I" "O" "exit 1\n", "nf_rsd_build_exit"),
+    ("signal", observe sample "I" "O" "signal 9\n", "nf_rsd_build_exit"),
+    ("extra", { warm with observations := built.observations }, "nf_rsd_build_extra_observation")] do
+    xs := xs ++ [{ name, ok := named req == some expected }]
+  for (label, p) in [("argv", { command with argv := ["changed.rsd"] }),
+      ("executable", { command with executableQ := pin 8 }), ("namespace", { command with namespaceQ := pin 8 }),
+      ("config", { command with configQ := pin 8 }), ("env", { command with environment := [("LANG", "other")] }),
+      ("cwd", { command with cwd := "another" }), ("output-cap", { command with maxOutput := 4095 }),
+      ("timeout", { command with timeoutMs := 59999 }), ("input", { command with inputQs := [pin 8] }),
+      ("name", { command with name := "other" }), ("msize", { command with msize := 8191 }),
+      ("args-cap", { command with maxArgs := 4095 }), ("status-cap", { command with maxStatus := 19 }),
+      ("step-cap", { command with maxSteps := 4095 })] do
+    let r := { warm with modules := [{ sample.modules[0]! with command := p }, sample.modules[1]!] }
+    xs := xs ++ [{ name := "key/" ++ label, ok := (decision r).state.pendingName == "A" }]
+  let p := (decision sample).state.pendingPlan.getD command
+  let unfinished : Request := { sample with observations := [{ name := "A", events := (Lib.Rsd.CommandDeviceRows.trace p [] [Lib.Rsd.CommandDevice.text "exit 0\n"]).take 10 }] }
+  let malformed : Request := { sample with observations := [{ name := "A", events := Lib.Rsd.CommandDeviceRows.trace p [Lib.Rsd.CommandDevice.text "bad"] [Lib.Rsd.CommandDevice.text "exit 0\n"] }] }
+  xs := xs ++ [{ name := "incomplete-no-publish", ok := (decision unfinished).residue.isNone && (decision unfinished).state.store.actions.isEmpty && (decision unfinished).state.pendingName == "A" },
+    { name := "malformed-no-publish", ok := named malformed == some "nf_rsd_build_output" && (decision malformed).state.store.actions.isEmpty },
+    { name := "forged-state", ok := (runNF sample { done := true, established := final.established, store := final.store }).state.pendingName == "A" }]
+  for index in List.range final.store.objects.length do
+    let damaged := final.store.objects.zip (List.range final.store.objects.length) |>.map fun (o, n) => if n == index then { o with bytes := [999] } else o
+    xs := xs ++ [{ name := s!"cache-corrupt/{index}", ok := !(decision { warm with objects := damaged }).state.done }]
+  for n in [0, 1, 127, 128, 129] do
+    let req : Request := { sample with maxCommands := n }
+    xs := xs ++ [{ name := s!"command-cap/{n}", ok := (decision req).residue.isNone == (n > 0 && n ≤ 128) }]
+  for index in List.range final.store.objects.length do
+    let without := final.store.objects.take index ++ final.store.objects.drop (index + 1)
+    let missing : Request := { warm with objects := without }
+    let isA := (decision missing).state.pendingName == "A"
+    let rebuilt := observe missing (if isA then "I.A" else "I.B") (if isA then "O.A" else "O.B")
+    xs := xs ++ [{ name := s!"cache-missing/{index}", ok := !(decision missing).state.done },
+      { name := s!"cache-repair/{index}", ok := (decision rebuilt).residue.isNone && (decision rebuilt).state.done },
+      { name := s!"nondeterministic-output/{index}", ok := named (observe missing "different" "different") == some "nf_rsd_build_store" }]
+  for cap in [1, 2, 3] do
+    let r : Request := { built with maxCommands := cap }
+    xs := xs ++ [{ name := s!"observed-cap/{cap}", ok := named r == (if cap < 2 then some "nf_rsd_build_capacity" else none) }]
+  for (label, req) in [("source-invalid", { sample with modules := [{ sample.modules[0]! with source := [-1] }, sample.modules[1]!] }),
+      ("duplicate-root", { sample with roots := ["B", "B"] }), ("no-roots", { sample with roots := [] }),
+      ("no-modules", { sample with modules := [] })] do
+    xs := xs ++ [{ name := label, ok := named req == some "nf_rsd_build_manifest" }]
+  for n in [0, 1, 2, 128, 129] do
+    xs := xs ++ [{ name := s!"module-limit/{n}", ok := (named { sample with maxModules := n }).isNone == (n >= 2 && n <= 128) }]
+  for n in [0, 1, 1000000, 1000001] do
+    xs := xs ++ [{ name := s!"graph-limit/{n}", ok := (named { sample with graphFuel := n } != some "nf_rsd_build_capacity") == (n > 0 && n <= 1000000) }]
+  let wrong : Request := { built with observations := [{ (built.observations[0]?.getD { name := "", events := [] }) with name := "B" }] }
+  let afterIncomplete : Request := { unfinished with observations := unfinished.observations ++ [(built.observations[1]?.getD { name := "", events := [] })] }
+  xs := xs ++ [{ name := "wrong-observer", ok := named wrong == some "nf_rsd_build_extra_observation" },
+    { name := "after-incomplete", ok := named afterIncomplete == some "nf_rsd_build_extra_observation" && (decision afterIncomplete).state.unknown }]
+  for (action, index) in final.store.actions.zip (List.range final.store.actions.length) do
+    let damaged := final.store.actions.zip (List.range final.store.actions.length) |>.map fun (a, n) => if n == index then { a with keyBytes := [] } else a
+    let conflict := { action with outputs := [] }
+    xs := xs ++ [{ name := s!"action-key-bytes/{index}", ok := !(decision { warm with actions := damaged }).state.done },
+      { name := s!"action-conflict/{index}", ok := !(decision { warm with actions := final.store.actions ++ [conflict] }).state.done }]
+  let one : Request := { modules := [node "A" "a"], roots := ["A"] }
+  let oneP := (decision one).state.pendingPlan.getD command
+  let fullTrace := Lib.Rsd.CommandDeviceRows.trace oneP [outputBytes (Lib.Rsd.CommandDevice.text "I") (Lib.Rsd.CommandDevice.text "O")] [Lib.Rsd.CommandDevice.text "exit 0\n"]
+  for n in List.range fullTrace.length do
+    let r : Request := { one with observations := [{ name := "A", events := fullTrace.take n }] }
+    xs := xs ++ [{ name := s!"prefix-no-publish/{n}", ok := (decision r).residue.isNone && !(decision r).state.done && (decision r).state.store.actions.isEmpty }]
+  for kind in [1, 2] do
+    for n in [0, 8, 9, fullTrace.length - 1] do
+      let r : Request := { one with observations := [{ name := "A", events := fullTrace.take n ++ [{ kind }] }] }
+      xs := xs ++ [{ name := s!"transport/{kind}/{n}", ok := named r == some "nf_rsd_build_command" && (decision r).state.store.actions.isEmpty && (decision r).state.unknown == (n >= 8 && n < fullTrace.length - 2) }]
+  let reorder1 : Request := { modules := [node "A" "a", node "B" "b", node "C" "c" [{name := "A"}, {name := "B"}]], roots := ["C"] }
+  let r1 := decision (observe (observe (observe reorder1 "IA" "OA") "IB" "OB") "IC" "OC")
+  let reordered : Request := { reorder1 with objects := r1.state.store.objects, actions := r1.state.store.actions, modules := [node "A" "a", node "B" "b", node "C" "c" [{name := "B"}, {name := "A"}]] }
+  xs := xs ++ [{ name := "import-order-key", ok := (decision reordered).state.pendingName == "C" },
+    { name := "graph-fuel-key", ok := (decision { warm with graphFuel := 99999 }).state.pendingName == "A" },
+    { name := "key-contains-cache", ok := (fun value (_state : Lib.Rsd.BuildSession.State) => value) sample {} != (fun value (_state : Lib.Rsd.BuildSession.State) => value) warm {} },
+    { name := "key-contains-events", ok := (fun value (_state : Lib.Rsd.BuildSession.State) => value) sample {} != (fun value (_state : Lib.Rsd.BuildSession.State) => value) built {} }]
+  return xs
+end Lib.Rsd.BuildSessionRows
+
+def main : IO UInt32 := do
+  let rows := Lib.Rsd.BuildSessionRows.rows
+  let failed := rows.filter (!·.ok)
+  IO.println (Lean.Json.mkObj [("rows", Lean.toJson rows.length), ("failures", Lean.toJson (failed.map (·.name))), ("closure_claim", Lean.toJson (0 : Nat))]).compress
+  return if failed.isEmpty then 0 else 1

@@ -1,80 +1,120 @@
-# RELEASE-NOTES — Residua 0.2
+# RELEASE-NOTES — Residua 0.3
 
 [English](RELEASE-NOTES.md) | 中文
 
-0.2 版本保留 0.1 的自举闭合——可验证来源的编译，只用 C 编译器
-从提交的 wasm 种子逐字节重建——并加入此后闭合的各项目标：最终
-的带类型内容标识、在其文法类上闭合的语法引擎，以及执行边界的
-形式语义。
+0.3 版本保留自举闭合——可验证来源的编译，只用 C 编译器从提交的
+wasm 种子逐字节重建——并加入 `rsd` 构建工具、语言中的 `UInt64`、
+执行边界处的首批带类型 `ExecModel` 实例，以及 MST-NF 复合定理。
+MST-NF 是 Residua 的基础理论：它在公共仓库
+[github.com/residua-labs/MST-NF](https://github.com/residua-labs/MST-NF)
+钉住提交 `4432a34`，证明由该仓持有。
 
-## 0.2 新增
+## 0.3 新增
 
-- **带类型的内容标识 `q`（格式 v1）。** 被寻址内容的种类进入
-  哈希字节内部：`q(kind, c) = SHA-256("<kind> <len>\0" ++ c)`，
-  打印为 `sha256:<hex>`；裸 SHA-256 保留为 `digest`，仅用于文件
-  完整性与互操作。跨种类的地址冲突不再可能。规范：
-  `docs/QFORMAT.zh-CN.md`；一致性向量：
-  `release/checks/qformat/`；说明：`release/notes/qformat-1.zh-CN.md`。
-- **在其文法类上闭合的语法引擎。** 一个函数——（以数据给出的
-  类内文法，一个输入）-> 一棵树或一个命名拒绝——其判定与树
-  在自类生成的文法上与该类经机器检查的参照判定器相等，并以
-  埋入的变异体作对照。源 `rsdc/syntax/`；类 `semantics/Syntax/`；
-  作为数据发货的表面 profile `rsdc/profiles/*.syn`；说明：
-  `release/notes/syntax-engine.zh-CN.md`。
-- **执行边界语义 E0–E4。** 线格式、准入与封签判断、一致性
-  分类器以及录制的传输会话，以 Lean 4.14 陈述书写
-  （`semantics/Effect/`）；验收证据 `reports/effect-sem/`
-  （仓库侧）；说明：`release/notes/effect-sem.zh-CN.md`。
+- **`rsd` 构建工具。** `rsd build` 经内容寻址存储编译程序，只重
+  编译变化部分；`rsd test` 运行端到端套件；`rsd run` 执行；
+  `rsd cache` 即存储本身。调度器 `rsd/`，存储与依赖图
+  `lib/rsd/`、`lib/Rsd.rsd`；用户文档 `docs/BUILD.md`；说明
+  `release/notes/rsd-tool.md`。
+- **语言中的 `UInt64`。** 编译器源码已使用它。
+- **套件恢复。** 0.1.1/0.1.2 随附而 0.2 遗漏的基准与测试套件按
+  当前字节恢复：`benchmarks/`、`instruments/lrc-host/`、`perf/`、
+  `ACKNOWLEDGEMENTS.md` 与 TESTING 指南。新增门禁检查拒绝再发生
+  同类静默遗漏（除非更新日志有一行声明）。
+- **执行边界的带类型 `ExecModel` 实例**
+  （`semantics/Effect/AdmissionNF.lean`）：`monitorModel` 与
+  `exec9AdmissionModel`，四条 Tier-1 定律已证——商分解、准入
+  可靠、余数全性与代表元精确。仓库侧回执：
+  `reports/effect-sem/ADMISSION-NF.md`（检查 11 条定理，公理在
+  `propext`/`Quot.sound` 内，拒绝控制 1/1）。
+- **三种表面写法。** `examples/surfaces/` 随附五个程序，各以
+  `.rsd`、`.rsj`、`.rsm` 写法打印；`docs/surfaces/` 记录
+  各剖面及三种写法解析到同一棵树的往返检查。
+- **新种子切面；wasm 路线默认 `narrow`。** 提交的种子在钉住的
+  主线头部重切；自本次切面起 wasm 路线默认以 `narrow` 层编译，
+  原生路线保持 64 位。
+- **MST-NF 复合定理**（`lean/nf-compose/`）：步骤必然性在积、
+  和、序列与分派上的复合规则，基于目录内 vendored 的钉住
+  必然性执行模型。独立审计通过
+  （`reports/nf-compose/REPORT.md`，Lean 4.14，公理仅
+  `propext`）。
+- **面向外部读者的公共文档。** `README.md` 按开源惯例排序并附
+  可复制的快速开始；`docs/` 按 Diátaxis 分类并有索引；
+  `docs/GLOSSARY.md`；`CONTRIBUTING.md`；`CODE_OF_CONDUCT.md`
+  （Contributor Covenant 2.1）；`SECURITY.md`；issue 与 PR 模板。
+  构建工具源码以其公开名随附（`rsd/`、`lib/rsd/`、`lib/Rsd.rsd`）。
+  钉定源字节的注释里仍有内部工作项和报告的名字；它们不含个人信息，
+  在下一次重切 seed 时修改。
+
+## 0.3 的 MST-NF 状态
+
+每个随附组件要么已绑定到钉住的 `ExecModel`
+（`lean/nf-compose/pinned/MSTNecessityExecModelMWE.lean`）并证出
+四条 Tier-1 定律，要么记录为缺口。
+
+| 随附组件 | 状态 |
+|---|---|
+| 编译器链（`rsdc`、`rsc`） | 缺口——尚无 `ExecModel` 实例 |
+| 执行层（`semantics/Effect/`） | 实例已随附：`monitorModel`、`exec9AdmissionModel`；Tier-1 定律已证（`AdmissionNF.lean`） |
+| 语法引擎（`rsdc/profiles/`、`semantics/Syntax/`） | 缺口——尚无 `ExecModel` 实例 |
+| QFormat（`docs/QFORMAT.md`、`release/checks/qformat/`） | 缺口——尚无 `ExecModel` 实例 |
+| `rsd` 构建工具（`rsd/`、`lib/rsd/`） | 缺口——尚无 `ExecModel` 实例 |
+| NF 复合（`lean/nf-compose/`） | 框架已随附：钉住模型上的复合定理，经独立审计 |
+
+0.1 与 0.2 没有随附任何此类实例：它们的 `Monitor.lean` 引用的是
+三形式编码，并非 `ExecModel` 定义。0.3 随附首批带类型实例；上述
+缺口仅作记录，不构成发布阻塞。
+
+准入审计状态：wasm0 实例的准入审计已在开发 main 线上签发，晚于本
+发布——该实例的判定器以类型变量合一运行，对照独立的
+wasm-validate 预言机、双种子，无反签名。QFormat、rsx、scm 实例
+在较早修订通过了空洞性检查；lambda-RC 准入仍未决，正在按更正后的
+判据重建。
 
 ## 本归档内容
 
-- 提交的 `rsdc`/`rsc` wasm 种子及其源码闭包
-  （`bootstrap/seed/stage-14274/`）
-- 种子配方（`bootstrap/seed/stage-14274/README.md`）及其所需的
-  C 宿主桥
-- 以阶段宿主文件契约调用的 rsd 链 `rsd -> rscm -> wasm`
+- 提交的 `rsdc`/`rsc` wasm 种子及其源码闭包（`bootstrap/seed/`
+  之下），附重建配方
+- 以 stage 宿主文件契约方式调用的 rsd 链 `rsd -> rscm -> wasm`
   （`docs/RSD-COMMAND.md`）
-- 逐层冻结的形式语义（scm、lambda-RC、wasm0），以内容摘要钉住，
-  作为规范文本；0.2 新增 `semantics/Syntax/` 与 `semantics/Effect/`
-- 语法引擎及其文法 profile（`rsdc/syntax/`、`rsdc/profiles/`）
-- 引导文法对照测量的语言一致性语料（`docs/LANGUAGE.md` 各表）
+- `rsd` 构建工具（`rsd/`、`lib/rsd/`、`lib/Rsd.rsd`）
+- 按内容摘要钉住的各编译层冻结形式语义（scm、lambda-RC、wasm0）
+  规范文本；`semantics/Syntax/` 与 `semantics/Effect/`（含带类型
+  `ExecModel` 实例）
+- 语法引擎的文法轮廓（`rsdc/profiles/`）与规范
+  （`semantics/Syntax/`）；引擎本体在随附的编译器源码内
+- MST-NF 复合包（`lean/nf-compose/`，含钉住模型）及其审计报告
+  （`reports/nf-compose/REPORT.md`）
+- 基准、差分与性能套件（`benchmarks/`、`instruments/lrc-host/`、
+  `perf/`）
+- 自举文法测量所依据的语言一致性语料（`docs/LANGUAGE.md` 各表）
 - 性能记录（`docs/PERF-RECORD.tsv`，形式见
   `docs/PERF-RECORD.md`）
-- 外来者文档：INSTALL、QUICKSTART、VERIFY-RELEASE、OVERVIEW、
-  LANGUAGE、STDLIB、RSD-COMMAND、SPECS、QFORMAT、
-  PERF-RECORD——均为英文；README 与十个 `docs/` 文本（OVERVIEW、
-  ARCHITECTURE、TRUST、GLOSSARY、STABILITY、FAQ、RELATED-WORK、
-  CONTRIBUTING-SECURITY、QFORMAT、RELEASE-NOTES，含本文件）另有
-  `.zh-CN.md` 中文版
+- 面向陌生读者的英文文档，及 `README` 与各 `docs/` 中文
+  `.zh-CN.md` 镜像
 - 逐目标发布说明（`release/notes/`）、可运行的一致性检查
-  （`release/checks/`）与 vendored 许可证文本（`release/licenses/`）
+  （`release/checks/`）与 vendored 许可证文本
+  （`release/licenses/`）
 
-## 核验
+## 验证
 
-`docs/VERIFY-RELEASE.md` 即核验规程：种子摘要、归档摘要，然后
-在一台干净的 Linux x86-64 或 macOS arm64 账户上完整执行种子配方——
-配方重建出的编译器映像必须与提交的种子逐字节一致（`seed_roundtrip=2/2`）。
-macOS arm64 宿主（Apple clang、`PATH=/usr/bin:/bin`、无 Lean）已在
-两台 Darwin 宿主上逐字节复现。
+`docs/VERIFY-RELEASE.md` 即协议：种子摘要、归档摘要，然后在干净
+的 Linux x86-64 或 macOS arm64 账户上跑完整种子配方——配方重建
+的编译器映像必须与提交的种子逐字节一致
+（`seed_roundtrip=2/2`）。归档的宿主回执随附于 `release/`。
 
-## 0.2 的版本局限
+## 0.3 的既定限制
 
-单模块程序（没有 `import`）；没有 I/O 执行层（效果边界语义规定
-的是宿主机契约，语言本身没有效果）；没有证明检查（R-CIC 检查器
-不在本版本）；没有 UInt64；4 GiB 地址空间；没有结果的发布/查询
-入口；没有可导入的标准库。引导 `.rsd` 文法拒绝 `theorem`、
-`axiom`、`class`、`abbrev`、`variable`、`opaque`、`by` 与
-`import` 作为源构造。
+仅单模块程序（无 `import`）；无 I/O 执行层（执行边界语义规定宿
+主契约，语言本身无副作用）；无证明检查（R-CIC 内核不在本版）；
+4 GiB 地址空间；无结果发布/查询入口；无可导入标准库。自举
+`.rsd` 文法拒绝 `theorem`、`axiom`、`class`、`abbrev`、
+`variable`、`opaque`、`by` 与 `import` 作为源码构造。
 
-## 0.2 之后的顺序
+## 0.3 之后
 
-1. `rsd` 构建工具（`build`/`test`/`run`/`cache`）连同其源码所需的
-   重切引导种子——本版本未含（仓库侧在 `rsd/`、`lib/rsd/`）。
-2. R-CIC 内核 + agent 入口的发布/查询入口——陌生人第一次能找到、
-   检查并复用他人结果的点。
-3. 编程完备性：模块、真实程序、UInt64、执行层、64 位寻址、应用
-   套件。
-4. 廉价的执行确认：wasm0 -> AIR -> zk。
-5. 通往外部语义的通用连接器（K/KORE、Lean/Rocq 导入）。
-
-`closure_claim=0`（`release/MANIFEST.md`）。
+1. R-CIC 内核 + agent 入口的发布/查询入口——陌生人首次能找到、
+   检查并复用他人结果的位置。
+2. 编程完备性：模块、真实程序、执行层、64 位寻址、应用套件。
+3. 执行的廉价确认：wasm0 -> AIR -> zk。
+4. 外部语义的通用连接器（K/KORE、Lean/Rocq 导入）。

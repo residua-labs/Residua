@@ -1,0 +1,95 @@
+-- Actual durable-entry decision boundary. Raw read observations are inputs;
+-- no caller-supplied validation flags authorize a hit or an overwrite.
+-- A bad previous entry may be healed; a valid conflicting one is retained.
+namespace Lib.Rsd.DirEntry
+
+inductive Operation where
+  | read
+  | write
+  deriving BEq, Repr
+
+structure Request where
+  operation : Operation
+  key : List Int
+  proposed : Prod (List Int) (Prod (List Int) (List Int)) := ([], [], [])
+  observed : Option (List Int) := none
+  deriving BEq, Repr
+
+inductive Residue where
+  | unavailable
+  | badEntry
+  | memoConflict
+
+def residueName : Residue -> String
+  | Residue.unavailable => "nf_entry_unavailable"
+  | Residue.badEntry => "nf_entry_bad"
+  | Residue.memoConflict => "nf_memo_conflict"
+
+structure Decision where
+  entry : Option (Prod (List Int) (Prod (List Int) (List Int))) := none
+  write : Bool := false
+  diagnostic : Option String := none
+  cause : Option Residue := none
+
+structure State where
+  request : Request
+  decision : Decision := {}
+
+structure Result where
+  state : State
+  residue : Option Residue
+
+def decoded (r : Request) : Option (Prod (List Int) (Prod (List Int) (List Int))) := do
+  let raw <- r.observed
+  let e <- Lib.Rsd.DirStore.decEntry raw
+  if Lib.Rsd.DirStore.qOk "nf-key" r.key e.1 then some e else none
+
+def decision (r : Request) : Decision :=
+  match r.operation with
+  | Operation.read =>
+    match r.observed with
+    | none => { cause := some Residue.unavailable }
+    | some _ =>
+      match decoded r with
+      | none => { cause := some Residue.badEntry, diagnostic := some "nf_entry_bad" }
+      | some e => { entry := some e }
+  | Operation.write =>
+    match r.observed with
+    | none => { write := true }
+    | some _ =>
+      match decoded r with
+      | none => { write := true, cause := some Residue.badEntry, diagnostic := some "nf_entry_bad" }
+      | some e =>
+        if !(Lib.Rsd.DirStore.qOk "blob" e.2.1 e.2.2) then { entry := some e, write := true }
+        else if e == r.proposed then { entry := some e }
+        else { entry := some e, cause := some Residue.memoConflict, diagnostic := some "nf_memo_conflict" }
+
+def sigma (s : State) : State := { request := s.request, decision := decision s.request }
+
+-- Complete raw identity preimage; the output is computed, never trusted.
+def q (s : State) : Request := s.request
+
+def residue? (s : State) : Option Residue := (decision s.request).cause
+
+def admissible (s : State) : Bool := (residue? s).isNone
+
+def runNF (s : State) : Result := { state := sigma s, residue := residue? s }
+
+-- NF-CORRECT-0 r2: the checked decision; runNF retains the original
+-- transition and its failure-state observations for existing callers.
+def admit (observation : Request) : Except Residue State :=
+  let answer := (runNF {request := observation})
+  match answer.residue with
+  | some residue => .error residue
+  | none => .ok answer.state
+
+def decide (s : State) : Except Residue State :=
+  let answer := runNF s
+  match answer.residue with
+  | some residue => .error residue
+  | none => .ok answer.state
+
+theorem quotient_factorization (s : State) : decide s = admit (q s) := rfl
+
+
+end Lib.Rsd.DirEntry

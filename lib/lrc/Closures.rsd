@@ -1,0 +1,316 @@
+-- LRC: the six lambda-RC r2 forms lowered to the r1 forms (LRC-REV2-IMPL-0, cc 2026-11-18).
+-- closure_claim = 0.
+--
+-- `pap`, `ap`, `box`, `unbox`, `uproj`, `uset` (lib/lrc/Ir.rsd, the r2 section; Basic:206-219, 258) and the usize
+-- count of a constructor (`mkUCtor`) are written as r1 IR before any other pass runs, so wasm0 r2 stays fixed
+-- and no later pass meets a new form (reports/lrcrev2/LOWERING-NOTE.md):
+--
+-- * `box ty x`: for usize, uint64 and float (`tyUSizeC`, `tyI64`, `tyFloatC`) a tag-0 constructor with one
+--   scalar word (lean.h:1970, :1980, :1990), for the smaller scalars the tagged word 2n+1 (lean.h:290;
+--   the wire's `primBox`). `unbox` reads the word back (`sproj`, `primUnbox`).
+-- * `uproj i x` / `uset x i y`: the word at byte 8 + 8 i of the object, as `sproj i 0` / `sset i 0`
+--   (lean.h:572, :602). A constructor's usize count joins its scalar area (`ssize + 8 * usize`), so
+--   the header's field count stays the object fields.
+-- * `pap f ys`: Reynolds' defunctionalisation (Reynolds 1972; the same as elab/irc.rsd `packClo`). The closure
+--   is a constructor of tag 245 (lean.h:70 `LeanClosure`) whose field 0 is the code of the pair (f, number of
+--   captured arguments k), a constant constructor (the boxed word, never counted), and whose fields 1..k
+--   are the captured arguments, owned. Lean keeps `m_fun` and `m_arity` in the header; the code holds both.
+-- * `ap x ys` (n arguments): a call of the dispatcher `apply_n` (a function of the program, added at the end), which
+--   follows src/runtime/apply.cpp `lean_apply_n`: a scalar `x` (an erased proof) is returned and the arguments
+--   released (by the counting pass: they are owned and unused); with arity - k = n the call, with n smaller the
+--   new closure over the old captured arguments and the new ones (`fix_args`), with n larger the call of
+--   the first arity - k arguments and the application of its result to the rest. Ownership (a shared closure's
+--   fields counted up and the closure released, an exclusive one's moved) is what the counting pass makes of the
+--   projections and the unused closure: `apply_n` is written before it, as lambda-pure code.
+-- * Fuel: `ap` runs the dispatcher at its caller's fuel (`mkFapSame`) and the call of the target is an
+--   ordinary one, so the target runs at the caller's fuel less 1 as Sem.rsd `Task.ap` has it (`fuel'`); the
+--   over-application recurses at the dispatcher's own fuel, as `.ap fuel r rest` does.
+--
+-- The pass only reads functions of the image to give a closure its arity. A program without the six forms is
+-- returned as it is.
+import Lib.Lrc.FreeVars
+import Lib.Lrc.Prim
+
+namespace Lrc
+
+def lwCloTid : Nat := 1000245
+-- a code names a function and its number of captured arguments (below lwCodeMul; a pap that holds that many, or an
+-- arm past it, is a refusal: the closure becomes `unreachable`, never a code of another function)
+def lwCodeMul : Nat := 65536
+def lwCode (f k : Nat) : Nat := f * lwCodeMul + k
+
+def lwScalar (code : Nat) : CtorInfo := { cidx := code, size := 0, ssize := 0, tid := lwCloTid }
+-- the largest constructor tag (lean.h `LeanMaxCtorTag`): the lowered closure is an ordinary constructor, so that the
+-- semantics' reads of it (proj, case) are those of any constructor; lean.h's own tag 245 is the unlowered form's
+def lwCloTag : Nat := 244
+def lwCloInfo (k : Nat) : CtorInfo := { cidx := lwCloTag, size := k + 1, ssize := 0, tid := lwCloTid }
+
+-- x := the closure of `code` over the captured arguments `ys`; cv is a variable for the code
+def lwAlloc (x cv code : Nat) (ys : List Int) (b : N) : N :=
+  mkVDecl cv tyObj (mkCtor (lwScalar code) []) (mkVDecl x tyObj (mkCtor (lwCloInfo ys.length) ((cv : Int) :: ys)) b)
+
+structure NN where
+  a : Nat
+  b : Nat
+  deriving Inhabited
+
+structure ClR where
+  node : N
+  next : Nat
+  deriving Inhabited
+
+structure ClsR where
+  nodes : List N
+  next : Nat
+  deriving Inhabited
+
+structure ClScan where
+  cfs : List Nat
+  cw : Nat
+  deriving Inhabited
+
+def lwClR (n : N) (k : Nat) : ClR := { node := n, next := k }
+
+def lwNN (a b : Nat) : NN := { a := a, b := b }
+
+def lwLookup (x : Nat) : List NN -> Option Nat
+  | [] => none
+  | p :: ps => if p.a == x then some p.b else lwLookup x ps
+
+/-! ## What the program has: the functions that are pap targets and the widest application -/
+
+mutual
+partial def lwScan (n : N) (fs : List Nat) (w : Nat) : ClScan :=
+  if n.op == opVDecl then
+    let e := vdeclExpr n
+    let fs := if e.op == opPap && !fs.contains (papFn e) then fs ++ [papFn e] else fs
+    let w := if e.op == opAp && (apArgs e).length > w then (apArgs e).length else w
+    lwScan (bodyOf n) fs w
+  else if n.op == opJDecl then
+    let r := lwScan (jdeclBody n) fs w
+    lwScan (bodyOf n) r.cfs r.cw
+  else if n.op == opCase then lwScanAlts (caseAlts n) fs w
+  else if n.op == opJmp || n.op == opRet || n.op == opUnreachable then { cfs := fs, cw := w : ClScan }
+  else lwScan (bodyOf n) fs w
+partial def lwScanAlts : List N → List Nat → Nat → ClScan
+  | [], fs, w => { cfs := fs, cw := w : ClScan }
+  | alt :: alts, fs, w =>
+    let r := lwScan (altBody alt) fs w
+    lwScanAlts alts r.cfs r.cw
+end
+
+def lwScanDecls : List Decl → List Nat → Nat → ClScan
+  | [], fs, w => { cfs := fs, cw := w : ClScan }
+  | d :: ds, fs, w =>
+    let r := if d.ext then { cfs := fs, cw := w : ClScan } else lwScan d.body fs w
+    lwScanDecls ds r.cfs r.cw
+
+def lwMaxFn : List Decl → Nat → Nat
+  | [], m => m
+  | d :: ds, m => lwMaxFn ds (if d.f > m then d.f else m)
+
+/-! ## The dispatcher `apply_n`
+
+Parameters: 1 the closure, 2 .. n + 1 the arguments. A body is a case on the closure: a scalar is returned (apply.cpp
+`lean_is_scalar`), a closure is taken apart by its code. -/
+
+-- the variables 1 .. n + 1 as arguments
+def lwArgVars (n : Nat) : List Int := (List.range n).map (fun i => ((i + 2 : Nat) : Int))
+
+-- the captured arguments of the closure c, as fresh variables from `next`: vdecl v_i (proj (i + 1) c)
+def lwBindCaps (c next k : Nat) (b : N) : N :=
+  ((List.range k).reverse).foldl (fun acc i => mkVDecl (next + i) tyObj (mkProj (i + 1) c) acc) b
+
+def lwVarList (next k : Nat) : List Int := (List.range k).map (fun i => ((next + i : Nat) : Int))
+
+-- the arm of the code (f, k) of arity a, for n arguments; the result is the arm's body and the next free variable
+def lwArm (dBase f a k n next : Nat) : ClR :=
+  let caps := lwVarList next k
+  let args := lwArgVars n
+  let next := next + k
+  let need := a - k
+  let body : ClR :=
+    if n == need then
+      let r := next
+      lwClR (mkVDecl r tyObj (mkFap f (caps ++ args)) (mkRet [(r : Int)])) (next + 1)
+    else if n < need then
+      -- fix_args: the closure of (f, k + n) over the old captured arguments and the new ones
+      let cv := next
+      let x := next + 1
+      if k + n >= lwCodeMul then lwClR mkUnreachable next
+      else lwClR (lwAlloc x cv (lwCode f (k + n)) (caps ++ args) (mkRet [(x : Int)])) (next + 2)
+    else
+      -- the first `need` arguments now, the result applied to the rest
+      let r := next
+      let r2 := next + 1
+      let rest := n - need
+      lwClR (mkVDecl r tyObj (mkFap f (caps ++ args.take need))
+        (mkVDecl r2 tyObj (mkFapSame (dBase + rest - 1) ((r : Int) :: args.drop need)) (mkRet [(r2 : Int)]))) (next + 2)
+  lwClR (lwBindCaps 1 (next - k) k body.node) body.next
+
+-- the arms of every (f, k) with k below the arity of f, for each pap target f
+def lwArmsK (dBase f a n c : Nat) : Nat -> Nat -> List N -> ClsR
+  | 0, next, acc => { nodes := acc, next := next }
+  | k + 1, next, acc =>
+    let kk := c - (k + 1)
+    let arm := lwArm dBase f a kk n next
+    lwArmsK dBase f a n c k arm.next (acc ++ [mkAltCtor (lwScalar (lwCode f kk)) arm.node])
+
+def lwArms (dBase : Nat) (decls : List Decl) (n : Nat) : List Nat -> Nat -> ClsR
+  | [], next => { nodes := [], next := next }
+  | f :: fs, next =>
+    let a := match declAt f decls with
+      | some d => d.xs.length
+      | none => 0
+    let r := lwArmsK dBase f a n (if a < lwCodeMul then a else lwCodeMul) (if a < lwCodeMul then a else lwCodeMul) next []
+    let rest := lwArms dBase decls n fs r.next
+    { nodes := r.nodes ++ rest.nodes, next := rest.next }
+
+def lwApplyDecl (dBase : Nat) (decls : List Decl) (fs : List Nat) (n : Nat) : Decl :=
+  let xs : List Param := (List.range (n + 1)).map (fun i => { x := i + 1, borrow := false, ty := tyObj })
+  let sv := n + 2
+  let v := n + 3
+  let arms := lwArms dBase decls n fs (n + 4)
+  let dispatch := mkCase v tyObj (arms.nodes ++ [mkAltDefault mkUnreachable])
+  -- the tag 244 is also a scalar word (an erased proof can be any word): apply.cpp tests `lean_is_scalar` first, so under
+  -- the tag the word is tested once more (a word of another tag is returned as it is in the default arm below;
+  -- `primIsScalar` has no meaning on an unboxed integer, Sem.rsd, so a typed word 244 held as an integer stays a stop)
+  let inner := mkVDecl sv tyU8 (mkPrim primIsScalar 0 0 [1]) (mkCase sv tyU8 [mkAltCtor (lwScalar 1) (mkRet [1]), mkAltDefault (mkVDecl v tyObj (mkProj 0 1) dispatch)])
+  let closureAlt := mkAltCtor { cidx := lwCloTag, size := 1, ssize := 0, tid := lwCloTid } inner
+  -- a value whose tag is not the closure's is a scalar: the erased proof, returned as it is. (apply.cpp tests
+  -- `lean_is_scalar`; an object of another tag would be a type error, which the typed IR excludes and Sem.rsd refuses.)
+  let scalarAlt := mkAltDefault (mkRet [1])
+  { f := dBase + n - 1, xs := xs, rets := [tyObj], ext := false, body := mkCase 1 tyObj [closureAlt, scalarAlt] }
+
+/-! ## The rewrite of a body -/
+
+def lwBoxInObj (ty : Int) : Bool := ty == tyI64 || ty == tyUSizeC || ty == tyFloatC
+
+-- the continuation `b` after the vdecl `x ty e`, with `e` one of the six forms; none when `e` is not one
+def lwVDecl (dBase next : Nat) (env : List NN) (n : N) (e : N) (b : N) : Option ClR :=
+  let x := vdeclVar n
+  let ty := vdeclTy n
+  if e.op == opPap then
+    if (papArgs e).length >= lwCodeMul then some { node := mkUnreachable, next := next }
+    else some { node := mkVDecl next tyObj (mkCtor (lwScalar (lwCode (papFn e) (papArgs e).length)) [])
+                     (mkVDecl x ty (mkCtor (lwCloInfo (papArgs e).length) ((next : Int) :: papArgs e)) b), next := next + 1 }
+  else if e.op == opAp then
+    some { node := mkVDecl x ty (mkFapSame (dBase + (apArgs e).length - 1) ((apVar e : Int) :: apArgs e)) b, next := next }
+  else if e.op == opBox then
+    if lwBoxInObj (boxTy e) then
+      some { node := mkVDecl x ty (mkCtor { cidx := 0, size := 0, ssize := 8, tid := lwCloTid + 1 } [])
+                       (mkSSet x 0 0 (boxVar e) tyI64 b), next := next }
+    else some { node := mkVDecl x ty (mkPrim primBox 0 0 [(boxVar e : Int)]) b, next := next }
+  else if e.op == opUnbox then
+    if lwBoxInObj (unboxTy e) then some { node := mkVDecl x ty (mkSProj 0 0 (unboxVar e)) b, next := next }
+    else some { node := mkVDecl x ty (mkPrim primUnbox 0 0 [(unboxVar e : Int)]) b, next := next }
+  -- usize slot i of an object of s fields is at index s + i (LOWERING-NOTE.md; Sem.rsd's `uproj` reads slot i of the
+  -- usize lane), the scalar at byte 8 s + 8 i: `sproj s (8 i)`, and Sem.rsd demands the field count s in `sproj`.
+  -- s is known where the object was built or taken apart in this function; elsewhere the form stays.
+  else if e.op == opUProj then
+    match lwLookup (uprojVar e) env with
+    | some sz => some { node := mkVDecl x ty (mkSProj sz (8 * uprojIdx e) (uprojVar e)) b, next := next }
+    | none => none
+  else if e.op == opCtor && ctorUsize e > 0 then
+    let i := infoOf e
+    some { node := mkVDecl x ty (mkCtor { i with ssize := i.ssize + 8 * ctorUsize e } e.ys) b, next := next }
+  else none
+
+mutual
+partial def lwGo (dBase : Nat) (env : List NN) (n : N) (next : Nat) : ClR :=
+  if n.op == opVDecl then
+    let e := vdeclExpr n
+    let env := if e.op == opCtor || e.op == opReuse then lwNN (vdeclVar n) (infoOf e).size :: env else env
+    let k := lwGo dBase env (bodyOf n) next
+    match lwVDecl dBase k.next env n e k.node with
+    | some r => r
+    | none => { node := { n with kids := [vdeclExpr n, k.node] }, next := k.next }
+  else if n.op == opJDecl then
+    let v := lwGo dBase env (jdeclBody n) next
+    let k := lwGo dBase env (bodyOf n) v.next
+    { node := { n with kids := [v.node, k.node] }, next := k.next }
+  else if n.op == opCase then
+    let r := lwAlts dBase env (caseVar n) (caseAlts n) next
+    { node := { n with kids := r.nodes }, next := r.next }
+  else if n.op == opUSet then
+    let k := lwGo dBase env (bodyOf n) next
+    match lwLookup (usetVar n) env with
+    | some sz => { node := mkSSet (usetVar n) sz (8 * usetIdx n) (usetArg n) tyI64 k.node, next := k.next }
+    | none => { node := { n with kids := [k.node] }, next := k.next }
+  else if n.op == opJmp || n.op == opRet || n.op == opUnreachable then { node := n, next := next }
+  else
+    let k := lwGo dBase env (bodyOf n) next
+    { node := { n with kids := [k.node] }, next := k.next }
+partial def lwAlts (dBase : Nat) (env : List NN) (x : Nat) : List N -> Nat -> ClsR
+  | [], next => { nodes := [], next := next }
+  | alt :: alts, next =>
+    let env' := if alt.op == opAltCtor then lwNN x (infoOf alt).size :: env else env
+    let b := lwGo dBase env' (altBody alt) next
+    let r := lwAlts dBase env x alts b.next
+    { nodes := altSetBody alt b.node :: r.nodes, next := r.next }
+end
+
+def lwDecl (dBase : Nat) (d : Decl) : Decl :=
+  if d.ext then d else { d with body := (lwGo dBase [] d.body (declMaxIndex d + 1)).node }
+
+-- Is a body free of the six forms (a program of the r1 IR is returned as it is)
+mutual
+partial def lwHasR2 (n : N) : Bool :=
+  if n.op == opVDecl then
+    let e := vdeclExpr n
+    e.op == opPap || e.op == opAp || e.op == opBox || e.op == opUnbox || e.op == opUProj || (e.op == opCtor && ctorUsize e > 0)
+      || lwHasR2 (bodyOf n)
+  else if n.op == opJDecl then lwHasR2 (jdeclBody n) || lwHasR2 (bodyOf n)
+  else if n.op == opCase then lwHasR2Alts (caseAlts n)
+  else if n.op == opJmp || n.op == opRet || n.op == opUnreachable then false
+  else n.op == opUSet || lwHasR2 (bodyOf n)
+partial def lwHasR2Alts : List N → Bool
+  | [] => false
+  | alt :: alts => lwHasR2 (altBody alt) || lwHasR2Alts alts
+end
+
+def lwAnyR2 : List Decl → Bool
+  | [] => false
+  | d :: ds => (!d.ext && lwHasR2 d.body) || lwAnyR2 ds
+
+-- The program with the six forms lowered. `apply_1 .. apply_w` (w the widest application) follow the functions.
+def lowerR2 (decls : List Decl) : List Decl :=
+  if !lwAnyR2 decls then decls
+  else
+    let sc := lwScanDecls decls [] 0
+    let dBase := lwMaxFn decls 0 + 1
+    let lowered := decls.map (lwDecl dBase)
+    lowered ++ ((List.range sc.cw).map (fun i => lwApplyDecl dBase decls sc.cfs (i + 1)))
+
+/-! ## Under narrow fields
+
+Where an object field is four bytes (rsc's layer `narrow`, lib/lrc/Emit.rsd "The width of an object field") a
+tagged word holds 31 bits. A scalar of 32 bits is then boxed as lean.h boxes it on a target whose pointers are 4
+bytes (src/include/lean/lean.h `lean_box_uint32` and `lean_unbox_uint32`, the arm `sizeof(void*) == 4`): in a
+constructor with one scalar word, as a uint64 is everywhere. Before the lowering, every `box` and `unbox` of that
+type gets the type of a word, and the lowering above does the rest. -/
+
+mutual
+partial def lwWideGo (n : N) : N :=
+  if n.op == opVDecl then
+    let e := vdeclExpr n
+    let e2 := if (e.op == opBox || e.op == opUnbox) && e.a == tyU32C then { e with a := tyI64 } else e
+    { n with kids := [e2, lwWideGo (bodyOf n)] }
+  else if n.op == opJDecl then { n with kids := [lwWideGo (jdeclBody n), lwWideGo (bodyOf n)] }
+  else if n.op == opCase then { n with kids := lwWideAlts (caseAlts n) }
+  else if n.op == opJmp || n.op == opRet || n.op == opUnreachable then n
+  else { n with kids := [lwWideGo (bodyOf n)] }
+partial def lwWideAlts : List N → List N
+  | [] => []
+  | alt :: alts => altSetBody alt (lwWideGo (altBody alt)) :: lwWideAlts alts
+end
+
+def lwWideDecl (d : Decl) : Decl :=
+  if d.ext then d else { d with body := lwWideGo d.body }
+
+-- the lowering for a module whose object fields are four bytes when `narrow`; without it, `lowerR2`
+def lowerR2N (narrow : Bool) (decls : List Decl) : List Decl :=
+  if !lwAnyR2 decls then decls
+  else lowerR2 (if narrow then decls.map lwWideDecl else decls)
+
+end Lrc

@@ -1,0 +1,160 @@
+-- tree-matmul: the Bend bench/runtime tree-matmul program (HigherOrderCO/Bend,
+-- bench/runtime/tree-matmul/main.bend), ported to P1' Lean 4.14. Same algorithm: each live batch
+-- leaf runs one round — generate two pseudo-random 2^size x 2^size matrices as depth-size
+-- quad-trees, multiply block-recursively (the 8-product burst per node), then verify C = A*B by
+-- Freivalds' check C*r == A*(B*r) with an or-fold of elementwise xor (0 iff identical), and mix the
+-- matrix checksum with the verification bit. Round checksums sum up the batch tree.
+-- Departure (named, SRC-BEND-U32): the source's U32 words are modeled exactly in checked Int
+-- arithmetic — every op wraps mod 2^32, xor/or decompose bit by bit, shl scales by 2^k; values stay
+-- in [0, 2^32), so every modeled op equals the U32 op it replaces (verified by the value check).
+-- The source's small size (size 3, blog 2, nchain 3) expects 4292995302 (verified against a Bend3 C
+-- run there); its main() runs the big size (7, 9, 384), out of reach here.
+-- Source pin (BENCH-SRC-0, 2026-11-06): HigherOrderCO/Bend commit be236f324ed0338fe907fe50474468e4d3b94157
+-- (main), bench/runtime/tree-matmul/main.bend, sha256
+-- e87baaba955d4dd52224a1bccd7cc2a493999499f42232350a6e89564fb11111
+-- (raw.githubusercontent.com/HigherOrderCO/Bend/be236f324ed0338fe907fe50474468e4d3b94157/bench/runtime/tree-matmul/main.bend).
+
+def W : Int := 4294967296
+
+def w32 (x : Int) : Int := x % W
+
+def bitXorLoop : Nat → Int → Int → Int → Int → Int
+  | 0, _, _, acc, _ => acc
+  | k + 1, a, b, acc, sc => bitXorLoop k (a / 2) (b / 2) (acc + ((a % 2 + b % 2) % 2) * sc) (sc * 2)
+
+def xor32 (a b : Int) : Int := bitXorLoop 32 a b 0 1
+
+def bitOrLoop : Nat → Int → Int → Int → Int → Int
+  | 0, _, _, acc, _ => acc
+  | k + 1, a, b, acc, sc => bitOrLoop k (a / 2) (b / 2) (acc + (a % 2 + b % 2 - a % 2 * b % 2) * sc) (sc * 2)
+
+def or32 (a b : Int) : Int := bitOrLoop 32 a b 0 1
+
+def bitAndLoop : Nat → Int → Int → Int → Int → Int
+  | 0, _, _, acc, _ => acc
+  | k + 1, a, b, acc, sc => bitAndLoop k (a / 2) (b / 2) (acc + (a % 2 * b % 2) * sc) (sc * 2)
+
+def and32 (a b : Int) : Int := bitAndLoop 32 a b 0 1
+
+def wAdd (a b : Int) : Int := w32 (a + b)
+def wSub (a b : Int) : Int := w32 (a - b + W)
+-- wMul is split at 16 bits so the intermediates stay under the checked-i64
+-- bound (a_lo * b, a_hi * b < 2^48); a*b mod 2^32 is unchanged
+-- (checkedArithmeticStuck at ~2^63 on the flat form, probe-verified)
+def wMul (a b : Int) : Int :=
+  w32 (w32 (w32 (a % 65536) * b) + w32 (w32 (w32 (a / 65536) * b) % 65536) * 65536)
+def wInc (a : Int) : Int := w32 (a + 1)
+
+def pw2 : Nat → Int
+  | 0 => 1
+  | k + 1 => 2 * pw2 k
+
+def wShlN (a : Int) (k : Nat) : Int := w32 (a * pw2 k)
+
+/-- The source's Mat: Lf{v} / Qd{a, b, c, d}. -/
+inductive Mt where
+  | lf (v : Int)
+  | qd (a : Mt) (b : Mt) (c : Mt) (d : Mt)
+
+/-- The source's Vec: Vl{v} / Vn{l, r}. -/
+inductive Vc where
+  | vl (v : Int)
+  | vn (l : Vc) (r : Vc)
+
+def b2u (b : Bool) : Int := if b then 1 else 0
+
+def gen : Nat → Int → Mt
+  | 0, s => Mt.lf (s % 100)
+  | p + 1, s =>
+    let a := gen p (wInc (wMul s 1664525))
+    let b := gen p (wAdd (wMul s 214013) 3)
+    let c := gen p (wAdd (wMul s 16843009) 5)
+    let e := gen p (wAdd (wMul s 48271) 7)
+    Mt.qd a b c e
+
+def vgen : Nat → Int → Vc
+  | 0, s => Vc.vl (wInc (wMul s 2654435761 % 100))
+  | p + 1, s =>
+    let l := vgen p (wInc (wMul s 1664525))
+    let r := vgen p (wAdd (wMul s 214013) 3)
+    Vc.vn l r
+
+def add : Mt → Mt → Mt
+  | Mt.lf x, Mt.lf y => Mt.lf (wAdd x y)
+  | Mt.lf _, _ => Mt.lf 0
+  | _, Mt.lf _ => Mt.lf 0
+  | Mt.qd a0 a1 a2 a3, Mt.qd b0 b1 b2 b3 =>
+    Mt.qd (add a0 b0) (add a1 b1) (add a2 b2) (add a3 b3)
+
+def mul : Mt → Mt → Mt
+  | Mt.lf x, Mt.lf y => Mt.lf (wMul x y)
+  | Mt.lf _, _ => Mt.lf 0
+  | _, Mt.lf _ => Mt.lf 0
+  | Mt.qd a0 a1 a2 a3, Mt.qd b0 b1 b2 b3 =>
+    let p0 := mul a0 b0
+    let q0 := mul a1 b2
+    let p1 := mul a0 b1
+    let q1 := mul a1 b3
+    let p2 := mul a2 b0
+    let q2 := mul a3 b2
+    let p3 := mul a2 b1
+    let q3 := mul a3 b3
+    Mt.qd (add p0 q0) (add p1 q1) (add p2 q2) (add p3 q3)
+
+def vadd : Vc → Vc → Vc
+  | Vc.vl a, Vc.vl b => Vc.vl (wAdd a b)
+  | Vc.vl _, _ => Vc.vl 0
+  | _, Vc.vl _ => Vc.vl 0
+  | Vc.vn a b, Vc.vn c d => Vc.vn (vadd a c) (vadd b d)
+
+-- [[a,b],[c,d]] * (l,h) = (a*l + b*h, c*l + d*h)
+def mvm : Mt → Vc → Vc
+  | Mt.lf x, Vc.vl y => Vc.vl (wMul x y)
+  | Mt.lf _, _ => Vc.vl 0
+  | _, Vc.vl _ => Vc.vl 0
+  | Mt.qd a b c d, Vc.vn l h =>
+    let t0 := mvm a l
+    let t1 := mvm b h
+    let t2 := mvm c l
+    let t3 := mvm d h
+    Vc.vn (vadd t0 t1) (vadd t2 t3)
+
+def cksum : Mt → Int
+  | Mt.lf x => x
+  | Mt.qd a b c d => wAdd (wAdd (wAdd (cksum a) (cksum b)) (cksum c)) (cksum d)
+
+-- or-fold of elementwise xor: 0 iff the vectors are identical
+def vdif : Vc → Vc → Int
+  | Vc.vl a, Vc.vl b => xor32 a b
+  | Vc.vl _, _ => 1
+  | _, Vc.vl _ => 1
+  | Vc.vn a b, Vc.vn c d => or32 (vdif a c) (vdif b d)
+
+-- one round: generate A, B, r; C = A*B; Freivalds-verify C*r == A*(B*r)
+def round (d : Nat) (s : Int) : Int :=
+  let a := gen d (wInc s)
+  let b := gen d (wAdd s 2)
+  let r := vgen d (wAdd s 3)
+  let c := mul a b
+  let k := cksum c
+  let t1 := mvm c r
+  let t2 := mvm a (mvm b r)
+  wAdd (xor32 k (wMul s 2654435761)) (b2u (vdif t1 t2 == 0))
+
+def batchLeaf (pp : Int) (n : Int) (d : Nat) : Int :=
+  if pp < n then round d (wMul pp 2654435761) else 0
+
+-- batch tree over the round index space: leaf i runs one round when
+-- p < nchain, p = the leaf's odd-multiplier permuted index
+def batch : Nat → Int → Int → Int → Nat → Int
+  | 0, i, n, m, d => batchLeaf (and32 (wMul i 2654435761) m) n d
+  | p + 1, i, n, m, d =>
+    let x := batch p i n m d
+    let y := batch p (wAdd i (pw2 p)) n m d
+    wAdd x y
+
+/-- Root: `treeMatmul size blog nchain` runs the source's batch(blog, 0,
+nchain, 2^blog - 1, size); its documented small size (3, 2, 3) expects
+4292995302, its main() runs (7, 9, 384). -/
+def treeMatmul (size blog nchain : Int) : Int :=
+  batch blog.toNat 0 nchain (wSub (pw2 blog.toNat) 1) size.toNat

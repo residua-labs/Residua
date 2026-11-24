@@ -1,0 +1,6 @@
+#lang rsd
+(struct Pair #:params ()
+  [a : Int]
+  [b : Int]
+)
+(define (total ) : Int (let [p : Pair = (inst [a 4] [b 5] )] (+ p.a p.b)))

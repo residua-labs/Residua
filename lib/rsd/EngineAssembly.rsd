@@ -1,0 +1,102 @@
+-- Complete ordered generator output. Reuses the existing scoped quotations;
+-- the caller supplies identities, and the device writes only admitted files.
+namespace Lib.Rsd.EngineAssembly
+
+inductive Residue where
+  | generation
+  | inventory
+  | output
+
+def residueName : Residue -> String
+  | Residue.generation => "nf_engine_assembly_generation"
+  | Residue.inventory => "nf_engine_assembly_inventory"
+  | Residue.output => "nf_engine_assembly_output"
+
+structure Request where
+  bodyQ : String
+  stepQ : String
+  coreQ : String
+  deriving BEq, Repr
+
+structure State where
+  files : List (Prod String String)
+  replayNoise : Nat := 0
+  deriving BEq, Repr
+
+structure Key where
+  request : Request
+  observations : State
+  deriving BEq, Repr
+
+structure Result where
+  state : State
+  residue : Option Residue
+
+def names : List String := ["body.scm", "prepare.scm", "linked_step.scm",
+  "stabilize_core.scm", "stabilize.scm", "root.json", "programs.json", "modules.json"]
+
+def bodyPin (bodyQ : String) : Residua.SCMEmission.SCMPinnedModule := {
+  name := .literal "rsd.body"
+  path := "lib/rsd/scm/body.scm"
+  params := [.literal "node", .literal "args"]
+  q := bodyQ }
+
+def outputs (r : Request) : Except String (List (Prod String String)) := do
+  let modules := [
+    (bodyPin r.bodyQ, BodyQuotation.observed),
+    (Residua.Incr.CarrierModules.preparePin, EngineQuotation.prepare),
+    (Residua.Incr.LinkedBody.stepPin r.stepQ, EngineQuotation.advance (bodyPin r.bodyQ)),
+    (EngineQuotation.corePin r.coreQ, EngineQuotation.stabilize r.stepQ)]
+  let mut programs : List Lean.Json := []
+  let mut roots : List (Residua.SCMEmission.SCMExpr 0) := []
+  let mut files := []
+  for (pin, term) in modules do
+    let expr <- term
+    roots := roots ++ [expr]
+    let wire <- Residua.Incr.Carrier.wire (.ok expr)
+    let name := (System.FilePath.mk pin.path).fileName.getD "module.scm"
+    files := files ++ [(name, (<- Residua.Incr.Carrier.render (.ok expr)) ++ "\n")]
+    programs := programs ++ [Lean.Json.arr #[Lean.toJson pin.name.render,
+      Lean.toJson (pin.params.map Residua.SCMEmission.SCMName.render), wire]]
+  let root <- EngineQuotation.source r.coreQ
+  files := files ++ [("stabilize.scm", (<- Residua.Incr.Carrier.render (.ok root)) ++ "\n"),
+    ("root.json", (<- Residua.Incr.Carrier.wire (.ok root)).compress ++ "\n"),
+    ("programs.json", (Lean.toJson programs).compress ++ "\n")]
+  let allPins : Residua.SCMEmission.SCMExpr 0 := .recordOfList
+    ((root :: roots).map (fun expr => (.literal "module", expr)))
+  let pins <- match Residua.SCMWireEmission.renderModulePins allPins with
+    | .ok pins => pure pins
+    | .error error => throw (reprStr error)
+  return files ++ [("modules.json", pins ++ "\n")]
+
+def sigma (s : State) : State := { s with replayNoise := 0 }
+def q (r : Request) (s : State) : Key := { request := r, observations := sigma s }
+def checkFiles (files : List (Prod String String)) (generated : Except String (List (Prod String String))) : Option Residue :=
+  if files.length != names.length then some .inventory
+  else match generated with
+    | .error _ => some .generation
+    | .ok expected => if files != expected then some .output else none
+
+def residue? (r : Request) (s : State) : Option Residue := checkFiles s.files (outputs r)
+
+def admissible (r : Request) (s : State) : Bool := (residue? r (sigma s)).isNone
+def runNF (r : Request) (s : State) : Result := { state := sigma s, residue := residue? r (sigma s) }
+
+-- NF-CORRECT-0 r2: the checked decision; runNF retains the original
+-- transition and its failure-state observations for existing callers.
+def admit (observation : Key) : Except Residue State :=
+  let answer := (runNF observation.request observation.observations)
+  match answer.residue with
+  | some residue => .error residue
+  | none => .ok answer.state
+
+def decide (r : Request) (s : State) : Except Residue State :=
+  let answer := runNF r s
+  match answer.residue with
+  | some residue => .error residue
+  | none => .ok answer.state
+
+theorem quotient_factorization (r : Request) (s : State) : decide r s = admit (q r s) := rfl
+
+
+end Lib.Rsd.EngineAssembly

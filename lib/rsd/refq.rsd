@@ -1,0 +1,171 @@
+-- Rsd declaration-closure resolver by q (docs/RSD.md 2a, 2b).
+-- Imports lib/AvlMap.rsd by q (no text copy) for the memo and visited tables.
+-- Built by rsdc from a pinned flat seed closure by q (Step 4 bootstrap).
+-- closure_claim = 0.
+import AvlMap
+
+structure QNode where
+  id : Int
+  qhi : Int
+  qlo : Int
+  sa : Int
+  sb : Int
+  deps : List Int
+
+structure QPlan where
+  vis : Map
+  memo : Map
+  order : List Int
+  err : Int
+
+def rqSlice : Nat -> String -> Int -> Int -> String
+  | 0, s, a, b =>
+    String.extract s (String.Pos.mk (Int.toNat a)) (String.Pos.mk (Int.toNat b))
+  | n + 1, s, a, b => rqSlice n s a b
+
+def rqPre : Nat -> String -> Nat -> String -> Bool
+  | 0, s, i, p =>
+    let k : Nat := String.length p;
+    if k == 0 then true
+    else if i + k <= String.length s then
+      rqSlice 0 s (Int.ofNat i) (Int.ofNat (i + k)) == p
+    else false
+  | n + 1, s, i, p => rqPre n s i p
+
+def rqWs : Nat -> String -> Nat -> Bool
+  | 0, s, i => rqPre 0 s i " " || rqPre 0 s i "\n" || rqPre 0 s i "\t" || rqPre 0 s i "\r"
+  | n + 1, s, i => rqWs n s i
+
+mutual
+def rqSkipPos : Nat -> String -> Nat -> Nat
+  | 0, _, i => i
+  | n + 1, s, i =>
+    if !(i < String.length s) then i
+    else if rqWs 0 s i then rqSkipPos n s (i + 1)
+    else if rqPre 0 s i "--" then rqSkipLine n s (i + 2)
+    else i
+
+def rqSkipLine : Nat -> String -> Nat -> Nat
+  | 0, _, i => i
+  | n + 1, s, i =>
+    if !(i < String.length s) then i
+    else if rqPre 0 s i "\n" then rqSkipPos n s (i + 1)
+    else rqSkipLine n s (i + 1)
+end
+
+def rqLineEnd : Nat -> String -> Nat -> Nat
+  | 0, _, i => i
+  | n + 1, s, i =>
+    if !(i < String.length s) then i
+    else if rqPre 0 s i "\n" then i + 1
+    else rqLineEnd n s (i + 1)
+
+-- Advance past leading `import X` header lines; returns body start offset.
+def rqBodyStart : Nat -> String -> Nat -> Nat
+  | 0, _, i => i
+  | n + 1, s, i =>
+    let j : Nat := rqSkipPos (String.length s + 1) s i;
+    if rqPre 0 s j "import " then
+      let k : Nat := rqLineEnd (String.length s + 1) s (j + 7);
+      rqBodyStart n s k
+    else j
+
+-- Count header `import X` lines using the same header scan.
+def rqImportCount : Nat -> String -> Nat -> Int -> Int
+  | 0, _, _, acc => acc
+  | n + 1, s, i, acc =>
+    let j : Nat := rqSkipPos (String.length s + 1) s i;
+    if rqPre 0 s j "import " then
+      let k : Nat := rqLineEnd (String.length s + 1) s (j + 7);
+      rqImportCount n s k (acc + 1)
+    else acc
+
+def rqPlan0 : Nat -> QPlan
+  | 0 => { vis := map0 0, memo := map0 0, order := [], err := 0 : QPlan }
+  | n + 1 => rqPlan0 n
+
+def rqLenI : Nat -> List Int -> Nat
+  | 0, _ => 0
+  | _ + 1, [] => 0
+  | n + 1, _ :: xs => rqLenI n xs + 1
+
+def rqDropI : Nat -> List Int -> Nat -> List Int
+  | 0, _, _ => []
+  | _ + 1, xs, 0 => xs
+  | _ + 1, [], _ => []
+  | n + 1, _ :: xs, k + 1 => rqDropI n xs k
+
+def rqLenN : Nat -> List QNode -> Nat
+  | 0, _ => 0
+  | _ + 1, [] => 0
+  | n + 1, _ :: xs => rqLenN n xs + 1
+
+-- Memoize one declaration's (qhi, qlo, sa, sb, deps) in AvlMap.Map by id.
+def rqMemoNode : Nat -> Map -> QNode -> Map
+  | 0, m, nd =>
+    let r : MR := ins m nd.id nd.qhi nd.sa nd.sb (nd.qlo :: nd.deps);
+    r.m
+  | n + 1, m, nd => rqMemoNode n m nd
+
+def rqMemoAll : Nat -> Map -> List QNode -> Map
+  | 0, m, _ => m
+  | _ + 1, m, [] => m
+  | n + 1, m, nd :: rest => rqMemoAll n (rqMemoNode 0 m nd) rest
+
+-- Bottom-up Merkle / Tarjan closure walk over memoized declaration nodes.
+-- Uses AvlMap.get and AvlMap.ins so each declaration q node is emitted once.
+mutual
+def rqVisit : Nat -> QPlan -> Int -> QPlan
+  | 0, pl, _ => { vis := pl.vis, memo := pl.memo, order := pl.order, err := 3 : QPlan }
+  | n + 1, pl, id =>
+    if pl.err != 0 then pl
+    else
+      let seen : MR := get pl.vis id;
+      let sh : Map := seen.hit;
+      if sh.tag != 0 && seen.v == 2 then pl
+      else if sh.tag != 0 && seen.v == 1 then pl
+      else
+        let look : MR := get pl.memo id;
+        let lh : Map := look.hit;
+        if lh.tag == 0 then
+          { vis := pl.vis, memo := pl.memo, order := pl.order, err := 5 : QPlan }
+        else
+          let v1 : MR := ins pl.vis id 1 0 0 [];
+          let pl1 : QPlan := { vis := v1.m, memo := pl.memo, order := pl.order, err := 0 : QPlan };
+          let pl2 : QPlan := rqVisitList n pl1 (rqDropI 64 look.xs 1);
+          if pl2.err != 0 then pl2
+          else
+            let v2 : MR := ins pl2.vis id 2 0 0 [];
+            { vis := v2.m, memo := pl2.memo, order := pl2.order ++ [id], err := 0 : QPlan }
+
+def rqVisitList : Nat -> QPlan -> List Int -> QPlan
+  | 0, pl, _ => { vis := pl.vis, memo := pl.memo, order := pl.order, err := 3 : QPlan }
+  | _ + 1, pl, [] => pl
+  | n + 1, pl, d :: ds =>
+    if pl.err != 0 then pl
+    else
+      let pl1 : QPlan := rqVisit n pl d;
+      rqVisitList n pl1 ds
+end
+
+def rqResolve : Nat -> List QNode -> List Int -> QPlan
+  | 0, nodes, roots =>
+    let k : Nat := rqLenN 4000 nodes;
+    let m : Map := rqMemoAll (k + 2) (map0 0) nodes;
+    let base : QPlan := { vis := map0 0, memo := m, order := [], err := 0 : QPlan };
+    rqVisitList (k * 8 + 64) base roots
+  | n + 1, nodes, roots => rqResolve n nodes roots
+
+-- Gate: diamond dependency graph D -> (B, C) -> A resolves to [A, B, C, D]
+-- with A visited once, and missing dependency refuses with err = 5 (not_in_view).
+def rqGate : Nat -> Int
+  | 0 =>
+    let nA : QNode := { id := 1, qhi := 101, qlo := 201, sa := 0, sb := 10, deps := [] : QNode };
+    let nB : QNode := { id := 2, qhi := 102, qlo := 202, sa := 10, sb := 20, deps := [1] : QNode };
+    let nC : QNode := { id := 3, qhi := 103, qlo := 203, sa := 20, sb := 30, deps := [1] : QNode };
+    let nD : QNode := { id := 4, qhi := 104, qlo := 204, sa := 30, sb := 40, deps := [2, 3] : QNode };
+    let okPl : QPlan := rqResolve 0 [nA, nB, nC, nD] [4];
+    let badPl : QPlan := rqResolve 0 [nB, nC, nD] [4];
+    let hdrCnt : Int := rqImportCount 16 "import AvlMap\nimport Graph\ndef x : Int := 1\n" 0 0;
+    if okPl.err == 0 && rqLenI 16 okPl.order == 4 && badPl.err == 5 && hdrCnt == 2 then 0 else 1
+  | n + 1 => rqGate n

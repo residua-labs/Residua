@@ -1,24 +1,29 @@
-# RSD-COMMAND — the 0.2 executor command surface
+# RSD-COMMAND — the 0.3 executor command surface
 
-0.2 ships no dispatcher binary: the command surface is the two CPU
-executors the seed recipe builds (`$out/rsdc/run`, `$out/rsc/run`).
-Every claim names its source. This document will change in later
-versions (0.2+).
+0.3 ships no compiled dispatcher binary: the direct command surface is
+the wasmtime host the [seed](GLOSSARY.md) recipe builds (`$out/run`,
+compiled from `bootstrap/seed/stage-14274/seed-host.c`). The `rsd`
+tool's verbs sit on top and ship as sources
+(`docs/BUILD.md`). Every claim names its source. This document will
+change in later versions.
 
 ## Invocation (verbatim from `bootstrap/seed/stage-14274/README.md`)
 
 ```sh
-"$out/rsdc/run" rsdc <input.rsd>  <output.rscm> 0     cons
-"$out/rsc/run"  rsc  <input.rscm> <output.wasm> 14274 cons
+"$out/run" rsdc <rsdc-entry> <rsdc.wasm> <input.rsd>  <output.rscm> 0     cons
+"$out/run" rsc  <rsc-entry>  <rsc.wasm>  <input.rscm> <output.wasm> 14274 cons
 ```
 
 - argv[1] names the compiler role (`rsdc`, `rsc`).
-- argv[2]/argv[3] are the input and output paths (`.rsd` -> `.rscm`,
+- argv[2] is the module's public entry export (`f832` for rsdc, `f2268`
+  for rsc; the recipe reads both from `stage-14274/CUT.tsv`).
+- argv[3] is the seed module — after the recipe's
+  `wasm-opt --translate-to-exnref` recoding (`stage-14274/README.md`).
+- argv[4]/argv[5] are the input and output paths (`.rsd` -> `.rscm`,
   `.rscm` -> `.wasm`).
-- argv[4] is the word: `0` for the rsdc front call (public entry
-  `f779`), `14274` for the rsc construction call (entry `f1971`)
-  (`stage-14274/README.md` header).
-- argv[5] is the heap layout (`cons`).
+- argv[6] is the word: `0` for the rsdc front call, `14274` for the rsc
+  construction call.
+- argv[7] is the heap layout (`cons`).
 
 ## Output and verdict
 
@@ -35,12 +40,10 @@ crash: the grammar's accept/refuse table is `docs/LANGUAGE.md`
 `opaque`, `by` all err=1); the residue names the sources declare are
 catalogued repository-side (`docs/RESIDUES.md` is not in the archive).
 
-## Not in 0.2
+## Not in 0.3
 
-The internal dispatcher binaries, their `--lib/--store/
+A compiled dispatcher binary, its `--lib/--store/
 --home/--fuel/--print/--watch` flags, the q-keyed
 module cache, `Proc`/`topen`/`tread`/`twrite` argv handling and the
 `main_args`/`main_arity`/exit-63/64/70 verdicts belong to the
-earlier plan's command — none ship in 0.2 (`release/MANIFEST.md`).
-
-closure_claim = 0
+earlier plan's command — none ship in 0.3 (`release/GAPS.tsv`).

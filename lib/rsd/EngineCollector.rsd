@@ -1,0 +1,241 @@
+-- Composition of the frozen engine collector's decisions. The observing
+-- device supplies raw observations, never an admission flag. This boundary
+-- authenticates no effects and does not execute or replace the chain.
+namespace Lib.Rsd.EngineCollector
+def hash := Lib.Rsd.FrontCollector.hash
+def parse := Lib.Rsd.EngineReplay.parse
+def stringify := Lib.Rsd.EngineReplay.stringify
+def get := Lib.Rsd.QFloorJson.get
+
+inductive Residue where
+  | source
+  | front
+  | inventory
+  | command
+  | assembly
+  | programs
+  | qfloor
+  | manifest
+  | axioms
+  | replay
+  | controls
+  | wall
+  | binding
+  | collection
+
+def residueName : Residue -> String
+  | Residue.source => "nf_engine_collector_source"
+  | Residue.front => "nf_engine_collector_front"
+  | Residue.inventory => "nf_engine_collector_inventory"
+  | Residue.command => "nf_engine_collector_command"
+  | Residue.assembly => "nf_engine_collector_assembly"
+  | Residue.programs => "nf_engine_collector_programs"
+  | Residue.qfloor => "nf_engine_collector_qfloor"
+  | Residue.manifest => "nf_engine_collector_manifest"
+  | Residue.axioms => "nf_engine_collector_axioms"
+  | Residue.replay => "nf_engine_collector_replay"
+  | Residue.controls => "nf_engine_collector_controls"
+  | Residue.wall => "nf_engine_collector_wall"
+  | Residue.binding => "nf_engine_collector_binding"
+  | Residue.collection => "nf_engine_collector_collection"
+
+structure Request where
+  front : Lib.Rsd.FrontCollector.Request
+  plans : List Lib.Rsd.FrontCollector.Planned
+  cold : Lib.Rsd.CommandReceipt.Binding
+  wallMs : Nat := 1000
+  deriving BEq, Repr
+structure State where
+  front : Lib.Rsd.FrontCollector.State
+  cells : List Lib.Rsd.FrontCollector.Cell
+  unpinned : Lib.Rsd.EngineAssembly.State
+  pinned : Lib.Rsd.EngineAssembly.State
+  samples : List Lib.Rsd.EngineReplay.Sample
+  controls : List Lib.Rsd.EngineReplayControls.Control
+  wall : Lib.Rsd.CommandReceipt.Observation
+  cold : Lib.Rsd.CommandReceipt.Binding
+  beforeSourceQ : String
+  afterSourceQ : String
+  replayNoise : Nat := 0
+  deriving BEq, Repr
+structure Key where
+  request : Request
+  observations : State
+  deriving BEq, Repr
+structure Result where
+  state : State
+  residue : Option Residue
+
+-- The fixed source inventory of the original engine oracle, distinct from
+-- the front collector's smaller source closure.
+def subject := Lib.Rsd.FrontCollector.subject
+def sourceQ : String := "343e26d60a111333796d639cbc26198d8aa157b743b7b8d5241bc0ecbe077689"
+def modules : List String := ["Residua.SCMEmission", "Residua.SCMWireEmission",
+  "algorithms.ResiduaRCCStepExecModel", "incr.Engine", "incr.Bind", "incr.Defunctionalized",
+  "incr.Flat", "incr.RefinementClosure", "Residua.SHA256", "Residua.SlotSemanticsCore",
+  "rcic.ScmEvalFuelMono", "incr.Bounded", "incr.Carrier", "incr.CarrierModules", "incr.LinkedBody",
+  "rsd.EngineQuotation", "rsd.BodyQuotation", "rsd.EngineGenerate",
+  "Residua.Exe.SlotEval", "rsd.BodyWire"]
+def labels : List String := modules.map (fun name => "build-" ++ name) ++ ["composition-axioms", "evalLF-link"]
+def compositionLaws : List String := [
+  "Lib.Rsd.EngineQuotation.prepare_shared", "Lib.Rsd.EngineQuotation.advance_shared",
+  "Lib.Rsd.EngineQuotation.stabilize_shared", "Lib.Rsd.EngineQuotation.source_shared",
+  "Lib.Rsd.BodyQuotation.observed_quotation", "Lib.Rsd.BodyQuotation.observed_evalLF",
+  "Lib.Rsd.BodyQuotation.observed_zero_fuel"]
+def zero : String := String.mk (List.replicate 64 '0')
+def zeroRequest : Lib.Rsd.EngineAssembly.Request := { bodyQ := zero, stepQ := zero, coreQ := zero }
+def file (s : Lib.Rsd.EngineAssembly.State) (name : String) : String :=
+  (s.files.lookup name).getD ""
+def replayRequest (s : State) : Except String Lib.Rsd.EngineReplay.Request := do
+  return { programs := <- parse (file s.pinned "programs.json"), root := <- parse (file s.pinned "root.json") }
+
+def programs (r : Lib.Rsd.EngineReplay.Request) : Except String (List Lib.Rsd.QFloorJson.Value) :=
+  match r.programs with | .arr xs => .ok xs | _ => .error "programs"
+def identities (r : Lib.Rsd.EngineReplay.Request) : Except String (List String) := do
+  (<- programs r).mapM fun p => match p with
+    | .arr [_, _, body] => Lib.Rsd.QFloor.contentQ body
+    | _ => .error "module"
+def pinnedRequest (qs : List String) : Lib.Rsd.EngineAssembly.Request :=
+  { bodyQ := qs[0]!, stepQ := qs[2]!, coreQ := qs[3]! }
+def paths : List String := ["lib/rsd/scm/body.scm", "scm/incr/prepare.scm",
+  "scm/incr/linked_step.scm", "lib/rsd/scm/stabilize_core.scm"]
+def names : List String := ["rsd.body", "incr.prepare", "incr.step", "rsd.stabilize_core"]
+def parameters : List (List String) := [["node","args"], ["nodes","observers"],
+  ["cache","needed","state","node"], ["nodes","cache","observers"]]
+
+def manifestOK (r : Lib.Rsd.EngineReplay.Request) (qs : List String) (m : Lib.Rsd.QFloorJson.Value) : Bool :=
+  match programs r, m with
+  | .ok ps, .obj entries => ps.length == 4 && qs.length == 4 && entries.length == 4 &&
+      (List.range 4).all (fun i =>
+        match ps[i]?.getD .null, get m names[i]! with
+        | .arr [.str name, params, _], some pin =>
+          name == names[i]! && params == .arr (parameters[i]!.map .str) &&
+          get pin "q" == some (.str qs[i]!) && get pin "path" == some (.str paths[i]!) &&
+          get pin "params" == some params
+        | _, _ => false)
+  | _, _ => false
+
+def manifestChecks (r : Lib.Rsd.EngineReplay.Request) (qs : List String) (m : Lib.Rsd.QFloorJson.Value) : List Bool :=
+  let put := Lib.Rsd.EngineReplayControls.put
+  let pin := (get m "incr.step").getD .null
+  [!(manifestOK r qs (put m "incr.step" (put pin "q" (.str zero)))),
+   !(manifestOK r qs (put m "incr.step" (put pin "path" (.str "foreign.scm")))),
+   !(manifestOK r qs (put m "incr.step" (put pin "params" (.arr (parameters[2]!.reverse.map .str)))))]
+
+def axiomsOK (text : String) : Bool :=
+  let rows := Lib.Rsd.FrontCollector.axiomRows text
+  rows.length == compositionLaws.length && compositionLaws.all (fun name =>
+    (rows.filter (fun row => row.1 == name)).length == 1) &&
+    rows.all (fun row => row.2.all (fun a => a == "propext" || a == "Quot.sound"))
+
+def commandOK (p : Lib.Rsd.FrontCollector.Planned) (c : Lib.Rsd.FrontCollector.Cell) : Bool :=
+  let b := p.request.expected
+  p.label == c.label && p.request.profile == .engine &&
+    !b.command.isEmpty && !b.executableQ.isEmpty &&
+    b.subject == subject && b.sourceQ == sourceQ &&
+    b.stdoutQ == hash c.state.observation.stdout && b.stderrQ == hash c.state.observation.stderr &&
+    (Lib.Rsd.CommandReceipt.residue? p.request c.state).isNone
+
+def axiomObservation (s : State) : Lib.Rsd.CommandReceipt.Observation :=
+  ((s.cells.find? (fun c => c.label == "composition-axioms")).map (fun c => c.state.observation)).getD {}
+
+def depthExpr : Nat -> Lib.Rsd.QFloorJson.Value
+  | 0 => .obj [("op", .str "num"), ("n", .int 1)]
+  | n + 1 => .obj [("op", .str "neg"), ("a", depthExpr n)]
+def depthOK : Bool :=
+  ((Lib.Rsd.QFloor.evaluate (stringify (depthExpr 511))).toOption == some "51973275c32a0cb1d0f2a11733502a973a4ece99fa50c60ddd69dea8f543d6c7") &&
+  match Lib.Rsd.QFloor.evaluate (stringify (depthExpr 512)) with
+  | .ok _ => false
+  | .error e => Lib.Rsd.CommandReceipt.hasText e "[evalr_decode_depth_exceeded]"
+
+-- The original actuator preimage excludes stderr; command admission above
+-- still binds both raw streams. The field order matches the frozen collector.
+def bindingJson (b : Lib.Rsd.CommandReceipt.Binding) : Lib.Rsd.QFloorJson.Value := .obj [
+  ("subject", .str b.subject), ("sourceQ", .str b.sourceQ), ("command", .arr (b.command.map .str)),
+  ("executableQ", .str b.executableQ), ("inputQ", .str b.inputQ), ("stdoutQ", .str b.stdoutQ)]
+def receiptQ (b : Lib.Rsd.CommandReceipt.Binding) : String := hash (stringify (bindingJson b))
+def foreignBindings (b : Lib.Rsd.CommandReceipt.Binding) : List Lib.Rsd.CommandReceipt.Binding := [
+  { b with subject := b.subject ++ "foreign" }, { b with sourceQ := b.sourceQ ++ "foreign" },
+  { b with command := ["foreign"] }, { b with executableQ := b.executableQ ++ "foreign" },
+  { b with inputQ := b.inputQ ++ "foreign" }, { b with stdoutQ := b.stdoutQ ++ "foreign" }]
+def actuator (expected observed : Lib.Rsd.CommandReceipt.Binding) : Option Lib.NF.Actuator.Residue :=
+  Lib.NF.Actuator.residue? { fence := 1, now := 1, receiptQ := receiptQ expected }
+    { acquireWon := true, leaseEnds := 2, currentFence := 1, observedReceiptQ := receiptQ observed, replayNoise := 0 }
+def bindingChecks (r : Request) (s : State) : List Bool :=
+  [(actuator r.cold s.cold).isNone] ++ (foreignBindings s.cold).map (fun b =>
+    (actuator r.cold b).map Lib.NF.Actuator.residueName == some "nf_receipt_binding_mismatch")
+def bindingOK (r : Request) (s : State) : Bool :=
+  match s.samples.head? with
+  | none => false
+  | some sample => r.cold.subject == subject && r.cold.sourceQ == sourceQ &&
+      !r.cold.command.isEmpty && !r.cold.executableQ.isEmpty &&
+      s.cold == r.cold && s.cold.inputQ == hash sample.input &&
+      s.cold.stdoutQ == hash sample.compiled.stdout && s.cold.stderrQ == hash sample.compiled.stderr &&
+      (bindingChecks r s).all id
+
+-- The old 63/23 totals are derived from admitted raw component evidence.
+-- No producer-supplied row counts or caught/admit Booleans enter this state.
+def collectionState (r : Request) (s : State) (rr : Lib.Rsd.EngineReplay.Request)
+    (qs : List String) (manifest : Lib.Rsd.QFloorJson.Value) : Lib.NF.Collection.State :=
+  let frontOK := Lib.Rsd.FrontCollector.admissible r.front s.front
+  let replayOK := Lib.Rsd.EngineReplay.admissible rr { samples := s.samples }
+  let controlsOK := Lib.Rsd.EngineReplayControls.admissible { programs := rr, samples := s.samples } { controls := s.controls }
+  let bindings := bindingChecks r s
+  let frontRows := ((Lib.Rsd.FrontCollector.body r.front "lib/rsd/ScheduleRows.rsd").splitOn "#guard").length - 1
+  let actualRows := frontRows + s.samples.length + bindings.length + 2
+  let mutants := (Lib.Rsd.FrontCollector.mutations.map (fun m =>
+      Lib.Rsd.FrontCollector.caught (Lib.Rsd.FrontCollector.observation s.front ("mutant-" ++ m.1)))) ++
+    manifestChecks rr qs manifest ++ List.replicate 4 controlsOK ++ bindings.drop 1
+  { receiptsQ := receiptQ s.cold, inventoryOK := r.plans.map (fun c => c.label) == labels && s.cells.map (fun c => c.label) == labels,
+    pinsOK := manifestOK rr qs manifest, leanOK := (r.plans.zip s.cells).all (fun (p,c) => commandOK p c),
+    axiomsOK := axiomsOK (axiomObservation s).stdout, stockEqual := replayOK,
+    actualRows, passedRows := if frontOK && replayOK && controlsOK && bindings.all id then actualRows else 0,
+    actualMutants := mutants.length, caughtMutants := (mutants.filter id).length,
+    subsetOK := frontOK, roundtripOK := Lib.Rsd.FrontCollector.roundtripOK (Lib.Rsd.FrontCollector.observation s.front "rsx-roundtrip") }
+
+def check (r : Request) (s : State) : Except Residue Unit := do
+  if r.cold.subject != subject || r.cold.sourceQ != sourceQ || s.beforeSourceQ != sourceQ || s.afterSourceQ != sourceQ then throw .source
+  if !Lib.Rsd.FrontCollector.admissible r.front s.front then throw .front
+  if r.plans.map (fun c => c.label) != labels || s.cells.map (fun c => c.label) != labels then throw .inventory
+  if !(r.plans.zip s.cells).all (fun (p,c) => commandOK p c) then throw .command
+  if !Lib.Rsd.EngineAssembly.admissible zeroRequest s.unpinned then throw .assembly
+  let rr <- (replayRequest s).mapError (fun _ => Residue.programs)
+  if !Lib.Rsd.EngineReplay.pinsOK rr then throw .programs
+  if file s.unpinned "programs.json" != file s.pinned "programs.json" then throw .programs
+  let qs <- (identities rr).mapError (fun _ => Residue.qfloor)
+  if qs.length != 4 || qs[1]! != "31f47c236946871c3b23453a16b74bba8c403230f55f8b3df5cb855e1f4fae8f" || !depthOK then throw .qfloor
+  if !Lib.Rsd.EngineAssembly.admissible (pinnedRequest qs) s.pinned then throw .assembly
+  let manifest <- (parse (file s.pinned "modules.json")).mapError (fun _ => Residue.manifest)
+  if !manifestOK rr qs manifest || !(manifestChecks rr qs manifest).all id then throw .manifest
+  if !axiomsOK (axiomObservation s).stdout then throw .axioms
+  if !Lib.Rsd.EngineReplay.admissible rr { samples := s.samples } then throw .replay
+  if !Lib.Rsd.EngineReplayControls.admissible { programs := rr, samples := s.samples } { controls := s.controls } then throw .controls
+  if r.wallMs != 1000 || (Lib.Rsd.CommandReceipt.resource? .engine s.wall).map Lib.Rsd.CommandReceipt.residueName != some "nf_rsd_command_wall" then throw .wall
+  if !bindingOK r s then throw .binding
+  let summary := collectionState r s rr qs manifest
+  if !(Lib.NF.Collection.residue? { subject, sourceQ, expectedRows := 63, expectedMutants := 23 } summary).isNone then throw .collection
+
+def sigma (s : State) : State := { s with replayNoise := 0 }
+def q (r : Request) (s : State) : Key := { request := r, observations := sigma s }
+def residue? (r : Request) (s : State) : Option Residue :=
+  match check r (sigma s) with | .ok _ => none | .error e => some e
+def admissible (r : Request) (s : State) : Bool := (residue? r (sigma s)).isNone
+def runNF (r : Request) (s : State) : Result := { state := sigma s, residue := residue? r (sigma s) }
+
+-- NF-CORRECT-0 r2: the checked decision; runNF retains the original
+-- transition and its failure-state observations for existing callers.
+def admit (observation : Key) : Except Residue State :=
+  let answer := (runNF observation.request observation.observations)
+  match answer.residue with
+  | some residue => .error residue
+  | none => .ok answer.state
+
+def decide (r : Request) (s : State) : Except Residue State :=
+  let answer := runNF r s
+  match answer.residue with
+  | some residue => .error residue
+  | none => .ok answer.state
+
+theorem quotient_factorization (r : Request) (s : State) : decide r s = admit (q r s) := rfl
+
+end Lib.Rsd.EngineCollector

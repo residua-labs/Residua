@@ -1,0 +1,127 @@
+-- deriv: the Koka/Perceus suite program test/bench/koka/deriv.kk (koka-lang/koka, master, fetched
+-- 2026-11-04), itself adapted from the Lean 4 IFL19 benchmark tests/bench/deriv.ml. Same algorithm:
+-- the smart constructors `add` / `mul` / `powr` / `ln` simplify as they build, `d` is the symbolic
+-- derivative with respect to a variable name, and the program takes 10 successive derivatives of
+-- x^x, printing the node count of each result (Koka: `deriv(i, f)` prints "i+1 count: n"; main then
+-- prints "done"). `derivMain n` returns the list of the n counts (so the host renders them in the
+-- Koka line format). Departures, stated: Koka's `int` is arbitrary precision while this language has
+-- checked i64 `Int` -- the Val coefficients of x^x's derivatives are 0, 1 and -1 and the counts stay
+-- far inside the i64 range (verified for n = 10 by this run); `pown` (Koka: `pow(a,b)`) is binary
+-- exponentiation by structural recursion on the exponent's magnitude, with b < 0 returning 0
+-- (unreachable here: `pown` is only called on Val x Val, and only with exponents 0 and 1); the smart
+-- constructors' chains are general recursion: EMIT-FUEL-0 r2 removed the hand Nat fuel, the source
+-- is `partial def` and the emitter threads the step index (zero refuses [fuel], never truncates); `d` matches on the expression
+-- as in the source.
+-- Source pin (BENCH-SRC-0, 2026-11-06): koka-lang/koka commit facb7932ce6871fdb063f762a304bd8238f35fba
+-- (master), test/bench/koka/deriv.kk, sha256
+-- 55d9dc2002fc9e4d32eb9b0892b0e2061ab5342dd8870fd347c8433eb9b79818
+-- (byte-identical to the 2026-11-04 PERF-KIT fetch). Rechecked arm by arm (add/mul/powr/ln/d/count
+-- and their order, nest, the x^x start, ten derivatives): no drift beyond the departures stated
+-- above (mul's (f,Val 1) arm is reached through the swap arm; same result).
+
+-- Official OCaml reference (BENCH-SRC-0 r2, LAYER-TEST-0 r9, 2026-11-06): koka-lang/koka commit facb7932ce6871fdb063f762a304bd8238f35fba
+-- (master), test/bench/ocaml/deriv.ml, sha256
+-- 39fe756bddfea65706e000f9f76fec3d0eed5641d830976ab92810ea2820a366
+-- (raw.githubusercontent.com/koka-lang/koka/facb7932ce6871fdb063f762a304bd8238f35fba/test/bench/ocaml/deriv.ml). Same algorithm as the
+-- Koka twin (pown/add/mul/pow/ln/d/count, nest deriv 10 over x^x, printing each step's count);
+-- rechecked line by line against the OCaml: no drift.
+inductive Expr where
+  | val : Int -> Expr
+  | var : String -> Expr
+  | add : Expr -> Expr -> Expr
+  | mul : Expr -> Expr -> Expr
+  | pow : Expr -> Expr -> Expr
+  | ln : Expr -> Expr
+
+-- executable expression size (the derived `sizeOf` instance has no codegen)
+def size : Expr -> Nat
+  | Expr.val _ => 1
+  | Expr.var _ => 1
+  | Expr.add f g => size f + size g + 1
+  | Expr.mul f g => size f + size g + 1
+  | Expr.pow f g => size f + size g + 1
+  | Expr.ln f => size f + 1
+
+partial def pownAux : Int -> Int -> Int
+  | _, 0 => 1
+  | a, 1 => a
+  | a, b =>
+    let half := pownAux a (b / 2)
+    half * half * (if b % 2 == 0 then 1 else a)
+
+def pown (a b : Int) : Int := if b < 0 then 1 else pownAux a b
+
+open Expr in
+partial def addAux : Expr -> Expr -> Expr
+  | val n, val m => val (n + m)
+  | val 0, f => f
+  | f, val 0 => f
+  | f, val n => addAux (val n) f
+  | val n, add (val m) f => addAux (val (n + m)) f
+  | f, add (val n) g => addAux (val n) (addAux f g)
+  | add f g, h => addAux f (addAux g h)
+  | f, g => add f g
+
+def addE (n0 m0 : Expr) : Expr := addAux n0 m0
+
+open Expr in
+partial def mulAux : Expr -> Expr -> Expr
+  | val n, val m => val (n * m)
+  | val 0, _ => val 0
+  | _, val 0 => val 0
+  | val 1, f => f
+  | f, val n => mulAux (val n) f
+  | val n, mul (val m) f => mulAux (val (n * m)) f
+  | f, mul (val n) g => mulAux (val n) (mulAux f g)
+  | mul f g, h => mulAux f (mulAux g h)
+  | f, g => mul f g
+
+def mulE (n0 m0 : Expr) : Expr := mulAux n0 m0
+
+def powrAux : Expr -> Expr -> Expr
+  | Expr.val m, Expr.val n => Expr.val (pown m n)
+  | _, Expr.val 0 => Expr.val 1
+  | f, Expr.val 1 => f
+  | Expr.val 0, _ => Expr.val 0
+  | f, g => Expr.pow f g
+
+def powr (m0 n0 : Expr) : Expr := powrAux m0 n0
+
+def lnE : Expr -> Expr
+  | Expr.val 1 => Expr.val 0
+  | f => Expr.ln f
+
+def d (x : String) : Expr -> Expr
+  | Expr.val _ => Expr.val 0
+  | Expr.var y => if x == y then Expr.val 1 else Expr.val 0
+  | Expr.add f g => addE (d x f) (d x g)
+  | Expr.mul f g => addE (mulE f (d x g)) (mulE g (d x f))
+  | Expr.pow f g =>
+    mulE (powr f g) (addE (mulE (mulE g (d x f)) (powr f (Expr.val (-1)))) (mulE (lnE f) (d x g)))
+  | Expr.ln f => mulE (d x f) (powr f (Expr.val (-1)))
+termination_by e => size e
+decreasing_by all_goals (simp only [size]; try omega)
+
+def count : Expr -> Int
+  | Expr.val _ => 1
+  | Expr.var _ => 1
+  | Expr.add f g => count f + count g
+  | Expr.mul f g => count f + count g
+  | Expr.pow f g => count f + count g
+  | Expr.ln f => count f
+
+def nestAux : Nat -> (Nat -> Expr -> Expr) -> Nat -> Expr -> Expr
+  | 0, _, _, x => x
+  | n + 1, f, s, x => nestAux n f (s + 1) (f (s - n) x)
+
+def nest (f : Nat -> Expr -> Expr) (n : Nat) (e : Expr) : Expr := nestAux n f n e
+
+-- Koka main: nest(deriv, 10, powr(Var "x", Var "x")); each step prints "i+1 count: c".
+-- `derivMain n` returns the counts of the n successive derivatives of x^x in step order,
+-- one list element per printed line (the host renders them; Koka then prints "done").
+def derivMainAux : Nat -> Nat -> Expr -> List Int -> List Int
+  | _, 0, _, acc => acc.reverse
+  | s, n + 1, x, acc => derivMainAux s n (d "x" x) (count (d "x" x) :: acc)
+
+def derivMain (n : Nat) : List Int :=
+  derivMainAux n n (powr (Expr.var "x") (Expr.var "x")) []

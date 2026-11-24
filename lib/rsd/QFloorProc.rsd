@@ -1,0 +1,36 @@
+-- Effect shell: concatenate after Proc9 and QFloorBytes's source closure.
+-- Chain admission is tracked separately; stock Lean is only an oracle.
+-- All decisions remain in the pure NFs; files use the existing 9P device.
+namespace Lib.Rsd.QFloorProc
+
+-- Only List Int is captured across a Proc await (the continuation ABI).
+def fileAnswer (input : List Int) : List Int :=
+  let answer := (Lib.Rsd.QFloorBytes.decision { bytes := input }).state
+  procResult answer.code answer.bytes
+
+def rowsAnswer (oracle actual : List Int) : List Int :=
+  let answer := Lib.Rsd.QFloorBytes.rowsBytes oracle actual
+  procResult answer.code answer.bytes
+
+-- Files hold JSONL, matching the original oracle service envelope. The terminal
+-- result is exit byte + report bytes; transport/protocol refusals stay Proc's.
+def fileP (inputPath outputPath : List Int) : Proc := do {
+  let input <- readFileP inputPath;
+  let answer : List Int := fileAnswer input;
+  let written <- createFileP outputPath (answer.drop 1);
+  answer
+}
+
+def corpusP (outputPath : List Int) : Proc := do {
+  let written <- createFileP outputPath (Lib.Rsd.Codec.utf8 Lib.Rsd.QFloorRows.corpusText.toList);
+  procResult 0 []
+}
+
+def rowsP (oraclePath actualPath outputPath : List Int) : Proc := do {
+  let oracle <- readFileP oraclePath;
+  let actual <- readFileP actualPath;
+  let answer : List Int := rowsAnswer oracle actual;
+  let written <- createFileP outputPath (answer.drop 1);
+  answer
+}
+end Lib.Rsd.QFloorProc

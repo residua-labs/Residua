@@ -1,0 +1,2 @@
+import R4Dep
+def main : Int := 42

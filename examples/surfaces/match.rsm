@@ -1,0 +1,5 @@
+#lang rsd
+(define (classify [n : Nat] ) : Nat (match n
+  [0 0]
+  [_ 1]
+))

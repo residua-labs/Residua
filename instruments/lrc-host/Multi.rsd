@@ -1,0 +1,312 @@
+-- LRC host oracle: written programs with calls of several results. closure_claim = 0.
+--
+-- A vdecl with several results and a ret of several values have no Lean form, so the comparison of
+-- each port with Lean's pass never sees one (instruments/lrc-host/Oracle.rsd `toBody` refuses them). The
+-- ports' code for that form was reached only through two bench images, and both audits found rows
+-- of it that no check caught (reports/lrc-audit-agy/AUDIT.md section 5: ElimDeadBranches
+-- `edbRetVal` and `edbUpdExtras`; reports/lrc-audit-glm/AUDIT.md "Gaps": Borrow's owning of the
+-- further results). These programs are that form on purpose. Each runs as written and after the
+-- stage's pipeline in the counting interpreter: the same value, nothing live at the end, the same
+-- outcome at every small fuel budget, and the parameters named in `owned` not borrowed.
+--
+-- What each part is there for:
+--   * `keys` branches on the first and on the second result of `split`. A pass that takes the value
+--     of a function with several results for "never returns", or a further result for "no value",
+--     removes those branches (the two ElimDeadBranches rows).
+--   * `walk` calls itself in tail position with the second result of `pair`, and reads its own
+--     tree parameter only. The parameter is owned because that argument is (Borrow.lean:218
+--     ownParamsUsingArgs through :257 preserveTailCall), and it is only owned when the further
+--     results of a call are (the Borrow row).
+--   * `walk` drops the first result of `pair`: the count of a dead result must go down.
+--
+-- The second program is there for tail recursion modulo cons (lib/lrc/Trmc.rsd), in both of its
+-- forms (options 258 and 514 force one each):
+--   * `keep` has a call of itself that fills a field of its result and a call of itself in tail
+--     position. With the root form its destination-passing form is called for a value by `main`;
+--     the list 6 .. 1 makes it keep two cells and then skip one, so the root is no longer the
+--     cell written last when the tail call passes it on. No bench image has a function with both
+--     calls: a row that loses the root at the tail call survived every image.
+--   * `build` is the plain case, one call that fills a field.
+--
+-- The third program is there for the range facts (lib/lrc/Range.rsd):
+--   * `step x` is `(x + 1) % 256`, `loop i x` applies it i times, `main n` is `loop n 7`. From `main`
+--     every x that reaches `loop` is below 256, so the clone of `loop` adds without a test.
+--   * The same `loop` entered from outside with x at the end of i64 must refuse as written: the
+--     body that the image names assumes nothing. A stage that used the clone's facts there
+--     would add without the test, and the interpreter stops on an operator that was written as
+--     proved in range and left i64.
+namespace Lrc.Host
+
+structure MultiCase where
+  name : String
+  decls : List Lrc.Decl
+  entry : Nat
+  args : List Int
+  value : String
+  -- function and parameter position that the pipeline must leave owned
+  owned : List (Nat × Nat)
+  -- the program as written refuses on these arguments, and so must the pipeline's, with the same status
+  refuses : Bool := false
+
+def fn2 (f : Nat) (xs : List Lrc.Param) (rets : List Int) (body : Lrc.N) : Lrc.Decl :=
+  { f := f, xs := xs, rets := rets, body := body, ext := false }
+
+open Lrc in
+-- f0 split t: both children of a node, two leaves for a leaf
+def mSplit : Lrc.Decl :=
+  fn2 0 [pO 1] [tyTObj, tyTObj]
+    (mkCase 1 tyTObj
+      [mkAltCtor leafI (mkVDecl 2 tyTObj (mkCtor leafI []) (mkVDecl 3 tyTObj (mkCtor leafI []) (mkRet [2, 3]))),
+       mkAltCtor nodeI (mkVDecl 4 tyTObj (mkProj 0 1) (mkVDecl 5 tyTObj (mkProj 1 1) (mkRet [4, 5])))])
+
+open Lrc in
+-- f1 keys t: the keys of t's two children added, a leaf counting 1 on the left and 0 on the right
+def mKeys : Lrc.Decl :=
+  fn 1 [pO 1] tyI64
+    (mkVDecls 2 tyTObj [3, tyTObj] (mkFap 0 [1])
+    (mkCase 2 tyTObj
+      [mkAltCtor leafI
+         (mkCase 3 tyTObj
+           [mkAltCtor leafI (mkVDecl 4 tyI64 (mkLit 1) (mkRet [4])),
+            mkAltCtor nodeI (mkVDecl 5 tyI64 (mkSProj 2 0 3) (mkRet [5]))]),
+       mkAltCtor nodeI
+         (mkVDecl 6 tyI64 (mkSProj 2 0 2)
+         (mkCase 3 tyTObj
+           [mkAltCtor leafI (mkRet [6]),
+            mkAltCtor nodeI (mkVDecl 7 tyI64 (mkSProj 2 0 3) (mkVDecl 8 tyI64 (mkPrim 6 0 0 [6, 7]) (mkRet [8])))]))]))
+
+open Lrc in
+-- f2 mk d: the full tree of depth d; a node's key is its depth
+def mMk : Lrc.Decl :=
+  fn 2 [pS 1] tyTObj
+    (mkVDecl 2 tyI64 (mkLit 0)
+    (mkVDecl 3 tyI64 (mkPrim 14 0 0 [1, 2])
+    (mkIfW 3
+      (mkVDecl 4 tyTObj (mkCtor leafI []) (mkRet [4]))
+      (mkVDecl 5 tyI64 (mkLit 1)
+      (mkVDecl 6 tyI64 (mkPrim 7 0 0 [1, 5])
+      (mkVDecl 7 tyTObj (mkFap 2 [6])
+      (mkVDecl 8 tyTObj (mkFap 2 [6])
+      (mkVDecl 9 tyTObj (mkCtor nodeI [7, 8])
+      (mkSSet 9 2 0 1 tyI64 (mkSSet 9 2 8 2 tyI64 (mkRet [9])))))))))))
+
+open Lrc in
+-- f3 pair d: the trees of depths d and d + 1
+def mPair : Lrc.Decl :=
+  fn2 3 [pS 1] [tyTObj, tyTObj]
+    (mkVDecl 2 tyTObj (mkFap 2 [1])
+    (mkVDecl 3 tyI64 (mkLit 1)
+    (mkVDecl 4 tyI64 (mkPrim 6 0 0 [1, 3])
+    (mkVDecl 5 tyTObj (mkFap 2 [4]) (mkRet [2, 5])))))
+
+open Lrc in
+-- f4 walk u n: at n = 0 the key of u (0 for a leaf); else walk (the second tree of pair (n - 1)) (n - 1)
+def mWalk : Lrc.Decl :=
+  fn 4 [pO 1, pS 2] tyI64
+    (mkVDecl 3 tyI64 (mkLit 0)
+    (mkVDecl 4 tyI64 (mkPrim 14 0 0 [2, 3])
+    (mkIfW 4
+      (mkCase 1 tyTObj
+        [mkAltCtor leafI (mkRet [3]),
+         mkAltCtor nodeI (mkVDecl 5 tyI64 (mkSProj 2 0 1) (mkRet [5]))])
+      (mkVDecl 6 tyI64 (mkLit 1)
+      (mkVDecl 7 tyI64 (mkPrim 7 0 0 [2, 6])
+      (mkVDecls 8 tyTObj [9, tyTObj] (mkFap 3 [7])
+      (mkVDecl 10 tyI64 (mkFap 4 [9, 7]) (mkRet [10]))))))))
+
+open Lrc in
+-- f5 main d: keys (mk d) + walk leaf d
+def mMain : Lrc.Decl :=
+  fn 5 [pS 1] tyI64
+    (mkVDecl 2 tyTObj (mkFap 2 [1])
+    (mkVDecl 3 tyI64 (mkFap 1 [2])
+    (mkVDecl 4 tyTObj (mkCtor leafI [])
+    (mkVDecl 5 tyI64 (mkFap 4 [4, 1])
+    (mkVDecl 6 tyI64 (mkPrim 6 0 0 [3, 5]) (mkRet [6]))))))
+
+open Lrc in
+-- f0 build n: the list n, n - 1, .., 1 as nodes whose right child is the rest and whose key is the element
+def kBuild : Lrc.Decl :=
+  fn 0 [pS 1] tyTObj
+    (mkVDecl 2 tyI64 (mkLit 0)
+    (mkVDecl 3 tyI64 (mkPrim 14 0 0 [1, 2])
+    (mkIfW 3
+      (mkVDecl 4 tyTObj (mkCtor leafI []) (mkRet [4]))
+      (mkVDecl 5 tyI64 (mkLit 1)
+      (mkVDecl 6 tyI64 (mkPrim 7 0 0 [1, 5])
+      (mkVDecl 7 tyTObj (mkFap 0 [6])
+      (mkVDecl 8 tyTObj (mkCtor leafI [])
+      (mkVDecl 9 tyTObj (mkCtor nodeI [8, 7])
+      (mkSSet 9 2 0 1 tyI64 (mkSSet 9 2 8 2 tyI64 (mkRet [9])))))))))))
+
+open Lrc in
+-- f1 keep t: the nodes of t with an odd key, in their order
+def kKeep : Lrc.Decl :=
+  fn 1 [pO 1] tyTObj
+    (mkCase 1 tyTObj
+      [mkAltCtor leafI (mkVDecl 2 tyTObj (mkCtor leafI []) (mkRet [2])),
+       mkAltCtor nodeI
+         (mkVDecl 3 tyI64 (mkSProj 2 0 1)
+         (mkVDecl 4 tyTObj (mkProj 1 1)
+         (mkVDecl 5 tyI64 (mkLit 2)
+         (mkVDecl 6 tyI64 (mkPrim 11 0 0 [3, 5])
+         (mkVDecl 7 tyI64 (mkLit 1)
+         (mkVDecl 8 tyI64 (mkPrim 14 0 0 [6, 7])
+         (mkIfW 8
+           (mkVDecl 9 tyTObj (mkFap 1 [4])
+           (mkVDecl 10 tyTObj (mkCtor leafI [])
+           (mkVDecl 11 tyTObj (mkCtor nodeI [10, 9])
+           (mkSSet 11 2 0 3 tyI64 (mkSSet 11 2 8 7 tyI64 (mkRet [11]))))))
+           (mkVDecl 12 tyTObj (mkFap 1 [4]) (mkRet [12])))))))))])
+
+open Lrc in
+-- f2 sum t: the keys along the right children, added
+def kSum : Lrc.Decl :=
+  fn 2 [pO 1] tyI64
+    (mkCase 1 tyTObj
+      [mkAltCtor leafI (mkVDecl 2 tyI64 (mkLit 0) (mkRet [2])),
+       mkAltCtor nodeI
+         (mkVDecl 3 tyI64 (mkSProj 2 0 1)
+         (mkVDecl 4 tyTObj (mkProj 1 1)
+         (mkVDecl 5 tyI64 (mkFap 2 [4])
+         (mkVDecl 6 tyI64 (mkPrim 6 0 0 [3, 5]) (mkRet [6])))))])
+
+open Lrc in
+-- f3 main n: sum (keep (build n))
+def kMain : Lrc.Decl :=
+  fn 3 [pS 1] tyI64
+    (mkVDecl 2 tyTObj (mkFap 0 [1])
+    (mkVDecl 3 tyTObj (mkFap 1 [2])
+    (mkVDecl 4 tyI64 (mkFap 2 [3]) (mkRet [4]))))
+
+open Lrc in
+-- f0 step x: (x + 1) % 256
+def rStep : Lrc.Decl :=
+  fn 0 [pS 1] tyI64
+    (mkVDecl 2 tyI64 (mkLit 1)
+    (mkVDecl 3 tyI64 (mkPrim 6 0 0 [1, 2])
+    (mkVDecl 4 tyI64 (mkLit 256)
+    (mkVDecl 5 tyI64 (mkPrim 11 0 0 [3, 4]) (mkRet [5])))))
+
+open Lrc in
+-- f1 loop i x: x after i steps
+def rLoop : Lrc.Decl :=
+  fn 1 [pS 1, pS 2] tyI64
+    (mkVDecl 3 tyI64 (mkLit 0)
+    (mkVDecl 4 tyI64 (mkPrim 14 0 0 [1, 3])
+    (mkIfW 4
+      (mkRet [2])
+      (mkVDecl 5 tyI64 (mkLit 1)
+      (mkVDecl 6 tyI64 (mkPrim 7 0 0 [1, 5])
+      (mkVDecl 7 tyI64 (mkFap 0 [2])
+      (mkVDecl 8 tyI64 (mkFap 1 [6, 7]) (mkRet [8]))))))))
+
+open Lrc in
+-- f2 main n: loop n 7
+def rMain : Lrc.Decl :=
+  fn 2 [pS 1] tyI64
+    (mkVDecl 2 tyI64 (mkLit 7)
+    (mkVDecl 3 tyI64 (mkFap 1 [1, 2]) (mkRet [3])))
+
+def pIrr (x : Nat) : Lrc.Param := { x := x, borrow := false, ty := Lrc.tyIrr }
+
+-- The fourth and fifth programs pass an irrelevant value on (AUDIT-LAND-LRC r1, CX-1 and CX-2). A
+-- parameter of irrelevant type is a variable like any other, and a body may hand it to the next
+-- call. The translation never writes that (an arena is the irrelevant argument at every use), so
+-- no image has it; the inliner and the join inliner must still bind such a parameter, or its number
+-- stays behind in the caller, unbound or another variable's.
+open Lrc in
+-- pick a x: x. It builds a leaf and cases on it; the alternative that cannot run calls itself with
+-- the irrelevant parameter, which keeps the function from being inlined.
+def iPick (f : Nat) : Lrc.Decl :=
+  fn f [pIrr 1, pS 2] tyI64
+    (mkVDecl 3 tyTObj (mkCtor leafI [])
+    (mkCase 3 tyTObj
+      [mkAltCtor leafI (mkRet [2]),
+       mkAltCtor nodeI (mkVDecl 4 tyI64 (mkFap f [1, 2]) (mkRet [4]))]))
+
+open Lrc in
+-- f1 mid x a: pick a x, the irrelevant parameter passed on as a variable
+def iMid : Lrc.Decl :=
+  fn 1 [pS 1, pIrr 4] tyI64 (mkVDecl 5 tyI64 (mkFap 2 [4, 1]) (mkRet [5]))
+
+open Lrc in
+-- f0 main x: mid x with the irrelevant argument; `mid` is small and is inlined here
+def iMain : Lrc.Decl :=
+  fn 0 [pS 1] tyI64 (mkVDecl 2 tyI64 (mkFap 1 [1, argIrr]) (mkRet [2]))
+
+open Lrc in
+-- f0 main x: a join point with an irrelevant parameter, reached by one jump
+def jMain : Lrc.Decl :=
+  fn 0 [pS 1] tyI64
+    (mkJDecl 10 [pIrr 9, pS 2]
+      (mkVDecl 3 tyI64 (mkFap 1 [9, 2]) (mkRet [3]))
+      (mkJmp 10 [argIrr, 1]))
+
+-- The sixth program has an operator that refuses and whose result nothing reads. The run refuses
+-- as written, and so it must after the pipeline: only a total primitive may go when its result is
+-- dead (lib/lrc/Prim.rsd `primTotal`).
+open Lrc in
+-- f0 main x: x, after x / 0
+def zMain : Lrc.Decl :=
+  fn 0 [pS 1] tyI64
+    (mkVDecl 2 tyI64 (mkLit 0)
+    (mkVDecl 3 tyI64 (mkPrim 10 0 0 [1, 2]) (mkRet [1])))
+
+-- keys (mk 3) = 2 + 2; walk leaf 3 ends at the tree of depth 1, key 1.
+-- keep (build 6) keeps 5, 3, 1; keep (build 5) starts with a kept cell.
+def multiCases : List MultiCase :=
+  [{ name := "split-keys-walk", decls := [mSplit, mKeys, mMk, mPair, mWalk, mMain], entry := 5, args := [3], value := "5",
+     owned := [(4, 0)] },
+   { name := "split-keys-walk at 0", decls := [mSplit, mKeys, mMk, mPair, mWalk, mMain], entry := 5, args := [0], value := "1",
+     owned := [] },
+   { name := "build-keep-sum", decls := [kBuild, kKeep, kSum, kMain], entry := 3, args := [6], value := "9", owned := [] },
+   { name := "build-keep-sum at 5", decls := [kBuild, kKeep, kSum, kMain], entry := 3, args := [5], value := "9", owned := [] },
+   -- (7 + 9) % 256 = 16; the fuel budgets cut the recursion short of 600 steps, so the count stays small
+   { name := "count-wrap", decls := [rStep, rLoop, rMain], entry := 2, args := [9], value := "16", owned := [] },
+   { name := "count-wrap from outside", decls := [rStep, rLoop, rMain], entry := 1, args := [1, 9223372036854775807], value := "",
+     owned := [], refuses := true },
+   { name := "irrelevant-through-inline", decls := [iMain, iMid, iPick 2], entry := 0, args := [47], value := "47", owned := [] },
+   { name := "irrelevant-through-join", decls := [jMain, iPick 1], entry := 0, args := [77], value := "77", owned := [] },
+   { name := "dead-division", decls := [zMain], entry := 0, args := [5], value := "", owned := [], refuses := true }]
+
+def multiFuel : List Nat := [1, 2, 3, 4, 5, 6, 7, 8, 10, 12, 16, 24]
+
+def checkMulti : IO Nat := do
+  let mut bad := 0
+  for c in multiCases do
+    -- the stage's own list functions follow a program's functions (lib/lrc/Ir.rsd `isOwnFn`)
+    let n := c.decls.length
+    let ds := c.decls ++ Lrc.helperDecls n
+    let init := runEntry ds c.entry c.args 1000000000 false n
+    if (c.refuses && init.status == "value") || (!c.refuses && (init.status != "value" || init.text != c.value)) then
+      bad := bad + 1
+      IO.println s!"MISMATCH multi={c.name} as written: {init.show}"
+    for opts in [0, 1, 2, 6, 10, 18, 34, 66, 130, 258, 514, 1026] do
+      let piped := Lrc.pipelineWith opts n ds
+      let own := runEntry piped c.entry c.args 1000000000 true n
+      let mut wrong := 0
+      if (c.refuses && own.status != init.status) || (!c.refuses && (own.status != "value" || own.text != c.value || own.leaked != 0)) then
+        wrong := wrong + 1
+        IO.println s!"MISMATCH multi={c.name} after the stage's pipeline ({opts}): {own.show}"
+      for fu in multiFuel do
+        let a := runEntry ds c.entry c.args fu false n
+        let b := runEntry piped c.entry c.args fu true n
+        if a.status != b.status || a.text != b.text then
+          wrong := wrong + 1
+          IO.println s!"MISMATCH multi={c.name} at fuel {fu} ({opts}): written {a.status} {a.text}, pipeline {b.status} {b.text}"
+      for (f, i) in c.owned do
+        match Lrc.declAt f piped with
+        | some d =>
+          if (d.xs.getD i { x := 0, borrow := true, ty := 0 }).borrow then
+            wrong := wrong + 1
+            IO.println s!"MISMATCH multi={c.name} ({opts}): parameter {i} of f{f} is borrowed"
+        | none =>
+          wrong := wrong + 1
+          IO.println s!"MISMATCH multi={c.name} ({opts}): no f{f}"
+      if wrong != 0 then bad := bad + 1
+      IO.println s!"check multi={c.name} options={opts}: status={own.status} value={own.text} allocations={own.allocs} incs={own.incs} decs={own.decs} leaked={own.leaked} fuel_budgets={multiFuel.length} wrong={wrong}"
+  IO.println s!"check pass=multi cases={multiCases.length} mismatch={bad}"
+  return bad
+
+end Lrc.Host

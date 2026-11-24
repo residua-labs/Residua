@@ -1,0 +1,17 @@
+schema	surfaces-x3-v1
+tier	fast
+closure_claim	0
+family	rsd_err	rsj_err	rsm_err	print_rsj	print_rsm	q_err	q	eq	reprint	lean_exit
+match	0	0	0	0	0	0	abe365bc4465b6f9beb06b709e2ea6d062dc4730ef7644ef3f4d4ad3d21a42ed	1	1	0
+structure	0	0	0	0	0	0	42fd7361127b168ab4916ed6ee7998a638cf8e651152d3d1ca250e22ee968f62	1	1	0
+inductive	0	0	0	0	0	0	0652db2e4108b7ebb8a7244e71853822ca435f3c68676b26c886fabb5edfbadc	1	1	0
+do	0	0	0	0	0	0	6beb1e176663ccbdcb92c472edcd46855435baf08b1e88ad1341d212a6dd7991	1	1	0
+module	0	0	0	0	0	0	b0a74badf226c4e441652fa9de94135edf97894a6d105a5c5ad9f1f4fe474803	1	1	0
+refuse	rsd-unclosed-comment	61	16	1
+refuse	rsd-dangling-op	62	29	1
+mutant	0	0	1	1
+same-source	0	1	1
+refuse	rsj-unclosed-comment	61	31	1
+refuse	rsj-non-assoc-eq	62	39	1
+refuse	rsm-header	60	0	1
+refuse	rsm-unclosed	61	27	1

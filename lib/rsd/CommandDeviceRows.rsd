@@ -1,0 +1,218 @@
+-- Compiled rows over complete raw replies. The transcript generator is an
+-- independent fixed protocol script; it never calls outgoing/next/replay.
+namespace Lib.Rsd.CommandDeviceRows
+open Lib.Rsd.CommandDevice
+open Lib.Rsd.Ninep
+
+structure Row where
+  name : String
+  ok : Bool
+
+def pin (n : Int) : List Int := List.replicate 32 n
+
+def plan : Plan :=
+  { name := "printf", argv := ["%s", "a;$(echo bad) * ' \" λ"], namespaceQ := pin 1,
+    configQ := pin 2, executableQ := pin 3, inputQs := [pin 4],
+    environment := [("LANG", "C")], cwd := ".", maxOutput := 64 }
+
+def rootQ : Qid := { qtype := 128, vers := 0, path := 1 }
+def dirQ : Qid := { qtype := 128, vers := 0, path := 2 }
+def fileQ : Qid := { qtype := 0, vers := 0, path := 3 }
+def frame (op tag : Int) (data : List Int) : Event := { bytes := wrapFrame op tag data }
+def version (ms : Nat := 8192) (v : List Int := W9P2000) : Event :=
+  frame RVERSION NOTAG (putU32LE ms ++ putName v)
+def attach (qid : Qid := rootQ) : Event := frame RATTACH 0 (putQid qid)
+def walk (qs : List Qid := [dirQ, fileQ]) : Event :=
+  frame RWALK 0 (putU16LE qs.length ++ qs.flatMap putQid)
+def opened (io : Nat := 0) (qid : Qid := fileQ) : Event :=
+  frame ROPEN 0 (putQid qid ++ putU32LE io)
+def wrote (n : Nat) : Event := frame RWRITE 0 (putU32LE n)
+def clunked : Event := frame RCLUNK 0 []
+def readBytes (bs : List Int) : Event := frame RREAD 0 (putU32LE bs.length ++ bs)
+
+def trace (p : Plan) (out status : List (List Int)) (io : Nat := 0) : List Event :=
+  [version p.msize, attach, walk, opened io, wrote (argsBytes p).bytes.length, clunked,
+   walk, opened io, wrote 5, clunked, walk, opened io] ++
+  out.map readBytes ++ [readBytes [], clunked, walk, opened io] ++
+  status.map readBytes ++ [readBytes [], clunked, clunked]
+
+def request (events : List Event) (p : Plan := plan) : Request := { plan := p, events }
+def named (r : Request) : Option String := (decision r).residue.map residueName
+def refuses (name : String) (r : Request) (cause : String) : Row := { name, ok := named r == some cause }
+def changed (es : List Event) (index : Nat) (e : Event) : List Event := es.take index ++ [e] ++ es.drop (index + 1)
+
+def successRows : List Row := Id.run do
+  let mut rows := []
+  for n in List.range 9 do
+    let out := List.replicate n 65
+    for width in [1, 2, 7, 32] do
+      -- Deliberately independent chunking, including UTF-8 split mid-scalar.
+      let chunks := if n == 0 then [] else [out.take width, out.drop width].filter (!List.isEmpty ·)
+      let es := trace plan chunks [text "ex", text "it ", text "0\n"]
+      let got := decision (request es)
+      rows := rows ++ [{ name := s!"success/{n}/{width}", ok := got.residue.isNone &&
+        got.state.done && got.state.output == out && got.state.exit == some 0 &&
+        got.state.signal.isNone && got.state.pending.isEmpty && !got.state.unknown &&
+        got.state.steps == es.length }]
+  let es := trace plan [text "λ"] [text "exit 1\n"]
+  let got := decision (request es)
+  rows := rows ++ [{ name := "nonzero-is-result", ok := got.residue.isNone && got.state.done &&
+    got.state.exit == some 1 && got.state.output == text "λ" }]
+  for (s, code, sig) in [("exit -2147483648\n", some (-2147483648), none),
+      ("exit 2147483647\n", some 2147483647, none),
+      ("signal 0\n", none, some 0), ("signal 4294967295\n", none, some 4294967295)] do
+    let got := decision (request (trace plan [] [text s]))
+    rows := rows ++ [{ name := "status-valid/" ++ s, ok := got.residue.isNone && got.state.done &&
+      got.state.exit == code && got.state.signal == sig }]
+  return rows
+
+def statusRows : List Row :=
+  ["", "exit 0", "exit 00\n", "exit +1\n", "exit -0\n", "exit 2147483648\n",
+   "exit -2147483649\n", "signal -1\n", "signal 4294967296\n", "exit 0\n\n",
+   "exit 0\r\n", "exit  0\n", "signal +1\n", "exit 0\nextra", "Exit 0\n", "exit λ\n"].map
+    (fun s => refuses ("status-invalid/" ++ s)
+      (request (trace plan [] (if s.isEmpty then [] else [text s]))) "nf_rsd_cmd_status")
+
+def boundaryRows : List Row := Id.run do
+  let es := trace plan [text "abcd"] [text "exit 0\n"]
+  let mut rows := []
+  for (label, p) in [("name", { plan with name := "../bad" }),
+      ("namespace", { plan with namespaceQ := pin 256 }),
+      ("config", { plan with configQ := [] }), ("executable", { plan with executableQ := [1] }),
+      ("input", { plan with inputQs := [[]] }), ("cwd", { plan with cwd := "" }),
+      ("env", { plan with environment := [("", "x")] }),
+      ("msize-low", { plan with msize := 255 }), ("msize-high", { plan with msize := 8193 }),
+      ("args-zero", { plan with maxArgs := 0 }), ("args-high", { plan with maxArgs := 8169 }),
+      ("output-high", { plan with maxOutput := 1048577 }),
+      ("status-zero", { plan with maxStatus := 0 }), ("status-high", { plan with maxStatus := 129 }),
+      ("steps-high", { plan with maxSteps := 4097 }),
+      ("timeout-zero", { plan with timeoutMs := 0 }), ("timeout-high", { plan with timeoutMs := 300001 })] do
+    rows := rows ++ [refuses ("plan/" ++ label) (request [] p) "nf_rsd_cmd_plan"]
+  let nul := String.mk [Char.ofNat 0]
+  rows := rows ++ [refuses "args-nul" (request [] { plan with argv := [nul] }) "nf_rsd_cmd_arguments",
+    refuses "args-cap+1" (request [] { plan with maxArgs := (argsBytes plan).bytes.length - 1 }) "nf_rsd_cmd_arguments"]
+  for cap in [3, 4, 5] do
+    let r := request es { plan with maxOutput := cap }
+    rows := rows ++ [{ name := s!"output-cap/{cap}", ok := named r == (if cap < 4 then some "nf_rsd_cmd_output_limit" else none) }]
+  for cap in [6, 7, 8] do
+    let r := request es { plan with maxStatus := cap }
+    rows := rows ++ [{ name := s!"status-cap/{cap}", ok := named r == (if cap < 7 then some "nf_rsd_cmd_status_limit" else none) }]
+  for cap in [0, 7, 8, 9, es.length - 1, es.length, es.length + 1] do
+    let got := decision (request es { plan with maxSteps := cap })
+    rows := rows ++ [{ name := s!"steps/{cap}", ok := got.residue.map residueName == (if cap < es.length then some "nf_rsd_cmd_steps" else none) &&
+      got.state.execSent == (cap >= 9) &&
+      got.state.unknown == (cap >= 9 && cap < es.length - 2) }]
+  -- Too many events must still replay through exec before the cap refusal.
+  rows := rows ++ [{ name := "steps-preserve-uncertainty", ok :=
+    (decision (request (es ++ es) { plan with maxSteps := 10 })).state.unknown }]
+  for io in [0, 1, 5, (argsBytes plan).bytes.length - 1, (argsBytes plan).bytes.length] do
+    let got := named (request (trace plan [] [text "exit 0\n"] io))
+    rows := rows ++ [{ name := s!"iounit/{io}", ok := got == (if io != 0 && io < (argsBytes plan).bytes.length then some "nf_rsd_cmd_atomic" else none) }]
+  return rows
+
+def wireRows : List Row := Id.run do
+  let es := trace plan [] [text "exit 0\n"]
+  let mut rows := [refuses "version-low" (request (changed es 0 (version 255))) "nf_rsd_cmd_version",
+    refuses "version-high" (request (changed es 0 (version 8193))) "nf_rsd_cmd_version",
+    refuses "version-dialect" (request (changed es 0 (version 8192 (text "9P2000.L")))) "nf_rsd_cmd_version",
+    refuses "attach-file" (request (changed es 1 (attach fileQ))) "nf_rsd_cmd_qid",
+    refuses "walk-short" (request (changed es 2 (walk [dirQ]))) "nf_rsd_cmd_walk",
+    refuses "walk-empty" (request (changed es 2 (walk []))) "nf_rsd_cmd_walk",
+    refuses "walk-wrong-kind" (request (changed es 2 (walk [fileQ, fileQ]))) "nf_rsd_cmd_qid",
+    refuses "open-wrong-path" (request (changed es 3 (opened 0 { fileQ with path := 4 }))) "nf_rsd_cmd_qid",
+    refuses "open-wrong-kind" (request (changed es 3 (opened 0 rootQ))) "nf_rsd_cmd_qid",
+    refuses "write-short" (request (changed es 4 (wrote ((argsBytes plan).bytes.length - 1)))) "nf_rsd_cmd_short_write",
+    refuses "exec-short" (request (changed es 8 (wrote 4))) "nf_rsd_cmd_short_write",
+    refuses "extra-after-done" (request (es ++ [clunked])) "nf_rsd_cmd_extra_reply",
+    refuses "event-kind" (request [{ kind := 3 }]) "nf_rsd_cmd_event",
+    refuses "event-with-bytes" (request [{ kind := 1, bytes := [0] }]) "nf_rsd_cmd_event"]
+  for index in List.range es.length do
+    for (label, e, cause) in [
+        ("device", frame RERROR (if index == 0 then NOTAG else 0) (putName (text "not_in_view")), "nf_rsd_cmd_device"),
+        ("wrong-tag", frame RCLUNK 7 [], "nf_rsd_cmd_wire"),
+        ("wrong-type", frame 106 0 [], "nf_rsd_cmd_wire"),
+        ("truncated", { bytes := [6, 0, 0, 0, 121, 0] }, "nf_rsd_cmd_wire"),
+        ("invalid-byte", { bytes := [-1] }, "nf_rsd_cmd_wire")] do
+      rows := rows ++ [refuses s!"{label}/{index}" (request (changed es index e)) (if label == "device" && index == 0 then "nf_rsd_cmd_version" else cause)]
+    for (k, cause) in [(1, "nf_rsd_cmd_timeout"), (2, "nf_rsd_cmd_closed")] do
+      let got := decision (request (es.take index ++ [{ kind := k }]))
+      rows := rows ++ [{ name := s!"transport/{k}/{index}", ok := got.residue.map residueName == some cause &&
+        got.state.execSent == (index >= 8) && got.state.unknown == (index >= 8 && index < es.length - 2) &&
+        got.state.pending.isEmpty }]
+  return rows
+
+def keyRows : List Row := Id.run do
+  let es := trace plan [] [text "exit 0\n"]
+  let r := request es
+  let s := (decision r).state
+  let mut rows := [{ name := "noise", ok := q r { s with replayNoise := 17 } == q r s },
+    { name := "forged-state-ignored", ok := (runNF r { phase := 19, done := true, exit := some 99 }).state == s },
+    { name := "key-events", ok := q r {} != q { r with events := [] } {} }]
+  for (label, p) in [("name", { plan with name := "other" }), ("argv", { plan with argv := [] }),
+      ("namespace", { plan with namespaceQ := pin 5 }), ("config", { plan with configQ := pin 5 }),
+      ("executable", { plan with executableQ := pin 5 }), ("inputs", { plan with inputQs := [] }),
+      ("env", { plan with environment := [] }), ("cwd", { plan with cwd := "x" }),
+      ("msize", { plan with msize := 4096 }), ("maxArgs", { plan with maxArgs := 4095 }),
+      ("maxOutput", { plan with maxOutput := 65 }), ("maxStatus", { plan with maxStatus := 19 }),
+      ("maxSteps", { plan with maxSteps := 4095 }), ("timeout", { plan with timeoutMs := 59000 })] do
+    rows := rows ++ [{ name := "key/" ++ label, ok := q r {} != q { r with plan := p } {} }]
+  return rows
+
+def profileRows : List Row := Id.run do
+  let mut rows := []
+  let n := (argsBytes plan).bytes.length
+  for cap in [n - 1, n, n + 1, 8167, 8168, 8169] do
+    let p := { plan with maxArgs := cap }
+    let got := named (request (trace p [] [text "exit 0\n"]) p)
+    rows := rows ++ [{ name := s!"args-cap/{cap}", ok := got == (if cap > 8168 then some "nf_rsd_cmd_plan" else if cap < n then some "nf_rsd_cmd_arguments" else none) }]
+  for ms in [255, 256, 257, 8191, 8192, 8193] do
+    let p := { plan with msize := ms }
+    rows := rows ++ [{ name := s!"msize/{ms}", ok := named (request (trace p [] [text "exit 0\n"]) p) == (if ms < 256 || ms > 8192 then some "nf_rsd_cmd_plan" else none) }]
+  for ms in [256, 257, 4096, 8192] do
+    rows := rows ++ [{ name := s!"negotiated-msize/{ms}", ok :=
+      (decision (request (changed (trace plan [] [text "exit 0\n"]) 0 (version ms)))).state.done }]
+  for cap in [0, 1, 1048575, 1048576, 1048577] do
+    let p := { plan with maxOutput := cap }
+    rows := rows ++ [{ name := s!"output-profile/{cap}", ok := named (request (trace p [] [text "exit 0\n"]) p) == (if cap > 1048576 then some "nf_rsd_cmd_plan" else none) }]
+  for cap in [0, 1, 127, 128, 129] do
+    let p := { plan with maxStatus := cap }
+    rows := rows ++ [{ name := s!"status-profile/{cap}", ok := named (request (trace p [] ((text "exit 0\n").map (fun b => [b]))) p) == (if cap == 0 || cap > 128 then some "nf_rsd_cmd_plan" else if cap < 7 then some "nf_rsd_cmd_status_limit" else none) }]
+  for cap in [1, 2, 299999, 300000, 300001] do
+    let p := { plan with timeoutMs := cap }
+    rows := rows ++ [{ name := s!"timeout-profile/{cap}", ok := named (request (trace p [] [text "exit 0\n"]) p) == (if cap > 300000 then some "nf_rsd_cmd_plan" else none) }]
+  return rows
+
+def metadataRows : List Row := Id.run do
+  let es := trace plan [] [text "exit 0\n"]
+  let mut rows := []
+  for flags in [0, 4, 32, 64, 127] do
+    let root := { rootQ with qtype := 128 + flags, vers := 4294967295 }
+    let dir := { dirQ with qtype := 128 + flags }
+    let file := { fileQ with qtype := flags }
+    let openedFile := { fileQ with qtype := 127 - flags, vers := 4294967295 }
+    let mut events := changed es 1 (attach root)
+    for index in [2, 6, 10, 14] do events := changed events index (walk [dir, file])
+    for index in [3, 7, 11, 15] do events := changed events index (opened 0 openedFile)
+    let got := decision (request events)
+    rows := rows ++ [{ name := s!"qid-metadata/{flags}", ok := got.residue.isNone && got.state.done }]
+  for (label, bad) in [("overlong", [192, 128]), ("invalid", [255]), ("nul", [0])] do
+    rows := rows ++ [refuses ("error-name/" ++ label)
+      (request (changed es 1 (frame RERROR 0 (putName bad)))) "nf_rsd_cmd_wire"]
+  return rows
+
+def allRows : List Row := successRows ++ statusRows ++ boundaryRows ++ wireRows ++ keyRows ++ profileRows ++ metadataRows
+
+def report (rows : List Row) : String :=
+  let failures := rows.filter (! ·.ok)
+  s!"rows={rows.length} failures={failures.length}\n" ++ String.intercalate "\n" (failures.map (·.name))
+
+def mutations : List (String × String × String) := [
+  ("short-write", "if n != Lib.Rsd.Ninep.tMaxCount (outgoing p s) then failed s Residue.shortWrite",
+    "if false then failed s Residue.shortWrite"),
+  ("output-cap", "if s.output.length + bs.length > p.maxOutput then failed s Residue.outputLimit",
+    "if false then failed s Residue.outputLimit"),
+  ("status-overflow", "if n > 2147483647 then none else some (Int.ofNat n)",
+    "if false then none else some (Int.ofNat n)"),
+  ("unknown-outcome", "unknown := s.execSent && s.exit.isNone && s.signal.isNone", "unknown := false"),
+  ("key-events", "request := r, observations := sigma s", "request := { r with events := [] }, observations := sigma s")]
+end Lib.Rsd.CommandDeviceRows

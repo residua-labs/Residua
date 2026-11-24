@@ -1,0 +1,626 @@
+-- Object store. docs/RSD.md C6.2: atomic no-replace commit, torn is a miss,
+-- two stores merge by union. A hit re-hashes the bytes.
+-- replaceAllowed is false: the device rename must not replace.
+-- Concatenate after lib/Sha256.rsd. closure_claim = 0.
+namespace Lib.Rsd.Store
+
+structure Obj where
+  q : List Int
+  bytes : List Int
+  deriving BEq
+
+structure Action where
+  key : List Int
+  keyBytes : List Int
+  outputs : List (String × List Int)
+  deriving BEq
+
+structure BadAction where
+  residue : String
+  action : Action
+
+-- Balanced AVL map keyed by `List Int` (digest / trace key) for O(log N)
+-- object and action lookups in `Store`.
+inductive QMap (α : Type) where
+  | leaf : QMap α
+  | node : Nat → QMap α → List Int → α → QMap α → QMap α
+
+def cmpQ : List Int → List Int → Ordering
+  | [], [] => .eq
+  | [], _ :: _ => .lt
+  | _ :: _, [] => .gt
+  | x :: xs, y :: ys =>
+    if x < y then .lt
+    else if x > y then .gt
+    else cmpQ xs ys
+
+namespace QMap
+
+def height {α : Type} : QMap α → Nat
+  | .leaf => 0
+  | .node h _ _ _ _ => h
+
+def mkNode {α : Type} (l : QMap α) (k : List Int) (v : α) (r : QMap α) : QMap α :=
+  let hl := height l
+  let hr := height r
+  .node ((if hl > hr then hl else hr) + 1) l k v r
+
+def bal {α : Type} (l : QMap α) (k : List Int) (v : α) (r : QMap α) : QMap α :=
+  let hl := height l
+  let hr := height r
+  if hl > hr + 2 then
+    match l with
+    | .node _ ll lk lv lr =>
+      if height ll ≥ height lr then
+        mkNode ll lk lv (mkNode lr k v r)
+      else
+        match lr with
+        | .node _ lrl lrk lrv lrr =>
+          mkNode (mkNode ll lk lv lrl) lrk lrv (mkNode lrr k v r)
+        | .leaf => mkNode l k v r
+    | .leaf => mkNode l k v r
+  else if hr > hl + 2 then
+    match r with
+    | .node _ rl rk rv rr =>
+      if height rr ≥ height rl then
+        mkNode (mkNode l k v rl) rk rv rr
+      else
+        match rl with
+        | .node _ rll rlk rlv rlr =>
+          mkNode (mkNode l k v rll) rlk rlv (mkNode rlr rk rv rr)
+        | .leaf => mkNode l k v r
+    | .leaf => mkNode l k v r
+  else
+    mkNode l k v r
+
+def find {α : Type} : QMap α → List Int → Option α
+  | .leaf, _ => none
+  | .node _ l k v r, q =>
+    match cmpQ q k with
+    | .lt => find l q
+    | .gt => find r q
+    | .eq => some v
+
+def insert {α : Type} : QMap α → List Int → α → QMap α
+  | .leaf, q, v => .node 1 .leaf q v .leaf
+  | .node _ l k cur r, q, v =>
+    match cmpQ q k with
+    | .lt => bal (insert l q v) k cur r
+    | .gt => bal l k cur (insert r q v)
+    | .eq => mkNode l q v r
+
+def minBinding {α : Type} : QMap α → Option (List Int × α)
+  | .leaf => none
+  | .node _ .leaf k v _ => some (k, v)
+  | .node _ l _ _ _ => minBinding l
+
+def removeMin {α : Type} : QMap α → QMap α
+  | .leaf => .leaf
+  | .node _ .leaf _ _ r => r
+  | .node _ l k v r => bal (removeMin l) k v r
+
+def mergeSub {α : Type} (t1 t2 : QMap α) : QMap α :=
+  match t1, t2 with
+  | .leaf, t => t
+  | t, .leaf => t
+  | _, _ =>
+    match minBinding t2 with
+    | none => t1
+    | some (k, v) => bal t1 k v (removeMin t2)
+
+def erase {α : Type} : QMap α → List Int → QMap α
+  | .leaf, _ => .leaf
+  | .node _ l k v r, q =>
+    match cmpQ q k with
+    | .lt => bal (erase l q) k v r
+    | .gt => bal l k v (erase r q)
+    | .eq => mergeSub l r
+
+end QMap
+
+structure Store where
+  objects : List Obj
+  actions : List Action
+  staging : List Obj
+  quarantine : List Obj
+  actionQuarantine : List BadAction
+  objMap : QMap Obj := .leaf
+  actMap : QMap Action := .leaf
+  -- Q-FORMAT 1: the declared kind of each namespace is a property of the
+  -- deployment (FORMAT.md section 6). "" is the legacy raw domain: entries
+  -- whose q was cut before Q-FORMAT 1 verify under it.
+  objKind : String := ""
+  actKind : String := ""
+
+structure Reply where
+  ok : Bool
+  residue : String
+  bytes : List Int
+  -- Which preimage form the hit verified as (Q-FORMAT 1 reader compat):
+  -- "tagged" | "legacy" | "" on a miss or refusal.
+  form : String := ""
+
+def empty : Store :=
+  { objects := [], actions := [], staging := [], quarantine := [], actionQuarantine := []
+  , objMap := .leaf, actMap := .leaf, objKind := "", actKind := "" }
+
+/-- A store declaring its namespace kinds (the deployment table of FORMAT.md
+    section 6): objects and actions each carry one kind; "" marks the legacy
+    raw domain of pre-QFORMAT stores. -/
+def declare (objKind actKind : String) : Store :=
+  { empty with objKind := objKind, actKind := actKind }
+
+def bad (r : String) : Reply :=
+  { ok := false, residue := r, bytes := [], form := "" }
+
+def hit (b : List Int) (form : String := "tagged") : Reply :=
+  { ok := true, residue := "", bytes := b, form := form }
+
+/-- Publication order. The device fsyncs, then rename-no-replace. -/
+inductive Step where
+  | stage (job : String)
+  | fsync (job : String)
+  | renameNoReplace (job dest : String)
+  deriving BEq
+
+def replaceAllowed : Bool := false
+
+def publishPlan (job dest : String) : List Step :=
+  [.stage job, .fsync job, .renameNoReplace job dest]
+
+def findObj : List Obj → List Int → Option Obj
+  | [], _ => none
+  | o :: os, q => if o.q == q then some o else findObj os q
+
+def dropObj : List Obj → List Int → List Obj
+  | [], _ => []
+  | o :: os, q => if o.q == q then dropObj os q else o :: dropObj os q
+
+def findAction : List Action → List Int → Option Action
+  | [], _ => none
+  | a :: as, k => if a.key == k then some a else findAction as k
+
+def dropAction : List Action → List Int → List Action
+  | [], _ => []
+  | a :: as, k => if a.key == k then dropAction as k else a :: dropAction as k
+
+def lookupObj (s : Store) (q : List Int) : Option Obj :=
+  match s.objMap with
+  | .leaf => findObj s.objects q
+  | _ => QMap.find s.objMap q
+
+def lookupAction (s : Store) (k : List Int) : Option Action :=
+  match s.actMap with
+  | .leaf => findAction s.actions k
+  | _ => QMap.find s.actMap k
+
+def buildObjMap (os : List Obj) : QMap Obj :=
+  os.foldr (fun o m => QMap.insert m o.q o) .leaf
+
+def buildActMap (as : List Action) : QMap Action :=
+  as.foldr (fun a m => QMap.insert m a.key a) .leaf
+
+-- Fast FIPS 180-2 SHA-256 over UInt32 words, bit-identical to
+-- Lib.Sha256.contentHashBytes on all valid and invalid inputs.
+def k32Store : Array UInt32 := #[
+  0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
+  0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
+  0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
+  0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
+  0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
+  0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
+  0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+  0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2
+]
+
+def rotr32Store (x n : UInt32) : UInt32 :=
+  (x >>> n) ||| (x <<< (32 - n))
+
+def fastSha256List (msg : List Int) : Lib.Sha256.HashResult := Id.run do
+  let mut count : Nat := 0
+  let mut valid := true
+  for b in msg do
+    if b < 0 || b > 255 then
+      valid := false
+    count := count + 1
+  if !valid then
+    return { ok := false, residue := "input_invalid", bytes := [] }
+  if count > Lib.Sha256.objectMax then
+    return { ok := false, residue := "budget_exhausted", bytes := [] }
+  let len := count
+  let bitLen : UInt64 := len.toUInt64 * 8
+  let rem := (len + 9) % 64
+  let padZero := if rem == 0 then 0 else 64 - rem
+  let total := len + 1 + padZero + 8
+  let mut padded := ByteArray.mkEmpty total
+  for b in msg do
+    padded := padded.push b.toNat.toUInt8
+  padded := padded.push 0x80
+  for _ in [0:padZero] do
+    padded := padded.push 0
+  for i in [0:8] do
+    let shift : UInt64 := ((7 - i) * 8).toUInt64
+    padded := padded.push ((bitLen >>> shift) &&& 0xff).toUInt8
+  let mut h0 : UInt32 := 0x6a09e667
+  let mut h1 : UInt32 := 0xbb67ae85
+  let mut h2 : UInt32 := 0x3c6ef372
+  let mut h3 : UInt32 := 0xa54ff53a
+  let mut h4 : UInt32 := 0x510e527f
+  let mut h5 : UInt32 := 0x9b05688c
+  let mut h6 : UInt32 := 0x1f83d9ab
+  let mut h7 : UInt32 := 0x5be0cd19
+  let blocks := total / 64
+  for b in [0:blocks] do
+    let base := b * 64
+    let mut w := Array.mkEmpty 64
+    for i in [0:16] do
+      let off := base + i * 4
+      let b0 := (padded.get! off).toUInt32 <<< 24
+      let b1 := (padded.get! (off + 1)).toUInt32 <<< 16
+      let b2 := (padded.get! (off + 2)).toUInt32 <<< 8
+      let b3 := (padded.get! (off + 3)).toUInt32
+      w := w.push (b0 ||| b1 ||| b2 ||| b3)
+    for i in [16:64] do
+      let w15 := w.get! (i - 15)
+      let w2 := w.get! (i - 2)
+      let s0 := (rotr32Store w15 7) ^^^ (rotr32Store w15 18) ^^^ (w15 >>> 3)
+      let s1 := (rotr32Store w2 17) ^^^ (rotr32Store w2 19) ^^^ (w2 >>> 10)
+      w := w.push (w.get! (i - 16) + s0 + w.get! (i - 7) + s1)
+    let mut a := h0
+    let mut b_ := h1
+    let mut c := h2
+    let mut d := h3
+    let mut e := h4
+    let mut f := h5
+    let mut g := h6
+    let mut h := h7
+    for i in [0:64] do
+      let s1 := (rotr32Store e 6) ^^^ (rotr32Store e 11) ^^^ (rotr32Store e 25)
+      let ch := (e &&& f) ^^^ ((~~~e) &&& g)
+      let temp1 := h + s1 + ch + k32Store.get! i + w.get! i
+      let s0 := (rotr32Store a 2) ^^^ (rotr32Store a 13) ^^^ (rotr32Store a 22)
+      let maj := (a &&& b_) ^^^ (a &&& c) ^^^ (b_ &&& c)
+      let temp2 := s0 + maj
+      h := g
+      g := f
+      f := e
+      e := d + temp1
+      d := c
+      c := b_
+      b_ := a
+      a := temp1 + temp2
+    h0 := h0 + a
+    h1 := h1 + b_
+    h2 := h2 + c
+    h3 := h3 + d
+    h4 := h4 + e
+    h5 := h5 + f
+    h6 := h6 + g
+    h7 := h7 + h
+  let mut out : Array Int := Array.mkEmpty 32
+  for w in #[h0, h1, h2, h3, h4, h5, h6, h7] do
+    out := out.push (Int.ofNat ((w >>> 24) &&& 0xff).toNat)
+    out := out.push (Int.ofNat ((w >>> 16) &&& 0xff).toNat)
+    out := out.push (Int.ofNat ((w >>> 8) &&& 0xff).toNat)
+    out := out.push (Int.ofNat (w &&& 0xff).toNat)
+  return { ok := true, residue := "", bytes := out.toList }
+
+/-- The same q as Lib.Sha256.qOf through the fast engine: the preimage is the
+    FORMAT.md section 2 header prepended to the canonical bytes. `kind` "" is
+    the legacy raw domain (plain digest, for pre-QFORMAT values). -/
+def qFast (kind : String) (msg : List Int) : Lib.Sha256.HashResult :=
+  if kind == "" then fastSha256List msg
+  else fastSha256List (Lib.Sha256.qHeader kind msg.length ++ msg)
+
+/-- The declared-kind check a writer runs: `q` must be the domain's name for
+    `bytes`. kind "" checks the legacy raw digest. -/
+def hashOk (kind : String) (q bytes : List Int) : String :=
+  let h := qFast kind bytes
+  if !h.ok then h.residue
+  else if h.bytes == q then ""
+  else "hash_mismatch"
+
+/-- Reader compat (the goal's "old q values are readable ... reports which it
+    read"): under a declared kind a stored object named by the old raw digest
+    verifies too, for one version, and the read reports "tagged", "legacy" or
+    "mismatch". The "" domain is legacy-only by definition. -/
+def readQForm (kind : String) (q bytes : List Int) : String :=
+  if kind != "" then
+    let h := qFast kind bytes
+    if h.ok && h.bytes == q then "tagged" else
+      let l := fastSha256List bytes
+      if l.ok && l.bytes == q then "legacy" else "mismatch"
+  else
+    let l := fastSha256List bytes
+    if l.ok && l.bytes == q then "legacy" else "mismatch"
+
+/-- Committed entries only. Staging is invisible, so a torn write is a miss.
+    A hashing failure on the stored bytes (input_invalid, budget_exhausted)
+    reports its own residue instead of collapsing into hash_mismatch. -/
+def resolve (s : Store) (q : List Int) : Reply :=
+  match lookupObj s q with
+  | none => bad "object_missing"
+  | some o =>
+    let h := qFast s.objKind o.bytes
+    if !h.ok then bad h.residue else
+    match readQForm s.objKind q o.bytes with
+    | "tagged" => hit o.bytes "tagged"
+    | "legacy" => hit o.bytes "legacy"
+    | _ => bad "hash_mismatch"
+
+def get (s : Store) (q : List Int) : Reply :=
+  resolve s q
+
+def decidePut (existing : Option Obj) (incoming : Obj) : String :=
+  match existing with
+  | none => "publish"
+  | some old =>
+    if old.q != incoming.q then "distinct"
+    else if old.bytes == incoming.bytes then "idempotent"
+    else "hash_collision"
+
+def stage (s : Store) (o : Obj) : Store :=
+  { s with staging := o :: s.staging }
+
+def commit (s : Store) (q : List Int) : Store × Reply :=
+  match findObj s.staging q with
+  | none => (s, bad "object_missing")
+  | some incoming =>
+    let r := hashOk s.objKind q incoming.bytes
+    if r != "" || incoming.q != q then (s, bad (if r == "" then "hash_mismatch" else r))
+    else
+      let s := { s with staging := dropObj s.staging q }
+      let cur := lookupObj s q
+      match decidePut cur incoming with
+      | "publish" =>
+        ({ s with objects := incoming :: s.objects, objMap := QMap.insert s.objMap q incoming }, hit incoming.bytes)
+      | "idempotent" => (s, hit incoming.bytes)
+      | _ =>
+        let quar := match cur with
+          | none => incoming :: s.quarantine
+          | some o => incoming :: o :: s.quarantine
+        ({ s with objects := dropObj s.objects q, objMap := QMap.erase s.objMap q, quarantine := quar }, bad "hash_collision")
+
+def facetsOk : List (String × List Int) → Bool
+  | [] => true
+  | [_] => true
+  | (a, _) :: (b, x) :: rest => decide (a < b) && facetsOk ((b, x) :: rest)
+
+def decideAction (existing : Option Action) (incoming : Action) : String :=
+  match existing with
+  | none => "publish"
+  | some old =>
+    if old.key != incoming.key then "distinct"
+    else if old.keyBytes != incoming.keyBytes then "hash_collision"
+    else if old.outputs != incoming.outputs then "cache_conflict"
+    else "idempotent"
+
+def putAction (s : Store) (a : Action) : Store × Reply :=
+  if !facetsOk a.outputs then (s, bad "input_invalid")
+  else
+    let r := hashOk s.actKind a.key a.keyBytes
+    if r != "" then (s, bad r)
+    else
+      let cur := lookupAction s a.key
+      match decideAction cur a with
+      | "publish" =>
+        ({ s with actions := a :: s.actions, actMap := QMap.insert s.actMap a.key a }, hit a.key)
+      | "idempotent" => (s, hit a.key)
+      | res =>
+        let tagged : List BadAction := { residue := res, action := a } :: s.actionQuarantine
+        let tagged := match cur with
+          | none => tagged
+          | some o => { residue := res, action := o } :: tagged
+        ({ s with actions := dropAction s.actions a.key, actMap := QMap.erase s.actMap a.key, actionQuarantine := tagged }, bad res)
+
+def addObj (acc quar : List Obj) (o : Obj) : List Obj × List Obj :=
+  match findObj acc o.q with
+  | none => (o :: acc, quar)
+  | some old =>
+    if old.bytes == o.bytes then (acc, quar)
+    else (dropObj acc o.q, o :: old :: quar)
+
+def foldObj : List Obj → List Obj → List Obj → List Obj × List Obj
+  | acc, quar, [] => (acc, quar)
+  | acc, quar, o :: os =>
+    let r := addObj acc quar o
+    foldObj r.1 r.2 os
+
+def addAction (acc : List Action × List BadAction) (a : Action) : List Action × List BadAction :=
+  match findAction acc.1 a.key with
+  | none => (a :: acc.1, acc.2)
+  | some old =>
+    let res := decideAction (some old) a
+    if res == "idempotent" then acc
+    else (dropAction acc.1 a.key,
+      { residue := res, action := a } :: { residue := res, action := old } :: acc.2)
+
+def foldAction : List Action → List BadAction → List Action → List Action × List BadAction
+  | acc, quar, [] => (acc, quar)
+  | acc, quar, a :: as =>
+    let r := addAction (acc, quar) a
+    foldAction r.1 r.2 as
+
+/-- Committed objects and actions only. Staging does not cross a merge. -/
+def merge (a b : Store) : Store :=
+  let objs := foldObj a.objects [] b.objects
+  let acts := foldAction a.actions [] b.actions
+  { objects := objs.1, actions := acts.1, staging := [],
+    quarantine := objs.2 ++ a.quarantine ++ b.quarantine,
+    actionQuarantine := acts.2 ++ a.actionQuarantine ++ b.actionQuarantine,
+    objMap := buildObjMap objs.1,
+    actMap := buildActMap acts.1,
+    objKind := a.objKind, actKind := a.actKind }
+
+-- ============================================================================
+-- The durable encoding (RAISIN-OPT-1): a Store as bytes so the NF memo
+-- folds (lib/FnNF.rsd) persist across processes. Magic `RNF1`, u32 little-
+-- endian lengths, committed objects then committed actions; staging and
+-- quarantine are session-only and never cross the boundary. A malformed
+-- or torn file decodes to `none`; callers treat it as the empty store.
+-- ============================================================================
+
+def u32le (n : Nat) : List Int :=
+  [Int.ofNat (n % 256), Int.ofNat ((n / 256) % 256), Int.ofNat ((n / 65536) % 256), Int.ofNat ((n / 16777216) % 256)]
+
+def encField (bs : List Int) : List Int := u32le bs.length ++ bs
+
+def encObj (o : Obj) : List Int := encField o.q ++ encField o.bytes
+
+def encStr (s : String) : List Int :=
+  encField (s.toUTF8.toList.map (fun b => Int.ofNat b.toNat))
+
+def encFacet (f : String × List Int) : List Int := encStr f.1 ++ encField f.2
+
+def encFacetsGo (acc : List Int) : List (String × List Int) → List Int
+  | [] => acc
+  | f :: fs => encFacetsGo (acc ++ encFacet f) fs
+
+def encAction (a : Action) : List Int :=
+  encField a.key ++ encField a.keyBytes ++ u32le a.outputs.length ++ encFacetsGo [] a.outputs
+
+def encObjsGo (acc : List Int) : List Obj → List Int
+  | [] => acc
+  | o :: os => encObjsGo (acc ++ encObj o) os
+
+def encActionsGo (acc : List Int) : List Action → List Int
+  | [] => acc
+  | a :: as => encActionsGo (acc ++ encAction a) as
+
+/-- Q-FORMAT 1: magic RNF2 carries the two declared namespace kinds ahead of
+    the entries, so a store file is self-describing across a deployment move. -/
+def encStore (s : Store) : List Int :=
+  [82, 78, 70, 50] ++ encStr s.objKind ++ encStr s.actKind
+    ++ u32le s.objects.length ++ encObjsGo [] s.objects
+    ++ u32le s.actions.length ++ encActionsGo [] s.actions
+
+-- ---- decode ---------------------------------------------------------------
+
+def rdU32 : List Int → Option (Nat × List Int)
+  | a :: b :: c :: d :: rest =>
+    if a < 0 || a > 255 || b < 0 || b > 255 || c < 0 || c > 255 || d < 0 || d > 255 then none
+    else some (a.toNat + b.toNat * 256 + c.toNat * 65536 + d.toNat * 16777216, rest)
+  | _ => none
+
+def rdFieldGo : Nat → List Int → List Int → Option (List Int × List Int)
+  | 0, acc, rest => some (acc.reverse, rest)
+  | n + 1, acc, x :: rest => if x < 0 || x > 255 then none else rdFieldGo n (x :: acc) rest
+  | _ + 1, _, [] => none
+
+def rdField (bs : List Int) : Option (List Int × List Int) :=
+  match rdU32 bs with
+  | none => none
+  | some (n, rest) => rdFieldGo n [] rest
+
+def rdObj (bs : List Int) : Option (Obj × List Int) :=
+  match rdField bs with
+  | none => none
+  | some (q, r1) =>
+    match rdField r1 with
+    | none => none
+    | some (bts, r2) => some ({ q := q, bytes := bts }, r2)
+
+def rdObjs : Nat → List Obj → List Int → Option (List Obj × List Int)
+  | 0, acc, bs => some (acc.reverse, bs)
+  | n + 1, acc, bs =>
+    match rdObj bs with
+    | none => none
+    | some (o, rest) => rdObjs n (o :: acc) rest
+
+def strOf (bs : List Int) : String :=
+  String.fromUTF8! (ByteArray.mk (bs.map (fun b => b.toNat.toUInt8)).toArray)
+
+def rdFacets : Nat → List (String × List Int) → List Int → Option (List (String × List Int) × List Int)
+  | 0, acc, bs => some (acc.reverse, bs)
+  | n + 1, acc, bs =>
+    match rdField bs with
+    | none => none
+    | some (nm, r1) =>
+      match rdField r1 with
+      | none => none
+      | some (q, r2) => rdFacets n ((strOf nm, q) :: acc) r2
+
+def rdAction (bs : List Int) : Option (Action × List Int) :=
+  match rdField bs with
+  | none => none
+  | some (key, r1) =>
+    match rdField r1 with
+    | none => none
+    | some (kb, r2) =>
+      match rdU32 r2 with
+      | none => none
+      | some (no, r3) =>
+        match rdFacets no [] r3 with
+        | none => none
+        | some (outs, r4) => some ({ key := key, keyBytes := kb, outputs := outs }, r4)
+
+def rdActions : Nat → List Action → List Int → Option (List Action × List Int)
+  | 0, acc, bs => some (acc.reverse, bs)
+  | n + 1, acc, bs =>
+    match rdAction bs with
+    | none => none
+    | some (a, rest) => rdActions n (a :: acc) rest
+
+def rdStr (bs : List Int) : Option (String × List Int) :=
+  match rdField bs with
+  | none => none
+  | some (bts, rest) => some (strOf bts, rest)
+
+def mkStore (objs : List Obj) (acts : List Action) (objKind actKind : String) : Store :=
+  { objects := objs, actions := acts, staging := [],
+    quarantine := [], actionQuarantine := [],
+    objMap := buildObjMap objs, actMap := buildActMap acts,
+    objKind := objKind, actKind := actKind }
+
+def rdEntries (bs : List Int) (objKind actKind : String) : Option Store :=
+  match rdU32 bs with
+  | none => none
+  | some (no, r1) =>
+    match rdObjs no [] r1 with
+    | none => none
+    | some (objs, r2) =>
+      match rdU32 r2 with
+      | none => none
+      | some (na, r3) =>
+        match rdActions na [] r3 with
+        | none => none
+        | some (acts, []) => some (mkStore objs acts objKind actKind)
+        | _ => none
+
+/-- Magic + object count + objects + action count + actions, all consumed.
+    RNF2 reads the declared kinds from the file; RNF1 (pre-QFORMAT) carries no
+    kinds, so its entries decode into the legacy "" domain — old q values stay
+    readable and verify under the raw-digest branch of `readQForm`. -/
+def decStore (bs : List Int) : Option Store :=
+  match bs with
+  | 82 :: 78 :: 70 :: 49 :: rest => rdEntries rest "" ""
+  | 82 :: 78 :: 70 :: 50 :: rest =>
+    (match rdStr rest with
+     | none => none
+     | some (ok, r1) =>
+       match rdStr r1 with
+       | none => none
+       | some (ak, r2) => rdEntries r2 ok ak)
+  | _ => none
+
+/-- The declared-domain decode: the deployment names its namespace kinds.
+    RNF1 entries verify through the legacy branch while new writes take the
+    declared kinds (the one-version migration); an RNF2 file whose recorded
+    kinds differ from the deployment's is a domain defect and refuses. -/
+def decStoreK (objKind actKind : String) (bs : List Int) : Option Store :=
+  match bs with
+  | 82 :: 78 :: 70 :: 49 :: rest =>
+    (match rdEntries rest "" "" with
+     | none => none
+     | some s => some { s with objKind := objKind, actKind := actKind })
+  | 82 :: 78 :: 70 :: 50 :: rest =>
+    (match rdStr rest with
+     | none => none
+     | some (ok, r1) =>
+       match rdStr r1 with
+       | none => none
+       | some (ak, r2) =>
+         if ok == objKind && ak == actKind then rdEntries r2 ok ak else none)
+  | _ => none
+
+end Lib.Rsd.Store

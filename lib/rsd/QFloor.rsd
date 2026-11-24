@@ -1,0 +1,42 @@
+-- Executable NF boundary; helpers are in QFloorData.rsd.
+namespace Lib.Rsd.QFloor
+
+-- Pure MST-NF admission boundary; effects only transport request and reply.
+inductive Residue where
+  | inputRefused
+
+def residueName : Residue -> String
+  | Residue.inputRefused => "nf_qfloor_input_refused"
+
+structure Request where
+  source : String
+structure State where
+  reply : String
+  deriving BEq
+structure Result where
+  state : State
+  residue : Option Residue
+
+
+
+
+def decision (r : Request) : Result :=
+  match evaluate r.source with
+  | .ok h => { state := { reply := Lib.Rsd.QFloorJson.encode 4 (.obj [("ok", .bool true), ("q", .str h)]) }, residue := none }
+  | .error e => { state := { reply := Lib.Rsd.QFloorJson.encode 4 (.obj [("ok", .bool false), ("err", .str e)]) }, residue := some .inputRefused }
+
+def residue? (r : Request) (_s : State) : Option Residue := (decision r).residue
+def admissible (r : Request) (s : State) : Bool := (residue? r (id s)).isNone
+def runNF (r : Request) (_s : State) : Result := decision r
+
+-- NF-CORRECT-0 r2: the checked decision; runNF retains the original
+-- transition and its failure-state observations for existing callers.
+def decide (r : Request) (_s : State) : Except Residue State :=
+  let answer := runNF r _s
+  match answer.residue with
+  | some residue => .error residue
+  | none => .ok answer.state
+
+
+
+end Lib.Rsd.QFloor

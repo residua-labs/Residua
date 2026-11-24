@@ -1,0 +1,71 @@
+-- LRC host check: the verdict of one run of the checks (stock Lean only). closure_claim = 0.
+-- An NF instance  a checker's verdict surface). The run hands
+-- over one tally for each check: what the check is, what a difference in it means, how many things
+-- it was given, how many differ. `q` sums the tallies by cause, so the order and the split of the
+-- checks do not change the class. `admit` gives the first cause with a difference; and it gives
+-- `nothingCompared` when a cause has nothing compared, for no difference among nothing is not
+-- agreement (an image table that was not written, a corpus that staged nothing).
+namespace Lrc.Host.Verdict
+
+inductive Residue where
+  -- a cause with nothing compared, or a run without a tally
+  | nothingCompared
+  -- a row of the image table fails its check (instruments/lrc-host/CheckImage.rsd names how)
+  | imageRowFails
+  -- a written program or an image's program that Lean's own pipeline does not take
+  | corpusNotTaken
+  -- a written program run before and after the stage's pipeline differs (instruments/lrc-host/Multi.rsd)
+  | writtenProgramDiffers
+  -- FreeVars, LiveVars or NormIds differ from Lean's on a declaration (instruments/lrc-host/CheckBase.rsd)
+  | foundationDiffers
+  -- a ported pass and Lean's pass give different IR for a declaration
+  | passDiffers
+  deriving BEq
+
+def residueName : Residue -> String
+  | Residue.nothingCompared => "lrc_check_nothing_compared"
+  | Residue.imageRowFails => "lrc_check_image_row_fails"
+  | Residue.corpusNotTaken => "lrc_check_corpus_not_taken"
+  | Residue.writtenProgramDiffers => "lrc_check_written_program_differs"
+  | Residue.foundationDiffers => "lrc_check_foundation_differs"
+  | Residue.passDiffers => "lrc_check_pass_differs"
+
+structure Tally where
+  -- the check, for the report
+  name : String
+  -- what a difference in this check is
+  cause : Residue
+  compared : Nat
+  differ : Nat
+
+structure Request where
+  tallies : List Tally
+
+structure Count where
+  cause : Residue
+  compared : Nat
+  differ : Nat
+
+-- the causes a run must have compared something for, in the order of the report
+def causes : List Residue :=
+  [Residue.imageRowFails, Residue.corpusNotTaken, Residue.writtenProgramDiffers, Residue.foundationDiffers, Residue.passDiffers]
+
+structure Class where
+  counts : List Count
+
+def q (r : Request) : Class :=
+  { counts := causes.map fun c =>
+      let mine := r.tallies.filter (·.cause == c)
+      { cause := c, compared := mine.foldl (· + ·.compared) 0, differ := mine.foldl (· + ·.differ) 0 } }
+
+structure Agreed where
+  compared : Nat
+
+def admit (c : Class) : Except Residue Agreed :=
+  match c.counts.find? (·.differ != 0) with
+  | some k => Except.error k.cause
+  | none =>
+    if c.counts.isEmpty || c.counts.any (·.compared == 0) then Except.error Residue.nothingCompared
+    else Except.ok { compared := c.counts.foldl (· + ·.compared) 0 }
+
+end Lrc.Host.Verdict

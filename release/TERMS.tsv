@@ -1,0 +1,30 @@
+# TERMS — public-prose word policy (task RELEASE-NEXT-0, "Public documents speak to outside readers")
+# term	class	wording_or_definition	scope
+# class remove: the term never appears in public prose (README*, CHANGELOG*, docs/*.md, release notes; citation paths and file names excepted).
+# scope (col 4, optional): a path prefix where the term is still permitted verbatim (recipes, manifests, check tables); `anywhere` lifts the ban entirely.
+# class define: real technical term; it stays, defined in docs/GLOSSARY.md (+ .zh-CN) and linked at first use in each document.
+closure_claim	remove	(say nothing; the claim table is internal)	reports/,docs/surfaces/
+SIGN	remove	an independent audit passed	release/checks/
+packet	remove	the release archive	benchmarks/,docs/EMITTER
+twin	remove	the OCaml reference front end	benchmarks/,instruments/
+Exec9	remove	the 9P host execution model	semantics/Effect/,release/notes/
+QFORMAT-1	remove	the q format work item
+SYNTAX-ENGINE-CLOSE	remove	the syntax engine work item
+EFFECT-SEM	remove	the execution-boundary semantics work item	reports/
+E0	remove	the admission check at the execution boundary	semantics/Effect/,docs/SPECS,docs/ARCHITECTURE,release/MANIFEST,release/notes/
+E1	remove	the admission check at the execution boundary	semantics/Effect/,docs/SPECS,docs/ARCHITECTURE,release/MANIFEST,release/notes/
+E2	remove	the admission check at the execution boundary	semantics/Effect/,docs/SPECS,docs/ARCHITECTURE,release/MANIFEST,release/notes/
+E3	remove	the admission check at the execution boundary	semantics/Effect/,docs/SPECS,docs/ARCHITECTURE,release/MANIFEST,release/notes/
+E4	remove	the admission check at the execution boundary	semantics/Effect/,docs/SPECS,docs/ARCHITECTURE,release/MANIFEST,release/notes/
+stage-14274	remove	the seed directory (allowed inside the seed recipe and pin tables)	bootstrap/seed/,docs/,TESTING,README,release/
+rsd	define	the Residua language and toolchain
+rscm	define	the erased functional core every program is lowered to
+wasm0	define	the integer-core subset of WebAssembly the compiler emits
+lambda-RC	define	the functional intermediate form with reference counting and in-place reuse
+R-CIC	define	the proof kernel under development (not in this release)
+stencil	define	a pinned program fragment the emitter instantiates
+receipt	define	a signed machine-readable record of a check run
+q	define	the typed content address of an object
+qbe	define	the back-end layer the `-qbe` benchmark variants compile through
+seed	define	the committed WebAssembly modules that rebuild the compiler
+fixed point	define	the compiler built by itself equals itself byte for byte

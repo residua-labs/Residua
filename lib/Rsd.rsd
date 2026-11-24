@@ -1,0 +1,104 @@
+-- R2. Rsd build, run, and seal as one program of the fold.
+-- A result is act * 256 + next phase. The host frames that number as a T; it does not choose it.
+-- which = 0 engine, 6 chunk, 7 bound, 8 fsClass, 9 registered,
+-- 1 run, 2 build, 3 seal, 4 bound demonstration, 5 create_new then truncate.
+-- closure_claim = 0. This file is not a proof for inputs it does not name.
+namespace Lib
+
+def chunk : Nat := 4096
+
+def boundMs : Nat := 200
+
+/-- Low 16 bits stay `act * 256 + next`. The path and op sit above them,
+    so the host copies a T instead of choosing one. -/
+def pAt (path : List Nat) (i : Nat) : Nat :=
+  match i, path with
+  | 0, x :: _ => x
+  | n + 1, _ :: xs => pAt xs n
+  | _, _ => 0
+
+def pack (act next op : Nat) (path : List Nat) : Nat :=
+  next + act * 256 + op * 65536 + path.length * 16777216
+    + pAt path 0 * 134217728 + pAt path 1 * 34359738368 + pAt path 2 * 8796093022208
+
+/-- 1 lean, 2 emitter, 3 candidate. Any other name is absent. -/
+def registered (n : Nat) : Nat :=
+  if n == 1 then 1
+  else if n == 2 then 2
+  else if n == 3 then 3
+  else 0
+
+/-- 114 create_new is D1. 126 truncate is not. -/
+def fsClass (op : Nat) : Nat :=
+  if op == 114 then 1
+  else if op == 126 then 2
+  else 0
+
+/-- 0 agree, 8 the module and the oracle disagree. -/
+def engine (a b : Nat) : Nat :=
+  if a == b then 0 else 8
+
+def runStep (phase reply : Nat) : Nat :=
+  if phase == 0 then pack 12 1 116 [4]
+  else if phase == 1 then pack 2 2 118 [3, 1, 2]
+  else if phase == 2 then pack 3 3 116 [3, 1, 3]
+  else if phase == 3 then pack 4 4 116 [3, 1, 4]
+  else if phase == 4 then pack 11 5 0 []
+  else if phase == 5 then
+    if reply == 0 then pack 0 6 0 [] else pack 8 6 0 []
+  else pack 255 255 0 []
+
+def buildStep (phase reply : Nat) : Nat :=
+  if phase == 0 then pack 13 1 118 [3, 2, 2]
+  else if phase == 1 then pack 3 2 116 [3, 2, 3]
+  else if phase == 2 then pack 4 3 116 [3, 2, 4]
+  else if phase == 3 then
+    if reply == 4096 then pack 4 3 116 [3, 2, 4] else pack 16 4 118 [3, 3, 2]
+  else if phase == 4 then pack 3 5 116 [3, 3, 3]
+  else if phase == 5 then pack 4 6 116 [3, 3, 4]
+  else if phase == 6 then
+    if reply == 4096 then pack 4 6 116 [3, 3, 4] else pack 5 7 114 [5, 1, 1]
+  else if phase == 7 then pack 0 8 0 []
+  else pack 255 255 0 []
+
+def sealStep (phase reply : Nat) : Nat :=
+  if phase == 0 then pack 12 1 116 [4]
+  else if phase == 1 then pack 2 2 118 [3, 1, 2]
+  else if phase == 2 then pack 3 3 116 [3, 1, 3]
+  else if phase == 3 then pack 4 4 116 [3, 1, 4]
+  else if phase == 4 then pack 11 5 0 []
+  else if phase == 5 then
+    if reply == 0 then pack 17 6 118 [3, 1, 2] else pack 8 6 0 []
+  else if phase == 6 then pack 3 7 116 [3, 1, 3]
+  else if phase == 7 then pack 4 8 116 [3, 1, 4]
+  else if phase == 8 then pack 11 9 0 []
+  else if phase == 9 then
+    if reply == 8 then pack 7 10 0 [] else pack 19 10 0 []
+  else pack 255 255 0 []
+
+def timeStep (phase : Nat) : Nat :=
+  if phase == 0 then pack 9 1 118 [3, 3, 2]
+  else if phase == 1 then pack 3 2 116 [3, 3, 3]
+  else if phase == 2 then pack 18 3 0 []
+  else pack 255 255 0 []
+
+def fsStep (phase : Nat) : Nat :=
+  if phase == 0 then pack 5 1 114 [5, 1, 1]
+  else if phase == 1 then pack 6 2 126 [5, 1]
+  else if phase == 2 then pack 0 3 0 []
+  else pack 255 255 0 []
+
+def rsd (which phase reply a b : Nat) : Nat :=
+  if which == 0 then engine a b
+  else if which == 6 then chunk
+  else if which == 7 then boundMs
+  else if which == 8 then fsClass a
+  else if which == 9 then registered a
+  else if which == 1 then runStep phase reply
+  else if which == 2 then buildStep phase reply
+  else if which == 3 then sealStep phase reply
+  else if which == 4 then timeStep phase
+  else if which == 5 then fsStep phase
+  else 65535
+
+end Lib

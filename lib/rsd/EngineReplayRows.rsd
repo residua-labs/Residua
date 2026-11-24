@@ -1,0 +1,165 @@
+-- Compiled differential rows. Expected data comes from the frozen raw streams,
+-- not an independently rewritten evaluator. No bulk elaborator evaluation.
+namespace Lib.Rsd.EngineReplayRows
+abbrev Json := Lib.Rsd.QFloorJson.Value
+open Lib.Rsd.EngineReplay
+
+structure Row where
+  name : String
+  expected : Option String
+  actual : Option String
+  deriving Repr
+
+def result {α : Type} : Except Residue α -> Option String
+  | .ok _ => none | .error e => some (residueName e)
+def failures (rows : List Row) : List String :=
+  (rows.filter fun r => r.expected != r.actual).map Row.name
+def report (rows : List Row) : String := encode 20 (.obj [
+  ("rows", .int rows.length), ("failures", .arr ((failures rows).map .str))])
+def row (name : String) (expected actual : Option Residue) : Row :=
+  { name, expected := expected.map residueName, actual := actual.map residueName }
+def comparison (name : String) (want : Option Residue) (index : Nat) (c : Case) (s : Sample) : Row :=
+  { name, expected := want.map residueName, actual := result (compare index c s) }
+def aggregate (name : String) (want : Option Residue) (r : Request) (samples : List Sample) : Row :=
+  row name want (runNF r { samples }).residue
+
+def put (v : Json) (key : String) (value : Json) : Json :=
+  match v with
+  | .obj xs => .obj (if xs.any (fun p => p.1 == key) then
+      xs.map (fun (k,old) => (k, if k == key then value else old)) else xs ++ [(key,value)])
+  | _ => v
+def both (s : Sample) (f : Json -> Json) : Sample :=
+  match parsed s.compiled.stdout with
+  | .error _ => s
+  | .ok value =>
+      let stdout := stringify (f value) ++ "\n"
+      { s with compiled := { s.compiled with stdout }, stock := { s.stock with stdout } }
+def value (s : Sample) (f : Json -> Json) : Sample :=
+  both s fun v => put v "val" (f ((get v "val").getD .null))
+def changeEntry (v : Json) (id : Int) (f : Json -> Json) : Json :=
+  let xs := ((field v "cache").bind elements).getD []
+  setField v "cache" (rvList (xs.map fun e => if (field e "id").bind number == some id then f e else e))
+def keyField (v : Json) (id : Int) (key : String) (next : Json) : Json :=
+  changeEntry v id fun e => setField e "key" (setField ((field e "key").getD .null) key next)
+def env (v : Json) (name : String) : Option Json := do
+  let xs <- (get v "env").bind arr?
+  match ← xs.find? (fun p => match p with | .arr [.str k, _] => k == name | _ => false) with
+  | .arr [_, x] => some x | _ => none
+
+-- The expected traces are the frozen collector's observations, independently
+-- indexed here. Cases use its raw stdin nodes/cache, not the new generator.
+def traces : List (List Int) := [[1,2,3],[],[1],[1],[1],[1],[1,2],[1,2],[1,2],[1,2],
+  [2,3],[],[],[3],[3],[3],[3],[1,2,3],[1,2,3],[],[1],[2,3]]
+def referenceCase (index : Nat) (s : Sample) : Except Residue Case := do
+  let v <- parsed s.input
+  let nodes <- required ((env v "nodes").bind elements) .input
+  let prior <- required ((env v "cache").bind elements) .input
+  let observers <- required ((env v "observers").bind elements) .input
+  let observers <- observers.mapM fun v => required (number v) .input
+  let trace <- required traces[index]? .inventory
+  let output <- parsed s.compiled.stdout
+  let cache <- required (((get output "val").bind fun v => field v "cache").bind elements) .cache
+  let expected <- trace.mapM fun id => do
+    let e <- required (cacheEntry cache id) .cache
+    pure (id, ← required (field e "outcome") .outcome)
+  pure { nodes, prior, trace, expected, observers, necessary := if [11,12,20].contains index then [1] else if index == 19 then [] else [1,2,3] }
+
+def nested : Nat -> Json
+  | 0 => .int 0 | n + 1 => .arr [nested n]
+def nestedText (n : Nat) : String :=
+  String.mk (List.replicate n '[') ++ "0" ++ String.mk (List.replicate n ']')
+
+def parserRows : List Row :=
+  let check := fun name text want =>
+    { name := "json/" ++ name, expected := want.map residueName, actual := result (parsed text) }
+  [check "depth-cap" (nestedText 512) none, check "depth-cap-plus-one" (nestedText 513) (some .json),
+   row "safe/depth-cap" none (if safe 513 (nested 512) then none else some .json),
+   row "safe/depth-cap-plus-one" (some .json) (if safe 513 (nested 513) then none else some .json),
+   row "equal/depth-cap" none (if equal 513 (nested 512) (nested 512) then none else some .json),
+   row "equal/depth-cap-plus-one" (some .json) (if equal 513 (nested 513) (nested 513) then none else some .json),
+   check "null" "null" none, check "malformed" "{" (some .json),
+   check "duplicate" "{\"ok\":true,\"ok\":false}" (some .json),
+   check "nested-duplicate" "{\"a\":{\"x\":1,\"x\":2}}" (some .json)] ++
+  ([-9007199254740991,9007199254740991] : List Int).map (fun n =>
+    check (toString n) (toString n) none) ++
+  ([-9007199254740992,9007199254740992] : List Int).map (fun n =>
+    check (toString n) (toString n) (some .json)) ++
+  [row "equal/object-order" none (if equal 5 (.obj [("a",.int 1),("b",.int 2)])
+       (.obj [("b",.int 2),("a",.int 1)]) then none else some .differential),
+   row "equal/array-order" (some .differential) (if equal 5 (.arr [.int 1,.int 2])
+       (.arr [.int 2,.int 1]) then none else some .differential),
+   row "equal/fuel-cap" none (if equal 2 (.arr [.int 1]) (.arr [.int 1]) then none else some .json),
+   row "equal/fuel-cap-plus-one" (some .json) (if equal 1 (.arr [.int 1]) (.arr [.int 1]) then none else some .json)]
+
+def aggregateRows (r : Request) (samples : List Sample) : List Row :=
+  let changed := fun f => match samples with | [] => [] | s::rest => f s :: rest
+  [aggregate "aggregate/exact" none r samples,
+   aggregate "aggregate/missing" (some .inventory) r (samples.drop 1),
+   aggregate "aggregate/extra" (some .inventory) r (samples ++ samples.take 1),
+   aggregate "aggregate/programs" (some .programPin) { r with programs := .arr [] } samples,
+   aggregate "aggregate/root" (some .programPin) { r with root := .null } samples,
+   aggregate "aggregate/label" (some .inventory) r (changed fun s => { s with label := "foreign" }),
+   aggregate "aggregate/input-space" (some .input) r (changed fun s => { s with input := s.input ++ " " }),
+   aggregate "aggregate/input-substitution" (some .input) r (changed fun s => { s with input := "{}\n" })]
+
+def caseRows (index : Nat) (c : Case) (s : Sample) : List Row := Id.run do
+  let labelPrefix := s.label ++ "/"
+  let check := fun name want sample => comparison (labelPrefix ++ name) want index c sample
+  let mut rows := [check "exact" none s,
+    check "exit" (some .command) { s with compiled := { s.compiled with exit := some 1 } },
+    check "stock-exit" (some .command) { s with stock := { s.stock with exit := some 1 } },
+    check "resource-zero-exit" (some .command) { s with compiled := { s.compiled with stderr := "maximum memory consumption" } },
+    check "malformed" (some .json) { s with compiled := { s.compiled with stdout := "{" } },
+    check "differential" (some .differential) { s with stock := { s.stock with stdout := "{}" } },
+    check "value-ok" (some .value) (both s fun v => put v "ok" (.bool false)),
+    check "value-null" (some .value) (both s fun v => put v "val" .null),
+    check "trace" (some .trace) (value s fun v => setField v "recomputed" (rvList [rvInt 99])),
+    check "necessary" (some .necessary) (value s fun v => setField v "necessary" (rvList [rvInt 99])),
+    check "cache" (some .cache) (value s fun v => setField v "cache" (rvInt 0)),
+    check "record-tag" (some .cache) (value s fun v => put v "tag" (.str "foreign")),
+    check "object-property-order" none (both s fun v => match v with | .obj xs => .obj xs.reverse | _ => v)]
+  for id in c.trace do
+    rows := rows ++ [
+      check ("key-body/" ++ toString id) (some .key) (value s fun v => keyField v id "body_q" (rvStr "foreign")),
+      check ("key-fuel/" ++ toString id) (some .key) (value s fun v => keyField v id "fuel" (rvInt 999)),
+      check ("key-witness/" ++ toString id) (some .key) (value s fun v => keyField v id "input_witness" (rvList [])),
+      check ("outcome/" ++ toString id) (some .outcome) (value s fun v => changeEntry v id fun e =>
+        setField e "outcome" (rvStr "damaged"))]
+    if id == 3 && [14,15,16].contains index then
+      let output := (parsed s.compiled.stdout).toOption.getD .null
+      let cache := (((get output "val").bind fun v => field v "cache").bind elements).getD []
+      let witness := (((cacheEntry cache id).bind fun e => field e "key").bind fun k => field k "input_witness").getD .null
+      let xs := (elements witness).getD []
+      let reordered := xs.take 1 ++ (xs.drop 1).reverse
+      -- A reversed pair of identical reads stays identical; removing the second
+      -- occurrence must still invalidate the complete ordered witness.
+      let changed := if index == 14 then xs.take 2 else reordered
+      rows := rows ++ [check "key-ordered-reads" (some .key)
+        (value s fun v => keyField v id "input_witness" (rvList changed))]
+  for n in c.nodes do
+    let id := ((field n "id").bind number).getD 0
+    if !c.trace.contains id && (cacheEntry c.prior id).isSome then
+      rows := rows ++ [check ("whole-hit/" ++ toString id) (some .hit)
+        (value s fun v => changeEntry v id fun e => setField e "outcome" (rvStr "stale-hit-damage"))]
+  if index == 20 then
+    for id in [2,3] do
+      rows := rows ++ [check ("sparse/" ++ toString id) (some .sparse)
+        (value s fun v => changeEntry v id fun e => setField e "present" (rvInt 1))]
+  return rows
+
+def allRows (r : Request) (samples : List Sample) : List Row := Id.run do
+  let mut rows := parserRows ++ aggregateRows r samples
+  for (index,s) in samples.enum do
+    match referenceCase index s with
+    | .error e => rows := rows ++ [row (s.label ++ "/reference-case") none (some e)]
+    | .ok c => rows := rows ++ caseRows index c s
+  return rows
+
+def mutations : List (String × String × String) := [
+  ("differential", "require (equal 513 a b) .differential", "require true .differential"),
+  ("trace", "require (trace.map (fun v => number v) == c.trace.map some) .trace", "require true .trace"),
+  ("outcome", "require (equal 513 observed want) .outcome", "require true .outcome"),
+  ("key", "require (field key \"body_q\" == field n \"body_q\" && field key \"fuel\" == field n \"fuel\" &&\n        ((field key \"input_witness\").any fun v => equal 513 v (rvList args))) .key", "require true .key"),
+  ("whole-hit", "require (equal 513 old entry) .hit", "require true .hit")]
+
+end Lib.Rsd.EngineReplayRows

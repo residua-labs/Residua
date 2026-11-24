@@ -1,0 +1,275 @@
+-- Checks for lib/rsd/codec.rsd. Concatenate, in order,
+-- lib/Word32.rsd, lib/Word64.rsd, lib/Sha256.rsd, lib/rsd/codec.rsd,
+-- then this file. The comparisons are on encodeRVal output.
+-- closure_claim = 0.
+namespace Lib.Rsd.CodecRun
+
+open Lib.Rsd.Codec
+
+def hexNib (n : Nat) : Char :=
+  Char.ofNat (if n < 10 then 48 + n else 87 + n)
+
+def hexByte (b : Int) : String :=
+  let n := b.toNat
+  String.mk [hexNib (n / 16), hexNib (n % 16)]
+
+def toHex : List Int → String
+  | [] => ""
+  | b :: bs => hexByte b ++ toHex bs
+
+def mustHash (kind : String) (bs : List Int) : List Int :=
+  let h := Lib.Sha256.qOf kind bs
+  if h.ok then h.bytes else []
+
+def qOf (kind : String) (bs : List Int) : String :=
+  toHex (mustHash kind bs)
+
+def enc (rv : RVal) : Out :=
+  encodeRVal rv defaultBounds
+
+def canon (rv : RVal) : String :=
+  let o := enc rv
+  if o.ok then toHex o.bytes else "encode:" ++ o.residue
+
+def roundtrip (rv : RVal) : Bool :=
+  let o := enc rv
+  if !o.ok then false
+  else
+    let d := decodeRVal o.bytes defaultBounds
+    if !d.ok then false
+    else
+      let o2 := enc d.rval
+      o2.ok && o2.bytes == o.bytes
+
+def qb (h : String) : Val :=
+  .bytes (Lib.Sha256.hex h)
+
+def artifactTy : Ty :=
+  .record [("recipe", .str), ("source", .bytes), ("generator", .bytes), ("environment", .bytes)]
+
+def verdictTy : Ty :=
+  .record [("recipe", .str), ("subject", .bytes), ("checker", .bytes), ("environment", .bytes)]
+
+def sourceQ : String := "41cf6794ba4200b839c53531555f0f3998df4cbb01a4d5cb0b94e3ca5e23947d"
+def generatorQ : String := "9123dcbb0b42652b0e105956c68d3ca2ff34584f324fa41a29aedd32b883e131"
+def envFixtureQ : String := "dbbb133233759e94b9735f2d17a805babae153f7c908a8fec268917350917c03"
+
+def artifactRv : RVal :=
+  { ty := artifactTy, val := .record [
+      ("recipe", .str "rsd.artifact-key/1"),
+      ("source", qb sourceQ),
+      ("generator", qb generatorQ),
+      ("environment", qb envFixtureQ)] }
+
+def verdictRv : RVal :=
+  { ty := verdictTy, val := .record [
+      ("recipe", .str "rsd.verdict-key/1"),
+      ("subject", qb sourceQ),
+      ("checker", qb generatorQ),
+      ("environment", qb envFixtureQ)] }
+
+def searchTy : Ty := .record [("logical", .str), ("tree", .bytes)]
+def importTy : Ty := .record [("module", .str), ("runtime", .bool), ("facet", .str), ("object", .bytes)]
+def readTy : Ty := .record [("operation", .str), ("path", .str), ("observation", .bytes)]
+def limitsTy : Ty := .record [
+  ("memory_mib", .i64), ("tstack_kib", .i64), ("fuel", .i64),
+  ("heartbeats", .i64), ("timeout_ms", .i64)]
+
+def envTy : Ty := .record [
+  ("recipe", .str), ("toolchain", .bytes), ("target", .str), ("argv", .list .str),
+  ("cwd", .str), ("module", .str), ("search", .list searchTy), ("imports", .list importTy),
+  ("environment", .list (.pair .str .str)), ("stdin", .bytes), ("reads", .list readTy),
+  ("limits", limitsTy), ("profile", .bytes), ("axioms", .option .bytes),
+  ("grammar", .option .bytes), ("catalog", .bytes), ("devices", .bytes),
+  ("clock", .option .i64), ("random", .option .bytes)]
+
+def envRv : RVal :=
+  { ty := envTy, val := .record [
+      ("recipe", .str "rsd.env/1"),
+      ("toolchain", qb "a3206db65ed2118428865b922bf7b4c4b5365f51f302d2fb9165933724c17bb5"),
+      ("target", .str "darwin-arm64"),
+      ("argv", .list [
+        .str "lean", .str "--tstack=65536", .str "--tstack=65536",
+        .str "-o", .str "A.olean", .str "A.lean"]),
+      ("cwd", .str "/logical/work"),
+      ("module", .str "A"),
+      ("search", .list [.record [
+        ("logical", .str "workspace"),
+        ("tree", qb "f59f68e4ae268fcea51db5aea005bc4f45f58b25385ba7d5427e0c7b50d801c0")]]),
+      ("imports", .list [.record [
+        ("module", .str "Init"), ("runtime", .bool false), ("facet", .str "olean"),
+        ("object", qb "53c58344b22d9441f9c554e0d7bb0ac2366fc2914b47ed936ba4b2aa3690d968")]]),
+      ("environment", .list [.pair (.str "LANG") (.str "C"), .pair (.str "TZ") (.str "UTC")]),
+      ("stdin", qb "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"),
+      ("reads", .list [.record [
+        ("operation", .str "file"), ("path", .str "/logical/work/data"),
+        ("observation", qb "3a6eb0790f39ac87c94f3856b2dd2c5d110e6811602261a9a923d3bb23adc8b7")]]),
+      ("limits", .record [
+        ("memory_mib", .int 2048), ("tstack_kib", .int 65536), ("fuel", .int 100000),
+        ("heartbeats", .int 200000), ("timeout_ms", .int 60000)]),
+      ("profile", qb "1900eab6c028483d7126599ee6f50de0d27907b5c65fa90524580b4b0f9852b0"),
+      ("axioms", .some (qb "6c30b34f8fa89e3d91a9d296f6015203ca2b0fa5338db443abd6e957bfacef38")),
+      ("grammar", .some (qb "e05eb8a4a255743e051d77d5e43b75e5e38073b27539b0184fbce352405a3ee1")),
+      ("catalog", qb "652f55016243bf1b9f1bbea46d5749ef892dbe394e46de9d66ab1aacf0b4af57"),
+      ("devices", qb "ade15a1287dabe92c77ad32bbfada2ba4f6593433011b090530bd2fa0d86d8a0"),
+      ("clock", .some (.int 0)),
+      ("random", .some (qb "19b25856e1c150ca834cffc8b59b23adbd0ec0389e58eb22b3b64768098d002b"))] }
+
+def artifactHex : String := "5256414c0107040106726563697065020106736f7572636503010967656e657261746f7203010b656e7669726f6e6d656e740301167472656c6c69732e61727469666163742d6b65792f31012041cf6794ba4200b839c53531555f0f3998df4cbb01a4d5cb0b94e3ca5e23947d01209123dcbb0b42652b0e105956c68d3ca2ff34584f324fa41a29aedd32b883e1310120dbbb133233759e94b9735f2d17a805babae153f7c908a8fec268917350917c03"
+def envHex : String := "5256414c0107130106726563697065020109746f6f6c636861696e03010674617267657402010461726776040201036377640201066d6f64756c6502010673656172636804070201076c6f676963616c02010474726565030107696d706f72747304070401066d6f64756c6502010772756e74696d6501010566616365740201066f626a65637403010b656e7669726f6e6d656e74040502020105737464696e030105726561647304070301096f7065726174696f6e0201047061746802010b6f62736572766174696f6e0301066c696d6974730705010a6d656d6f72795f6d696200010a74737461636b5f6b69620001046675656c00010a6865617274626561747300010a74696d656f75745f6d7300010770726f66696c650301066178696f6d73080301076772616d6d617208030107636174616c6f6703010764657669636573030105636c6f636b0800010672616e646f6d0803010d7472656c6c69732e656e762f310120a3206db65ed2118428865b922bf7b4c4b5365f51f302d2fb9165933724c17bb5010c64617277696e2d61726d36340601046c65616e010e2d2d74737461636b3d3635353336010e2d2d74737461636b3d363535333601022d6f0107412e6f6c65616e0106412e6c65616e010d2f6c6f676963616c2f776f726b010141010109776f726b73706163650120f59f68e4ae268fcea51db5aea005bc4f45f58b25385ba7d5427e0c7b50d801c0010104496e69740001056f6c65616e012053c58344b22d9441f9c554e0d7bb0ac2366fc2914b47ed936ba4b2aa3690d9680201044c414e470101430102545a01035554430120e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b85501010466696c6501122f6c6f676963616c2f776f726b2f6461746101203a6eb0790f39ac87c94f3856b2dd2c5d110e6811602261a9a923d3bb23adc8b700000800000000000000000001000000000000a08601000000000000400d0300000000000060ea00000000000001201900eab6c028483d7126599ee6f50de0d27907b5c65fa90524580b4b0f9852b00101206c30b34f8fa89e3d91a9d296f6015203ca2b0fa5338db443abd6e957bfacef38010120e05eb8a4a255743e051d77d5e43b75e5e38073b27539b0184fbce352405a3ee10120652f55016243bf1b9f1bbea46d5749ef892dbe394e46de9d66ab1aacf0b4af570120ade15a1287dabe92c77ad32bbfada2ba4f6593433011b090530bd2fa0d86d8a00100000000000000000001012019b25856e1c150ca834cffc8b59b23adbd0ec0389e58eb22b3b64768098d002b"
+
+def nodeTy : Ty := .record [("kind", .str), ("q", .bytes)]
+
+def nodeRv (kind q : String) : RVal :=
+  { ty := nodeTy, val := .record [("kind", .str kind), ("q", qb q)] }
+
+def declQ : String := "0284ed29714a1b7e6dce4060d6b5f44c30232b0b0a4108ecdcd3d29b8e223df4"
+
+def ltBytes (fuel : Nat) (xs ys : List Int) : Bool :=
+  match fuel with
+  | 0 => false
+  | n + 1 =>
+    match xs, ys with
+    | [], [] => false
+    | [], _ => true
+    | _, [] => false
+    | x :: xs, y :: ys =>
+      if x < y then true else if x == y then ltBytes n xs ys else false
+
+def insert (d : List Int) : List (List Int) → List (List Int)
+  | [] => [d]
+  | x :: xs => if ltBytes 40 d x then d :: x :: xs else x :: insert d xs
+
+def sortDigests : List (List Int) → List (List Int)
+  | [] => []
+  | d :: ds => insert d (sortDigests ds)
+
+def digest (s : String) : List Int :=
+  let h := Lib.Sha256.contentHashBytes (Lib.Sha256.bytesOf s)
+  if h.ok then h.bytes else []
+
+def capText : String :=
+  "stage S0\nhost-interface schema-1\nbuild --emit olean\ndoctor\nexplain\nhelp\nstatus\nstore stat\nversion\n"
+
+def catalogQ : String := "a8995218a9c91f7f83fdce98c0e046203790e07c90ffe7f656bcfdb42f49d1bf"
+def registryQ : String := "d0c8327530711ffbdb5427e8d27ff44944842d95ec81d7628c91f1fe5126a606"
+
+def verbs : List String := [
+  "init", "status", "query", "inspect", "size", "mem", "store stat", "patch",
+  "reconcile", "check", "test", "seal", "pin", "verify-projection", "admit",
+  "run", "build", "q", "export", "import", "view", "diff", "fmt",
+  "check-source", "help", "version", "explain", "doctor", "fix", "clean",
+  "dev", "skills"]
+
+def regTy : Ty := .record [("recipe", .str), ("verbs", .list .str), ("catalog", .bytes)]
+
+def regRv : RVal :=
+  { ty := regTy, val := .record [
+      ("recipe", .str "rsd.verbs/1"),
+      ("verbs", .list (List.map (fun s => .str s) verbs)),
+      ("catalog", qb catalogQ)] }
+
+def toolTy : Ty := .record [
+  ("recipe", .str), ("cli", .bytes), ("engine", .bytes), ("modules", .list .bytes),
+  ("devices", .bytes), ("catalog", .bytes), ("capabilities", .bytes),
+  ("bootstrap", .list .bytes)]
+
+def bootsWith : List String := [
+  "B-CLI-HOST", "B-HASH-HOST", "B-KEY-PY", "B-LAKE", "B-LAKE-CONFIG", "B-LEAN-FRONTEND"]
+
+def bootsWithout : List String := [
+  "B-CLI-HOST", "B-HASH-HOST", "B-LAKE", "B-LAKE-CONFIG", "B-LEAN-FRONTEND",
+  "B-SANDBOX-LEAN"]
+
+def toolRv (names : List String) : RVal :=
+  { ty := toolTy, val := .record [
+      ("recipe", .str "rsd.tool/1"),
+      ("cli", qb registryQ),
+      ("engine", .bytes (digest "rsd.engine/none")),
+      ("modules", .list []),
+      ("devices", .bytes (digest "rsd.devices/none")),
+      ("catalog", qb catalogQ),
+      ("capabilities", .bytes (digest capText)),
+      ("bootstrap", .list (List.map (fun d => .bytes d) (sortDigests (List.map digest names))))] }
+
+def toolQ (names : List String) : String :=
+  let o := enc (toolRv names)
+  if o.ok then qOf "rval" o.bytes else "encode:" ++ o.residue
+
+def toolWithout : String :=
+  "ed79408d63b371b2a3ba2e8b7a6aa3a4dcf7bf1fa2fd77b4ce5994080ccecedc"
+
+def fail (name expected got : String) : IO Bool := do
+  IO.println s!"{name} fail"
+  IO.println s!"expected {expected}"
+  IO.println s!"got {got}"
+  return false
+
+def eq (name expected got : String) : IO Bool := do
+  if expected == got then
+    IO.println s!"{name} ok"
+    return true
+  else
+    fail name expected got
+
+def flag (name : String) (ok : Bool) : IO Bool := do
+  IO.println s!"{name} {if ok then "ok" else "fail"}"
+  return ok
+
+end Lib.Rsd.CodecRun
+
+def main (argv : List String) : IO UInt32 := do
+  let tq := Lib.Rsd.CodecRun.toolQ Lib.Rsd.CodecRun.bootsWithout
+  if argv == ["tool-q"] then
+    if tq == Lib.Rsd.CodecRun.toolWithout then
+      IO.println tq
+      return 0
+    else
+      IO.eprintln s!"tool-q fail {tq}"
+      return 1
+  let mut bad := false
+  let v7 := Lib.Rsd.CodecRun.qOf "rval" (Lib.Rsd.CodecRun.enc Lib.Rsd.Codec.v7).bytes
+  if !(← Lib.Rsd.CodecRun.eq "v7-q" "b1e7881f560cc5248d09ca0f874197bef247260dec2faf3ac742ccac0942ee07" v7) then
+    bad := true
+  let art := Lib.Rsd.CodecRun.canon Lib.Rsd.CodecRun.artifactRv
+  if !(← Lib.Rsd.CodecRun.eq "artifact-bytes" Lib.Rsd.CodecRun.artifactHex art) then
+    bad := true
+  if !(← Lib.Rsd.CodecRun.eq "artifact-q" "338b0bea21cbec168fe7e458c233591f277215564cad1f7a3770fec578bb67cf"
+      (Lib.Rsd.CodecRun.qOf "rval" (Lib.Rsd.CodecRun.enc Lib.Rsd.CodecRun.artifactRv).bytes)) then
+    bad := true
+  let env := Lib.Rsd.CodecRun.canon Lib.Rsd.CodecRun.envRv
+  if !(← Lib.Rsd.CodecRun.eq "env-bytes" Lib.Rsd.CodecRun.envHex env) then
+    bad := true
+  if !(← Lib.Rsd.CodecRun.eq "env-q" "dbbb133233759e94b9735f2d17a805babae153f7c908a8fec268917350917c03"
+      (Lib.Rsd.CodecRun.qOf "rval" (Lib.Rsd.CodecRun.enc Lib.Rsd.CodecRun.envRv).bytes)) then
+    bad := true
+  let ver := Lib.Rsd.CodecRun.qOf "verdict" (Lib.Rsd.CodecRun.enc Lib.Rsd.CodecRun.verdictRv).bytes
+  if !(← Lib.Rsd.CodecRun.eq "verdict-q" "afb8e6c0bf679cc200ce8502b55e0a6d5959d420d7801b6cbc21e3123d080730" ver) then
+    bad := true
+  if !(← Lib.Rsd.CodecRun.flag "artifact-ne-verdict" (art != Lib.Rsd.CodecRun.canon Lib.Rsd.CodecRun.verdictRv)) then
+    bad := true
+  let decl := Lib.Rsd.CodecRun.nodeRv "declaration" Lib.Rsd.CodecRun.declQ
+  let bind := Lib.Rsd.CodecRun.nodeRv "binding" Lib.Rsd.CodecRun.declQ
+  if !(← Lib.Rsd.CodecRun.eq "node-declaration"
+      "b768a65a992f06630908776ff10fa32dd2f7cafb73e6c1f752e6d88ce538bbab"
+      (Lib.Rsd.CodecRun.qOf "rval" (Lib.Rsd.CodecRun.enc decl).bytes)) then
+    bad := true
+  if !(← Lib.Rsd.CodecRun.eq "node-binding"
+      "1d6b737f98a30c212b1f9723f8a4bf333889a2c6a399e96a05fa51215ac57510"
+      (Lib.Rsd.CodecRun.qOf "rval" (Lib.Rsd.CodecRun.enc bind).bytes)) then
+    bad := true
+  if !(← Lib.Rsd.CodecRun.flag "roundtrip" (
+      Lib.Rsd.CodecRun.roundtrip Lib.Rsd.Codec.v7 &&
+      Lib.Rsd.CodecRun.roundtrip Lib.Rsd.CodecRun.artifactRv &&
+      Lib.Rsd.CodecRun.roundtrip Lib.Rsd.CodecRun.envRv)) then
+    bad := true
+  let reg := Lib.Rsd.CodecRun.qOf "rval" (Lib.Rsd.CodecRun.enc Lib.Rsd.CodecRun.regRv).bytes
+  if !(← Lib.Rsd.CodecRun.eq "registry-q" Lib.Rsd.CodecRun.registryQ reg) then
+    bad := true
+  let withPy := Lib.Rsd.CodecRun.toolQ Lib.Rsd.CodecRun.bootsWith
+  if !(← Lib.Rsd.CodecRun.eq "tool-with-b-key-py"
+      "bf7c9c01f118fce5462b21d6aa0b4965a170079b7f9c6955a6da0f738ad8eac8" withPy) then
+    bad := true
+  if !(← Lib.Rsd.CodecRun.eq "tool-q" Lib.Rsd.CodecRun.toolWithout tq) then
+    bad := true
+  if bad then return 1 else return 0

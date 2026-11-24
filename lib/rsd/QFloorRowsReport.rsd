@@ -1,0 +1,15 @@
+-- Pure output encoding; decisions are in QFloorRows.rsd.
+namespace Lib.Rsd.QFloorRows
+open Lib.Rsd.QFloorJson
+open Lib.Rsd.QFloor
+
+def report (r : Request) : String :=
+  let result := decision r
+  encode 10 (.obj [("schema", .str "rsd-qfloor-differential/1"),
+    ("closure_claim", .int 0), ("admit", .bool result.residue.isNone),
+    ("constructors", .int shapes.length), ("rows", .int corpus.length),
+    ("accepted", .int (corpus.filter Row.accepts).length),
+    ("refused", .int (corpus.filter (!·.accepts)).length),
+    ("direct_checks", .int directChecks.length),
+    ("failures", .arr (result.state.failures.map Value.str))])
+end Lib.Rsd.QFloorRows

@@ -1,0 +1,123 @@
+-- Checks for lib/rsd/store.rsd. Concatenate after lib/Sha256.rsd and store.rsd.
+-- closure_claim = 0.
+namespace Lib.Rsd.StoreRun
+
+open Lib.Rsd.Store
+
+def flag (name : String) (ok : Bool) : IO Bool := do
+  IO.println s!"{name} {if ok then "ok" else "fail"}"
+  return ok
+
+/-- Store objects live in the blob domain (CLASSIFY row 45): the new q form. -/
+def qOf (s : String) : List Int :=
+  (Lib.Sha256.qOf "blob" (Lib.Sha256.bytesOf s)).bytes
+
+/-- The same bytes under the pre-QFORMAT raw digest: the legacy form a reader
+    must still resolve (and report as "legacy"). -/
+def qLegacy (s : String) : List Int :=
+  (Lib.Sha256.contentHashBytes (Lib.Sha256.bytesOf s)).bytes
+
+def obj (s : String) : Obj :=
+  { q := qOf s, bytes := Lib.Sha256.bytesOf s }
+
+def put (s : Store) (name : String) : Store × Reply :=
+  let o := obj name
+  commit (stage s o) o.q
+
+end Lib.Rsd.StoreRun
+
+def main : IO UInt32 := do
+  let mut bad := false
+  let a := Lib.Rsd.StoreRun.obj "AAAA"
+  let b := Lib.Rsd.StoreRun.obj "BBBB"
+  let s0 := Lib.Rsd.Store.declare "blob" "blob"
+  if !(← Lib.Rsd.StoreRun.flag "miss" (
+      (Lib.Rsd.Store.resolve s0 a.q).residue == "object_missing")) then bad := true
+  let torn := Lib.Rsd.Store.stage s0 a
+  if !(← Lib.Rsd.StoreRun.flag "torn-miss" (
+      (Lib.Rsd.Store.get torn a.q).residue == "object_missing" &&
+      torn.objects.length == 0)) then bad := true
+  let c1 := Lib.Rsd.Store.commit torn a.q
+  if !(← Lib.Rsd.StoreRun.flag "commit" (
+      c1.2.ok && c1.2.bytes == a.bytes &&
+      (Lib.Rsd.Store.get c1.1 a.q).bytes == a.bytes)) then bad := true
+  let c2 := Lib.Rsd.StoreRun.put c1.1 "AAAA"
+  if !(← Lib.Rsd.StoreRun.flag "idempotent" (
+      c2.2.ok && c2.1.objects.length == 1)) then bad := true
+  let forged := Lib.Rsd.Store.stage c1.1 { q := a.q, bytes := b.bytes }
+  let badHash := Lib.Rsd.Store.commit forged a.q
+  if !(← Lib.Rsd.StoreRun.flag "hash-mismatch" (
+      badHash.2.residue == "hash_mismatch" && badHash.1.objects.length == 1)) then bad := true
+  let collision := Lib.Rsd.Store.decidePut (some a) { q := a.q, bytes := b.bytes }
+  if !(← Lib.Rsd.StoreRun.flag "hash-collision" (collision == "hash_collision")) then bad := true
+  let both := Lib.Rsd.StoreRun.put c1.1 "BBBB"
+  if !(← Lib.Rsd.StoreRun.flag "second-object" (
+      both.2.ok && both.1.objects.length == 2 &&
+      (Lib.Rsd.Store.get both.1 b.q).bytes == b.bytes)) then bad := true
+  let left := Lib.Rsd.StoreRun.put s0 "AAAA"
+  let right := Lib.Rsd.StoreRun.put s0 "BBBB"
+  let u := Lib.Rsd.Store.merge left.1 right.1
+  if !(← Lib.Rsd.StoreRun.flag "union" (
+      u.objects.length == 2 && u.quarantine.length == 0 &&
+      (Lib.Rsd.Store.get u a.q).ok && (Lib.Rsd.Store.get u b.q).ok)) then bad := true
+  let same := Lib.Rsd.Store.merge left.1 left.1
+  if !(← Lib.Rsd.StoreRun.flag "union-same" (same.objects.length == 1 && same.quarantine.length == 0)) then bad := true
+  let clashB := { Lib.Rsd.Store.declare "blob" "blob" with objects := [{ q := a.q, bytes := b.bytes }] }
+  let clash := Lib.Rsd.Store.merge left.1 clashB
+  if !(← Lib.Rsd.StoreRun.flag "union-clash" (
+      clash.objects.length == 0 && clash.quarantine.length == 2 &&
+      (Lib.Rsd.Store.get clash a.q).residue == "object_missing")) then bad := true
+  let act := { key := a.q, keyBytes := a.bytes, outputs := [("olean", b.q)] }
+  let p1 := Lib.Rsd.Store.putAction s0 act
+  let p2 := Lib.Rsd.Store.putAction p1.1 act
+  if !(← Lib.Rsd.StoreRun.flag "action-idempotent" (
+      p1.2.ok && p2.2.ok && p2.1.actions.length == 1)) then bad := true
+  let other := { act with outputs := [("olean", a.q)] }
+  let conf := Lib.Rsd.Store.putAction p1.1 other
+  if !(← Lib.Rsd.StoreRun.flag "cache-conflict" (
+      conf.2.residue == "cache_conflict" && conf.1.actions.length == 0 &&
+      conf.1.actionQuarantine.length == 2)) then bad := true
+  let unsorted := { act with outputs := [("z", a.q), ("a", b.q)] }
+  if !(← Lib.Rsd.StoreRun.flag "facet-order" (
+      (Lib.Rsd.Store.putAction s0 unsorted).2.residue == "input_invalid")) then bad := true
+  if !(← Lib.Rsd.StoreRun.flag "no-replace" (
+      Lib.Rsd.Store.replaceAllowed == false &&
+      Lib.Rsd.Store.publishPlan "job" "blobs/aa/q" ==
+        [.stage "job", .fsync "job", .renameNoReplace "job" "blobs/aa/q"])) then bad := true
+  let tornMerge := Lib.Rsd.Store.merge torn left.1
+  if !(← Lib.Rsd.StoreRun.flag "torn-not-merged" (
+      tornMerge.staging.length == 0 && tornMerge.objects.length == 1)) then bad := true
+  -- Q-FORMAT 1 reader compat: a legacy raw-digest entry resolves under the
+  -- declared kind and reports which form it read; a writer never emits it.
+  let legacy := { Lib.Rsd.Store.declare "blob" "blob"
+    with objects := [{ q := Lib.Rsd.StoreRun.qLegacy "AAAA", bytes := a.bytes }] }
+  if !(← Lib.Rsd.StoreRun.flag "legacy-read" (
+      let r := Lib.Rsd.Store.get legacy (Lib.Rsd.StoreRun.qLegacy "AAAA")
+      r.ok && r.form == "legacy" && r.bytes == a.bytes)) then bad := true
+  if !(← Lib.Rsd.StoreRun.flag "tagged-read" (
+      let r := Lib.Rsd.Store.get c1.1 a.q
+      r.ok && r.form == "tagged")) then bad := true
+  -- A crafted store field that pre-bakes another domain's preimage is a
+  -- mismatch under the declared kind, not a second name for the bytes.
+  let crafted := Lib.Sha256.qHeader "rsx-atom" a.bytes.length ++ a.bytes
+  let planted := { Lib.Rsd.Store.declare "blob" "blob"
+    with objects := [{ q := Lib.Sha256.bytesOf "x", bytes := crafted }] }
+  if !(← Lib.Rsd.StoreRun.flag "crafted-rejected" (
+      (Lib.Rsd.Store.get planted (Lib.Sha256.bytesOf "x")).residue == "hash_mismatch" ||
+      (Lib.Rsd.Store.get planted (Lib.Sha256.bytesOf "x")).ok == false)) then bad := true
+  -- RNF2 round trip: kinds ride the file; RNF1 decodes into the "" domain.
+  let enc := Lib.Rsd.Store.encStore c1.1
+  match Lib.Rsd.Store.decStore enc with
+  | some s =>
+    if !(← Lib.Rsd.StoreRun.flag "rnf2-roundtrip" (
+        s.objKind == "blob" && s.actKind == "blob" &&
+        (Lib.Rsd.Store.get s a.q).ok)) then bad := true
+  | none => bad := true
+  let aL : Lib.Rsd.Store.Obj := { q := Lib.Rsd.StoreRun.qLegacy "AAAA", bytes := a.bytes }
+  let encL := [82, 78, 70, 49] ++ Lib.Rsd.Store.u32le 1 ++ Lib.Rsd.Store.encObj aL ++ Lib.Rsd.Store.u32le 0
+  match Lib.Rsd.Store.decStore encL with
+  | some s =>
+    if !(← Lib.Rsd.StoreRun.flag "rnf1-legacy" (
+        s.objKind == "" && (Lib.Rsd.Store.get s aL.q).form == "legacy")) then bad := true
+  | none => bad := true
+  if bad then return 1 else return 0

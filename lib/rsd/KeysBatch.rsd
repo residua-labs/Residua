@@ -1,0 +1,114 @@
+-- Declaration nodes of one census export, keyed through /gpu under the flag `gpu`.
+-- Concatenate after Word32, Word64, Sha256, codec.rsd, Gpu.rsd, keys.rsd.
+-- The export path and the helper are arguments. No absolute path. closure_claim = 0.
+
+structure DeclRow where
+  canon : List Int
+  key : List Int
+
+def declTag (line : String) : Bool :=
+  let t := line.takeWhile fun c => c != ' '
+  t == "#DEF" || t == "#THM" || t == "#AX" || t == "#INDG" || t == "#OPA"
+
+def buildRow (line : String) : Option DeclRow :=
+  let hq := Lib.Sha256.qOf "decl-line" (Lib.Sha256.bytesOf line)
+  if !hq.ok then none
+  else
+    match Lib.Rsd.Keys.nodeCanon "declaration" hq.bytes with
+    | none => none
+    | some c =>
+      let k := Lib.Rsd.Keys.nodeQ "declaration" hq.bytes
+      if k.ok then some { canon := c, key := k.bytes } else none
+
+def buildGo : List String → List DeclRow → Option (List DeclRow)
+  | [], acc => some acc.reverse
+  | line :: rest, acc =>
+    if !declTag line then buildGo rest acc
+    else
+      match buildRow line with
+      | none => none
+      | some r => buildGo rest (r :: acc)
+
+def buildAll (lines : List String) : Option (List DeclRow) :=
+  buildGo lines []
+
+def admitted : List Lib.Gpu.Keyed → Nat
+  | [] => 0
+  | k :: ks => (if k.receipt.isSome then 1 else 0) + admitted ks
+
+def receiptsAgree : List DeclRow → List Lib.Gpu.Keyed → Bool
+  | [], [] => true
+  | r :: rs, k :: ks =>
+    match k.receipt with
+    | some e => e.q == r.key && receiptsAgree rs ks
+    | none => false
+  | _, _ => false
+
+def dropKey (key line : String) : Option String :=
+  let pre := key ++ " "
+  if pre.isPrefixOf line then some (line.drop pre.length) else none
+
+def findField (key : String) : List String → Option String
+  | [] => none
+  | line :: rest =>
+    match dropKey key line with
+    | some v => some v
+    | none => findField key rest
+
+def ppm (cpuNs buildS : Nat) : Nat :=
+  if buildS == 0 then 0 else cpuNs / (buildS * 1000)
+
+def main (args : List String) : IO UInt32 := do
+  match args with
+  | ["keys", path, flag, helper, buildS] =>
+    let useGpu := flag == "gpu"
+    if flag != "gpu" && flag != "cpu" then
+      IO.eprintln "flag is gpu or cpu"
+      return 2
+    let some nBuild := buildS.toNat? | IO.eprintln "build_s"; return 2
+    let text ← IO.FS.readFile path
+    let t0 ← IO.monoNanosNow
+    let some rows := buildAll (text.splitOn "\n") | IO.eprintln "canon_fail"; return 1
+    let t1 ← IO.monoNanosNow
+    let cpuNs := t1 - t0
+    let canons := rows.map fun r => r.canon
+    IO.FS.createDirAll "gpu/out"
+    IO.FS.writeBinFile "gpu/out/nodes.bin" (bytesOf (Lib.Gpu.encodeBatch canons))
+    IO.println s!"decls {rows.length}"
+    IO.println s!"canons {canons.length}"
+    IO.println s!"cpu_key_ns {cpuNs}"
+    IO.println s!"build_s {nBuild}"
+    IO.println s!"share_ppm {ppm cpuNs nBuild}"
+    IO.println s!"share_small {if ppm cpuNs nBuild < 10000 then 1 else 0}"
+    IO.println s!"profile_gpu {if Lib.Gpu.wantsGpuLens (canons.map fun c => c.length) then 1 else 0}"
+    if !useGpu then
+      IO.println "flag cpu"
+      return 0
+    let proc ← IO.Process.output {
+      cmd := helper
+      args := #["time", "gpu/out/nodes.bin", "gpu/out/reply-keys.bin"]
+    }
+    if proc.exitCode != 0 then
+      IO.eprintln proc.stdout
+      IO.eprintln proc.stderr
+      IO.eprintln s!"helper_exit {proc.exitCode}"
+      return 1
+    let lines := proc.stdout.splitOn "\n"
+    for line in lines do
+      if line != "" then IO.println line
+    let reply ← IO.FS.readBinFile "gpu/out/reply-keys.bin"
+    match Lib.Rsd.Keys.keyNodeReply canons (intsOf reply) with
+    | none =>
+      IO.eprintln "reply_reject"
+      return 1
+    | some ks =>
+      let n := admitted ks
+      IO.println s!"receipts {n}"
+      if n != rows.length || !receiptsAgree rows ks then
+        IO.eprintln "receipt_mismatch"
+        return 1
+      IO.println "receipts_ok 1"
+      return 0
+  | _ =>
+    IO.eprintln "usage: lean --run <concat> keys <export> gpu|cpu <helper> <build_s>"
+    return 2

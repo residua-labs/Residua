@@ -1,0 +1,99 @@
+namespace Lib.Rsd.FileBuildSessionRows
+open Lib.Rsd.FileBuildSession
+
+structure Row where
+  name : String
+  ok : Bool
+
+def bs : List Int := [82,83,67,77,1,9]
+def blob : Blob := { bytes := bs, contentQ := (Lib.Rsd.Store.qFast "blob" bs).bytes }
+def desc : Descriptor := { format := "rscm", size := bs.length, contentQ := blob.contentQ }
+def command : Lib.Rsd.CommandDevice.Plan :=
+  { Lib.Rsd.CommandDeviceRows.plan with name := "compiler", argv := ["source", "output"], maxOutput := 4096 }
+def node (name source : String) (deps : List Lib.Rsd.BuildSession.Dependency := []) : Lib.Rsd.BuildSession.Module :=
+  { name, source := Lib.Rsd.CommandDevice.text source, command, dependencies := deps }
+def sample : Request := { build := { modules := [node "A" "a", node "B" "b" [{name := "A", facet := "interface"}]], roots := ["B"] }, blobs := [blob] }
+
+def observe (r : Request) (i o : List Int) : Request :=
+  let s := (decision r).state
+  match s.pendingPlan with
+  | none => r
+  | some p =>
+    let observation : Lib.Rsd.BuildSession.Observation :=
+      { name := s.pendingName
+        events := Lib.Rsd.CommandDeviceRows.trace p [Lib.Rsd.BuildSession.outputBytes i o] [Lib.Rsd.CommandDevice.text "exit 0\n"] }
+    { r with build := { r.build with observations := r.build.observations ++ [observation] } }
+
+def built := observe (observe sample (encode desc) (encode desc)) (encode desc) (encode desc)
+def final := (decision built).state
+def warm : Request := { sample with build := { sample.build with objects := final.store.objects, actions := final.store.actions } }
+def named (r : Request) := (decision r).residue.map residueName
+
+def rows : List Row := Id.run do
+  let mut xs : List Row := [
+    { name := "descriptor-roundtrip", ok := decode (encode desc) == some desc },
+    { name := "cold-two", ok := (decision built).residue.isNone && final.done && final.ran == ["A", "B"] },
+    { name := "warm-zero", ok := (decision warm).residue.isNone && (decision warm).state.done && (decision warm).state.ran.isEmpty && (decision warm).state.cached == ["A", "B"] },
+    { name := "missing-cache-blob", ok := (decision { warm with blobs := [] }).state.pendingName == "A" },
+    { name := "missing-new-blob", ok := named { built with blobs := [] } == some "nf_rsd_file_descriptor" },
+    { name := "bad-new-descriptor", ok := named (observe sample [1] (encode desc)) == some "nf_rsd_file_descriptor" },
+    { name := "forged-state", ok := (runNF sample final).state.pendingName == "A" },
+    { name := "duplicate-blob", ok := named { sample with blobs := [blob, blob] } == some "nf_rsd_file_blob" }]
+  let changed : Request := { warm with build := { warm.build with modules := [node "A" "edited", node "B" "b" [{name := "A", facet := "interface"}]] } }
+  let cutoff := decision (observe changed (encode desc) (encode desc))
+  xs := xs ++ [{ name := "interface-cutoff", ok := cutoff.residue.isNone && cutoff.state.done && cutoff.state.ran == ["A"] && cutoff.state.cached == ["B"] }]
+  for (label, b) in [("content", { blob with bytes := bs ++ [10] }),
+      ("q", { blob with contentQ := List.replicate 32 0 }),
+      ("q-length", { blob with contentQ := [] }), ("byte-low", { blob with bytes := [-1] }),
+      ("byte-high", { blob with bytes := [256] })] do
+    xs := xs ++ [{ name := "invalid-blob/" ++ label, ok := named { sample with blobs := [b] } == some "nf_rsd_file_blob" }]
+  for (label, d) in [("format", { desc with format := "other" }), ("empty", { desc with size := 0 }),
+      ("cap+1", { desc with size := 4194305 }), ("q-empty", { desc with contentQ := [] }),
+      ("q-bad", { desc with contentQ := List.replicate 32 256 })] do
+    xs := xs ++ [{ name := "invalid-descriptor/" ++ label, ok := (decode (encode d)).isNone }]
+  for size in [1, 8, 4194303, 4194304, 4194305] do
+    let d := { desc with size }
+    xs := xs ++ [{ name := s!"descriptor-size/{size}", ok := (decode (encode d)).isSome == (size <= 4194304) }]
+  for raw in [[], (encode desc) ++ [0], (encode desc).drop 1] do
+    xs := xs ++ [{ name := "descriptor-canonical", ok := (decode raw).isNone }]
+  for (label, d) in [("length", { desc with size := bs.length + 1 }),
+      ("digest", { desc with contentQ := List.replicate 32 0 }),
+      ("magic", { desc with format := "wasm" })] do
+    let bad := observe sample (encode d) (encode desc)
+    xs := xs ++ [{ name := "descriptor-observation/" ++ label, ok := named bad == some "nf_rsd_file_descriptor" && (decision bad).state.store.actions.isEmpty }]
+  for n in [0, 1, 255, 256, 257] do
+    let r := { sample with maxBlobs := n }
+    xs := xs ++ [{ name := s!"blob-limit/{n}", ok := named r == (if n == 0 || n > 256 then some "nf_rsd_file_capacity" else none) }]
+  for n in [0, 5, 6, 7, 4194304, 4194305] do
+    let r := { sample with maxBlobBytes := n }
+    xs := xs ++ [{ name := s!"byte-limit/{n}", ok := named r == (if n < bs.length || n > 4194304 then some "nf_rsd_file_capacity" else none) }]
+  for n in [0, 5, 6, 7, 33554432, 33554433] do
+    let r := { sample with maxTotalBytes := n }
+    xs := xs ++ [{ name := s!"total-limit/{n}", ok := named r == (if n < bs.length || n > 33554432 then some "nf_rsd_file_capacity" else none) }]
+  for n in [255, 256, 257] do
+    xs := xs ++ [{ name := s!"blob-count/{n}", ok := capacityOk { sample with blobs := List.replicate n blob } == (n <= 256) }]
+  for n in [4194303, 4194304, 4194305] do
+    let large : Blob := { blob with bytes := List.replicate n 0 }
+    xs := xs ++ [{ name := s!"actual-byte-cap/{n}", ok := capacityOk { sample with blobs := [large] } == (n <= 4194304) }]
+  for n in [7, 8, 9] do
+    let large : Blob := { blob with bytes := List.replicate 4194304 0 }
+    xs := xs ++ [{ name := s!"actual-total-cap/{n}", ok := capacityOk { sample with blobs := List.replicate n large } == (n <= 8) }]
+  let wasm : List Int := [0,97,115,109,1,0,0,0,9]
+  let wb : Blob := { bytes := wasm, contentQ := (Lib.Rsd.Store.qFast "blob" wasm).bytes }
+  let wd : Descriptor := { format := "wasm", size := wasm.length, contentQ := wb.contentQ }
+  let wr : Request := { sample with blobs := [wb] }
+  xs := xs ++ [{ name := "wasm-complete", ok := (decision (observe (observe wr (encode wd) (encode wd)) (encode wd) (encode wd))).state.done }]
+  for bad in [bs.take 5, [82,83,67,77,2,9], [0,97,115,109,1,0,0,0]] do
+    let b : Blob := { bytes := bad, contentQ := (Lib.Rsd.Store.qFast "blob" bad).bytes }
+    let d : Descriptor := { format := if bad.head? == some 0 then "wasm" else "rscm", size := bad.length, contentQ := b.contentQ }
+    xs := xs ++ [{ name := "magic-header-body", ok := named (observe { sample with blobs := [b] } (encode d) (encode d)) == some "nf_rsd_file_descriptor" }]
+  let causes : List Lib.Rsd.BuildSession.Residue := [.manifest, .capacity, .graph, .key, .command, .exit, .output, .store, .extraObservation]
+  xs := xs ++ causes.map (fun e => { name := "lift/" ++ Lib.Rsd.BuildSession.residueName e, ok := residueName (liftBuild e) == Lib.Rsd.BuildSession.residueName e })
+  return xs
+end Lib.Rsd.FileBuildSessionRows
+
+def main : IO UInt32 := do
+  let rows := Lib.Rsd.FileBuildSessionRows.rows
+  let failed := rows.filter (!·.ok)
+  IO.println (Lean.Json.mkObj [("rows", Lean.toJson rows.length), ("failures", Lean.toJson (failed.map (·.name))), ("closure_claim", Lean.toJson (0 : Nat))]).compress
+  return if failed.isEmpty then 0 else 1

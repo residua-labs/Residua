@@ -1,0 +1,6 @@
+import Lib.Proc
+def main : Proc UInt8 :=
+  bind (request (topen "/fs/data/greeting.txt" 0)) fun fid =>
+  bind (request (tread fid 0 4096)) fun bytes =>
+  bind (request (twrite 1 bytes)) fun _ =>
+  pure 0

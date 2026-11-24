@@ -1,0 +1,178 @@
+-- Generated differential corpus and admission, all decisions in rsd.
+-- The independent frozen Rust process is an oracle, never a build dependency.
+namespace Lib.Rsd.QFloorRows
+open Lib.Rsd.QFloorJson
+open Lib.Rsd.QFloor
+
+structure Row where
+  name : String
+  source : String
+  accepts : Bool
+  errorClass : String := ""
+
+def next (s : Nat) : Nat := (1664525 * s + 1013904223) % 4294967296
+
+def baseExpr (s : Nat) : Value := .obj [("op", .str "num"), ("n", .int (Int.ofNat (s % 101) - 50))]
+
+def fieldWith (gen : Nat → Value) (s : Nat) (k : Kind) : Value :=
+  match k with
+  | .expr => gen s
+  | .text => .str ((["", "λ😀\n", "x", "a,b()", "界"].get? (s % 5)).getD "x")
+  | .boolean => .bool (s % 2 == 0)
+  | .integer => .int (Int.ofNat (s % 101) - 50)
+  | .natural => .int (Int.ofNat (s % 9))
+  | .number => .int (Int.ofNat (s % 101) - 50)
+  | .exprs => .arr [gen s, gen (next s)]
+  | .integers => .arr [.int (-1), .int 0, .int 7]
+  | .textPairs => .arr [.arr [.str "λ", gen s], .arr [.str "λ", gen (next s)]]
+  | .intPairs => .arr [.arr [.int (-1), gen s], .arr [.int 7, gen (next s)]]
+
+def generated : Nat → Nat → Value
+  | 0, s => baseExpr s
+  | f + 1, s =>
+    let shape := (shapes.get? (s % shapes.length)).getD { op := "emptyList", tag := "EmptyListE", fields := [] }
+    .obj (("op", .str shape.op) :: (shape.fields.enum.map fun (i, (name, kind)) =>
+      (name, fieldWith (generated f) (next (s + i)) kind)))
+
+def exprRow (name : String) (v : Value) : Row := { name, source := encode 100 v, accepts := true }
+def raw (name source : String) (accepts : Bool) (errorClass : String := "") : Row :=
+  { name, source, accepts, errorClass }
+def nestText (n : Nat) : String :=
+  String.join (List.replicate n "{\"op\":\"neg\",\"a\":") ++ "{\"op\":\"emptyList\"}" ++ String.join (List.replicate n "}")
+
+def constructorRows : List Row := shapes.enum.map fun (i, shape) =>
+  exprRow ("constructor-" ++ shape.op) (.obj (("op", .str shape.op) ::
+    (shape.fields.enum.map fun (j, (name, k)) => (name, fieldWith baseExpr (next (i * 17 + j)) k))))
+
+def boundaryRows : List Row :=
+  ([-9223372036854775808, -9007199254740993, -9007199254740992, -1, 0, 1,
+     9007199254740992, 9007199254740993, 9223372036854775807] : List Int).map (fun n =>
+      exprRow ("integer-" ++ toString n) (.obj [("op", .str "num"), ("n", .int n)])) ++
+  (["0.0", "-1.0", "9007199254740992.0", "-9007199254740992.0"].map fun s =>
+    raw ("alias-" ++ s) ("{\"op\":\"num\",\"n\":" ++ quote s ++ "}") false "[wire_num_float_repr_aliases_int]") ++
+  (["-0.0", "01.0", "+1.0", "9007199254740993.0", "1e3", "nan", ""].map fun s =>
+    raw ("string-number-" ++ s) ("{\"op\":\"num\",\"n\":" ++ quote s ++ "}") false "[wire_num_string_n]") ++ [
+  raw "depth-511" (nestText 510) true,
+  raw "depth-512" (nestText 511) true,
+  raw "depth-513" (nestText 512) false "[evalr_decode_depth_exceeded]",
+  raw "duplicate-key-first" "{\"op\":\"num\",\"n\":7,\"n\":99}" true,
+  raw "leading-zero" "{\"op\":\"num\",\"n\":0007}" true,
+  raw "negative-zero" "{\"op\":\"num\",\"n\":-0}" true,
+  raw "surrogate-pair" "{\"op\":\"strLit\",\"s\":\"\\ud83d\\ude00\"}" true,
+  raw "lone-low-surrogate" "{\"op\":\"strLit\",\"s\":\"\\udc00\"}" false,
+  raw "lone-high-surrogate" "{\"op\":\"strLit\",\"s\":\"\\ud800\"}" false,
+  raw "bad-surrogate-pair" "{\"op\":\"strLit\",\"s\":\"\\ud800\\u0041\"}" false,
+  raw "int64-cap-plus-one" "{\"op\":\"num\",\"n\":9223372036854775808}" false,
+  raw "int64-min-minus-one" "{\"op\":\"num\",\"n\":-9223372036854775809}" false,
+  raw "float" "{\"op\":\"num\",\"n\":1.0}" false,
+  raw "exponent" "{\"op\":\"num\",\"n\":1e2}" false,
+  raw "trailing-input" "{\"op\":\"num\",\"n\":1}x" false,
+  raw "trailing-comma" "{\"op\":\"num\",\"n\":1,}" false,
+  raw "negative-nat" "{\"op\":\"listWindow\",\"l\":{\"op\":\"emptyList\"},\"k\":-1}" false,
+  raw "unknown-op" "{\"op\":\"foreign\"}" false,
+  raw "missing-field" "{\"op\":\"add\",\"a\":{\"op\":\"emptyList\"}}" false,
+  raw "wrong-bool" "{\"op\":\"boollit\",\"b\":0}" false,
+  raw "nonascii-digit" "{\"op\":\"num\",\"n\":١}" false,
+  exprRow "ordered-pairs" (.obj [("op", .str "makeRecord"), ("flds", .arr [
+    .arr [.str "b", baseExpr 1], .arr [.str "a", baseExpr 2], .arr [.str "b", baseExpr 3]])]),
+  raw "wrapper" "{\"expr\":{\"op\":\"num\",\"n\":7},\"ignored\":true}" true,
+  raw "raw-control-legacy" ("{\"op\":\"strLit\",\"s\":\"" ++ String.singleton (Char.ofNat 1) ++ "\"}") true
+  ]
+
+def legacyCorpus : List Row := constructorRows ++
+  ((List.range 500).map fun i => exprRow ("generated-" ++ toString i) (generated 3 (next (410213 + i)))) ++ boundaryRows
+
+-- Derive malformed wire rows from every frozen constructor field. Missing,
+-- wrong-kind and simultaneous-invalid cases also exercise Rust's check order.
+def schemaRefusals : List Row := shapes.flatMap fun shape =>
+  let valid := shape.fields.enum.map fun (i, (name, kind)) => (name, fieldWith baseExpr (next i) kind)
+  let node := fun fields => encode 100 (.obj (("op", .str shape.op) :: fields))
+  let singles := shape.fields.flatMap fun (name, _) => [
+    raw ("missing-" ++ shape.op ++ "-" ++ name) (node (valid.filter (fun p => p.1 != name))) false,
+    raw ("wrong-" ++ shape.op ++ "-" ++ name) (node (valid.map (fun p => if p.1 == name then (name, .null) else p))) false]
+  singles ++ (if shape.fields.isEmpty then [] else [
+    raw ("all-missing-" ++ shape.op) (node []) false,
+    raw ("all-wrong-" ++ shape.op) (node (valid.map (fun p => (p.1, .null)))) false])
+
+def malformedJson : List Row :=
+  (["", " ", "-", "[", "{", "[1", "[1,]", "[1 2]", "{1:2}", "{\"a\" 2}", "{\"a\":1 2}",
+    "{\"a\":1,}", "true x", "t", "tru", "falsee", "fals", "nul", "n", "x", "λ", "١", "-x",
+    "9223372036854775808", "-9223372036854775809", "1.", "1e", "1E-2",
+    "\"unterminated", "\"\\", "\"\\q\"", "\"\\λ\"", "\"\\u\"", "\"\\u00\"", "\"\\uXX00\"",
+    "\"\\ud800\\uXXXX\"", "\"\\ud800\"", "\"\\udc00\""] : List String).enum.map fun (i, text) =>
+      raw ("json-refusal-" ++ toString i) text false
+
+def nestedRefusals : List Row :=
+  ([ ("makeRecord", "flds", .arr [.null]), ("makeRecord", "flds", .arr [.arr []]),
+     ("makeRecord", "flds", .arr [.arr [.null, baseExpr 1]]),
+     ("matchTag", "universe", .arr [.null]), ("matchTag", "branches", .arr [.null]),
+     ("matchTag", "branches", .arr [.arr []]), ("matchTag", "branches", .arr [.arr [.null, baseExpr 1]])
+   ] : List (String × String × Value)).enum.map fun (i, (op, name, bad)) =>
+    let shape := (shapes.find? (fun s => s.op == op)).getD { op, tag := "", fields := [] }
+    let fields := shape.fields.map fun (n, k) => (n, if n == name then bad else fieldWith baseExpr 1 k)
+    raw ("nested-refusal-" ++ toString i) (encode 100 (.obj (("op", .str op) :: fields))) false
+
+def corpus : List Row := legacyCorpus ++ schemaRefusals ++ malformedJson ++ nestedRefusals
+
+def jsonLines (xs : List String) : String := String.intercalate "\n" xs ++ "\n"
+def corpusText : String := jsonLines (corpus.map Row.source)
+def lines (s : String) : List String := (s.splitOn "\n").filter (!·.isEmpty)
+
+def checkRow (r : Row) (oracle actual : String) : Option String :=
+  match parse oracle, parse actual with
+  | .ok o, .ok a =>
+    let oo := get o "ok" >>= bool?
+    let ao := get a "ok" >>= bool?
+    if oo != some r.accepts || ao != some r.accepts then some (r.name ++ ":admission")
+    else if r.accepts then
+      let oq := get o "q" >>= str?
+      let aq := get a "q" >>= str?
+      if oq.isSome && oq == aq then (if oracle == actual then none else some (r.name ++ ":reply-bytes")) else some (r.name ++ ":q")
+    else
+      let oe := (get o "err" >>= str?).getD ""
+      let ae := (get a "err" >>= str?).getD ""
+      if oe.isEmpty || ae.isEmpty then some (r.name ++ ":error-missing")
+      else if !r.errorClass.isEmpty && (!oe.startsWith r.errorClass || !ae.startsWith r.errorClass)
+      then some (r.name ++ ":error-class")
+      else if oe != ae then some (r.name ++ ":error-text")
+      else if oracle != actual then some (r.name ++ ":reply-bytes") else none
+  | _, _ => some (r.name ++ ":malformed-envelope")
+
+def compareRows (rs : List Row) (oracle actual : List String) : List String :=
+  if oracle.length != rs.length || actual.length != rs.length then ["nf_qfloor_rows_count"]
+  else (rs.zip (oracle.zip actual)).filterMap fun (r, o, a) => checkRow r o a
+
+-- Fixed-base preservation is deliberately narrower for refused rows: the
+-- seven original diagnostic repairs are the only permitted legacy byte delta.
+def legacyComparison (oracle actual : List String) : List String :=
+  if oracle.length != legacyCorpus.length || actual.length < legacyCorpus.length then ["legacy-count"]
+  else (legacyCorpus.zip (oracle.zip (actual.take legacyCorpus.length))).filterMap fun (r, o, a) =>
+    if r.accepts then checkRow r o a
+    else if ["int64-cap-plus-one", "int64-min-minus-one", "trailing-comma", "negative-nat", "missing-field", "wrong-bool", "nonascii-digit"].contains r.name then
+      if o == a then some (r.name ++ ":expected-diagnostic-repair")
+      else match parse o, parse a with
+        | .ok ov, .ok av => if (get ov "ok" >>= bool?) == some false && (get av "ok" >>= bool?) == some false then none else some (r.name ++ ":admission")
+        | _, _ => some (r.name ++ ":envelope")
+    else checkRow r o a
+
+-- A constructed JSON Expr bypasses the byte parser, so both depth boundaries
+-- need independent rows. No kernel evaluation of bulk corpus.
+def nestValue : Nat → Value
+  | 0 => .obj [("op", .str "emptyList")]
+  | n + 1 => .obj [("op", .str "neg"), ("a", nestValue n)]
+
+def reprEquals (v : Value) (want : String) : Bool :=
+  match canonical v with | .ok got => got == want | .error _ => false
+
+def directChecks : List (String × Bool) := [
+  ("checker-error-text", (checkRow (raw "error" "" false) "{\"ok\":false,\"err\":\"left\"}" "{\"ok\":false,\"err\":\"right\"}").isSome),
+  ("checker-envelope-bytes", (checkRow (raw "error" "" false) "{\"ok\":false,\"err\":\"same\"}" "{ \"ok\":false,\"err\":\"same\"}").isSome),
+  ("canonical-small-int", reprEquals (baseExpr 57) "Num(float:7.0)"),
+  ("canonical-exact-large-int", reprEquals (.obj [("op", .str "num"), ("n", .int 9007199254740993)]) "Num(int:9007199254740993)"),
+  ("unicode-codepoints", reprEquals (.obj [("op", .str "strLit"), ("s", .str "λ😀")]) "StrLit(str:2:λ😀)"),
+  ("declared-field-order", reprEquals (.obj [("op", .str "sub"), ("b", baseExpr 52), ("a", baseExpr 51)]) "Sub(Num(float:1.0),Num(float:2.0))"),
+  ("constructed-depth-512", (canonical (nestValue 512)).isOk),
+  ("constructed-depth-513", match canonical (nestValue 513) with | .error e => e.startsWith "[evalr_decode_depth_exceeded]" | _ => false)
+]
+
+end Lib.Rsd.QFloorRows

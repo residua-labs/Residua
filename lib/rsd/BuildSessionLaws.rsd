@@ -1,0 +1,31 @@
+namespace Lib.Rsd.BuildSession
+ theorem sigma_idempotent (s : State) : id (id s) = id s := rfl
+ theorem q_sigma (r : Request) (s : State) : (fun value (_state : Lib.Rsd.BuildSession.State) => value) r (id s) = (fun value (_state : Lib.Rsd.BuildSession.State) => value) r s := rfl
+ theorem residue_sigma (r : Request) (s : State) : residue? r (id s) = residue? r s := rfl
+ theorem admit_iff (r : Request) (s : State) : admissible r s = true ↔ residue? r s = none := by
+   simp only [admissible, residue_sigma, Option.isNone_iff_eq_none]
+ theorem soundness (r : Request) (s : State) (h : admissible r s = true) : residue? r s = none := (admit_iff r s).mp h
+ theorem completeness (r : Request) (s : State) (h : residue? r s = none) : admissible r s = true := (admit_iff r s).mpr h
+ theorem exactness (r : Request) (s : State) : (runNF r s).residue = none ↔ admissible r s = true := (admit_iff r s).symm
+ theorem refusal_exact (r : Request) (s : State) (e : Residue) : (runNF r s).residue = some e ↔ residue? r s = some e := Iff.rfl
+ theorem state_not_authority (r : Request) (s t : State) : runNF r s = runNF r t := rfl
+ theorem failed_no_pending (s : State) (e : Residue) (d : String) : (failed s e d).state.pending = [] := rfl
+ theorem residue_named (e : Residue) : residueName e != "" := by cases e <;> decide
+end Lib.Rsd.BuildSession
+#print axioms Lib.Rsd.BuildSession.sigma_idempotent
+#print axioms Lib.Rsd.BuildSession.q_sigma
+#print axioms Lib.Rsd.BuildSession.residue_sigma
+#print axioms Lib.Rsd.BuildSession.admit_iff
+#print axioms Lib.Rsd.BuildSession.soundness
+#print axioms Lib.Rsd.BuildSession.completeness
+#print axioms Lib.Rsd.BuildSession.exactness
+#print axioms Lib.Rsd.BuildSession.refusal_exact
+#print axioms Lib.Rsd.BuildSession.state_not_authority
+#print axioms Lib.Rsd.BuildSession.failed_no_pending
+#print axioms Lib.Rsd.BuildSession.residue_named
+
+def main : IO UInt32 := do
+  let source ← IO.FS.readBinFile "lib/rsd/BuildSession.rsd"
+  match Lib.NF.residue? { source := source.data.toList.map (fun b => Int.ofNat b.toNat) } 0 with
+  | none => IO.println "BuildSession:conformance-ok"; return 0
+  | some e => IO.println (Lib.NF.residueName e); return 1

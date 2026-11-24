@@ -3,7 +3,7 @@
 Scope: how an ordinary first-order program written in Lean 4.14 (the P1′ source language) becomes a
 `Residua.Bootstrap.SCM.SCMPrograms S S` of the chain, and whether the emitted R-CIC certificate checker lies
 inside the chain's source domain. Pins: chain `17586d3d4c` (`IR.lean`, `SCM.lean`, `LowerSCM.lean`, wire
-`docs/BOOTSTRAP_SCM_SOURCE_WIRE.md`); consumer contract `26147cfc16`; owner's domain review `e74a63bf9b`;
+`docs/BOOTSTRAP_SCM_SOURCE_WIRE.md`);
 untyped emitter `lean/algorithms/ResiduaRCCLeanToScm.lean` (blob `254bd184`, sha256 `27e19c49…`) at
 `8820fe64d8`, not on main. Every number below was measured by the prototype unless marked READ or INFERRED.
 The prototype is a 440-line change to that emitter (sha256 `04775a89…`); it is the emitter's new identity and
@@ -82,8 +82,8 @@ untyped emitter turns the let into a `let` head and refuses (`application of non
 prototype binds the variable as a local instead and the refusal disappears (§9).
 
 Not in the 53, named: string concatenation (`String.append`/`++`), number to string, code point at an index
-(`str-code-at`), `String.toNat?`: refused as `[typed_gap_<op>]`. The owner confirmed concatenation as a gap
-(review R1) and the final position is to exclude it from the core; text building is library code over `list i64`.
+(`str-code-at`), `String.toNat?`: refused as `[typed_gap_<op>]`. Concatenation is confirmed as a gap
+and the final position is to exclude it from the core; text building is library code over `list i64`.
 Stock `%` on `Int` is refused as `[typed_refused_int_mod]`; write `Int.fmod`.
 
 ## 5. Numbers and fuel
@@ -106,7 +106,7 @@ Stock `%` on `Int` is refused as `[typed_refused_int_mod]`; write `Int.fmod`.
 Revision 4 ships the **plain-allocation form**: an arena-allocated constructor
 lowers to `alloc` (append without search, same `Node`, same sequential
 handles), and `intern` (find-or-add) is the later revision for compared types.
-The emitter selects per type by one rule, S0.2 rule 4: `alloc` unless the
+The emitter selects per type by one rule: `alloc` unless the
 program compares the type with `=`/`≠` — comparison needs canonical handles,
 so only the intern form can carry it. On an alloc'd type structural `=` is
 **refused by name** (`[typed_arena_eq_unsupported]`), never emitted as handle
@@ -194,8 +194,8 @@ two benchmark programs elaborate in minutes on stock Lean 4.14 (measured in
 the report).
 
 History (superseded by this section): an interned arena exists and carries
-the checker through the chain's candidate compiler (Fu1Bridge line,
-DESIGN.md §"One route"; the withdrawn text below kept for the record).
+the checker through the chain's candidate compiler (the arena-generator
+line, repository-side; the withdrawn text below kept for the record).
 
 Lean's own types do not map: of the 211 modules of the typed closure, 200 have a recursive or indexed type in
 their signature (first offender: `Expr` 102, `Level` 56, derivations `TyConvT` 18, `HasTyT` 12, `ConvT` 12).
@@ -250,7 +250,7 @@ A refusal never writes a stand-in.
 * Operators of the 210 modules: 21 heads, all with a form in §4; 995 sum-tag reads become `matchE`, 1164 record
   constructions with a leading tag become `inj`.
 
-## 10. Open, for cc
+## 10. Open
 
 1. Literal tokens (tag 7) and `Nat` const refs in the flat codec. Correction: conversion on the interned arena runs, and a memo exists; both on a branch.
 2. `sortPiConv?` refusal on main: cause not found (the let-capture fix does not remove it).
@@ -272,7 +272,7 @@ always been the list of its elements; no operator is added and `evalLF` is untou
 canonical type identity, digests and sizes are those of `list(T)` (lib/RscBase.rsd `readTyIter`, `tyNeedGo`,
 `tyNode`, `typeDigest`, `sizeGoWithLayers`, `listTysGo`; rsc/fuse.rsd `readTyGo`; the Lean decoders
 `RscmDecode*.bootTyD`), so an old image (no tag 10) reads as before and a new image reads as the old image of
-the same program. The stage may later keep the kind and width (Fable's P3); nothing reads them yet.
+the same program. The stage may later keep the kind and width (a later stage); nothing reads them yet.
 Written by rsdc/Compile.rsd `tyW` and instruments/rsdc-ml/rsdc.ml `tyW` (Array of a non-Char element, ByteArray).
 
 ### WIRE-SEQ-0 revision 2: a fixed-width scalar says its width; who reads what
@@ -285,7 +285,7 @@ Written by `tyW` of both front ends. The sequence rows above and this row are th
 
 ## RSCM revision UINT64-0 (W row): a 64-bit word has its own operators
 
-(sonnet-lrc2 for cc, 2026-11-19; owner "那就做"; the rows of this section are the whole revision. closure_claim = 0.)
+(the rows of this section are the whole revision.)
 
 Lean's `UInt64` (and `USize`, the same type on the 64-bit targets) is `Fin (2^64)` with primitive operations
 (`lean_uint64_*`). A value does not fit the wire's checked i64 (`litI` is 8 bytes of two's complement, `add sub mul`
@@ -341,7 +341,7 @@ tag in the code). An image with neither an expression tag 64 to 77 nor the type 
 under each existing layer set. A declared `UInt64` field occupies eight bytes under every layer set, including in images that
 have the type `11 64` without a `w64` operator.
 The stage (lib/lrc/FromWire, Prim, Emit) refuses an image with a tag 64 to 77 by the named code until it implements the
-operators (Fable, item 2 of UINT64-0); it never miscompiles one. The stage's existing words `primAddW/SubW/MulW` (103 to 105),
+operators (the UINT64-0 revision); it never miscompiles one. The stage's existing words `primAddW/SubW/MulW` (103 to 105),
 `primDivU/RemU` and the constant shift cover tags 65 to 69 and 77 with a constant count; it lacks unsigned less-than and
 less-or-equal, the variable shifts and `and/or/xor/not`, about six primitives. The scm layer gains the fourteen arms in S4 revision 2 (a sibling, never an edit of the frozen files): lean/rsd-cert/Residua/Bootstrap/R2/{SCM,SCMAuditCached,SCMSourceWire}.lean and Residua/EvalLean/R2/RscmDecode.lean, q's and rows in reports/uint64/S4-R2.md; this
 row is its specification. Written by `rsdc/Compile.rsd` and `instruments/rsdc-ml/rsdc.ml` (`tyW` writes `11 64`; the
@@ -353,14 +353,14 @@ on a value at or above 2^63, a missing reduction after `wMul`, a shift count not
 
 Metadata, unchecked: the `kind` byte of tag 10 and the `width` bytes of tags 10 and 11 are advisory. The readers
 skip them without validating them (a `10 7 99 T` reads as `list(T)`, an `11 99` as a word); nothing reads them yet
-(the stage's use is Fable's P2/P3). A later reader that uses them must validate them first.
+(no reader uses them yet). A later reader that uses them must validate them first.
 
 Edited bytes: a new image differs from the old one of the same program only at type positions, in the signature
 type table and in the inline type payloads of bodies (let, equality, list-length nodes carry their types): each
 old `04` (or `00`) becomes `0a kk ww` (or `0b ww`); the size grows by exactly 2 bytes per sequence type and 1 per
 fixed-width scalar type.
 
-Who reads which image (seed recipe, bootstrap/seed/stage-14274): the committed seed's `rsdc` writes old-format
+Who reads which image (seed recipe, bootstrap/seed/stage-14274): the committed [seed](GLOSSARY.md)'s `rsdc` writes old-format
 images only (it has no tag 10 or 11 writer); the seed's `rsc` reads old-format images only and refuses a tag 10
 or 11 by name. In stage 1 the seed's rsdc compiles the head's sources into old-format images and the seed's rsc
 lowers them, so the seed never meets a new image. The rsdc built in stage 1 writes the new format and the rsc built

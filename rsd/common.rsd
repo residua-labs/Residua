@@ -1,0 +1,945 @@
+-- rsd/common.rsd — shared by the `rsd` dispatcher (shell.rsd) and the
+-- `rsdc` compiler driver (rsdc.rsd). One definition, two consumers:
+-- CLI options, repo-home discovery, q-dir hashing, the mod/<srcQ> record
+-- format, host resolution, and the wasm run protocol (rsc ABI status →
+-- process exit). Stdlib-only so the dispatcher binary stays small.
+-- closure_claim = 0.
+
+namespace Rsd
+
+-- ============================================================================
+-- Exit map (documented in reports/RSD-0.r1.md §exits). A value exits with
+-- the value mod 256 when `main`'s return is Int/Nat/Bool; named refusals exit
+-- with a distinct code each.
+--   2 usage | 20+i rsdc front end | 30+i rsdc emit stage | 40 rsc refusal
+--   50 fuel | 51 capacity | 52 signedOverflow | 53 divisionByZero
+--   54 nonExactDivision | 55 stuck | 56 residue | 57 host_trap
+--   60 import_unresolved | 61 import_toolchain | 62 main_absent | 63 main_arity
+--   64 main_args | 65 closure | 66 store | 70 host_unavailable
+-- ============================================================================
+
+def refuse (name : String) (detail : String) (code : UInt32) : IO UInt32 := do
+  if detail == "" then IO.eprintln s!"[{name}]" else IO.eprintln s!"[{name}] {detail}"
+  return code
+
+-- ============================================================================
+-- Text / path utilities
+-- ============================================================================
+
+-- Phase clock (RSD_TIME=1): one stderr line `[rsd_time] <phase> <us>`
+-- per phase, microseconds since the previous mark. Off, it prints nothing.
+structure Clock where
+  on : Bool
+  last : IO.Ref Nat
+
+def clockNew : IO Clock := do
+  let on := (← IO.getEnv "RSD_TIME").isSome
+  return { on := on, last := ← IO.mkRef (← IO.monoNanosNow) }
+
+def Clock.mark (c : Clock) (phase : String) : IO Unit := do
+  if c.on then
+    let now ← IO.monoNanosNow
+    IO.eprintln s!"[rsd_time] {phase} {(now - (← c.last.get)) / 1000}"
+    c.last.set (← IO.monoNanosNow)
+
+def stripShebang (src : String) : String :=
+  if src.startsWith "#!" then (src.dropWhile (· != '\n')).drop 1 else src
+
+def lineValue (lines : List String) (key : String) : String :=
+  match lines.find? (·.startsWith s!"{key} ") with
+  | some l => l.drop (key.length + 1)
+  | none => ""
+
+-- ============================================================================
+-- Hashing is in-process (rsd/sha256.rsd, the Lib.Olean implementation):
+-- no subprocess on the warm path. The hasher is a transport, the digest is
+-- the identity — the same sha256 the REF-Q objects are named by.
+-- ============================================================================
+
+def digestBytes (b : ByteArray) : String := Lib.Olean.sha256Hex b
+
+def digestFile (path : String) : IO String := do
+  try
+    return digestBytes (← IO.FS.readBinFile path)
+  catch _ =>
+    return ""
+
+def digestString (s : String) : String := digestBytes s.toUTF8
+
+-- ============================================================================
+-- CLI options (shared grammar: `rsd` and `rsdc` take the same flags)
+-- ============================================================================
+
+-- The resident host worker (RSD-OPT-1): a `rsd-host --worker` child
+-- the resident server holds across requests — one wasmtime engine, one
+-- request per stdin line, the usual protocol lines plus an `end` sentinel.
+-- One-shot mode keeps spawning a host per run.
+structure HostWorker where
+  child : IO.Process.Child { stdin := .piped, stdout := .piped, stderr := .inherit }
+
+structure FileStat where
+  sec : Int
+  nsec : Nat
+  size : UInt64
+  deriving BEq, Inhabited
+
+def fileStatOf (path : String) : IO (Option FileStat) := do
+  try
+    let m ← System.FilePath.metadata path
+    return some { sec := m.modified.sec, nsec := m.modified.nsec.toNat, size := m.byteSize }
+  catch _ =>
+    return none
+
+def formatFstatLine (p h : String) (st : FileStat) : String :=
+  s!"fstat {h} {st.sec} {st.nsec} {st.size.toNat} {p}"
+
+def parseFstatLine (l : String) : Option (String × String × FileStat) :=
+  if !(l.startsWith "fstat ") || l.length <= 72 then none
+  else
+    let rest := l.drop 6
+    let h := rest.take 64
+    let r1 := rest.drop 65
+    let parts := r1.splitOn " "
+    match parts with
+    | secS :: nsecS :: sizeS :: pathParts =>
+      match secS.toInt?, nsecS.toNat?, sizeS.toNat? with
+      | some sec, some nsec, some sz =>
+        let path := " ".intercalate pathParts
+        if path == "" then none
+        else some (path, h, { sec := sec, nsec := nsec, size := sz.toUInt64 })
+      | _, _, _ => none
+    | _ => none
+
+def validateFileStat (p h : String) (st : FileStat) : IO Bool := do
+  match ← fileStatOf p with
+  | none => return false
+  | some cur =>
+    if cur == st then return true
+    if cur.size == st.size then return (← digestFile p) == h
+    return false
+
+-- Z6: stat-then-hash lookup for an input file under <store>/stat/<key>.
+def statShaFile (store path : String) : IO (String × Option FileStat) := do
+  let stOpt ← fileStatOf path
+  if (← IO.getEnv "RSD_NO_STAT").isNone then
+    match stOpt with
+    | some st =>
+      let key := digestString path
+      let idx := s!"{store}/stat/{key}"
+      if ← System.FilePath.pathExists idx then
+        let line := ((← IO.FS.readFile idx).splitOn "\n").headD ""
+        match parseFstatLine line with
+        | some (p0, h0, st0) =>
+          if p0 == path && st0 == st && h0.length == 64 then
+            return (h0, some st)
+        | none => pure ()
+    | none => pure ()
+  let h ← digestFile path
+  match stOpt with
+  | some st =>
+    if h.length == 64 then
+      try
+        IO.FS.createDirAll s!"{store}/stat"
+        let key := digestString path
+        IO.FS.writeFile s!"{store}/stat/{key}" (formatFstatLine path h st ++ "\n")
+      catch _ => pure ()
+  | none => pure ()
+  return (h, stOpt)
+
+structure Opts where
+  file : String := ""
+  scriptArgs : List String := []
+  libDir : String := ""
+  store : String := ""
+  fuel : String := "4000000000000000"
+  printVal : Bool := false
+  home : String := ""
+  watch : Bool := false
+  watchSteps : Nat := 0
+  -- RSD-OPT-1 resident mode: when outPath is set, the script's value
+  -- output appends to that file instead of the process's stdout; when
+  -- errPath is set, refusals append there instead of stderr. The resident
+  -- server sets both per request so the client receives bytes identical
+  -- to the one-shot mode's.
+  outPath : String := ""
+  errPath : String := ""
+  -- set by the resident server: the pooled host worker.
+  worker : Option HostWorker := none
+
+def usage (prog : String) : IO UInt32 := do
+  IO.eprintln s!"usage: {prog} [--lib DIR] [--store DIR] [--home DIR] [--fuel N] [--print] [--watch] [--watch-steps N] FILE.rsd [args...]"
+  return 2
+
+partial def parseOptsGo (o : Opts) (args : List String) (flagsDone : Bool) : IO (Option Opts) := do
+  match args with
+  | [] => return if o.file == "" then none else some o
+  | a :: r =>
+    if a == "--" then
+      if o.file == "" then
+        match r with
+        | [] => return none
+        | f :: rest => return some { o with file := f, scriptArgs := rest }
+      else
+        return some { o with scriptArgs := o.scriptArgs ++ r }
+    else if !flagsDone && a == "--lib" then
+      match r with | v :: r2 => parseOptsGo { o with libDir := v } r2 flagsDone | [] => return none
+    else if !flagsDone && a == "--store" then
+      match r with | v :: r2 => parseOptsGo { o with store := v } r2 flagsDone | [] => return none
+    else if !flagsDone && a == "--home" then
+      match r with | v :: r2 => parseOptsGo { o with home := v } r2 flagsDone | [] => return none
+    else if !flagsDone && a == "--fuel" then
+      match r with | v :: r2 => parseOptsGo { o with fuel := v } r2 flagsDone | [] => return none
+    else if !flagsDone && a == "--print" then
+      parseOptsGo { o with printVal := true } r flagsDone
+    else if !flagsDone && a == "--watch" then
+      parseOptsGo { o with watch := true } r flagsDone
+    else if !flagsDone && a == "--watch-steps" then
+      match r with | v :: r2 => parseOptsGo { o with watch := true, watchSteps := v.toNat?.getD 1 } r2 flagsDone | [] => return none
+    else if !flagsDone && a.startsWith "--" then
+      IO.eprintln s!"unknown flag {a}"
+      return none
+    else
+      if o.file == "" then
+        parseOptsGo { o with file := a } r true
+      else
+        parseOptsGo { o with scriptArgs := o.scriptArgs ++ [a] } r flagsDone
+
+def parseOpts (args : List String) : IO (Option Opts) := do
+  let home ← IO.getEnv "HOME"
+  parseOptsGo { store := s!"{home.getD "."}/.cache/rsd" } args false
+
+-- The repo home has lib/ and rsc/rsc.rsd. --home, $RSD_HOME, or a walk
+-- up from the script's directory.
+def findHome (o : Opts) : IO (Option String) := do
+  if o.home != "" then return some o.home
+  match ← IO.getEnv "RSD_HOME" with
+  | some h => return some h
+  | none => pure ()
+  let abs ← IO.FS.realPath o.file
+  let mut dir : Option String := abs.parent.map (·.toString)
+  for _ in [0:12] do
+    match dir with
+    | none => return none
+    | some d =>
+      if (← System.FilePath.pathExists s!"{d}/lib") && (← System.FilePath.pathExists s!"{d}/rsc/rsc.rsd") then
+        return some d
+      dir := (System.FilePath.mk d).parent.map (·.toString)
+  return none
+
+def libDirOf (home : String) (o : Opts) : String :=
+  if o.libDir != "" then o.libDir else s!"{home}/lib"
+
+-- Opts-aware output sinks (RSD-OPT-1): the resident server sets
+-- o.outPath / o.errPath so a request's bytes land in its response files
+-- instead of the process streams. Empty paths keep the one-shot behavior.
+def emitVal (o : Opts) (s : String) : IO Unit := do
+  if o.outPath == "" then IO.print s
+  else IO.FS.withFile o.outPath IO.FS.Mode.append (·.putStr s)
+
+def refuseO (o : Opts) (name detail : String) (code : UInt32) : IO UInt32 := do
+  let line := if detail == "" then s!"[{name}]\n" else s!"[{name}] {detail}\n"
+  if o.errPath == "" then IO.eprint line
+  else IO.FS.withFile o.errPath IO.FS.Mode.append (·.putStr line)
+  return code
+
+-- ============================================================================
+-- mod/<srcQ> records (v2). The dispatcher cannot recompute a decl-level
+-- closure q, so the record pins the closure by its *file manifest*: every
+-- source file rsdc read, with its sha256 (plus Z6 fstat metadata). A warm
+-- hit requires: toolchain parts equal, every recorded file matching its
+-- fstat (or rehashing equal), and the wasm object rehashing to its name.
+-- ============================================================================
+
+structure ModRecord where
+  tqRsdc : String
+  tqRsc : String
+  tqHost : String
+  closureQ : String
+  wasmQ : String
+  entry : Int
+  ret : Int
+  arity : Int
+  procStep : Option Int := none
+  files : List (String × String)
+  fstats : List (String × String × FileStat) := []
+
+def readMod (store srcQ : String) : IO (Option ModRecord) := do
+  let p := s!"{store}/mod/{srcQ}"
+  if !(← System.FilePath.pathExists p) then return none
+  let ls := (← IO.FS.readFile p).splitOn "\n"
+  if ls.headD "" != "v2" then return none
+  let mut tqRsdc := ""
+  let mut tqRsc := ""
+  let mut tqHost := ""
+  let mut closureQ := ""
+  let mut wasmQ := ""
+  let mut entry : Int := 0
+  let mut ret : Int := 0
+  let mut arity : Int := 0
+  let mut procStep : Option Int := none
+  let mut files : Array (String × String) := #[]
+  let mut fstats : Array (String × String × FileStat) := #[]
+  for l in ls do
+    if l.startsWith "v " then
+      return none
+    else if l.startsWith "tq_rsdc " then
+      tqRsdc := l.drop 11
+    else if l.startsWith "tq_rsc " then
+      tqRsc := l.drop 7
+    else if l.startsWith "tq_host " then
+      tqHost := l.drop 8
+    else if l.startsWith "closure_q " then
+      closureQ := l.drop 10
+    else if l.startsWith "wasm " then
+      wasmQ := l.drop 5
+    else if l.startsWith "entry " then
+      entry := Int.ofNat ((l.drop 6).toNat?.getD 0)
+    else if l.startsWith "ret " then
+      ret := Int.ofNat ((l.drop 4).toNat?.getD 0)
+    else if l.startsWith "arity " then
+      arity := Int.ofNat ((l.drop 6).toNat?.getD 0)
+    else if l.startsWith "proc_step " then
+      let some step := (l.drop 10).toNat? | return none
+      if procStep.isSome then return none
+      procStep := some (Int.ofNat step)
+    else if l.startsWith "file " && l.length > 70 then
+      let h := (l.drop 5).take 64
+      let path := (l.drop 5).drop 65
+      files := files.push (path, h)
+    else if l.startsWith "fstat " then
+      match parseFstatLine l with
+      | some fs => fstats := fstats.push fs
+      | none => pure ()
+  if wasmQ == "" || wasmQ.length != 64 then return none
+  return some {
+    tqRsdc := tqRsdc,
+    tqRsc := tqRsc,
+    tqHost := tqHost,
+    closureQ := closureQ,
+    wasmQ := wasmQ,
+    entry := entry,
+    ret := ret,
+    arity := arity,
+    procStep := procStep,
+    files := files.toList,
+    fstats := fstats.toList }
+
+-- ============================================================================
+-- The node runhost: the rsc-ABI wasm runner as one string (the rsc.rsd /
+-- rowhost.cjs pattern — a generated file's source lives in the .rsd, never
+-- as a hand-written repo file). `ensureRunHost` writes it into the store
+-- when absent or drifted; the recorded identity is its sha, so a store copy
+-- that fails its hash is rewritten before use. It decodes the block ABI the
+-- C host implements: block at 24, result word at +96, rsc heap objects.
+-- ============================================================================
+
+def runHostJs : String :=
+  "\n".intercalate [
+    "// rsd/runhost.cjs — rsc-ABI wasm runner for `rsd` (RSD-0).",
+    "// Interim host until EXEC-HOST-0's 9P host lands: pure `main` values only,",
+    "// no 9P devices, no T/R exchange. The rsc output ABI is loaded unchanged:",
+    "//   argv: node runhost.cjs <wasm> <export> <fuel> <retCode> [i64 args...]",
+    "//   rsc ABI on main (rsc.rsd offBump..offCap, resAt, as rsc/out/rowhost.cjs):",
+    "//   block at 24: +0 bump +8 limit +16 status +24 detail +32 abump +40 cap;",
+    "//   the export returns the outcome tag; the result word is at block+96.",
+    "// stdout protocol (one per line):",
+    "//   status <value|residue|fuel|stuck|trap>",
+    "//   detail <name|n>",
+    "//   value_i64 <n>",
+    "//   value_text <rendered>      (int/bool raw, string blob decoded, lists walked)",
+    "// Exit 0 always means the call ran; exit 1 means the host itself failed.",
+    "const fs = require('node:fs');",
+    "",
+    "const BLOCK = 24, RES = 96, HEAP = 65536, EMPTYSTR = 8, EMPTYLIST = 16;",
+    "const FWD = 1n << 61n, HASMAP = 1n << 62n, MASK = (1n << 61n) - 1n;",
+    "const names = ['value', 'residue', 'fuel', 'stuck', 'capacity'];",
+    "const details = ['0', 'divisionByZero', 'nonExactDivision', 'signedOverflow'];",
+    "",
+    "// rsc emits no memory export; add one by rewriting the export section",
+    "// (same patch as rsc's rowHost — the ABI the host loads is unchanged).",
+    "function uleb(n) {",
+    "  const out = [];",
+    "  do { let b = n & 0x7f; n = Math.floor(n / 128); if (n) b |= 0x80; out.push(b); } while (n);",
+    "  return Buffer.from(out);",
+    "}",
+    "function lebAt(buf, o) {",
+    "  let n = 0, s = 0, i = o;",
+    "  for (;;) { const b = buf[i++]; n |= (b & 0x7f) << s; if (!(b & 0x80)) break; s += 7; }",
+    "  return [n, i];",
+    "}",
+    "function patch(buf) {",
+    "  const sections = [];",
+    "  let o = 8;",
+    "  while (o < buf.length) {",
+    "    const id = buf[o++];",
+    "    const pair = lebAt(buf, o);",
+    "    const ln = pair[0]; o = pair[1];",
+    "    sections.push({ id: id, body: buf.subarray(o, o + ln) });",
+    "    o += ln;",
+    "  }",
+    "  const exp = sections.find(function (s) { return s.id === 7; });",
+    "  const head = lebAt(exp.body, 0);",
+    "  const count = head[0], q1 = head[1];",
+    "  // rsdc stores already-patched wasm; a stored module that names `memory`",
+    "  // must not get a second export.",
+    "  {",
+    "    let q = q1, found = false;",
+    "    for (let i = 0; i < count; i++) {",
+    "      const nl = lebAt(exp.body, q);",
+    "      const name = exp.body.subarray(nl[1], nl[1] + nl[0]).toString();",
+    "      q = lebAt(exp.body, nl[1] + nl[0] + 1)[1];",
+    "      if (name === 'memory') { found = true; break; }",
+    "    }",
+    "    if (found) return buf;",
+    "  }",
+    "  const extra = [];",
+    "  {",
+    "    function add(name, kind, idx) {",
+    "      extra.push(Buffer.concat([uleb(name.length), Buffer.from(name), Buffer.from([kind]), uleb(idx)]));",
+    "    }",
+    "    add('memory', 2, 0);",
+    "  }",
+    "  exp.body = Buffer.concat([uleb(count + extra.length), exp.body.subarray(q1)].concat(extra));",
+    "  const parts = [buf.subarray(0, 8)];",
+    "  for (const s of sections) parts.push(Buffer.from([s.id]), uleb(s.body.length), s.body);",
+    "  return Buffer.concat(parts);",
+    "}",
+    "",
+    "function put(view, off, v) { view.setBigInt64(off, BigInt(v), true); }",
+    "",
+    "function decode(view, p, ret) {",
+    "  const G = (a) => view.getBigInt64(a, true);",
+    "  const chase = (p0) => {",
+    "    let h = G(p0);",
+    "    while (h < 0n && (h & FWD) !== 0n) { p0 = Number(G(p0 + 8)); h = G(p0); }",
+    "    return [p0, h];",
+    "  };",
+    "  // OBJECT-ABI v1 String (tag 249): byte_size incl NUL at +8, capacity",
+    "  // at +16, character count at +24, packed UTF-8 at +32. Tag 249 sets",
+    "  // the old forwarding bit, so the chase below must not run first.",
+    "  const strAt = (p0) => {",
+    "    if (p0 === EMPTYSTR || p0 === 0) return '';",
+    "    if (p0 < 8 || p0 + 40 > view.byteLength) return null;",
+    "    const h0 = G(p0);",
+    "    const tag = Number((h0 >> 56n) & 0xffn);",
+    "    if (tag === 249) {",
+    "      let n = Number(G(p0 + 8));",
+    "      if (!Number.isFinite(n) || n < 1) return '';",
+    "      n -= 1;",
+    "      if (p0 + 32 + n > view.byteLength) return null;",
+    "      const bytes = Buffer.alloc(n);",
+    "      for (let i = 0; i < n; i++) bytes[i] = view.getUint8(p0 + 32 + i);",
+    "      return bytes.toString('utf8');",
+    "    }",
+    "    const [q, h] = chase(p0);",
+    "    if (h < 0n) return null;",
+    "    const n = Number(h & MASK);",
+    "    let s = '';",
+    "    for (let i = 0; i < n; i++) s += String.fromCharCode(Number(G(q + 8 + i * 8) & 0xffn));",
+    "    return s;",
+    "  };",
+    "  // linked cons cell: header = payload words | bit63 allPtr | bit62",
+    "  // hasMap; hasMap adds a map word at +8 (payload then at +16). head is",
+    "  // payload word 0, tail the last payload word; nil is the EMPTYLIST",
+    "  // pointer. (An allPtr cell: negative header, head +8, tail +16; a",
+    "  // hasMap cell like `list i64`: positive header, head +16, tail +24.)",
+    "  const listAt = (p0, elem) => {",
+    "    const out = [];",
+    "    for (let i = 0; i < 100000; i++) {",
+    "      if (p0 === EMPTYLIST) return out;",
+    "      const [q, h] = chase(p0);",
+    "      const pay = Number(h & MASK);",
+    "      if (pay < 2) return out;",
+    "      const base = q + ((h & HASMAP) !== 0n ? 16 : 8);",
+    "      const head = G(base);",
+    "      out.push(elem === 3 ? strAt(Number(head)) : head.toString());",
+    "      p0 = Number(G(base + 8 * (pay - 1)));",
+    "    }",
+    "    return out;",
+    "  };",
+    "  // Lean's integers and strings as the front end writes them (rsdc/Compile.rsd): a Nat is the",
+    "  // list of its base-256 digits, least first; an Int is two result words, a sign and such a",
+    "  // list; a String is the list of its code points. A list cell is an object of",
+    "  // docs/OBJECT-ABI.md revision 2: the number of object fields at bits 48..55 of the header;",
+    "  // with a scalar head that is 1, the tail at +8 and the head at +16. nil is a boxed scalar,",
+    "  // which is odd. null when p0 is no such list.",
+    "  const scalars = (p0) => {",
+    "    const out = [];",
+    "    while ((p0 & 7) === 0 && p0 >= 8 && p0 + 24 <= view.byteLength && out.length <= view.byteLength / 24) {",
+    "      if (Number((G(p0) >> 48n) & 0xffn) !== 1) return null;",
+    "      out.push(G(p0 + 16));",
+    "      p0 = Number(G(p0 + 8));",
+    "    }",
+    "    return (p0 & 1) === 1 ? out : null;",
+    "  };",
+    "  const natOf = (p0) => {",
+    "    const ds = scalars(p0);",
+    "    if (ds === null || ds.some((d) => d < 0n || d > 255n)) return null;",
+    "    let v = 0n;",
+    "    for (let i = ds.length - 1; i >= 0; i--) v = v * 256n + ds[i];",
+    "    return v;",
+    "  };",
+    "  if (ret === 4) { const v = natOf(Number(p)); return v === null ? `<nat@${p}>` : v.toString(); }",
+    "  if (ret === 1) {",
+    "    const m = natOf(Number(G(BLOCK + RES + 8)));",
+    "    return m === null ? `<int@${p}>` : (p !== 0n && m !== 0n ? -m : m).toString();",
+    "  }",
+    "  if (ret === 2 || ret === 5) return p.toString();",
+    "  if (ret === 3) {",
+    "    const cs = scalars(Number(p));",
+    "    if (cs !== null && cs.every((c) => c >= 0n && c <= 0x10ffffn)) {",
+    "      let s = '';",
+    "      for (const c of cs) s += String.fromCodePoint(Number(c));",
+    "      return s;",
+    "    }",
+    "    const s = strAt(Number(p));",
+    "    return s === null ? `<str@${p}>` : s;",
+    "  }",
+    "  if (ret >= 1000) {",
+    "    const el = ret - 1000;",
+    "    const xs = listAt(Number(p), el);",
+    "    return '[' + xs.join(' ') + ']';",
+    "  }",
+    "  return `<ptr ${p}>`;",
+    "}",
+    "",
+    "try {",
+    "  const wasmPath = process.argv[2];",
+    "  const exp = process.argv[3];",
+    "  const fuel = BigInt(process.argv[4]);",
+    "  const ret = Number(process.argv[5] || 1);",
+    "  const args = process.argv.slice(6).map(BigInt);",
+    "  const inst = new WebAssembly.Instance(new WebAssembly.Module(patch(fs.readFileSync(wasmPath))));",
+    "  const fn = inst.exports[exp];",
+    "  if (typeof fn !== 'function') {",
+    "    fs.writeSync(2, `export_missing ${exp}\\n`);",
+    "    process.stdout.write('status trap\\nvalue_i64 0\\n');",
+    "    process.exit(1);",
+    "  }",
+    "  const mem = inst.exports.memory;",
+    "  const view = new DataView(mem.buffer);",
+    "  put(view, BLOCK + 0, HEAP);",
+    "  put(view, BLOCK + 8, mem.buffer.byteLength);",
+    "  put(view, BLOCK + 16, 0n);",
+    "  put(view, BLOCK + 24, 0n);",
+    "  put(view, BLOCK + 32, 0n);",
+    "  put(view, BLOCK + 40, 0n);",
+    "  const tag = fn(BigInt(BLOCK), fuel, ...args);",
+    "  const view2 = new DataView(mem.buffer);",
+    "  const result = view2.getBigInt64(BLOCK + RES, true);",
+    "  const detail = view2.getBigInt64(BLOCK + 24, true);",
+    "  const tn = names[Number(tag)] || String(tag);",
+    "  const dn = tag === 1n ? (details[Number(detail)] || String(detail)) : String(detail);",
+    "  process.stdout.write(`status ${tn}\\n`);",
+    "  process.stdout.write(`detail ${dn}\\n`);",
+    "  // value_i64 of an Int or a Nat is the value's low 64 bits, not the first result word",
+    "  const text = tag === 0n ? decode(view2, result, ret) : null;",
+    "  const whole = text !== null && (ret === 1 || ret === 4) && /^-?[0-9]+$/.test(text);",
+    "  process.stdout.write(`value_i64 ${(whole ? BigInt.asIntN(64, BigInt(text)) : result).toString()}\\n`);",
+    "  if (text !== null) process.stdout.write(`value_hex ${Buffer.from(text, 'utf8').toString('hex')}\\n`);",
+    "} catch (e) {",
+    "  fs.writeSync(2, 'trap ' + String(e).slice(0, 300) + '\\n');",
+    "  process.stdout.write('status trap\\nvalue_i64 0\\n');",
+    "  process.exit(1);",
+    "}"
+  ]
+
+-- Write runHostJs to <store>/runhost.cjs when missing or changed; return the
+-- path. A tampered or stale copy is rewritten (the sha name is the content).
+def ensureRunHost (store : String) : IO String := do
+  let p := s!"{store}/runhost.cjs"
+  if (← digestFile p) != digestString runHostJs then
+    IO.FS.writeFile p runHostJs
+  return p
+
+
+-- ============================================================================
+-- The host that runs the wasm (rsc ABI): the C `rsd-host` when built
+-- (wasmtime, ~10ms), else `node runhost.cjs` (portable fallback). identityPath
+-- is the file whose sha names the program — the .cjs for the node fallback.
+-- ============================================================================
+
+-- `precompile`: the host takes --cwasm-in / --cwasm-out (the C host).
+structure HostSpec where
+  cmd : String
+  preArgs : List String
+  identityPath : String
+  precompile : Bool
+
+def findHost (store home : String) : IO (Option HostSpec) := do
+  match ← IO.getEnv "RSD_HOST" with
+  | some h =>
+    if ← System.FilePath.pathExists h then
+      let rp ← IO.FS.realPath h
+      return some { cmd := h, preArgs := [], identityPath := rp.toString, precompile := true }
+  | none => pure ()
+  let c := s!"{store}/build/rsd-host"
+  if ← System.FilePath.pathExists c then
+    let rp ← IO.FS.realPath c
+    return some { cmd := c, preArgs := [], identityPath := rp.toString, precompile := true }
+  let exe ← IO.appPath
+  match exe.parent with
+  | some d =>
+    let b := s!"{d}/rsd-host"
+    if ← System.FilePath.pathExists b then
+      let rp ← IO.FS.realPath b
+      return some { cmd := rp.toString, preArgs := [], identityPath := rp.toString, precompile := true }
+  | none => pure ()
+  let cjs ← ensureRunHost store
+  return some { cmd := "node", preArgs := [cjs], identityPath := cjs, precompile := false }
+
+-- The rsdc compiler binary: $RSDC, a `rsdc-*` beside this binary,
+-- or one in <store>/build. Returns the resolved real path.
+def findRsdc (store : String) : IO (Option String) := do
+  match ← IO.getEnv "RSDC" with
+  | some p =>
+    if ← System.FilePath.pathExists p then return some (← IO.FS.realPath p).toString
+  | none => pure ()
+  let exe ← IO.appPath
+  let mut dirs : List String := []
+  match exe.parent with
+  | some d => dirs := d.toString :: dirs
+  | none => pure ()
+  dirs := dirs ++ [s!"{store}/build"]
+  for d in dirs do
+    let plain := s!"{d}/rsdc"
+    if ← System.FilePath.pathExists plain then
+      return some (← IO.FS.realPath plain).toString
+    try
+      let es ← (System.FilePath.mk d).readDir
+      for e in es do
+        if e.fileName.startsWith "rsdc-" then
+          let p := s!"{d}/{e.fileName}"
+          return some (← IO.FS.realPath p).toString
+    catch _ => pure ()
+  return none
+
+-- The rsc-native compiler binary: content-named `rsc-native-<sha12>` where
+-- the sha is over the compiler and host import closure. ensureRscNative keeps an `rsc-native`
+-- symlink pointing at the current one; bare names are a legacy fallback.
+def findRscNative (store : String) : IO (Option String) := do
+  let link := s!"{store}/build/rsc-native"
+  if ← System.FilePath.pathExists link then
+    return some (← IO.FS.realPath link).toString
+  -- RSC_BUILD (a colon-free single dir) names one extra dir to scan, for a
+  -- testloop-built rsc-native kept outside this store.
+  let mut dirs := [s!"{store}/build"]
+  match ← IO.getEnv "RSC_BUILD" with
+  | some d => dirs := dirs ++ [d]
+  | none => pure ()
+  for d in dirs do
+    try
+      let es ← (System.FilePath.mk d).readDir
+      for e in es do
+        if e.fileName.startsWith "rsc-native-" then
+          return some (← IO.FS.realPath s!"{d}/{e.fileName}").toString
+    catch _ => pure ()
+  return none
+
+-- A binary's identity: build.sh names binaries `<name>-<sha12>` where the
+-- sha is over the sources that produced them — content identity already.
+-- Any other name falls back to hashing the file itself.
+def binIdentity (pfx : String) (path : String) : IO String := do
+  let nm := (System.FilePath.mk path).fileName.getD ""
+  if nm.startsWith pfx && nm.length == pfx.length + 12 then
+    return nm.drop pfx.length
+  digestFile path
+
+-- The NF-wrapped rsc compiler (RSD-OPT-1): `rscnf-<sha12>` beside
+-- rsc-native in the store's build dir. When RSD_NF is on and the binary
+-- is present, it is the rsc tool — its own sha goes in the
+-- record, since it is the wasm's producer.
+def findRscnf (store : String) : IO (Option String) := do
+  let link := s!"{store}/build/rscnf"
+  if ← System.FilePath.pathExists link then
+    return some (← IO.FS.realPath link).toString
+  try
+    let es ← (System.FilePath.mk s!"{store}/build").readDir
+    for e in es do
+      if e.fileName.startsWith "rscnf-" then
+        return some (← IO.FS.realPath s!"{store}/build/{e.fileName}").toString
+  catch _ => pure ()
+  return none
+
+def rscToolIdentity (store : String) : IO String := do
+  -- same predicate as the writer (rsdcRun): rscnf only under the
+  -- opt-in RSD_NF_RSC — the identity must match what produced the wasm.
+  if (← IO.getEnv "RSD_NF_RSC") == some "1" then
+    match ← findRscnf store with
+    | some p => return ← binIdentity "rscnf-" p
+    | none => pure ()
+  match ← findRscNative store with
+  | some p => binIdentity "rsc-native-" p
+  | none => pure "absent"
+
+-- Pin the execution bundle by bytes, including the Proc bridge and device
+-- server. File names are not identities for these mutable executable inputs.
+def executionHostIdentity (home : String) (hostOpt : Option HostSpec) : IO String := do
+  let scalar ← match hostOpt with
+    | some h => digestFile h.identityPath
+    | none => pure "absent"
+  let bridge ← digestFile s!"{home}/host/exec9.cjs"
+  let device ← digestFile s!"{home}/host/devsrv/target/release/devsrv"
+  return digestString (String.intercalate "\n" ["execution-host-v2", scalar, bridge, device])
+
+-- The three toolchain parts pinned in every mod record. `"absent"` marks a
+-- part that could not be resolved — records carrying it only hit under an
+-- equally-resolved environment.
+def toolchainParts (home store : String) (hostOpt : Option HostSpec)
+    : IO (String × String × String) := do
+  let rq ← match ← findRsdc store with
+    | some p => binIdentity "rsdc-" p
+    | none => pure "absent"
+  let rscQ ← rscToolIdentity store
+  let hq ← executionHostIdentity home hostOpt
+  return (rq, rscQ, hq)
+
+-- ============================================================================
+-- Running the wasm: protocol lines → process exit.
+-- ============================================================================
+
+def runtimeExit (status detail : String) : UInt32 × String :=
+  if status == "fuel" then (50, "fuel")
+  else if status == "capacity" || (status == "stuck" && detail == "1") then (51, "capacity")
+  else if status == "stuck" then (55, "stuck")
+  else if status == "residue" && detail == "signedOverflow" then (52, "signedOverflow")
+  else if status == "residue" && detail == "divisionByZero" then (53, "divisionByZero")
+  else if status == "residue" && detail == "nonExactDivision" then (54, "nonExactDivision")
+  else if status == "residue" then (56, s!"residue_{detail}")
+  else if status == "trap" then (57, "host_trap")
+  else (56, s!"outcome_{status}")
+
+def intArgOk (s : String) : Bool := s.toInt?.isSome
+
+def hexByte (h1 h2 : Char) : UInt8 :=
+  let v (c : Char) : Nat :=
+    let n := c.toNat
+    if n >= 97 then n - 87 else if n >= 65 then n - 55 else n - 48
+  (v h1 * 16 + v h2).toUInt8
+
+def unhex (s : String) : ByteArray := Id.run do
+  let cs := s.data
+  let mut out := ByteArray.mkEmpty (cs.length / 2)
+  let mut i : Nat := 0
+  while i + 1 < cs.length do
+    out := out.push (hexByte (cs.get! i) (cs.get! (i + 1)))
+    i := i + 2
+  return out
+
+def hostWorkerSpawn (host : HostSpec) : IO HostWorker := do
+  let child ← IO.Process.spawn
+    { cmd := host.cmd, args := #["--worker"], stdin := .piped, stdout := .piped, stderr := .inherit }
+  return { child := child }
+
+-- Int (1) prints its decimal and exits with the low 8 bits. Bool (2) prints
+-- `true` or `false`. Nat (4) and String.Pos (5) print only under `--print`.
+-- Any other value, including String (3), is written as decoded text. An
+-- empty decode of a non-empty String refuses by name: exit 0 with no bytes
+-- is not a result.
+def emitMainValue (lines : List String) (ret : Int) (o : Opts) : IO UInt32 := do
+  let vHex := String.fromUTF8! (unhex (lineValue lines "value_hex"))
+  let v := (lineValue lines "value_i64").toInt?.getD 0
+  if ret == 2 then
+    emitVal o (if v == 0 then "false\n" else "true\n")
+    return ((v % 256).toNat).toUInt32
+  if ret == 1 || ret == 4 || ret == 5 then
+    -- an Int or a Nat the host could not read as limbs is no number: refuse by name, print nothing
+    if (ret == 1 || ret == 4) && vHex.toInt?.isNone then
+      return ← refuseO o "main_type_unsupported" (if ret == 1 then "Int" else "Nat") 64
+    if ret == 1 || o.printVal then emitVal o (vHex ++ "\n")
+    return ((v % 256).toNat).toUInt32
+  -- the empty String is nil, a boxed scalar (odd), or one of the two older empty blobs
+  if ret == 3 && vHex == "" && v != 8 && v != 768 && v % 2 == 0 then
+    return ← refuseO o "main_type_unsupported" "String" 64
+  emitVal o vHex
+  return 0
+
+def hostLines (lines : List String) (ret : Int) (o : Opts) : IO UInt32 := do
+  let status := lineValue lines "status"
+  if status == "" then
+    return ← refuseO o "host_unavailable" "host failed: no status line" 70
+  let detail := lineValue lines "detail"
+  if status == "value" then
+    return ← emitMainValue lines ret o
+  let (code, name) := runtimeExit status detail
+  refuseO o name s!"status={status} detail={detail}" code
+
+partial def hostLinesGo (acc : List String) (h : IO.FS.Handle) : IO (List String) := do
+  let l ← h.getLine
+  let l := String.trim l
+  if l == "end" || l == "" then return acc.reverse
+  hostLinesGo (l :: acc) h
+
+def runWasmWorker (clk : Clock) (w : HostWorker) (hostFlags : List String) (store : String)
+    (wasmQ : String) (entry ret arity : Int) (o : Opts) : IO UInt32 := do
+  let (cwi, cwo) := match hostFlags with
+    | ["--cwasm-out", p] => ("-", p)
+    | ["--cwasm-in", p] => (p, "-")
+    | _ => ("-", "-")
+  let req := String.intercalate "|"
+    ([cwi, cwo, s!"{store}/q/{wasmQ}", s!"f{entry}", o.fuel, s!"{ret}",
+      toString o.scriptArgs.length] ++ o.scriptArgs)
+  w.child.stdin.putStr (req ++ "\n")
+  w.child.stdin.flush
+  let lines ← hostLinesGo [] w.child.stdout
+  clk.mark "host_worker"
+  hostLines lines ret o
+
+def runWasm (clk : Clock) (host : HostSpec) (hostFlags : List String) (store : String)
+    (wasmQ : String) (entry ret arity : Int) (o : Opts) : IO UInt32 := do
+  match o.worker with
+  | some w => return ← runWasmWorker clk w hostFlags store wasmQ entry ret arity o
+  | none => pure ()
+  -- R015: every timed cell states which host ran the module.
+  if clk.on then
+    IO.eprintln s!"[rsd_time] host_kind {if host.precompile then "rsd-host-wasmtime" else "node-runhost"}"
+  let args : Array String :=
+    (host.preArgs ++ hostFlags ++ [s!"{store}/q/{wasmQ}", s!"f{entry}", o.fuel, s!"{ret}"]).toArray
+      ++ o.scriptArgs.toArray
+  let r ← IO.Process.output { cmd := host.cmd, args := args }
+  clk.mark "host_process"
+  if clk.on then
+    for l in r.stderr.splitOn "\n" do
+      if l.startsWith "[rsd_time]" then IO.eprintln l
+  let lines := r.stdout.splitOn "\n"
+  let status := lineValue lines "status"
+  if status == "" then
+    return ← refuseO o "host_unavailable" s!"host failed: {r.stderr.trim}" 70
+  let detail := lineValue lines "detail"
+  if status == "value" then
+    return ← emitMainValue lines ret o
+  let (code, name) := runtimeExit status detail
+  refuseO o name s!"status={status} detail={detail}" code
+
+-- ============================================================================
+-- Precompiled module cache (CHAIN-CLOSE-0 Methods by source, rsd warm
+-- start: wasmtime Module::serialize / Module::deserialize). A constructive
+-- trace (Mokhov, Mitchell, Peyton Jones, Build systems a la carte, ICFP 2018)
+-- keyed by the q of everything the compile reads, in EMIT-FAST-0's key shape
+-- (emitter/typed/algorithms/EmitCache.lean keyOf: local bytes, 0, dependency
+-- keys, compiler q): here the wasm module's q (its bytes' identity), no
+-- dependencies, and the host's identity (rsd-host.c, build.sh and the
+-- wasmtime library it links). Index cwasm/<key> holds the artifact's q; the
+-- artifact lives at q/<q> and is rehashed on every hit before the host loads
+-- it: a tampered artifact is refused by name and recompiled.
+-- RSD_KEY_MUTANT=drop_input is the mutant that omits the wasm q (the
+-- input) from the key: the rows run two scripts and catch it by output.
+-- ============================================================================
+
+/-- Q-FORMAT 1: the composite cache key is a `cwasm-key` q — the preimage
+    (wasmQ NUL hostQ) is unchanged inside the canonical form; the header
+    supplies the domain tag (FORMAT.md section 2). -/
+def qHexKind (kind : String) (b : ByteArray) : String :=
+  Lib.Olean.sha256Hex ((kind ++ " " ++ toString b.size ++ "\x00").toUTF8 ++ b)
+
+def cwasmKey (wasmQ hostQ : String) : IO String := do
+  let mutant := (← IO.getEnv "RSD_KEY_MUTANT") == some "drop_input"
+  let lbytes := if mutant then ByteArray.empty else wasmQ.toUTF8
+  return qHexKind "cwasm-key" ((lbytes.push 0) ++ hostQ.toUTF8)
+
+def cwasmLookup (store key : String) : IO (Option String) := do
+  let idx := s!"{store}/cwasm/{key}"
+  if !(← System.FilePath.pathExists idx) then return none
+  let bq := (← IO.FS.readFile idx).trim
+  let p := s!"{store}/q/{bq}"
+  if bq.length == 64 && (← digestFile p) == bq then return some p
+  IO.eprintln s!"[rsd_cache_tampered] cwasm/{key}"
+  return none
+
+def cwasmAdmit (store key tmp : String) : IO Unit := do
+  if !(← System.FilePath.pathExists tmp) then return
+  let bq ← digestFile tmp
+  if bq == "" then return
+  IO.FS.rename tmp s!"{store}/q/{bq}"
+  IO.FS.createDirAll s!"{store}/cwasm"
+  let t := s!"{store}/cwasm/.t{← IO.monoNanosNow}"
+  IO.FS.writeFile t (bq ++ "\n")
+  IO.FS.rename t s!"{store}/cwasm/{key}"
+
+-- Run a stored module: arity/args checks, then the cwasm hit, else the wasm
+-- (after `wasmOk`, the caller's check of the wasm object) compiled once and
+-- serialized for the next run. `none` = the wasm object failed its check.
+def runProc (clk : Clock) (home store wasmQ : String) (entry step : Int)
+    (o : Opts) : IO UInt32 := do
+  let script := s!"{home}/host/exec9.cjs"
+  if !(← System.FilePath.pathExists script) then
+    return ← refuseO o "host_unavailable" "missing host/exec9.cjs" 70
+  let args := #[script, "--proc", s!"{store}/q/{wasmQ}", s!"f{entry}", s!"f{step}",
+    o.fuel, o.outPath, o.errPath, s!"{home}/host/devsrv/target/release/devsrv"] ++ o.scriptArgs.toArray
+  try
+    let child ← IO.Process.spawn { cmd := "node", args := args }
+    let code ← child.wait
+    clk.mark "host_proc"
+    return code
+  catch _ => refuseO o "host_unavailable" "could not run Node execution host" 70
+
+def runModule (clk : Clock) (host : HostSpec) (home store hostQ wasmQ : String)
+    (entry ret arity : Int) (procStep : Option Int) (o : Opts) (wasmOk : IO Bool) : IO (Option UInt32) := do
+  if let some step := procStep then
+    -- Recheck even in a resident server: its startup tuple can be stale.
+    if (← executionHostIdentity home (some host)) != hostQ then
+      return some (← refuseO o "host_identity_changed" "Proc execution bundle changed" 70)
+    if arity != 0 then
+      return some (← refuseO o "main_arity" "Proc main takes no parameters. Use /env/args" 63)
+    if !(← wasmOk) then return none
+    return some (← runProc clk home store wasmQ entry step o)
+  if o.scriptArgs.length != arity.toNat then
+    return some (← refuseO o "main_arity" s!"main takes {arity} args, got {o.scriptArgs.length}" 63)
+  if !(o.scriptArgs.all intArgOk) then
+    return some (← refuseO o "main_args" "non-i64 argument (heap args wait on EXEC-HOST-0 marshalling)" 64)
+  if !host.precompile || (← IO.getEnv "RSD_NO_CWASM").isSome then
+    if !(← wasmOk) then return none
+    return some (← runWasm clk host [] store wasmQ entry ret arity o)
+  let key ← cwasmKey wasmQ hostQ
+  match ← cwasmLookup store key with
+  | some p =>
+    clk.mark "d_cwasm_hit"
+    return some (← runWasm clk host ["--cwasm-in", p] store wasmQ entry ret arity o)
+  | none =>
+    if !(← wasmOk) then return none
+    let tmp := s!"{store}/tmp-cwasm-{← IO.monoNanosNow}"
+    let code ← runWasm clk host ["--cwasm-out", tmp] store wasmQ entry ret arity o
+    cwasmAdmit store key tmp
+    clk.mark "d_cwasm_admit"
+    return some code
+
+-- ============================================================================
+-- The record check the warm path and the resident server share (moved here
+-- from shell.rsd for RSD-OPT-1; the dispatcher keeps calling the same
+-- names). Everything the record pins must hold: toolchain parts equal and
+-- every recorded file rehashing equal. The wasm object is checked by
+-- `wasmOk` only when it is read (a cwasm miss; runModule above).
+-- ============================================================================
+
+def validateMod (tq : String × String × String) (rec : ModRecord) : IO Bool := do
+  if rec.tqRsdc != tq.1 || rec.tqRsc != tq.2.1 || rec.tqHost != tq.2.2 then
+    return false
+  if (← IO.getEnv "RSD_NO_STAT").isNone && !rec.fstats.isEmpty && rec.fstats.length == rec.files.length then
+    for (p, h, st) in rec.fstats do
+      if !(← validateFileStat p h st) then return false
+    return true
+  for (p, h) in rec.files do
+    if (← digestFile p) != h then return false
+  return true
+
+def wasmOk (store wasmQ : String) : IO Bool := do
+  if (← digestFile s!"{store}/q/{wasmQ}") == wasmQ then return true
+  IO.eprintln s!"[rsd_cache_tampered] q/{wasmQ}"
+  return false
+
+-- ============================================================================
+-- The resident server (RSD-OPT-1, `rsd serve`): one long-lived
+-- rsdc process that keeps the toolchain identities and the NF memo
+-- stores in memory and runs scripts on request. The mailbox is three
+-- files under <store>/serve/: the client writes req-<id> atomically
+-- (tmp+rename), the server answers res-<id>.{ack,code,out,err}. A killed
+-- server leaves the req behind; the client times out on the ack and falls
+-- back to the one-shot path, so a dead server loses warmth, never bytes.
+-- ============================================================================
+
+def serveDir (store : String) : String := s!"{store}/serve"
+def serveLivePath (store : String) : String := s!"{serveDir store}/live"
+def reqPath (store id : String) : String := s!"{serveDir store}/req-{id}"
+def resPath (store id ext : String) : String := s!"{serveDir store}/res-{id}.{ext}"
+
+end Rsd

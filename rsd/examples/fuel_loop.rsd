@@ -1,0 +1,3 @@
+def loop : Int -> Int
+  | x => loop x
+def main : Int := loop 0

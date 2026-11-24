@@ -1,0 +1,73 @@
+-- Concatenate after graph.rsd's own module set (OrderedMap, Hyper, graph);
+-- import Lean.Util.SCC before all files. The reference uses Lean's
+-- independent SCC implementation; the shipped one is Lib.Hyper.sccIter
+-- (reached through the Lib.Rsd.Graph.sccIter alias). This driver is a
+-- manual check, same role as lib/TarjanRun.lean — the shipped modules
+-- themselves carry no Lean-frontend import.
+-- Build (repository root):
+--   mkdir -p out/scc && { echo 'import Lean.Util.SCC'; \
+--     cat lib/OrderedMap.rsd lib/Hyper.rsd lib/rsd/graph.rsd \
+--     lib/rsd/SccCheckRun.rsd; } > out/scc/SccCheckRun.lean
+--   lean -c out/scc/SccCheckRun.c out/scc/SccCheckRun.lean
+--   LEAN_CC=/usr/bin/clang leanc -O3 -DNDEBUG out/scc/SccCheckRun.c \
+--     -o out/scc/scc-check-run
+-- closure_claim = 0.
+
+def sccPart (nodes : List String) (succ : String → List String) : String :=
+  Lib.Rsd.Graph.showGroups (Lib.Rsd.Graph.sortG (((Lib.Rsd.Graph.sccIter nodes succ).map Lib.Rsd.Graph.sortS).filter fun g => g != []))
+
+def leanPart (nodes : List String) (succ : String → List String) : String :=
+  Lib.Rsd.Graph.showGroups (Lib.Rsd.Graph.sortG (((Lean.SCC.scc nodes succ).map Lib.Rsd.Graph.sortS).filter fun g => g != []))
+
+def spineSucc : String → List String
+  | "N1" => ["N0"]
+  | "N2" => ["N1"]
+  | "N3" => ["N2"]
+  | "N4" => ["N3"]
+  | "N5" => ["N4"]
+  | "N6" => ["N5"]
+  | "N7" => ["N6"]
+  | "N8" => ["N7"]
+  | "N9" => ["N8"]
+  | "N10" => ["N9"]
+  | "N11" => ["N10"]
+  | _ => []
+
+def cycSucc : String → List String
+  | "P" => ["Q"]
+  | "Q" => ["P"]
+  | _ => []
+
+def loopSucc : String → List String
+  | "S" => ["S"]
+  | _ => []
+
+def chainSucc : String → List String
+  | "B" => ["A"]
+  | "C" => ["B"]
+  | "D" => ["C"]
+  | _ => []
+
+def diamondSucc : String → List String
+  | "B" => ["A"]
+  | "C" => ["A"]
+  | "D" => ["B", "C"]
+  | _ => []
+
+def sccCases : List (List String × (String → List String)) :=
+  [(["A", "B", "C", "D"], chainSucc)
+  , (["N0", "N1", "N2", "N3", "N4", "N5", "N6", "N7", "N8", "N9", "N10", "N11"], spineSucc)
+  , (["P", "Q"], cycSucc)
+  , (["S"], loopSucc)
+  , (["A", "B", "C", "D"], diamondSucc)]
+
+def main : IO UInt32 := do
+  let mut bad := 0
+  for (nodes, succ) in sccCases do
+    let ours := sccPart nodes succ
+    let refs := leanPart nodes succ
+    if ours != refs then
+      bad := bad + 1
+      IO.eprintln s!"[scc_disagree] ours={ours} lean={refs}"
+  IO.println s!"scc-check cases={sccCases.length} disagreements={bad} closure_claim=0"
+  return if bad == 0 then 0 else 1

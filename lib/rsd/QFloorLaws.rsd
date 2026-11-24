@@ -1,0 +1,33 @@
+-- Laws about the executable Qfloor boundaries; stock Lean is an oracle.
+namespace Lib.Rsd.QFloor
+theorem sigma_idempotent (s : State) : id (id s) = id s := rfl
+theorem q_sigma (r : Request) (s : State) : (fun value (_state : Lib.Rsd.QFloor.State) => value) r (id s) = (fun value (_state : Lib.Rsd.QFloor.State) => value) r s := rfl
+theorem admit_iff (r : Request) (s : State) : admissible r s = true ↔ (runNF r s).residue = none := by
+  simp [admissible, residue?, runNF, id, Option.isNone_iff_eq_none]
+
+end Lib.Rsd.QFloor
+
+namespace Lib.Rsd.QFloorRows
+theorem sigma_idempotent (s : State) : id (id s) = id s := rfl
+theorem q_sigma (r : Request) (s : State) : (fun value (_state : Lib.Rsd.QFloorRows.State) => value) r (id s) = (fun value (_state : Lib.Rsd.QFloorRows.State) => value) r s := rfl
+theorem admit_iff (r : Request) (s : State) : admissible r s = true ↔ (runNF r s).residue = none := by
+  simp [admissible, residue?, runNF, id, Option.isNone_iff_eq_none]
+
+end Lib.Rsd.QFloorRows
+
+namespace Lib.Rsd.QFloorBytes
+theorem sigma_idempotent (s : State) : id (id s) = id s := rfl
+theorem q_sigma (r : Request) (s : State) : (fun value (_state : Lib.Rsd.QFloorBytes.State) => value) r (id s) = (fun value (_state : Lib.Rsd.QFloorBytes.State) => value) r s := rfl
+theorem admit_iff (r : Request) (s : State) : admissible r s = true ↔ (runNF r s).residue = none := by
+  simp [admissible, residue?, runNF, id, Option.isNone_iff_eq_none]
+
+end Lib.Rsd.QFloorBytes
+
+namespace Lib.Rsd.QFloorByteRows
+theorem sigma_idempotent (s : State) : id (id s) = id s := rfl
+theorem q_sigma (r : Request) (s : State) : (fun value (_state : Lib.Rsd.QFloorByteRows.State) => value) r (id s) = (fun value (_state : Lib.Rsd.QFloorByteRows.State) => value) r s := rfl
+theorem admit_iff (r : Request) (s : State) : admissible r s = true ↔ (runNF r s).residue = none := by
+  simp [admissible, residue?, runNF, id, Option.isNone_iff_eq_none]
+
+end Lib.Rsd.QFloorByteRows
+

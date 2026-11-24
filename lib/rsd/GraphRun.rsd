@@ -1,0 +1,177 @@
+-- Header imports for one source on stdin. Concatenate is not required:
+-- copy lib/rsd/graph.rsd to Graph.lean and run this module beside it.
+-- closure_claim = 0.
+import Graph
+
+def readStdin : IO String := do
+  let h ← IO.getStdin
+  let mut acc : Array String := #[]
+  let mut fuel := 200000
+  let mut n := 0
+  let mut go := true
+  while go do
+    if fuel == 0 || n > 1000000 then
+      go := false
+    else
+      let line ← h.getLine
+      if line == "" then
+        go := false
+      else
+        acc := acc.push line
+        n := n + line.length
+        fuel := fuel - 1
+  let mut out := ""
+  for line in acc do
+    out := out ++ line
+  return out
+
+def parseU (s : String) : Option Nat :=
+  let cs := s.data
+  if cs == [] then none
+  else if cs.any fun c => c < '0' || c > '9' then none
+  else if cs.length > 1 && cs.head? == some '0' then none
+  else some (cs.foldl (fun n c => n * 10 + (c.toNat - 48)) 0)
+
+def split1 (s : String) : Option (String × String) :=
+  let rec go (acc : List Char) (cs : List Char) : Option (String × String) :=
+    match cs with
+    | [] => none
+    | c :: rest =>
+      if c == '\t' then some (String.mk acc.reverse, String.mk rest)
+      else go (c :: acc) rest
+  go [] s.data
+
+def splitTabs (s : String) : List String :=
+  let rec go (acc : List Char) (out : List String) (cs : List Char) : List String :=
+    match cs with
+    | [] => out ++ [String.mk acc.reverse]
+    | c :: rest =>
+      if c == '\t' then go [] (out ++ [String.mk acc.reverse]) rest
+      else go (c :: acc) out rest
+  go [] [] s.data
+
+structure GAcc where
+  bound : Option Nat
+  fuel : Option Nat
+  roots : List String
+  kinds : List String
+  order : List String
+  deps : List (String × Lib.Rsd.Graph.Imp)
+  ended : Bool
+
+def emptyG : GAcc :=
+  { bound := none, fuel := none, roots := [], kinds := [], order := [], deps := [], ended := false }
+
+def hasName (xs : List String) (n : String) : Bool :=
+  xs.any (· == n)
+
+def impsOf (n : String) (rows : List (String × Lib.Rsd.Graph.Imp)) : List Lib.Rsd.Graph.Imp :=
+  rows.foldl (fun acc row => if row.1 == n then acc ++ [row.2] else acc) []
+
+inductive GStep where
+  | go (a : GAcc)
+  | bad (r : String)
+
+def addG (a : GAcc) (line : String) : GStep :=
+  if line == "" then .go a
+  else if line == "end" then
+    if a.ended then .bad "input_invalid" else .go { a with ended := true }
+  else if a.ended then .bad "input_invalid"
+  else
+    match split1 line with
+    | none => .bad "input_invalid"
+    | some (k, rest) =>
+      match k with
+      | "bound" =>
+        match a.bound, parseU rest with
+        | none, some n => .go { a with bound := some n }
+        | _, _ => .bad "input_invalid"
+      | "fuel" =>
+        match a.fuel, parseU rest with
+        | none, some n => .go { a with fuel := some n }
+        | _, _ => .bad "input_invalid"
+      | "root" =>
+        if rest == "" then .bad "input_invalid" else .go { a with roots := a.roots ++ [rest] }
+      | "kind" =>
+        if rest != "import" && rest != "runtime" then .bad "input_invalid"
+        else .go { a with kinds := a.kinds ++ [rest] }
+      | "mod" =>
+        if rest == "" || hasName a.order rest then .bad "input_invalid"
+        else .go { a with order := a.order ++ [rest] }
+      | "dep" =>
+        match splitTabs rest with
+        | [importer, dep, kind] =>
+          if importer == "" || dep == "" || (kind != "import" && kind != "runtime") then .bad "input_invalid"
+          else if !hasName a.order importer then .bad "input_invalid"
+          else .go { a with deps := a.deps ++ [(importer, { name := dep, kind := kind })] }
+        | _ => .bad "input_invalid"
+      | _ => .bad "input_invalid"
+
+def modsOf (a : GAcc) : List Lib.Rsd.Graph.Mod :=
+  a.order.map fun n => { name := n, imps := impsOf n a.deps }
+
+def runWaves (text : String) : IO UInt32 := do
+  let mut rest := text.splitOn "\n"
+  let mut a := emptyG
+  let mut bad := false
+  let mut go := true
+  while go do
+    match rest with
+    | [] => go := false
+    | line :: xs =>
+      rest := xs
+      match addG a line with
+      | .bad _ =>
+        bad := true
+        go := false
+      | .go next =>
+        a := next
+  if bad then
+    IO.eprintln "input_invalid"
+    return 1
+  else
+    match a.bound, a.fuel with
+    | some bound, some fuel =>
+      if !a.ended || a.roots == [] || a.kinds == [] || a.order == [] then
+        IO.eprintln "input_invalid"
+        return 1
+      let ans := Lib.Rsd.Graph.waves (modsOf a) a.roots a.kinds bound (fuel : Int)
+      if !ans.ok then
+        IO.eprintln ans.residue
+        return 1
+      IO.println (Lib.Rsd.Graph.showGroups ans.groups)
+      return 0
+    | _, _ =>
+      IO.eprintln "input_invalid"
+      return 1
+
+def runRoots (text : String) : IO UInt32 := do
+  let lines := (text.splitOn "\n").filter (· != "")
+  match lines with
+  | [] =>
+    IO.eprintln "input_invalid"
+    return 1
+  | target :: names =>
+    let roots := Lib.Rsd.Graph.targetRoots target names
+    if roots == [] then
+      IO.eprintln "input_invalid"
+      return 1
+    for r in roots do
+      IO.println r
+    return 0
+
+def main (argv : List String) : IO UInt32 := do
+  if argv == ["bound"] then
+    IO.println s!"{Lib.Rsd.Graph.parallelBound}"
+    return 0
+  let text ← readStdin
+  if argv == ["roots"] then
+    return ← runRoots text
+  if argv == ["waves"] then
+    return ← runWaves text
+  let p := Lib.Rsd.Graph.headerImports text
+  if !p.ok then
+    IO.eprintln p.residue
+    return 1
+  IO.println p.text
+  return 0

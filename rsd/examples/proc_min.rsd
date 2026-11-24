@@ -1,0 +1,2 @@
+import Lib.Proc
+def main : Proc UInt8 := pure [0]

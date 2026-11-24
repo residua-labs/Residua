@@ -1,0 +1,49 @@
+namespace Lib.Rsd.EngineReplayControlRows
+abbrev Observation := Lib.Rsd.CommandReceipt.Observation
+open Lib.Rsd.EngineReplayControls
+abbrev Row := Lib.Rsd.EngineReplayRows.Row
+
+def result {α : Type} : Except Residue α -> Option String
+  | .ok _ => none | .error e => some (residueName e)
+def row (name : String) (expected : Option Residue) (actual : Option String) : Row :=
+  { name, expected := expected.map residueName, actual }
+def output (o : Observation) : String := o.stdout
+
+def allRows (r : Request) (s : State) : List Row := Id.run do
+  let aggregate := fun name expected state => row name expected ((runNF r state).residue.map residueName)
+  let mut rows := [aggregate "controls/exact" none s,
+    aggregate "controls/missing" (some .inventory) { controls := s.controls.drop 1 },
+    aggregate "controls/extra" (some .inventory) { controls := s.controls ++ s.controls.take 1 },
+    row "controls/base" (some .base) ((runNF { r with samples := [] } s).residue.map residueName)]
+  let controlOutput := ((s.controls.head?).map fun c => c.observation.stdout).getD ""
+  for (kind,c) in kinds.zip s.controls do
+    let check := fun name expected next =>
+      row (c.label ++ "/" ++ name) expected (result (verify r kind next))
+    rows := rows ++ [check "exact" none c,
+      check "label" (some .inventory) { c with label := "foreign" },
+      check "input" (some .input) { c with input := c.input ++ " " },
+      check "exit" (some .command) { c with observation := { c.observation with exit := some 1 } },
+      check "json" (some .json) { c with observation := { c.observation with stdout := "{" } }]
+    if kind == .entryFuel then
+      rows := rows ++ [check "not-null" (some .fuel) { c with observation := { c.observation with stdout := "{\"val\":1}" } }]
+    else if kind == .control then
+      rows := rows ++ [check "changed-value" (some .control) { c with observation := { c.observation with stdout := "{}\n{}\n" } },
+        check "one-answer" (some .json) { c with observation := { c.observation with stdout := "{}\n" } }]
+    else
+      rows := rows ++ [check "uncaught" (some .mutant) { c with observation := { c.observation with stdout := controlOutput } }]
+  let changed := r.samples.map fun sample =>
+    if sample.label == "cold" then
+      match Lib.Rsd.EngineReplay.parsed sample.input with
+      | .error _ => sample
+      | .ok v => { sample with input := Lib.Rsd.EngineReplay.stringify (put v "programs" (.arr [])) }
+    else sample
+  rows := rows ++ [row "controls/no-anchor" (some .anchor) (result (plan { r with samples := changed } .bodyField)),
+    row "controls/missing-selection" (some .inventory) (result (plan { r with samples := [] } .control))]
+  return rows
+
+def mutations : List (String × String × String) := [
+  ("runtime-mutant", "else if same then throw .mutant", "else if false then throw .mutant"),
+  ("entry-fuel", "if get v \"val\" != some .null then throw .fuel", "if false then throw .fuel"),
+  ("anchor-count", "if count != 1 then throw .anchor", "if false then throw .anchor")]
+
+end Lib.Rsd.EngineReplayControlRows

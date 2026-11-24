@@ -1,0 +1,5 @@
+let sumList = (xs: List(Nat), ): Nat => Id.run(do: {
+  syntax_225(syntax_134(tree_name(total), tree_none, tree_num(0)))
+  syntax_206(tree_12(syntax_207(tree_none, tree_name(x), tree_name(xs)), tree_none), tree_46_general(syntax_223(tree_name(total), tree_none, binary_1(tree_name(total), tree_name(x))), ))
+  return total;
+});

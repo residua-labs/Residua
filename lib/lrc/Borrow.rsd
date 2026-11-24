@@ -10,6 +10,7 @@
 -- order, and in that order a callee's parameters are settled before a caller reads them.
 import Lib.Lrc.NormIds
 import Lib.Lrc.CallGraph
+import Lib.Lrc.Prim
 
 namespace Lrc
 

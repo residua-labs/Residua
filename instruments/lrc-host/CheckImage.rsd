@@ -1,0 +1,379 @@
+-- LRC host oracle: whole images (stock Lean only). closure_claim = 0.
+-- A row of instruments/lrc-host/Images.tsv is an image that the stage accepts, with one bench row's entry,
+-- arguments and value; or, with a VALUE `!NAME class=N function=F`, an image that the stage's gate
+-- must refuse by that residue at that function, and nothing else is asked of it. Checked here: FromWire accepts it; its IR, run as it is, returns the value;
+-- the IR after the stage's own pipeline (lib/lrc/Pipeline.rsd) returns the value on the counting
+-- heap with nothing live at the end, which is the only check that reaches a declaration with
+-- several results; and, when every declaration has a Lean form, so does the IR after Lean's own
+-- pipeline. The image's program then joins the corpus of the pass checks.
+--
+-- The verdict of a row is an NF instance, `ImageVerdict` below:
+-- `checkImages` runs and reads, and hands over what it saw (`Facts`); `q` keeps the results of the
+-- comparisons; `admit` decides, and a row fails by the first residue in the order of the check.
+namespace Lrc.Host.ImageVerdict
+
+inductive Residue where
+  -- the file is not an image the host reads
+  | loadRefused
+  -- the stage's gate refuses the image (lib/lrc/FromWire.rsd `admit`)
+  | notAdmitted
+  -- the IR as translated does not return the row's value
+  | translatedValue
+  -- laid out as one class the gate refuses the image (a class whose reads find no single tag has one layout
+  -- for all its tags, lib/lrc/FromWire.rsd `layMergeTag`: no image is refused for such a read)
+  | oneClassRefused
+  -- as one class under the default pipeline: another value, or an object left live
+  | oneClassValue
+  -- after the stage's pipeline under one of its option words: another value, or an object left live
+  | pipelineValue
+  -- at a small fuel budget the pipeline's IR ends otherwise than the translated IR
+  | pipelineFuel
+  -- Lean's pipeline took the program and its result does not come back as IR
+  | leanResultLost
+  -- after Lean's own pipeline: another value, or an object left live
+  | leanValue
+  -- the row names the refusal the gate must give, and the gate admits the image or refuses it otherwise
+  | refusalOther
+  -- with the integer operations compiled as the image wrote them (no short form): another value, or
+  -- an object left live. A short form then differs from the function it stands for.
+  | plainIntsValue
+  -- translated under the narrow bounds of a small number (rsc's layer `narrow`: an object field of four bytes) and
+  -- run with boxes of 31 bits under the default pipeline: another value, an object left live, or a number boxed
+  -- that no such box holds
+  | narrowValue
+  -- the run under the narrow bounds holds another number of bytes live at most, or allocates another number of
+  -- cells, than instruments/lrc-host/Peaks.tsv says for the row: a layout that grew, or a constant built on every
+  -- use, changes no value
+  | narrowPeak
+
+def residueName : Residue -> String
+  | Residue.loadRefused => "lrc_image_load_refused"
+  | Residue.notAdmitted => "lrc_image_not_admitted"
+  | Residue.translatedValue => "lrc_image_translated_value"
+  | Residue.oneClassRefused => "lrc_image_one_class_refused"
+  | Residue.oneClassValue => "lrc_image_one_class_value"
+  | Residue.pipelineValue => "lrc_image_pipeline_value"
+  | Residue.pipelineFuel => "lrc_image_pipeline_fuel"
+  | Residue.leanResultLost => "lrc_image_lean_result_lost"
+  | Residue.leanValue => "lrc_image_lean_value"
+  | Residue.refusalOther => "lrc_image_refusal_other"
+  | Residue.plainIntsValue => "lrc_image_plain_ints_value"
+  | Residue.narrowValue => "lrc_image_narrow_value"
+  | Residue.narrowPeak => "lrc_image_narrow_peak"
+
+-- a run as the verdict reads it
+structure Ran where
+  status : String
+  text : String
+  leaked : Nat
+
+-- one option word of the stage's pipeline: its run, and at each fuel budget the end of the
+-- translated IR and the end of the pipeline's
+structure Piped where
+  options : Nat
+  run : Ran
+  fuel : List (Ran × Ran)
+
+-- what the host saw of one row; `none` where the check did not come that far
+structure Facts where
+  -- the row's value
+  value : String
+  loaded : Bool
+  -- the gate's refusal
+  gate : Option Lrc.Residue := none
+  translated : Option Ran := none
+  -- as one class: the gate's refusal, or the run under the default pipeline
+  oneGate : Option Lrc.Residue := none
+  one : Option Ran := none
+  piped : List Piped := []
+  -- Lean's pipeline took the program: its result did not come back, or it ran
+  leanLost : Bool := false
+  lean : Option Ran := none
+  -- the refusal the row names ("" when it gives a value), and what the gate said, in the same form
+  refusal : String := ""
+  gateSaid : String := ""
+  -- the run with the integer operations as the image wrote them, under the default pipeline
+  plain : Option Ran := none
+  -- the run of the translation under the narrow bounds, under the default pipeline, with boxes of 31 bits
+  narrow : Option Ran := none
+  -- the bytes that run held live at most and the cells it allocated, and what instruments/lrc-host/Peaks.tsv says
+  -- for the row (none: it has no line)
+  narrowPeak : Nat := 0
+  narrowAllocs : Nat := 0
+  peakWant : Option (Nat × Nat) := none
+
+-- the results of the comparisons, and no text of a run
+structure Class where
+  loaded : Bool
+  admitted : Bool
+  translatedOk : Bool
+  -- 0 admitted as one class; 2 refused
+  oneGate : Nat
+  oneOk : Bool
+  pipedRuns : Nat
+  pipedWrong : Nat
+  fuelWrong : Nat
+  leanLost : Bool
+  leanOk : Bool
+  refusalNamed : Bool
+  refusalRight : Bool
+  plainOk : Bool
+  narrowOk : Bool
+  peakOk : Bool
+
+def isValue (value : String) (r : Ran) : Bool := r.status == "value" && r.text == value
+def clean (value : String) (r : Ran) : Bool := isValue value r && r.leaked == 0
+
+-- Is `narrow` the text of the value whose text is `wide`, when `narrow` was read where an object field is four bytes?
+-- There a list's scalar head is an object word (lib/lrc/FromWire.rsd "A scalar head where an object field is four
+-- bytes"; docs/OBJECT-ABI.md "Narrow fields"): where `wide` has the word `n`, `narrow` has the boxed number `#n`
+-- (which for the word 0 is the word of the empty list, written `[]`) or the box that holds it, `{n}`. Every other
+-- word has one text in both. The texts are compared word by word, `wide` saying where a scalar stands.
+def valueTokens (s : String) : List String :=
+  let marked := s.replace "[]" " NIL "
+  let spaced := (((marked.replace "[" " [ ").replace "]" " ] ").replace "{" " { ").replace "}" " } "
+  ((spaced.splitOn " ").filter (· != "")).map (fun t => if t == "NIL" then "[]" else t)
+
+partial def sameWords : List String → List String → Bool
+  | [], [] => true
+  | w :: ws, n :: ns =>
+    if w == n then sameWords ws ns
+    else if n == "#" ++ w then sameWords ws ns
+    else if w == "0" && n == "[]" then sameWords ws ns
+    else
+      match n, ns with
+      | "{", k :: "}" :: rest => w == k && sameWords ws rest
+      | _, _ => false
+  | _, _ => false
+
+def sameValue (wide narrow : String) : Bool := sameWords (valueTokens wide) (valueTokens narrow)
+
+-- the run under the narrow bounds: the row's value as it is written there, nothing leaked
+def cleanNarrow (value : String) (r : Ran) : Bool := r.status == "value" && sameValue value r.text && r.leaked == 0
+def endsApart (p : Ran × Ran) : Bool := p.1.status != p.2.status || p.1.text != p.2.text
+
+def q (f : Facts) : Class :=
+  { loaded := f.loaded,
+    admitted := f.gate.isNone,
+    translatedOk := (match f.translated with | some r => isValue f.value r | none => false),
+    oneGate := (match f.oneGate with | none => 0 | some _ => 2),
+    oneOk := (match f.one with | some r => clean f.value r | none => false),
+    pipedRuns := f.piped.length,
+    pipedWrong := (f.piped.filter fun p => !clean f.value p.run).length,
+    fuelWrong := (f.piped.filter fun p => p.fuel.any endsApart).length,
+    leanLost := f.leanLost,
+    leanOk := (match f.lean with | some r => clean f.value r | none => true),
+    refusalNamed := f.refusal != "",
+    refusalRight := f.refusal == f.gateSaid,
+    plainOk := (match f.plain with | some r => clean f.value r | none => false),
+    narrowOk := (match f.narrow with | some r => cleanNarrow f.value r | none => false),
+    peakOk := (match f.peakWant with | some w => f.narrowPeak == w.1 && f.narrowAllocs == w.2 | none => true) }
+
+structure Agreed where
+  -- the option words of the stage's pipeline that were run and agree
+  runs : Nat
+
+def admit (c : Class) : Except Residue Agreed :=
+  if !c.loaded then Except.error Residue.loadRefused
+  else if c.refusalNamed then (if c.refusalRight then Except.ok { runs := 0 } else Except.error Residue.refusalOther)
+  else if !c.admitted then Except.error Residue.notAdmitted
+  else if !c.translatedOk then Except.error Residue.translatedValue
+  else if c.oneGate == 2 then Except.error Residue.oneClassRefused
+  else if c.oneGate == 0 && !c.oneOk then Except.error Residue.oneClassValue
+  else if c.pipedWrong != 0 then Except.error Residue.pipelineValue
+  else if c.fuelWrong != 0 then Except.error Residue.pipelineFuel
+  else if c.leanLost then Except.error Residue.leanResultLost
+  else if !c.leanOk then Except.error Residue.leanValue
+  else if !c.plainOk then Except.error Residue.plainIntsValue
+  else if !c.narrowOk then Except.error Residue.narrowValue
+  else if !c.peakOk then Except.error Residue.narrowPeak
+  else Except.ok { runs := c.pipedRuns }
+
+end Lrc.Host.ImageVerdict
+
+namespace Lrc.Host
+
+structure ImageRow where
+  name : String
+  path : String
+  kinds : String
+  entry : Nat
+  args : List Int
+  -- the entry's value as instruments/lrc-host/Interp.rsd `showV` prints it
+  value : String
+
+def readImageRows (listPath : String) : IO (List ImageRow) := do
+  if !(← System.FilePath.pathExists listPath) then return []
+  let mut rows := []
+  for line in (← IO.FS.readFile listPath).splitOn "\n" do
+    match line.splitOn "\t" with
+    | [name, path, kinds, entry, args, value] =>
+      rows := rows ++ [{ name, path, kinds, entry := entry.toNat!, args := (if args.isEmpty then [] else (args.splitOn ",").map (·.toInt!)), value := value }]
+    | _ => pure ()
+  return rows
+
+-- the fuel budgets at which the pipeline's IR is compared with the translated IR: every one up to
+-- 12, then some up to 48 (a refusing run costs the more the later it refuses)
+def fuelBudgets : List Nat := [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 14, 16, 20, 24, 32, 48]
+
+def valueIs (o : Outcome) (v : String) : Bool := o.status == "value" && o.text == v
+
+def ranOf (o : Outcome) : ImageVerdict.Ran := { status := o.status, text := o.text, leaked := o.leaked }
+
+-- instruments/lrc-host/Peaks.tsv: NAME, BYTES, ALLOCATIONS. For a row it names, the run under the narrow bounds must
+-- hold exactly that many bytes live at most (instruments/lrc-host/Interp.rsd counts a cell with fields of four bytes
+-- there) and allocate exactly that many cells. No value shows a layout that grew or a constant that is built again
+-- on every use; the first number shows the one and the second the other. Twice a change far from lib/lrc/Pack.rsd
+-- switched it off for every program (a read of a scalar whose object the pass could not name), and every check
+-- passed.
+def readPeaks (path : String) : IO (List (String × (Nat × Nat))) := do
+  if !(← System.FilePath.pathExists path) then return []
+  let mut out := []
+  for line in (← IO.FS.readFile path).splitOn "\n" do
+    match line.splitOn "\t" with
+    | [name, bytes, allocs] =>
+      if !name.startsWith "#" && bytes.toNat?.isSome && allocs.toNat?.isSome then out := out ++ [(name, (bytes.toNat!, allocs.toNat!))]
+    | _ => pure ()
+  return out
+
+-- the rows that fail, and the programs that Lean's pipeline can take
+-- `quick`: the default pipeline alone and six fuel budgets, for the mutant replay, where every row
+-- is one such run
+def checkImages (env : Lean.Environment) (rows : List ImageRow) (quick : Bool := false) : IO (Nat × List Prog) := do
+  let mut bad := 0
+  let mut progs := []
+  let peaks ← readPeaks "instruments/lrc-host/Peaks.tsv"
+  for r in rows do
+    let bytes := (← IO.FS.readBinFile r.path).toList.map (fun b => (b.toNat : Int))
+    if r.value.startsWith "!" then
+      -- a row that names the refusal the gate must give
+      let (loaded, said) := match imageAdmit bytes r.kinds with
+        | .error e => (false, s!"load refused: {e}")
+        | .ok (.error e) => (true, refusalText e)
+        | .ok (.ok _) => (true, "admitted")
+      match ImageVerdict.admit (ImageVerdict.q { value := r.value, loaded := loaded, refusal := r.value.drop 1, gateSaid := said }) with
+      | .ok _ => IO.println s!"check image={r.name} refused as the row says: {said}"
+      | .error e =>
+        bad := bad + 1
+        IO.println s!"MISMATCH image={r.name} [{ImageVerdict.residueName e}] the row says {r.value.drop 1}; the gate: {said}"
+      continue
+    let mut facts : ImageVerdict.Facts := { value := r.value, loaded := false }
+    -- what the host saw where a comparison fails, for the row's report line
+    let mut seen : List String := []
+    match imageAdmit bytes r.kinds with
+    | .error e => seen := seen ++ [s!"load refused: {e}"]
+    | .ok (.error e) =>
+      facts := { facts with loaded := true, gate := some e }
+      seen := seen ++ [s!"not admitted: {refusalText e}"]
+    | .ok (.ok im) =>
+      facts := { facts with loaded := true }
+      let bodies := (im.decls.filter (!·.ext)).length
+      -- a row's value is what leaves through the entry: the entry's boundary twin runs when it has one
+      -- (lib/lrc/FromWire.rsd "The boundary")
+      let ent := Lrc.pubEntry im.pubs r.entry
+      let init := runEntry im.decls ent r.args 1000000000 false im.n
+      facts := { facts with translated := some (ranOf init) }
+      if !valueIs init r.value then seen := seen ++ [s!"as translated: {init.show}"]
+      -- The image laid out as one class, which is how an image is laid out when its classes say
+      -- nothing (lib/lrc/FromWire.rsd "Layout"): the same value and no leak under the default
+      -- pipeline. Tags that several types share then have one layout: the longest list of
+      -- children with the places left over filled, a list of children for all when one has it.
+      match imageAdmit bytes r.kinds true with
+      | .error e => seen := seen ++ [s!"as one class, load refused: {e}"]
+      | .ok (.error e) =>
+        -- an image whose reads only its classes decide (ProgKinds.rsd) has one layout for all its tags as one
+        -- class (lib/lrc/FromWire.rsd `layMergeTag`): a refusal here is a mismatch
+        facts := { facts with oneGate := some e }
+        seen := seen ++ [s!"as one class not admitted: {refusalText e}"]
+      | .ok (.ok one) =>
+        let o := runEntry (Lrc.pipelineWith Lrc.pipelineDefault one.n one.decls) (Lrc.pubEntry one.pubs r.entry) r.args 1000000000 true one.n
+        facts := { facts with one := some (ranOf o) }
+        if !valueIs o r.value || o.leaked != 0 then seen := seen ++ [s!"as one class: {o.show}"]
+        IO.println s!"check image={r.name} one_class: status={o.status} allocations={o.allocs} leaked={o.leaked} peak_bytes={o.peakBytes}"
+      -- the pipeline without inlining (0), with the inlining before the passes (1), after them (2, the
+      -- default), and the default without repeated calls as common subexpressions (2 + 4), without
+      -- tail recursion modulo cons (2 + 8), without byte fields (2 + 16), with constant cells (2 + 32), and so
+      -- on through the options of lib/lrc/Pipeline.rsd `pipelineWith`; the last five: without a second form for
+      -- counting functions, without merged cases, with the code after a reset written twice everywhere and
+      -- written once everywhere (and that without the count-ups sunk), and without the splitting of a function that
+      -- calls itself (the default has it). The quick run takes the default and the one copy everywhere, and that without the
+      -- count-ups sunk (2 + 128 + 32768): by default few resets get the one copy, with the option every reset
+      -- of every row does, and without the sinking the read in front of a reset is the one the code after it
+      -- uses (Lean's own shape), not a second read made for the count.
+      for inl in (if quick then [Lrc.pipelineDefault, Lrc.pipelineDefault + 32768, Lrc.pipelineDefault + 128 + 32768]
+                  else [0, 1, 2, 6, 10, 18, 34, 66, 130, 258, 514, 1026, 4098, 8194, 16386, 32770, 32898, 131074]) do
+        let piped := Lrc.pipelineWith inl im.n im.decls
+        let own := runEntry piped ent r.args 1000000000 true im.n
+        if !valueIs own r.value || own.leaked != 0 then
+          seen := seen ++ [s!"after the stage's pipeline (inlining {inl}): {own.show}"]
+        -- the wire's fuel: at every small budget the pipeline's IR ends as the translated IR does
+        let mut fuel : List (ImageVerdict.Ran × ImageVerdict.Ran) := []
+        let mut fuelBad := 0
+        for fu in (if quick then [1, 2, 3, 5, 8, 12] else fuelBudgets) do
+          let a := runEntry im.decls ent r.args fu false im.n
+          let b := runEntry piped ent r.args fu true im.n
+          fuel := fuel ++ [(ranOf a, ranOf b)]
+          if a.status != b.status || a.text != b.text then
+            fuelBad := fuelBad + 1
+            if fuelBad == 1 then seen := seen ++ [s!"at fuel {fu} (inlining {inl}): translated {a.status} {a.text}, pipeline {b.status} {b.text}"]
+        facts := { facts with piped := facts.piped ++ [{ options := inl, run := ranOf own, fuel := fuel }] }
+        IO.println s!"check image={r.name} own_pipeline inlining={inl}: status={own.status} allocations={own.allocs} frees={own.frees} incs={own.incs} decs={own.decs} leaked={own.leaked} peak_bytes={own.peakBytes} fuel_budgets={fuelBudgets.length} differ={fuelBad}"
+      -- the integer operations as the image wrote them: the same value, so each short form agrees with its function here
+      match imageAdmit bytes r.kinds false true with
+      | .ok (.ok plain) =>
+        let o := runEntry (Lrc.pipelineWith Lrc.pipelineDefault plain.n plain.decls) (Lrc.pubEntry plain.pubs r.entry) r.args 1000000000 true plain.n
+        facts := { facts with plain := some (ranOf o) }
+        if !valueIs o r.value || o.leaked != 0 then seen := seen ++ [s!"with the integer operations as written: {o.show}"]
+        IO.println s!"check image={r.name} plain_ints: status={o.status} allocations={o.allocs} steps={o.steps} leaked={o.leaked}"
+      | _ => seen := seen ++ ["with the integer operations as written: not admitted"]
+      -- under the narrow bounds of a small number (rsc's layer `narrow`): the same value, from boxes of 31 bits, so
+      -- every number between the two bounds is right in its other form and none is boxed that does not fit
+      match imageAdmit bytes r.kinds false false true with
+      | .ok (.ok nar) =>
+        -- (the pipeline's option 2048 is the layer's: lib/lrc/Pipeline.rsd)
+        let o := runEntry (Lrc.pipelineWith (Lrc.pipelineDefault + 2048) nar.n nar.decls) (Lrc.pubEntry nar.pubs r.entry) r.args 1000000000 true nar.n true
+        facts := { facts with narrow := some (ranOf o), narrowPeak := o.peakBytes, narrowAllocs := o.allocs, peakWant := peaks.lookup r.name }
+        if !ImageVerdict.cleanNarrow r.value (ranOf o) then seen := seen ++ [s!"under the narrow bounds: {o.show}"]
+        match peaks.lookup r.name with
+        | some w =>
+          if o.peakBytes != w.1 || o.allocs != w.2 then
+            seen := seen ++ [s!"under the narrow bounds: {o.peakBytes} bytes live at most and {o.allocs} cells allocated, instruments/lrc-host/Peaks.tsv says {w.1} and {w.2}"]
+        | none => pure ()
+        IO.println s!"check image={r.name} narrow: status={o.status} allocations={o.allocs} steps={o.steps} leaked={o.leaked} peak_bytes={o.peakBytes}"
+      | _ => seen := seen ++ ["under the narrow bounds: not admitted"]
+      let prog : Prog := { name := r.name, decls := im.decls }
+      match stage env prog with
+      | .error _ =>
+        IO.println s!"check image={r.name} bodies={bodies} translated={init.status} allocations={init.allocs} lean_form=no"
+      | .ok st =>
+        progs := progs ++ [prog]
+        -- The program as the ported passes meet it in the stage: after the byte fields, the common
+        -- subexpressions and the guards (lib/lrc/Pipeline.rsd). It joins the corpus too, so each port
+        -- is compared with Lean's pass on the shapes the stage gives it, not only on the translation's.
+        let front : Prog := { name := r.name ++ "+front", decls := Lrc.guardElim im.n (Lrc.cse true (Lrc.packScalars im.decls)) }
+        match stage env front with
+        | .ok _ => progs := progs ++ [front]
+        | .error e => IO.println s!"check image={r.name} front: Lean's pipeline does not take it: {e.take 120}"
+        -- and as the passes after the first pushProj meet it: with the reads sunk past the tests
+        let sunk : Prog := { name := r.name ++ "+sunk", decls := Lrc.sinkProj (Lrc.plPushProj (Lrc.elimDeadBranches front.decls)) }
+        match stage env sunk with
+        | .ok _ => progs := progs ++ [sunk]
+        | .error e => IO.println s!"check image={r.name} sunk: Lean's pipeline does not take it: {e.take 120}"
+        match canonDecls st.pp2 with
+        | .error e =>
+          facts := { facts with leanLost := true }
+          seen := seen ++ [s!"Lean's result does not come back: {e}"]
+        | .ok final =>
+          let o := runEntry (final ++ im.decls.filter (·.ext)) ent r.args 1000000000 true im.n
+          facts := { facts with lean := some (ranOf o) }
+          if !valueIs o r.value || o.leaked != 0 then seen := seen ++ [s!"after Lean's pipeline: {o.show}"]
+          IO.println s!"check image={r.name} bodies={bodies} translated={init.status} allocations={init.allocs} lean_form=yes after_lean: allocations={o.allocs} frees={o.frees} incs={o.incs} decs={o.decs} leaked={o.leaked}"
+    match ImageVerdict.admit (ImageVerdict.q facts) with
+    | .ok _ => pure ()
+    | .error e =>
+      bad := bad + 1
+      IO.println s!"MISMATCH image={r.name} [{ImageVerdict.residueName e}] {" | ".intercalate seen}"
+  IO.println s!"check pass=images rows={rows.length} staged={progs.length} mismatch={bad}"
+  return (bad, progs)
+
+end Lrc.Host

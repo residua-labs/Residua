@@ -2,8 +2,8 @@
 
 English | [中文](syntax-engine.zh-CN.md)
 
-Status: **shipped in release 0.2**; the summary also appears in
-`docs/RELEASE-NOTES.md`. `closure_claim = 0`.
+Status: **shipped in release 0.3** (first shipped in 0.2); the summary also appears in
+`docs/RELEASE-NOTES.md`. 
 
 ## What it provides
 
@@ -11,9 +11,12 @@ The parser is one function: (a grammar of the class given as data, an
 input) -> a tree or a named, located refusal. The class is
 `semantics/Syntax/Class.rsd`: `SynSpec.Grammar`, the `Parses` relation
 and the reference decider `refParses` with its soundness proof
-(axioms `propext`, `Quot.sound`). Engine sources are `rsdc/syntax/`; a
-surface is data in `rsdc/profiles/*.syn` — a new profile is added with
-an empty diff under `rsdc/syntax/`. The shipped compiler's accepted
+(axioms `propext`, `Quot.sound`). The engine's implementation sources
+live at `rsdc/syntax/` in the development repository; in this archive
+they ship inside the seed's whole-module source bundles
+(`bootstrap/seed/stage-14274/sources/`), while a surface is data in
+`rsdc/profiles/*.syn` — a new profile is added with an empty diff
+under `rsdc/syntax/`. The shipped compiler's accepted
 surface is unchanged (the `.rsd` bootstrap subset of
 `docs/LANGUAGE.md`).
 
@@ -21,10 +24,10 @@ surface is unchanged (the `.rsd` bootstrap subset of
 
 - Source revision: `28b9ff89f10514b93de92b8c0f60a109660ffa49` (on the
   development `main` branch).
-- Independent audit: verdict **SIGN** at that sha; transcript
+- Independent audit: an independent audit passed at that sha; transcript
   `reports/release-02/evidence/AUDIT-SYNTAX-ENGINE.28b9ff89f1.md`
-  (copied into the packet from the development contracts repository).
-- Agreement with the class (E2): `rsdc/syntax/ClassGate.rsd` over 240
+  (repository-side, not in this archive).
+- Agreement with the class (E2): `rsdc/syntax/ClassGate.rsd` (repository-side) over 240
   generated grammars and 4,334 generated inputs —
   `disagreements=0`; each grammar carries a mutant that changes a
   `refParses` verdict (240/240 armed), and coverage is checked: rhs

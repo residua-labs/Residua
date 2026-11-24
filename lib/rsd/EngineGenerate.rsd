@@ -1,0 +1,58 @@
+import rsd.EngineQuotation
+import rsd.BodyQuotation
+import Lean.Data.Json
+
+/-! The Rsd instance links a caller-supplied SCM body to the shared engine.
+Both source and wire are emitted from the same scoped AST. Content identities
+are supplied by the content-addressed module assembler, not guessed here. -/
+namespace Lib.Rsd.EngineGenerate
+open Lean Residua.SCMEmission Residua.SCMWireEmission Residua.Incr
+
+private def checked (value : Except String α) : IO α :=
+  match value with
+  | .ok value => pure value
+  | .error error => throw (IO.userError error)
+
+def bodyPin (bodyQ : String) : SCMPinnedModule := {
+  name := .literal "rsd.body"
+  path := "lib/rsd/scm/body.scm"
+  params := [.literal "node", .literal "args"]
+  q := bodyQ }
+
+def generate (output : System.FilePath) (bodyQ stepQ coreQ : String) : IO Unit := do
+  IO.FS.createDirAll output
+  let modules := [
+    (bodyPin bodyQ, BodyQuotation.observed),
+    (CarrierModules.preparePin, EngineQuotation.prepare),
+    (LinkedBody.stepPin stepQ, EngineQuotation.advance (bodyPin bodyQ)),
+    (EngineQuotation.corePin coreQ, EngineQuotation.stabilize stepQ)]
+  let mut programs : List Json := []
+  let mut roots : List (SCMExpr 0) := []
+  for (pin, term) in modules do
+    let expr ← checked term
+    roots := roots ++ [expr]
+    let wire ← checked (Carrier.wire (.ok expr))
+    let name := (System.FilePath.mk pin.path).fileName.getD "module.scm"
+    IO.FS.writeFile (output / name) ((← checked (Carrier.render (.ok expr))) ++ "\n")
+    programs := programs ++ [Json.arr #[toJson pin.name.render,
+      toJson (pin.params.map SCMName.render), wire]]
+  let root ← checked (EngineQuotation.source coreQ)
+  IO.FS.writeFile (output / "stabilize.scm")
+    ((← checked (Carrier.render (.ok root))) ++ "\n")
+  IO.FS.writeFile (output / "root.json")
+    ((← checked (Carrier.wire (.ok root))).compress ++ "\n")
+  IO.FS.writeFile (output / "programs.json") ((toJson programs).compress ++ "\n")
+  let allPins : SCMExpr 0 := .recordOfList
+    ((root :: roots).map (fun expr => (.literal "module", expr)))
+  let pins ← match renderModulePins allPins with
+    | .ok pins => pure pins
+    | .error error => throw (IO.userError (reprStr error))
+  IO.FS.writeFile (output / "modules.json") (pins ++ "\n")
+
+end Lib.Rsd.EngineGenerate
+
+def main (args : List String) : IO Unit :=
+  match args with
+  | [output, bodyQ, stepQ, coreQ] =>
+      Lib.Rsd.EngineGenerate.generate output bodyQ stepQ coreQ
+  | _ => throw (IO.userError "usage: EngineGenerate <output> <body-q> <step-q> <core-q>")

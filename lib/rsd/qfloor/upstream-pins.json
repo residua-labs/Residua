@@ -1,0 +1,36 @@
+{
+  "schema": "frozen-scm-q-floor/1",
+  "subject": "dec8359329c1501014f503b30b2ff32a8d5108a1",
+  "unchanged_sources": [
+    {
+      "path": "lib/rsd/qfloor/src/ast.rs",
+      "upstream_path": "rust/residua-evalr/src/ast.rs",
+      "blob": "f4e8a397963d2de9be73cfcf8b008a1ef5daf618",
+      "q": "a182833ce42a992bfca078958ba37c970dffb6dd2c148b1b042ec45404df84b0"
+    },
+    {
+      "path": "lib/rsd/qfloor/src/json.rs",
+      "upstream_path": "rust/residua-evalr/src/json.rs",
+      "blob": "f08eb8dc9c31c8ccc261ea77a4734e0f55be9a43",
+      "q": "6234d0bde0d51c42ac5e52c88be999b250d4cc2bf076179c9b49678b912b7af7"
+    },
+    {
+      "path": "lib/rsd/qfloor/src/wire.rs",
+      "upstream_path": "rust/residua-evalr/src/wire.rs",
+      "blob": "a42136080a34736e3c41b8c0ff55a7682f47017e",
+      "q": "b83831efd662cb94396bf7175d43adcec50bac26904d5fd86798d1887addc1c6"
+    },
+    {
+      "path": "lib/rsd/qfloor/src/content_hash.rs",
+      "upstream_path": "rust/residua-evalr/src/content_hash.rs",
+      "blob": "8ec426b18c905618756326f0da1f457e979992df",
+      "q": "e7fb923ab1efe93428e813d673d5f66489d1822e3b2d2daeaef8373d48516e17"
+    },
+    {
+      "path": "lib/rsd/qfloor/src/sha256.rs",
+      "upstream_path": "rust/residua-evalr/src/sha256.rs",
+      "blob": "cdf05316c1680a01c1b29e9bfa4ae43973fbb643",
+      "q": "14a1f93a6d4a68cc2a098680986f961d1f39b812ec2422ef5d915202286c1215"
+    }
+  ]
+}

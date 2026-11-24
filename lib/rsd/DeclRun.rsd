@@ -1,0 +1,224 @@
+-- Plan, key, and replay admission for the declaration driver.
+-- Host I/O only. Decisions stay in lib/rsd/decl.rsd.
+-- closure_claim = 0.
+import Decl
+
+def hexVal (c : Char) : Option Nat :=
+  if '0' <= c && c <= '9' then some (c.toNat - '0'.toNat)
+  else if 'a' <= c && c <= 'f' then some (c.toNat - 'a'.toNat + 10)
+  else if 'A' <= c && c <= 'F' then some (c.toNat - 'A'.toNat + 10)
+  else none
+
+def parseHex (s : String) : Option (List Int) :=
+  let rec go : List Char → Option (List Int)
+    | [] => some []
+    | a :: b :: rest =>
+      match hexVal a, hexVal b, go rest with
+      | some hi, some lo, some xs => some (Int.ofNat (hi * 16 + lo) :: xs)
+      | _, _, _ => none
+    | _ => none
+  match go s.data with
+  | some xs => if xs.length == 32 then some xs else none
+  | none => none
+
+def hexCh (n : Nat) : Char :=
+  if n < 10 then Char.ofNat ('0'.toNat + n) else Char.ofNat ('a'.toNat + (n - 10))
+
+def toHex : List Int → String
+  | [] => ""
+  | b :: bs => String.mk [hexCh (b.toNat / 16), hexCh (b.toNat % 16)] ++ toHex bs
+
+def parseU (s : String) : Option Nat :=
+  let cs := s.data
+  if cs == [] then none
+  else if cs.any fun c => c < '0' || c > '9' then none
+  else if cs.length > 1 && cs.head? == some '0' then none
+  else some (cs.foldl (fun n c => n * 10 + (c.toNat - '0'.toNat)) 0)
+
+def splitTabs (s : String) : List String :=
+  let rec go (acc : List Char) (out : List String) (cs : List Char) : List String :=
+    match cs with
+    | [] => out ++ [String.mk acc.reverse]
+    | c :: rest =>
+      if c == '\t' then go [] (out ++ [String.mk acc.reverse]) rest
+      else go (c :: acc) out rest
+  go [] [] s.data
+
+def depsOf (s : String) : List String :=
+  if s == "-" || s == "" then [] else (s.splitOn ",").filter (· != "")
+
+structure PAcc where
+  workers : Option Nat
+  bound : Option Nat
+  queue : Option Nat
+  fuel : Option Nat
+  nodes : List Lib.Rsd.Decl.Node
+  ended : Bool
+
+def emptyP : PAcc :=
+  { workers := none, bound := none, queue := none, fuel := none, nodes := [], ended := false }
+
+inductive PStep where
+  | go (a : PAcc)
+  | bad
+
+def addP (a : PAcc) (line : String) : PStep :=
+  if line == "" then .go a
+  else if line == "end" then
+    if a.ended then .bad else .go { a with ended := true }
+  else if a.ended then .bad
+  else
+    match splitTabs line with
+    | ["workers", n] =>
+      match a.workers, parseU n with
+      | none, some k => .go { a with workers := some k }
+      | _, _ => .bad
+    | ["bound", n] =>
+      match a.bound, parseU n with
+      | none, some k => .go { a with bound := some k }
+      | _, _ => .bad
+    | ["queue", n] =>
+      match a.queue, parseU n with
+      | none, some k => .go { a with queue := some k }
+      | _, _ => .bad
+    | ["fuel", n] =>
+      match a.fuel, parseU n with
+      | none, some k => .go { a with fuel := some k }
+      | _, _ => .bad
+    | ["node", name, phase, order, cost, deps] =>
+      if name == "" || (phase != "statement" && phase != "proof") then .bad
+      else
+        match parseU order, parseU cost with
+        | some o, some c =>
+          .go { a with nodes := a.nodes ++ [{ name := name, phase := phase, deps := depsOf deps, order := o, cost := c }] }
+        | _, _ => .bad
+    | _ => .bad
+
+def showGroups (xs : List (Nat × String)) : String :=
+  String.intercalate "\n" (xs.map fun p => s!"group {p.1} {p.2}")
+
+def queueLine (line : String) : Option (List String) :=
+  if line == "queue" || line == "queue -" then some []
+  else if line.startsWith "queue " then
+    some (((line.drop 6).splitOn ",").filter (· != ""))
+  else none
+
+def runSteal (text : String) : IO UInt32 := do
+  let mut qs : Array (List String) := #[]
+  let mut bad := false
+  for line in text.splitOn "\n" do
+    if line == "" || line == "end" then
+      continue
+    else
+      match queueLine line with
+      | some names => qs := qs.push names
+      | none => bad := true
+  if bad || qs.isEmpty then
+    IO.eprintln "input_invalid"
+    return 1
+  let s := Lib.Rsd.Decl.stealOnce qs.toList
+  IO.println s!"moved {s.moved}"
+  IO.println s!"name {s.name}"
+  IO.println s!"from {s.fr}"
+  IO.println s!"to {s.to}"
+  for q in s.queues do
+    if q.isEmpty then IO.println "queue -"
+    else IO.println ("queue " ++ String.intercalate "," q)
+  return 0
+
+def runPlan (text : String) : IO UInt32 := do
+  let mut rest := text.splitOn "\n"
+  let mut a := emptyP
+  let mut bad := false
+  let mut go := true
+  while go do
+    match rest with
+    | [] => go := false
+    | line :: xs =>
+      rest := xs
+      match addP a line with
+      | .bad =>
+        bad := true
+        go := false
+      | .go next =>
+        a := next
+  if bad || !a.ended then
+    IO.eprintln "input_invalid"
+    return 1
+  match a.workers, a.bound, a.fuel with
+  | some workers, some bound, some fuel =>
+    if workers == 0 || bound == 0 || a.nodes.length == 0 then
+      IO.eprintln "bad_argument"
+      return 1
+    let ans := Lib.Rsd.Decl.declWaves a.nodes bound (fuel : Int)
+    if !ans.ok then
+      IO.eprintln ans.residue
+      return 1
+    let groups := Lib.Rsd.Decl.assign workers (Lib.Rsd.Decl.proofsOf (Lib.Rsd.Decl.linkStmt a.nodes))
+    IO.println s!"worker {Lib.Rsd.Decl.workerName}"
+    IO.println s!"queueBound {Lib.Rsd.Decl.queueBound}"
+    IO.println ("waves " ++ Lib.Rsd.Graph.showGroups ans.groups)
+    if groups != [] then
+      IO.println (showGroups groups)
+    IO.println ("diag " ++ String.intercalate "," (Lib.Rsd.Decl.sourceOrder a.nodes))
+    return 0
+  | _, _, _ =>
+    IO.eprintln "input_invalid"
+    return 1
+
+def readStdin : IO String := do
+  let h ← IO.getStdin
+  let mut acc : Array String := #[]
+  let mut fuel := 200000
+  let mut go := true
+  while go do
+    if fuel == 0 then
+      go := false
+    else
+      let line ← h.getLine
+      if line == "" then
+        go := false
+      else
+        acc := acc.push line
+        fuel := fuel - 1
+  let mut out := ""
+  for line in acc do
+    out := out ++ line
+  return out
+
+def hexArg (s : String) : IO (List Int) := do
+  match parseHex s with
+  | some q => pure q
+  | none =>
+    IO.eprintln "q_invalid"
+    throw <| IO.userError "q_invalid"
+
+def printKey (r : Lib.Rsd.Keys.Result) : IO UInt32 := do
+  if !r.ok then
+    IO.eprintln r.residue
+    return 1
+  IO.println (toHex r.bytes)
+  return 0
+
+def main (argv : List String) : IO UInt32 := do
+  match argv with
+  | ["plan"] =>
+    let text ← readStdin
+    runPlan text
+  | ["steal"] =>
+    let text ← readStdin
+    runSteal text
+  | ["artifact", a, b, c] =>
+    printKey (Lib.Rsd.Decl.declArtifact (← hexArg a) (← hexArg b) (← hexArg c))
+  | ["verdict", a, b, c] =>
+    printKey (Lib.Rsd.Decl.declVerdict (← hexArg a) (← hexArg b) (← hexArg c))
+  | ["node", a] =>
+    printKey (Lib.Rsd.Decl.declNode (← hexArg a))
+  | ["replay", a, b] =>
+    let cert ← hexArg a
+    let got ← hexArg b
+    IO.println (Lib.Rsd.Decl.replayResidue cert got)
+    return 0
+  | _ =>
+    IO.eprintln "bad_argument"
+    return 2

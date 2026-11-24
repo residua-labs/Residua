@@ -1,0 +1,315 @@
+-- Pure equivalent of front-rows.cjs at the frozen migration subject. Source
+-- recipes and all verdict decisions live here; the observing device supplies
+-- process results and executable identities. q is the complete preimage.
+namespace Lib.Rsd.FrontCollector
+
+inductive Residue where
+  | sourcePin
+  | mutationAnchor
+  | commandPlan
+  | commandInventory
+  | commandBinding
+  | stockVersion
+  | lawsRows
+  | axiomBasis
+  | mutationEscaped
+  | subsetBuild
+  | subsetVerdict
+  | canonicalBuild
+  | canonicalRoundtrip
+
+def residueName : Residue -> String
+  | Residue.sourcePin => "nf_front_source_pin"
+  | Residue.mutationAnchor => "nf_front_mutation_anchor"
+  | Residue.commandPlan => "nf_front_command_plan"
+  | Residue.commandInventory => "nf_front_command_inventory"
+  | Residue.commandBinding => "nf_front_command_binding"
+  | Residue.stockVersion => "nf_front_stock_version"
+  | Residue.lawsRows => "nf_front_laws_rows"
+  | Residue.axiomBasis => "nf_front_axiom_basis"
+  | Residue.mutationEscaped => "nf_front_mutation_escaped"
+  | Residue.subsetBuild => "nf_front_subset_build"
+  | Residue.subsetVerdict => "nf_front_subset_verdict"
+  | Residue.canonicalBuild => "nf_front_canonical_build"
+  | Residue.canonicalRoundtrip => "nf_front_canonical_roundtrip"
+
+structure Source where
+  path : String
+  body : String
+  deriving BEq, Repr
+
+structure Plan where
+  files : List (Prod String String)
+  command : List String
+  environment : List (Prod String String) := []
+  wallMs : Nat := 60000
+  deriving BEq, Repr
+
+structure Planned where
+  label : String
+  request : Lib.Rsd.CommandReceipt.Request
+  deriving BEq, Repr
+
+structure Request where
+  sources : List Source
+  darwin : Bool
+  plans : List Planned
+  deriving BEq, Repr
+
+structure Cell where
+  label : String
+  state : Lib.Rsd.CommandReceipt.State
+  deriving BEq, Repr
+
+structure State where
+  beforeSourceQ : String
+  afterSourceQ : String
+  cells : List Cell
+  replayNoise : Nat := 0
+  deriving BEq, Repr
+
+structure Key where
+  request : Request
+  observations : State
+  deriving BEq, Repr
+
+structure Result where
+  state : State
+  residue : Option Residue
+
+def subject : String := "7a4b77382fc61c9822167d2f348420bf49234d72"
+def directory : String := "out/rsd/front-rsd"
+def sourcePins : List (Prod String String) := [
+  ("lib/NF.rsd", "d5b20a50d2624cd9a6f393934fb7eeedfbd973c8a6d3977c6c9c0bf6a12567b4"),
+  ("lib/rsd/schedule.rsd", "0e50a7a1d73d5ec1ff4371ca786bc84782d44f48de961e44baecc3e10e0f08d7"),
+  ("lib/rsd/ScheduleRows.rsd", "a37be621a9704936e0e68711794db0cef0c34a8d98be895064b6f099d2bcf636"),
+  ("lib/rsd/ScheduleLaws.rsd", "27abeaa669850d43e559220b440b04942ebf9cf506e0efefe751c1770889273a"),
+  ("lib/Tarjan.rsd", "897d54fa8c4f043bdba00f0bde1a0ea8a73a4594fb4d5b7ad7154bc25ca8182e"),
+  ("lib/ArrayWireNF.rsd", "2f3d8661ba4318bc8febf8d97616f16bad6d45ea3e00ec0816a374ea2b96ec41"),
+  ("rsdc/Compile.rsd", "1fb19b64e0a6f781f650f8a0e7d8a301272c08f7d2378ccf5acf5620f16eefa3"),
+  ("rsdc/Sexp.rsd", "7b145cd8d27712c7dfb215d4de874b97548a36c86a56e0dc845d43ff8ceca524"),
+  ("rsdc/Canon.rsd", "ae48ff07bee91bba412e0b0c0c618438b89eba43e781c0f49fc513d3a3635160"),
+  ("rsdc/Surface.rsd", "14f16b5eccf0430ed892956d8518b65d32d19ab241c3d00a453ca7e6dc61c9de"),
+  ("rsdc/RsxMain.lean", "f176df2f6bc12b0a17bd13f68a1dcfec0f70369aa1b6bb9258e94da9869a2f24"),
+  ("instruments/rsdc-ml/rsdc.ml", "9ade54b8fb7bfda1d0c385ac46b275c337387caccebda53d85c2488b7cf22f72"),]
+
+-- The existing Codec.utf8 recursively appends and exhausts the host stack on
+-- the frozen 551 KiB compiler source. Reuse its per-character encoding with
+-- a tail-recursive fold; small Unicode and all pinned files are differential
+-- rows in the stock oracle. No global codec implementation changes here.
+def utf8 (s : String) : List Int :=
+  (s.toList.foldl (fun acc c => (Lib.Rsd.Codec.utf8Char c).reverse ++ acc) []).reverse
+
+def hash (s : String) : String :=
+  let h := Lib.Rsd.Store.qFast "blob" (utf8 s)
+  if !h.ok then "" else String.join (h.bytes.map fun b =>
+    String.mk [Lib.Rsd.QFloorJson.hexChar (b.toNat / 16),
+      Lib.Rsd.QFloorJson.hexChar (b.toNat % 16)])
+
+def sourceQ : String := "98e9010a9349241619687ba5f1eefbc17bd6f9b336c87fb8e8ee3fa5e2ef60d4"
+
+def pinsOK (sources : List Source) : Bool :=
+  sources.length == sourcePins.length && (sources.zip sourcePins).all (fun (s, p) =>
+    s.path == p.1 && hash s.body == p.2)
+
+def body (r : Request) (path : String) : String :=
+  ((r.sources.find? (fun s => s.path == path)).map (fun s => s.body)).getD ""
+
+def laws : List String := ["sigma_idempotent", "q_sigma", "residue_sigma", "admit_iff",
+  "soundness", "completeness", "step_residue", "exactness", "refusal_exact",
+  "result_canonical", "residue_named", "admitted_whole_outcome", "open_ledger_refused",
+  "discovery_reads", "discovery_body", "discovery_fuel", "discovery_control"]
+
+def mutations : List (Prod String (Prod String String)) := [
+  ("memo-body", "eqQ a.bodyQ b.bodyQ &&", "true &&"),
+  ("memo-fuel", "a.fuel == b.fuel &&", "true &&"),
+  ("memo-reads", "eqQs a.inputQs b.inputQs", "true"),
+  ("fuel-upper-bound", "fuel >= 0 && fuel <= 9223372036854775807", "fuel >= 0"),
+  ("open-ledger", "if !r.ledgerClosed then", "if false then"),
+  ("consumer-domain", "else if !keyOk r.storedKey || !keyOk r.request || !qOk r.controlQ || !qOk r.discoveredControlQ then", "else if false then"),
+  ("discovery-control", "else if !eqQ r.controlQ r.discoveredControlQ then", "else if false then"),
+  ("whole-outcome-value", "outcome := r.stored", "outcome := { r.stored with valueQ := [] }"),
+  ("whole-outcome-residue", "outcome := r.stored", "outcome := { r.stored with residue := \"\" }"),
+  ("whole-outcome-fuel", "outcome := r.stored", "outcome := { r.stored with fuelUsed := 0 }")]
+
+def labels : List String := ["lean-version", "laws-rows-conformance"] ++
+  mutations.map (fun m => "mutant-" ++ m.1) ++
+  ["rsdc-build", "rsdc-subset", "rsx-core-build", "rsx-build", "rsx-link", "rsx-roundtrip"]
+
+def header : String := "import Lean\nset_option linter.unusedVariables false\n"
+
+def joined (r : Request) (paths : List String) : String :=
+  String.intercalate "\n" (paths.map fun path => String.intercalate "\n"
+    (((body r path).splitOn "\n").filter (fun line => !line.startsWith "import ")))
+
+def checkSource (r : Request) : String :=
+  header ++ body r "lib/NF.rsd" ++ "\n" ++ body r "lib/rsd/schedule.rsd" ++ "\n" ++
+  body r "lib/rsd/ScheduleRows.rsd" ++ "\n" ++ body r "lib/rsd/ScheduleLaws.rsd" ++ "\n" ++
+  String.intercalate "\n" (laws.map (fun n => "#print axioms Lib.Rsd.Schedule." ++ n)) ++
+  "\ndef main : IO UInt32 := do\n  let input <- IO.FS.readBinFile \"" ++ directory ++
+  "/frozen/lib/rsd/schedule.rsd\"\n  let r : Lib.NF.Request := { source := input.data.toList.map (fun b => Int.ofNat b.toNat) }\n  match Lib.NF.residue? r 0 with\n  | none => IO.println \"conformance-ok\"; return 0\n  | some e => IO.println (Lib.NF.residueName e); return 1\n"
+
+def canonicalCoreSource (r : Request) : String :=
+  header ++ joined r ["lib/Tarjan.rsd", "lib/ArrayWireNF.rsd", "rsdc/Compile.rsd", "rsdc/Sexp.rsd"] ++ "\n"
+
+def canonicalSource (r : Request) : String :=
+  "import FrontCanonicalCore\n" ++ header ++ "\nnamespace RsdCanonical\n" ++
+  joined r ["rsdc/Canon.rsd", "rsdc/Surface.rsd", "rsdc/RsxMain.lean"] ++
+  "\nend RsdCanonical\ndef main (args : List String) : IO UInt32 := RsdCanonical.main args\n"
+
+def recipe? (r : Request) (label : String) : Option Plan :=
+  if label == "lean-version" then some { files := [], command := ["lean", "--version"] }
+  else if label == "laws-rows-conformance" then some {
+    files := [(directory ++ "/Schedule.rsd", checkSource r)],
+    command := ["lean", "-j4", "-M2048", "--run", directory ++ "/Schedule.rsd"] }
+  else if label == "rsdc-build" then some {
+    files := [(directory ++ "/rsdc.ml", body r "instruments/rsdc-ml/rsdc.ml")],
+    command := ["ocamlopt", "-w", "-8-11-26", "-I", "+unix", "-o", directory ++ "/rsdc_ml", "unix.cmxa", directory ++ "/rsdc.ml"] }
+  else if label == "rsdc-subset" then some {
+    files := [],
+    command := [directory ++ "/rsdc_ml", "check", directory ++ "/frozen/lib/rsd/schedule.rsd"] }
+  else if label == "rsx-core-build" then some {
+    files := [(directory ++ "/FrontCanonicalCore.rsd", canonicalCoreSource r)],
+    -- Named reason: unchanged frozen Compile/Sexp declarations need the
+    -- frozen collector's elaboration budget. Each process stays capped at 60s.
+    command := ["lean", "-j4", "-M6144", "-DmaxHeartbeats=3200000", "-DmaxRecDepth=100000",
+      "--root=" ++ directory, "-o", directory ++ "/FrontCanonicalCore.olean",
+      "-c", directory ++ "/FrontCanonicalCore.c", directory ++ "/FrontCanonicalCore.rsd"] }
+  else if label == "rsx-build" then some {
+    files := [(directory ++ "/Rsx.rsd", canonicalSource r)],
+    environment := [("LEAN_PATH", directory)],
+    -- Named reason: unchanged frozen Canon/Surface/RsxMain declarations use
+    -- the same finite elaboration budget as the original collector.
+    command := ["lean", "-j4", "-M6144", "-DmaxHeartbeats=3200000", "-DmaxRecDepth=100000",
+      "--root=" ++ directory, "-c", directory ++ "/Rsx.c", directory ++ "/Rsx.rsd"] }
+  else if label == "rsx-link" then some {
+    files := [],
+    command := ["leanc", "-O1"] ++ (if r.darwin then ["-Wl,-no_data_const"] else []) ++
+      ["-o", directory ++ "/rsx", directory ++ "/FrontCanonicalCore.c", directory ++ "/Rsx.c"] }
+  else if label == "rsx-roundtrip" then some {
+    files := [],
+    command := [directory ++ "/rsx", directory ++ "/frozen/lib/rsd/schedule.rsd"] }
+  else match mutations.find? (fun m => label == "mutant-" ++ m.1) with
+    | none => none
+    | some m =>
+      let parts := (body r "lib/rsd/schedule.rsd").splitOn m.2.1
+      if parts.length != 2 then none else some {
+        files := [(directory ++ "/" ++ label ++ ".rsd", header ++
+          String.intercalate m.2.2 parts ++ "\n" ++ body r "lib/rsd/ScheduleRows.rsd")],
+        command := ["lean", "-j4", "-M2048", directory ++ "/" ++ label ++ ".rsd"] }
+
+def inputQ (p : Plan) : String :=
+  let inputs := [.str sourceQ,
+    .arr (p.files.map (fun (path, content) => .arr [.str path, .str content]))]
+  let inputs := if p.environment.isEmpty then inputs else inputs ++
+    [.arr (p.environment.map (fun (key, value) => .arr [.str key, .str value]))]
+  "sha256:" ++ hash (Lib.Rsd.QFloorJson.encode 10 (.arr inputs))
+
+def plansOK (r : Request) : Bool :=
+  r.plans.map (fun p => p.label) == labels && r.plans.all (fun p =>
+    match recipe? r p.label with
+    | none => false
+    | some recipe => p.request.profile == Lib.Rsd.CommandReceipt.Profile.front &&
+      p.request.wallMs == recipe.wallMs && p.request.expected.subject == subject &&
+      p.request.expected.sourceQ == sourceQ && p.request.expected.command == recipe.command &&
+      p.request.expected.inputQ == inputQ recipe)
+
+def processBound (p : Planned) (c : Cell) : Bool :=
+  hash c.state.observation.stdout == p.request.expected.stdoutQ &&
+  hash c.state.observation.stderr == p.request.expected.stderrQ &&
+  match Lib.Rsd.CommandReceipt.residue? p.request c.state with
+  | none => true
+  | some Lib.Rsd.CommandReceipt.Residue.commandExit => true
+  | _ => false
+
+def observation (s : State) (label : String) : Lib.Rsd.CommandReceipt.Observation :=
+  ((s.cells.find? (fun c => c.label == label)).map (fun c => c.state.observation)).getD {}
+
+def good (o : Lib.Rsd.CommandReceipt.Observation) : Bool :=
+  Lib.Rsd.CommandReceipt.good Lib.Rsd.CommandReceipt.Profile.front o
+
+def hasText (s needle : String) : Bool := Lib.Rsd.CommandReceipt.hasText s needle
+
+def stockVersionOK (text : String) : Bool :=
+  ((text.splitOn "version 4.14.0").drop 1).any fun suffix =>
+    match suffix.toList with
+    | [] => true
+    | c :: _ =>
+      let n := c.toNat
+      !((n >= 48 && n <= 57) || (n >= 65 && n <= 90) ||
+        (n >= 97 && n <= 122) || n == 95)
+
+-- Parse only stock Lean's complete axiom-report lines, never a supplied Bool.
+def axiomLine? (line : String) : Option (Prod String (List String)) :=
+  match line.splitOn "'" with
+  | ["", name, tail] =>
+    if tail == " does not depend on any axioms" then some (name, [])
+    else if tail.startsWith " depends on axioms: [" && tail.endsWith "]" then
+      let inside := (tail.drop " depends on axioms: [".length).dropRight 1
+      some (name, if inside.isEmpty then [] else (inside.splitOn ",").map String.trim)
+    else none
+  | _ => none
+
+def axiomRows (text : String) : List (Prod String (List String)) :=
+  (text.trim.splitOn "\n").filterMap axiomLine?
+
+def axiomsOK (text : String) : Bool :=
+  let rows := axiomRows text
+  rows.length == laws.length && laws.all (fun name =>
+    (rows.filter (fun row => row.1 == "Lib.Rsd.Schedule." ++ name)).length == 1) &&
+    rows.all (fun row => row.2.all (fun a => a == "propext" || a == "Quot.sound"))
+
+def caught (o : Lib.Rsd.CommandReceipt.Observation) : Bool :=
+  o.exit == some 1 && (Lib.Rsd.CommandReceipt.resource? .front o).isNone &&
+    ["did not evaluate to `true`", "did not evaluate to 'true'", "did not evaluate to \"true\"",
+      "did not evaluate to true"].any (fun diagnostic => hasText o.stdout diagnostic)
+
+def roundtripFlags : List String := ["rtT", "rtC", "rsdQ", "rsxEq", "rsdFix", "emitEq"]
+def roundtripOK (o : Lib.Rsd.CommandReceipt.Observation) : Bool :=
+  good o && roundtripFlags.all (fun name => (o.stdout.trim.splitOn " ").contains (name ++ "=true"))
+
+def sigma (s : State) : State := { s with replayNoise := 0 }
+def q (r : Request) (s : State) : Key := { request := r, observations := sigma s }
+
+def residue? (r : Request) (s : State) : Option Residue :=
+  if !pinsOK r.sources || s.beforeSourceQ != sourceQ || s.afterSourceQ != sourceQ then some Residue.sourcePin
+  else if !mutations.all (fun m => ((body r "lib/rsd/schedule.rsd").splitOn m.2.1).length == 2) then some Residue.mutationAnchor
+  else if !plansOK r then some Residue.commandPlan
+  else if s.cells.map (fun c => c.label) != labels then some Residue.commandInventory
+  else if !(r.plans.zip s.cells).all (fun (p, c) => processBound p c) then some Residue.commandBinding
+  else if !good (observation s "lean-version") ||
+      !stockVersionOK (observation s "lean-version").stdout then some Residue.stockVersion
+  else if !good (observation s "laws-rows-conformance") ||
+      !hasText (observation s "laws-rows-conformance").stdout "conformance-ok" ||
+      ((body r "lib/rsd/ScheduleRows.rsd").splitOn "#guard").length != 33 then some Residue.lawsRows
+  else if !axiomsOK (observation s "laws-rows-conformance").stdout then some Residue.axiomBasis
+  else if !mutations.all (fun m => caught (observation s ("mutant-" ++ m.1))) then some Residue.mutationEscaped
+  else if !good (observation s "rsdc-build") then some Residue.subsetBuild
+  else if !good (observation s "rsdc-subset") || (observation s "rsdc-subset").stdout.trim != "ok" then some Residue.subsetVerdict
+  else if !good (observation s "rsx-core-build") || !good (observation s "rsx-build") ||
+      !good (observation s "rsx-link") then some Residue.canonicalBuild
+  else if !roundtripOK (observation s "rsx-roundtrip") then some Residue.canonicalRoundtrip
+  else none
+
+def admissible (r : Request) (s : State) : Bool := (residue? r (sigma s)).isNone
+def runNF (r : Request) (s : State) : Result :=
+  { state := sigma s, residue := residue? r (sigma s) }
+
+-- NF-CORRECT-0 r2: the checked decision; runNF retains the original
+-- transition and its failure-state observations for existing callers.
+def admit (observation : Key) : Except Residue State :=
+  let answer := (runNF observation.request observation.observations)
+  match answer.residue with
+  | some residue => .error residue
+  | none => .ok answer.state
+
+def decide (r : Request) (s : State) : Except Residue State :=
+  let answer := runNF r s
+  match answer.residue with
+  | some residue => .error residue
+  | none => .ok answer.state
+
+theorem quotient_factorization (r : Request) (s : State) : decide r s = admit (q r s) := rfl
+
+
+end Lib.Rsd.FrontCollector

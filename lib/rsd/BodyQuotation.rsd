@@ -1,0 +1,31 @@
+import incr.Carrier
+import rcic.ScmEvalFuelMono
+
+/-! The pure side of the existing actuator interface transports an observed
+complete worker outcome. It does not execute a native worker or attest its
+effects. The caller binds the recorded observation to the requested action
+before handing it to this module. The complete observation and action witness
+are input data, so a cache hit cannot substitute a partial result. -/
+namespace Lib.Rsd.BodyQuotation
+open Residua.SCMEmission Residua.Incr
+open MSTNFSlotSemanticsCoreMWE
+open MSTNFSlotSemanticsCoreMWE.FuelMono
+
+def observed : Except String (SCMExpr 0) :=
+  Carrier.field (Carrier.field (Carrier.atom "node") "input") "outcome" 0
+
+def observedCore : Expr :=
+  .fieldAccess (.fieldAccess (.var "node") "input") "outcome"
+
+theorem observed_evalLF (value : Val) (nodeTail inputTail : List (String × Val))
+    (programs : Programs) (fuel : Nat) :
+    evalLF observedCore
+      [("node", .record (("input", .record (("outcome", value) :: inputTail)) :: nodeTail))]
+      programs (fuel + 1) = some value := by
+  simp [observedCore, evalLF_fieldAccess_eq, evalLF_var_eq, lookup]
+
+theorem observed_zero_fuel (environment : Env) (programs : Programs) :
+    evalLF observedCore environment programs 0 = none := by
+  exact evalLF_zero observedCore environment programs
+
+end Lib.Rsd.BodyQuotation

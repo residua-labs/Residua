@@ -1,0 +1,5 @@
+def sumList (xs : List Nat) : Nat := Id.run do
+  let mut total := 0
+  for x in xs do
+    total := total + x
+  return total

@@ -1,0 +1,13 @@
+import rsd.BodyQuotation
+import Residua.Exe.SlotEval
+
+/-! Kept outside the generator's import closure: SlotEval also exports a
+command-line entry point. This certificate connects the generated wire AST
+directly to the frozen expression used by observed_evalLF. -/
+namespace Lib.Rsd.BodyQuotation
+
+theorem observed_quotation :
+    Residua.Incr.Carrier.wire observed = .ok (SlotEval.exprToJson observedCore) := by
+  rfl
+
+end Lib.Rsd.BodyQuotation

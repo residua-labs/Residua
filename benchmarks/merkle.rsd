@@ -1,0 +1,171 @@
+-- merkle: the Bend bench/runtime merkle program (HigherOrderCO/Bend,
+-- bench/runtime/merkle/main.bend), ported to P1' Lean 4.14. Same algorithm: 2^d leaves; each leaf
+-- Speck32/64-encrypts its 30 counter blocks (22 ARX rounds per block, the standard test-vector key
+-- expanded offline into the rk table) and chains the ciphertexts into a leaf hash; `build`
+-- materializes the Merkle tree (every Mn node stores mrk of its children), `audit` re-folds the
+-- tree checking every stored hash (a mismatch perturbs the result), `pgen` extracts the Merkle proof
+-- for leaf k by recomputing each sibling subtree hash with the pure scalar `htree` prover, and
+-- `pverify` folds the Path back up from the probed leaf hash. The checksum is
+-- mrk(audit root, recomputed root).
+-- Departure (named, SRC-BEND-U32): the source's U32 words are modeled exactly in checked Int
+-- arithmetic — every op wraps mod 2^32, xor/and/or decompose bit by bit, shl/shr scale by 2^k;
+-- values stay in [0, 2^32), so every modeled op equals the U32 op it replaces (verified by the
+-- value check).
+-- The source's small size (d 4, probe 13) expects 524568222 (verified against a Bend3 C run there);
+-- its main() runs (22, 1337), out of reach here.
+-- Source pin (BENCH-SRC-0, 2026-11-06): HigherOrderCO/Bend commit be236f324ed0338fe907fe50474468e4d3b94157
+-- (main), bench/runtime/merkle/main.bend, sha256
+-- fee3e9144d09a4426a3903656ef485d68d9b9c99822ef02368b5fcbc663e39c9
+-- (raw.githubusercontent.com/HigherOrderCO/Bend/be236f324ed0338fe907fe50474468e4d3b94157/bench/runtime/merkle/main.bend).
+
+def W : Int := 4294967296
+
+def w32 (x : Int) : Int := x % W
+
+def bitXorLoop : Nat → Int → Int → Int → Int → Int
+  | 0, _, _, acc, _ => acc
+  | k + 1, a, b, acc, sc => bitXorLoop k (a / 2) (b / 2) (acc + ((a % 2 + b % 2) % 2) * sc) (sc * 2)
+
+def xor32 (a b : Int) : Int := bitXorLoop 32 a b 0 1
+
+def bitAndLoop : Nat → Int → Int → Int → Int → Int
+  | 0, _, _, acc, _ => acc
+  | k + 1, a, b, acc, sc => bitAndLoop k (a / 2) (b / 2) (acc + (a % 2 * b % 2) * sc) (sc * 2)
+
+def and32 (a b : Int) : Int := bitAndLoop 32 a b 0 1
+
+def bitOrLoop : Nat → Int → Int → Int → Int → Int
+  | 0, _, _, acc, _ => acc
+  | k + 1, a, b, acc, sc => bitOrLoop k (a / 2) (b / 2) (acc + (a % 2 + b % 2 - a % 2 * b % 2) * sc) (sc * 2)
+
+def or32 (a b : Int) : Int := bitOrLoop 32 a b 0 1
+
+def wAdd (a b : Int) : Int := w32 (a + b)
+-- wMul is split at 16 bits so the intermediates stay under the checked-i64
+-- bound (a_lo * b, a_hi * b < 2^48); a*b mod 2^32 is unchanged
+-- (checkedArithmeticStuck at ~2^63 on the flat form, probe-verified)
+def wMul (a b : Int) : Int :=
+  w32 (w32 (w32 (a % 65536) * b) + w32 (w32 (w32 (a / 65536) * b) % 65536) * 65536)
+def wInc (a : Int) : Int := w32 (a + 1)
+
+def pw2 : Nat → Int
+  | 0 => 1
+  | k + 1 => 2 * pw2 k
+
+def wShlN (a : Int) (k : Nat) : Int := w32 (a * pw2 k)
+def wShrN (a : Int) (k : Nat) : Int := a / pw2 k
+
+/-- The source's Mt: Ml{h} / Mn{h, l, r}. -/
+inductive Mt where
+  | ml (h : Int)
+  | mn (h : Int) (l : Mt) (r : Mt)
+
+/-- The source's Path: Pn / Pc{side, sib, rest}. -/
+inductive Path where
+  | pn
+  | pc (side : Int) (sib : Int) (rest : Path)
+
+def blocks : Nat := 30
+
+def selGo (x y : Int) : Bool → Int
+  | true => x
+  | false => y
+
+def sel (t x y : Int) : Int := selGo x y (t == 0)
+
+-- Speck32/64 round keys for key 1918 1110 0908 0100
+def rk : Nat → Int
+  | 0 => 256
+  | 1 => 5394
+  | 2 => 24957
+  | 3 => 5208
+  | 4 => 26905
+  | 5 => 30690
+  | 6 => 3209
+  | 7 => 52443
+  | 8 => 61418
+  | 9 => 20019
+  | 10 => 30452
+  | 11 => 22902
+  | 12 => 61067
+  | 13 => 56068
+  | 14 => 17943
+  | 15 => 62334
+  | 16 => 34740
+  | 17 => 36554
+  | 18 => 60827
+  | 19 => 14930
+  | 20 => 33321
+  | _ => 60772
+
+-- 22 Speck rounds over the 16-bit halves x, y (n counts down, j up)
+def spk : Nat → Nat → Int → Int → Int
+  | 0, _, x, y => or32 x (wShlN y 16)
+  | p + 1, j, x, y =>
+    let nx := and32 (xor32 (and32 (wAdd (and32 (or32 (wShrN x 7) (wShlN x 9)) 65535) y) 65535) (rk j)) 65535
+    let ny := and32 (xor32 (and32 (or32 (wShlN y 2) (wShrN y 14)) 65535) nx) 65535
+    spk p (j + 1) nx ny
+
+-- one leaf: encrypt BLOCKS counter blocks, chain the ciphertexts
+def blk : Nat → Int → Int → Int
+  | 0, _, acc => acc
+  | p + 1, b, acc =>
+    let ct := spk 22 0 (and32 b 65535) (and32 (wShrN b 16) 65535)
+    blk p (wInc b) (wAdd (wMul acc 2654435761) ct)
+
+def leafh (b : Int) : Int := blk blocks (wMul b 30) (wInc b)
+
+-- Merkle join: ARX mix of the two child hashes
+def mrk (a b : Int) : Int :=
+  let hh := xor32 (wMul a 2654435761) b
+  let h2 := xor32 (wMul (wAdd hh 2246822519) 2246822519) (wShrN hh 13)
+  xor32 h2 (wShrN h2 16)
+
+-- the scalar prover: recompute a subtree hash without materializing it
+def htree : Nat → Int → Int
+  | 0, b => leafh b
+  | p + 1, b => mrk (htree p b) (htree p (wAdd b (pw2 p)))
+
+-- join two subtrees into a hashed node (peek the child hashes, rebuild)
+def mjoin : Mt → Mt → Mt
+  | Mt.ml a, Mt.ml b => Mt.mn (mrk a b) (Mt.ml a) (Mt.ml b)
+  | Mt.ml a, Mt.mn c x y => Mt.mn (mrk a c) (Mt.ml a) (Mt.mn c x y)
+  | Mt.mn a x y, Mt.ml b => Mt.mn (mrk a b) (Mt.mn a x y) (Mt.ml b)
+  | Mt.mn a x y, Mt.mn c w z => Mt.mn (mrk a c) (Mt.mn a x y) (Mt.mn c w z)
+
+-- build the Merkle tree over blocks b .. b + 2^d - 1
+def build : Nat → Int → Mt
+  | 0, b => Mt.ml (leafh b)
+  | p + 1, b => mjoin (build p b) (build p (wAdd b (pw2 p)))
+
+-- audit: re-fold the tree; any stored-hash mismatch perturbs the result
+def audit : Mt → Int
+  | Mt.ml h => h
+  | Mt.mn h l r =>
+    let m := mrk (audit l) (audit r)
+    wAdd m (xor32 m h)
+
+-- Merkle proof for leaf k: per level, the side bit and the sibling hash
+-- (recomputed by the scalar prover)
+def pgen : Nat → Int → Int → Path
+  | 0, _, _ => Path.pn
+  | p + 1, k, b =>
+    let bit := and32 (wShrN k p) 1
+    let half := pw2 p
+    let sib := htree p (sel bit (wAdd b half) b)
+    let rest := pgen p k (sel bit b (wAdd b half))
+    Path.pc bit sib rest
+
+-- fold the proof back up from the leaf hash to a root hash
+def pverify : Path → Int → Int
+  | Path.pn, lh => lh
+  | Path.pc s sib rest, lh =>
+    let hh := pverify rest lh
+    mrk (sel s hh sib) (sel s sib hh)
+
+/-- Root: `merkle d k` is mrk(audit(build(d, 0)), pverify(pgen(d, k, 0),
+leafh(k))); the source's documented small size (4, 13) expects 524568222,
+its main() runs (22, 1337). -/
+def merkle (d k : Int) : Int :=
+  let t := build d.toNat 0
+  mrk (audit t) (pverify (pgen d.toNat k 0) (leafh k))

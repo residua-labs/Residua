@@ -1,0 +1,23 @@
+namespace Lib.Rsd.FrontCollector
+
+theorem sigma_idempotent (s : State) : sigma (sigma s) = sigma s := rfl
+theorem q_sigma (r : Request) (s : State) : q r (sigma s) = q r s := rfl
+theorem residue_sigma (r : Request) (s : State) : residue? r (sigma s) = residue? r s := rfl
+theorem admit_iff (r : Request) (s : State) :
+    admissible r s = true <-> residue? r s = none := by
+  simp [admissible, residue_sigma, Option.isNone_iff_eq_none]
+theorem soundness (r : Request) (s : State) (h : admissible r s = true) :
+    residue? r s = none := (admit_iff r s).mp h
+theorem completeness (r : Request) (s : State) (h : residue? r s = none) :
+    admissible r s = true := (admit_iff r s).mpr h
+theorem step_residue (r : Request) (s : State) :
+    (runNF r s).residue = residue? r s := rfl
+theorem exactness (r : Request) (s : State) :
+    (runNF r s).residue = none <-> admissible r s = true := (admit_iff r s).symm
+theorem refusal_exact (r : Request) (s : State) (e : Residue) :
+    (runNF r s).residue = some e <-> residue? r s = some e := Iff.rfl
+theorem result_canonical (r : Request) (s : State) :
+    sigma (runNF r s).state = (runNF r s).state := rfl
+theorem residue_named (e : Residue) : residueName e != "" := by cases e <;> decide
+
+end Lib.Rsd.FrontCollector

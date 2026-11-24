@@ -1,0 +1,6 @@
+#lang rsd
+(define (sumList [xs : (List Nat)] ) : Nat (Id.run (do:
+  (#:syntax225 (#:syntax134 (#:tree-name total) #:none (#:tree-num 0)))
+  (#:syntax206 (#:tree12 (#:syntax207 #:none (#:tree-name x) (#:tree-name xs)) #:none) (#:tree46-general (#:syntax223 (#:tree-name total) #:none (#:binary1 (#:tree-name total) (#:tree-name x))) ))
+  (return total)
+)))

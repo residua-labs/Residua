@@ -37,7 +37,9 @@
 --
 -- K is what stands between the call and the return. K[_] is K without its use of r, which is
 -- either the field i of the constructor that makes z, or a `set z[i] := r` on a cell the function
--- took for reuse (lib/lrc/ExpandResetReuse.rsd, the fast path).
+-- took for reuse (lib/lrc/ExpandResetReuse.rsd, the fast path). A `reuse` makes z as a constructor
+-- does (the same file, "One copy of the code after a reset": the token is a cell or the boxed zero
+-- at run time).
 --
 -- The pass runs last, on bodies whose counting is explicit, so that what K may hold can be read
 -- off its instructions. K is moved before the call, and that is sound when
@@ -47,8 +49,11 @@
 --     pass keeps in place);
 --   * K has no `dec` and no `del`: a release before the call could free what the call reads;
 --   * K reads r nowhere else and reads z nowhere at all, so nothing sees the open field;
---   * no object K writes to (z, or another cell taken for reuse) is an argument of the call. Such
---     a cell is unique, so the callee reaches it through an argument or not at all.
+--   * no object K writes to (z, or another cell taken for reuse, or the token of a `reuse`) is an
+--     argument of the call. Such a cell is unique, so the callee reaches it through an argument or
+--     not at all. A token's cell is the object its `reset` took; that object is not an argument
+--     either: a reset stands where its object is no longer live (lib/lrc/ResetReuse.rsd
+--     `rrDFinalize`, ResetReuse.lean:116), so nothing after it names the object.
 -- The fuel is as before: f calls g at its fuel less one, as it called f, and g's jump to its own
 -- start tests and counts as every self tail call does (lib/lrc/Emit.rsd `emBody`). g is not one
 -- of the stage's own list functions (lib/lrc/Ir.rsd `isOwnFn`): it takes fuel as f does. A call
@@ -86,7 +91,11 @@ partial def tcRetVar (n : N) : Int :=
 
 -- an expression that may stand before the call: it cannot refuse and reads no count
 def tcMovable (e : N) : Bool :=
-  e.op == opCtor || e.op == opLit || e.op == opLitStr || e.op == opProj || e.op == opSProj
+  e.op == opCtor || e.op == opReuse || e.op == opLit || e.op == opLitStr || e.op == opProj || e.op == opSProj
+
+-- the fields an expression gives the object it makes: a constructor's, a reuse's
+def tcMakes (e : N) : Bool := e.op == opCtor || e.op == opReuse
+def tcFields (e : N) : List Int := if e.op == opReuse then reuseArgs e else e.ys
 
 -- The context k after `let r := f args`, which returns z: the index of the field of z that r
 -- fills, or -2 when k is not a context the head of this file allows. `idx` is the field found
@@ -96,8 +105,9 @@ partial def tcHole (r z : Int) (args : List Int) (idx : Int) (n : N) : Int :=
   else if n.op == opVDecl then
     let e := vdeclExpr n
     if !n.ys.isEmpty || !tcMovable e || tcMember z (exprArgs e) then -2
-    else if e.op == opCtor && n.a == z && idx == -1 && tcCount r e.ys == 1 then
-      tcHole r z args ((tcPos r e.ys : Nat) : Int) (bodyOf n)
+    else if e.op == opReuse && tcMember (reuseVar e : Int) args then -2
+    else if tcMakes e && n.a == z && idx == -1 && tcCount r (tcFields e) == 1 && !(e.op == opReuse && (reuseVar e : Int) == r) then
+      tcHole r z args ((tcPos r (tcFields e) : Nat) : Int) (bodyOf n)
     else if tcMember r (exprArgs e) then -2
     else tcHole r z args idx (bodyOf n)
   else if n.op == opSet then
@@ -125,7 +135,10 @@ partial def tcOpen (r : Int) (tail : N) (n : N) : N :=
   if n.op == opRet then tail
   else if n.op == opVDecl then
     let e := vdeclExpr n
-    { n with kids := [if e.op == opCtor then { e with ys := tcOpenArgs r e.ys } else e, tcOpen r tail (bodyOf n)] }
+    let e2 := if e.op == opCtor then { e with ys := tcOpenArgs r e.ys }
+              else if e.op == opReuse then { e with ys := e.ys.take 2 ++ tcOpenArgs r (reuseArgs e) }
+              else e
+    { n with kids := [e2, tcOpen r tail (bodyOf n)] }
   else if n.op == opSet && setArg n == r then tcOpen r tail (bodyOf n)
   else setBody n (tcOpen r tail (bodyOf n))
 
@@ -148,15 +161,21 @@ structure TcEnv where
   u : Nat
   zv : Nat
   cv : Nat
+  -- f is one of the stage's own list functions, which take no fuel: g is entered at the caller's fuel and its
+  -- jump to its own start counts nothing down (lib/lrc/Ir.rsd `fapSame`)
+  same : Bool := false
   deriving Inhabited
+
+-- a call of g: at the caller's fuel less one as a call of f is, or at the caller's own (`same`)
+def tcFapG (cx : TcEnv) (ys : List Int) : N := if cx.same then mkFapSame cx.g ys else mkFap cx.g ys
 
 -- g ys dst di root, whose result is returned at once: in g a jump to its start
 def tcJumpG (cx : TcEnv) (ys : List Int) (dst di root : Int) : N :=
-  mkVDecl cx.u cx.rty (mkFap cx.g (ys ++ [dst, di, root])) (mkRet [(cx.u : Int)])
+  mkVDecl cx.u cx.rty (tcFapG cx (ys ++ [dst, di, root])) (mkRet [(cx.u : Int)])
 
 -- the plain form: g ys dst di, which returns nothing, then `after`
 def tcCallG (cx : TcEnv) (ys : List Int) (dst di : Int) (after : N) : N :=
-  mkVDecl cx.u tyIrr (mkFap cx.g (ys ++ [dst, di])) after
+  mkVDecl cx.u tyIrr (tcFapG cx (ys ++ [dst, di])) after
 
 -- g's two ways at a store: `has` with a destination, `hasNot` without one (di < 0)
 def tcIfDest (cx : TcEnv) (has hasNot : N) : N :=
@@ -238,21 +257,23 @@ partial def tcSelfValueAlts (self np : Nat) : List N → Bool
   | alt :: alts => tcSelfValue self np (altBody alt) || tcSelfValueAlts self np alts
 end
 
--- f rewritten, and its destination-passing form as function g; `val`: the form with the root
-def tcDecl (d : Decl) (g : Nat) (val : Bool) : TcPair :=
+-- f rewritten, and its destination-passing form as function g; `val`: the form with the root; `same`: f takes no fuel
+def tcDecl (d : Decl) (g : Nat) (val : Bool) (same : Bool) : TcPair :=
   let m := declMaxIndex d
   let cx : TcEnv := { self := d.f, g := g, np := d.xs.length, dps := false, val := val, dst := m + 1, di := m + 2, root := m + 3,
-                      rty := intAt 0 d.rets, iv := m + 4, u := m + 5, zv := m + 6, cv := m + 7 }
+                      rty := intAt 0 d.rets, iv := m + 4, u := m + 5, zv := m + 6, cv := m + 7, same := same }
   let own : List Param := [{ x := m + 1, borrow := true, ty := tyObj }, { x := m + 2, borrow := false, ty := tyI64 }]
     ++ (if val then [{ x := m + 3, borrow := true, ty := tyObj }] else [])
   let dps : Decl := { f := g, xs := d.xs ++ own, rets := if val then d.rets else [],
                       body := tcGo { cx with dps := true } d.body, ext := false }
   { direct := declNormalizeIds { d with body := tcGo cx d.body }, dps := declNormalizeIds dps }
 
--- a function that takes fuel (an image function, or a clone of one), with a body, one object for its
--- result, and such a call
+-- a function with a body, one object for its result, and such a call. One of the stage's own list functions
+-- (the recursive append, lib/lrc/FromWire.rsd `declAppRec`) has the plain form only: nothing calls it for a value
+-- from inside, and a call from outside stays a call of f.
 def tcApplies (nImg : Nat) (d : Decl) : Bool :=
-  !d.ext && !isOwnFn nImg d.f && d.rets.length == 1 && tyIsObj (intAt 0 d.rets) && tcAny d.f d.xs.length d.body
+  !d.ext && d.rets.length == 1 && tyIsObj (intAt 0 d.rets) && tcAny d.f d.xs.length d.body
+    && !(isOwnFn nImg d.f && tcSelfValue d.f d.xs.length d.body)
 
 -- `pairs`: f, g, f, g, ... for every function f whose form g also serves calls for a value
 structure TcR where
@@ -265,8 +286,9 @@ def trmcGo (nImg mode : Nat) : Nat → List Decl → TcR
   | _, [] => { decls := [], added := [], pairs := [] }
   | next, d :: ds =>
     if tcApplies nImg d then
-      let val := mode == 2 || (mode == 0 && tcSelfValue d.f d.xs.length d.body)
-      let p := tcDecl d next val
+      let own := isOwnFn nImg d.f
+      let val := !own && (mode == 2 || (mode == 0 && tcSelfValue d.f d.xs.length d.body))
+      let p := tcDecl d next val own
       let r := trmcGo nImg mode (next + 1) ds
       { decls := p.direct :: r.decls, added := p.dps :: r.added,
         pairs := if val then (d.f : Int) :: (next : Int) :: r.pairs else r.pairs }

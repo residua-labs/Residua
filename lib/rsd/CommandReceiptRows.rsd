@@ -1,0 +1,144 @@
+-- Generated classifier boundaries use explicit trace facts as the reference,
+-- not the candidate's substring matcher or resource? implementation.
+namespace Lib.Rsd.CommandReceiptRows
+open Lib.Rsd.CommandReceipt
+open Lib.Rsd.QFloorJson
+
+structure Trace where
+  name : String
+  stdout : String
+  stderr : String
+  memory : Bool := false
+  recursion : Bool := false
+  heartbeats : Bool := false
+
+def traces : List Trace := [
+  { name := "quiet", stdout := "", stderr := "" },
+  { name := "memory-out", stdout := "excessive memory consumption detected", stderr := "", memory := true },
+  { name := "memory-err", stdout := "", stderr := "maximum memory consumption", memory := true },
+  { name := "recursion-out", stdout := "maximum recursion depth has been reached", stderr := "", recursion := true },
+  { name := "recursion-err", stdout := "", stderr := "maximum recursion depth has been reached", recursion := true },
+  { name := "heartbeats-out", stdout := "maximum number of heartbeats", stderr := "", heartbeats := true },
+  { name := "heartbeats-err", stdout := "", stderr := "maximum number of heartbeats", heartbeats := true },
+  { name := "all-priority", stdout := "maximum number of heartbeats\nmaximum recursion depth has been reached",
+    stderr := "maximum memory consumption", memory := true, recursion := true, heartbeats := true },
+  { name := "case-sensitive", stdout := "Maximum memory consumption", stderr := "maximum number of heartbeat" },
+  { name := "stream-boundary", stdout := "maximum memory", stderr := "consumption" }
+]
+
+def binding : Binding :=
+  { subject := "subject", sourceQ := "source", command := ["lean", "input.rsd"],
+    executableQ := "executable", inputQ := "input", stdoutQ := "stdout", stderrQ := "stderr" }
+def request : Request := { profile := .engine, wallMs := 60000, expected := binding }
+def state : State :=
+  { observed := binding, beforeSourceQ := "source", afterSourceQ := "source", observation := { exit := some 0 } }
+
+structure Row where
+  name : String
+  ok : Bool
+
+def resultName (r : Request) (s : State) : Option String := (runNF r s).residue.map residueName
+
+def expectedResource (p : Profile) (exit : Option Int) (error signal : Option String) (t : Trace) : Option String :=
+  let ordered := [
+    (exit == some 124 || error == some "ETIMEDOUT", "nf_rsd_command_wall"),
+    (p == .engine && error == some "ENOBUFS", "nf_rsd_command_output"),
+    (error.isSome, "nf_rsd_tool_launch"),
+    (p == .engine && t.memory, "nf_rsd_command_memory"),
+    (p == .engine && t.recursion, "nf_rsd_command_recursion"),
+    (p == .engine && t.heartbeats, "nf_rsd_command_heartbeats"),
+    (signal.any (fun s => !s.isEmpty) || (p == .engine && exit == some 137), "nf_rsd_command_terminated")]
+  (ordered.find? Prod.fst).map Prod.snd
+
+def classifierRows : List Row := Id.run do
+  let mut rows : List Row := []
+  for p in [Profile.front, Profile.engine] do
+    for exit in [none, some 0, some 1, some 124, some 137] do
+      for error in [none, some "ETIMEDOUT", some "ENOBUFS", some "ENOENT", some ""] do
+        for signal in [none, some "SIGKILL", some ""] do
+          for t in traces do
+            let o : Observation := { exit, errorCode := error, signal, stdout := t.stdout, stderr := t.stderr }
+            let expected := expectedResource p exit error signal t
+            let req := { request with profile := p }
+            let s := { state with observation := o, replayNoise := 7 }
+            let wanted := expected.getD (if exit == some 0 then "" else "nf_rsd_command_exit")
+            let ok := (resource? p o).map residueName == expected &&
+                good p o == (exit == some 0 && expected.isNone) &&
+                ((runNF req s).residue.map residueName).getD "" == wanted &&
+                (runNF req s).state.replayNoise == 0
+            rows := { name := s!"{repr p}/{repr exit}/{repr error}/{repr signal}/{t.name}", ok } :: rows
+  return rows.reverse
+
+def bindingRows : List Row :=
+  let changes : List (String × Binding) := [
+    ("subject", { binding with subject := "foreign" }),
+    ("sourceQ", { binding with sourceQ := "foreign" }),
+    ("command", { binding with command := ["other"] }),
+    ("executableQ", { binding with executableQ := "foreign" }),
+    ("inputQ", { binding with inputQ := "foreign" }),
+    ("stdoutQ", { binding with stdoutQ := "foreign" }),
+    ("stderrQ", { binding with stderrQ := "foreign" })]
+  changes.map fun (name, b) =>
+    { name := "binding/" ++ name,
+      ok := resultName request { state with observed := b } == some "nf_rsd_receipt_binding" &&
+        q request { state with observed := b } != q request state }
+
+def boundaryRows : List Row :=
+  ([0, 1, 60000, 299999, 300000, 300001].map fun n =>
+    { name := "wall/" ++ toString n,
+      ok := resultName { request with wallMs := n } state ==
+        (if n == 0 || n == 300001 then some "nf_rsd_plan_wall" else none) }) ++ bindingRows ++ [
+  { name := "source/before", ok := resultName request { state with beforeSourceQ := "foreign" } == some "nf_rsd_source_before" },
+  { name := "source/after", ok := resultName request { state with afterSourceQ := "foreign" } == some "nf_rsd_source_after" },
+  { name := "source/priority", ok := resultName request { state with beforeSourceQ := "foreign", afterSourceQ := "foreign" } == some "nf_rsd_source_before" },
+  { name := "noise", ok := q request { state with replayNoise := 99 } == q request state },
+  { name := "raw-key", ok := q request { state with observation := { exit := some 0, stdout := "different" } } != q request state },
+  { name := "source-key", ok := q request { state with afterSourceQ := "different" } != q request state },
+  { name := "profile-key", ok := q { request with profile := .front } state != q request state },
+  { name := "plan-key", ok := q { request with wallMs := 1 } state != q request state }
+]
+
+-- These are compile/run mutations; a compilation error is not a caught mutant.
+def mutations : List (String × String × String) := [
+  ("exit137", "(profile == Profile.engine && o.exit == some 137)", "false"),
+  ("front-memory", "profile == Profile.engine &&\n        (hasText", "true &&\n        (hasText"),
+  ("binding-input", "s.observed != r.expected", "{ s.observed with inputQ := r.expected.inputQ } != r.expected"),
+  ("source-after", "s.afterSourceQ != r.expected.sourceQ", "false"),
+  ("wall-cap", "r.wallMs > 300000", "r.wallMs > 300001")]
+
+def allRows : List Row := classifierRows ++ boundaryRows
+def failures (rows : List Row) : List String := rows.filterMap fun r => if r.ok then none else some r.name
+
+inductive Residue where
+  | differentialChanged
+def residueName : Residue -> String
+  | Residue.differentialChanged => "nf_rsd_command_rows_changed"
+structure Request where
+  rows : List Row
+structure State where
+  failures : List String
+structure Result where
+  state : State
+  residue : Option Residue
+
+
+def residue? (r : Request) (_s : State) : Option Residue :=
+  if (failures r.rows).isEmpty then none else some .differentialChanged
+def admissible (r : Request) (s : State) : Bool := (residue? r (id s)).isNone
+def runNF (r : Request) (_s : State) : Result :=
+  { state := { failures := failures r.rows }, residue := residue? r { failures := [] } }
+
+-- NF-CORRECT-0 r2: the checked decision; runNF retains the original
+-- transition and its failure-state observations for existing callers.
+def decide (r : Request) (_s : State) : Except Residue State :=
+  let answer := runNF r _s
+  match answer.residue with
+  | some residue => .error residue
+  | none => .ok answer.state
+
+
+def report (rows : List Row) : String := encode 6 (.obj [
+  ("schema", .str "rsd-command-rows/1"), ("closure_claim", .int 0),
+  ("rows", .int rows.length), ("failures", .arr ((failures rows).map Value.str))])
+
+end Lib.Rsd.CommandReceiptRows

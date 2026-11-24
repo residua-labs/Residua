@@ -1,0 +1,108 @@
+-- Proofs over the exact lib/rsd/schedule.rsd definitions.
+-- Explicit proof terms; no tactics, no added axioms.
+namespace Lib.Rsd.Schedule
+
+deriving instance DecidableEq for Residue
+
+theorem sigma_idempotent (s : Lookup) : sigma (sigma s) = sigma s := rfl
+
+theorem q_sigma (r : Request) (s : Lookup) : q r (sigma s) = q r s := rfl
+
+theorem residue_sigma (r : Request) (s : Lookup) : residue? r (sigma s) = residue? r s := rfl
+
+theorem admit_iff (r : Request) (s : Lookup) : admit r s = true <-> residue? r s = none :=
+  Option.isNone_iff_eq_none
+
+theorem soundness (r : Request) (s : Lookup) (h : admit r s = true) : residue? r s = none :=
+  (admit_iff r s).mp h
+
+theorem completeness (r : Request) (s : Lookup) (h : residue? r s = none) : admit r s = true :=
+  (admit_iff r s).mpr h
+
+theorem step_residue (r : Request) (s : Lookup) : (step r s).residue = residue? r s := rfl
+
+theorem exactness (r : Request) (s : Lookup) :
+    (step r s).residue = none <-> admit r s = true :=
+  (admit_iff r s).symm
+
+theorem refusal_exact (r : Request) (s : Lookup) (e : Residue) :
+    (step r s).residue = some e <-> residue? r s = some e := Iff.rfl
+
+theorem result_canonical (r : Request) (s : Lookup) :
+    sigma (step r s).state = (step r s).state := rfl
+
+theorem residue_named (e : Residue) : residueName e != "" :=
+  match e with
+  | Residue.readLedgerOpen => rfl
+  | Residue.discoveryControlChanged => rfl
+  | Residue.consumerDomainRefused => rfl
+  | Residue.unobservedMissing => rfl
+
+-- Bool if-negation as an equation, for folding decision's nested ifs.
+theorem if_ne {c : Bool} {α : Type} {a b : α} (h : c = false) : (if c then a else b) = b :=
+  if_neg (fun ht => Bool.noConfusion (ht.symm.trans h))
+
+theorem admitted_whole_outcome (r : Request) (s : Lookup) (h : admit r s = true) :
+    (step r s).state = { hit := true, outcome := r.stored } :=
+  have hn : (decision r).residue = none := (admit_iff r s).mp h
+  match h1 : !r.ledgerClosed with
+  | true =>
+    (Option.noConfusion ((congrArg Result.residue (if_pos h1)).symm.trans hn))
+  | false =>
+    match h2 : (!keyOk r.storedKey || !keyOk r.request || !qOk r.controlQ || !qOk r.discoveredControlQ) with
+    | true =>
+      (Option.noConfusion ((congrArg Result.residue ((if_ne h1).trans (if_pos h2))).symm.trans hn))
+    | false =>
+      match h3 : (!eqQ r.controlQ r.discoveredControlQ) with
+      | true =>
+        (Option.noConfusion
+          ((congrArg Result.residue ((if_ne h1).trans ((if_ne h2).trans (if_pos h3)))).symm.trans hn))
+      | false =>
+        match h4 : (!sameKey r.storedKey r.request) with
+        | true =>
+          (Option.noConfusion
+            ((congrArg Result.residue
+              ((if_ne h1).trans ((if_ne h2).trans ((if_ne h3).trans (if_pos h4))))).symm.trans hn))
+        | false =>
+          congrArg Result.state
+            ((if_ne h1).trans ((if_ne h2).trans ((if_ne h3).trans (if_ne h4))))
+
+theorem open_ledger_refused (r : Request) (s : Lookup) (h : r.ledgerClosed = false) :
+    (step r s).residue = some Residue.readLedgerOpen :=
+  congrArg Result.residue (if_pos (congrArg Bool.not h))
+
+theorem discovery_reads (k : MemoKey) (o : Outcome) (body control : List Int)
+    (fuel : Int) (d : Discovered) (closed : Bool) :
+    (discoveryRequest k o body control fuel d closed).request.inputQs = d.reads := rfl
+
+theorem discovery_body (k : MemoKey) (o : Outcome) (body control : List Int)
+    (fuel : Int) (d : Discovered) (closed : Bool) :
+    (discoveryRequest k o body control fuel d closed).request.bodyQ = body := rfl
+
+theorem discovery_fuel (k : MemoKey) (o : Outcome) (body control : List Int)
+    (fuel : Int) (d : Discovered) (closed : Bool) :
+    (discoveryRequest k o body control fuel d closed).request.fuel = fuel := rfl
+
+theorem discovery_control (k : MemoKey) (o : Outcome) (body control : List Int)
+    (fuel : Int) (d : Discovered) (closed : Bool) :
+    (discoveryRequest k o body control fuel d closed).discoveredControlQ = d.controlQ := rfl
+
+#print axioms sigma_idempotent
+#print axioms q_sigma
+#print axioms residue_sigma
+#print axioms admit_iff
+#print axioms soundness
+#print axioms completeness
+#print axioms step_residue
+#print axioms exactness
+#print axioms refusal_exact
+#print axioms result_canonical
+#print axioms residue_named
+#print axioms admitted_whole_outcome
+#print axioms open_ledger_refused
+#print axioms discovery_reads
+#print axioms discovery_body
+#print axioms discovery_fuel
+#print axioms discovery_control
+
+end Lib.Rsd.Schedule

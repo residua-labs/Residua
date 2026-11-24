@@ -1,9 +1,11 @@
-# CONTRIBUTING 与 SECURITY — 贡献与安全
+# 贡献与安全
 
 [English](CONTRIBUTING-SECURITY.md) | 中文
 
-在公开仓库上提 issue 与讨论。安全报告通过仓库上 GitHub 的私密
-安全通告（private security advisory）提交。
+本指针页保留 docs 侧到两个根文件的入口：
 
-外部贡献：外部结果的准入路径（按 q 发布、经检查准入）不在 0.2；
-在它存在之前，贡献以 issue 形式评审。
+- 贡献：[CONTRIBUTING.zh-CN.md](../CONTRIBUTING.zh-CN.md)。
+- 安全报告：[SECURITY.md](../SECURITY.md)（仅英文）。
+
+外部贡献：外部结果的准入路径（按 q 发布、经检查准入）不在 0.3；
+在其存在之前，贡献以 issue 形式评审。

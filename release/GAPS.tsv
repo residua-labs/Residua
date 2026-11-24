@@ -1,39 +1,9 @@
 path	what	why
-bench/	clean 14 internal-path/seat-name/contract-path hits listed in release/scan/leakage.tsv	path owned outside release/; rows are the fix input
-benchmarks/	clean 56 internal-path/seat-name/contract-path hits listed in release/scan/leakage.tsv	path owned outside release/; rows are the fix input
-bootstrap/	clean 33 internal-path/seat-name/contract-path hits listed in release/scan/leakage.tsv	path owned outside release/; rows are the fix input
-ci/	clean 19 internal-path/seat-name/contract-path hits listed in release/scan/leakage.tsv	path owned outside release/; rows are the fix input
-contract/	clean 2 internal-path/seat-name/contract-path hits listed in release/scan/leakage.tsv	path owned outside release/; rows are the fix input
-contracts/	clean 12 internal-path/seat-name/contract-path hits listed in release/scan/leakage.tsv	path owned outside release/; rows are the fix input
-discovery/	clean 5 internal-path/seat-name/contract-path hits listed in release/scan/leakage.tsv	path owned outside release/; rows are the fix input
-docs/	clean 207 internal-path/seat-name/contract-path hits listed in release/scan/leakage.tsv	path owned outside release/; rows are the fix input
-e2e/	clean 18 internal-path/seat-name/contract-path hits listed in release/scan/leakage.tsv	path owned outside release/; rows are the fix input
-emitter/	clean 14 internal-path/seat-name/contract-path hits listed in release/scan/leakage.tsv	path owned outside release/; rows are the fix input
-gates/	clean 52 internal-path/seat-name/contract-path hits listed in release/scan/leakage.tsv	path owned outside release/; rows are the fix input
-host/	clean 15 internal-path/seat-name/contract-path hits listed in release/scan/leakage.tsv	path owned outside release/; rows are the fix input
-hyper/	clean 103 internal-path/seat-name/contract-path hits listed in release/scan/leakage.tsv	path owned outside release/; rows are the fix input
-instruments/	clean 7 internal-path/seat-name/contract-path hits listed in release/scan/leakage.tsv	path owned outside release/; rows are the fix input
-ksem-bridge0/	clean 2 internal-path/seat-name/contract-path hits listed in release/scan/leakage.tsv	path owned outside release/; rows are the fix input
-lean/	clean 11 internal-path/seat-name/contract-path hits listed in release/scan/leakage.tsv	path owned outside release/; rows are the fix input
-lib/	clean 34 internal-path/seat-name/contract-path hits listed in release/scan/leakage.tsv	path owned outside release/; rows are the fix input
-native-cert/	clean 1 internal-path/seat-name/contract-path hits listed in release/scan/leakage.tsv	path owned outside release/; rows are the fix input
-opt/	clean 1 internal-path/seat-name/contract-path hits listed in release/scan/leakage.tsv	path owned outside release/; rows are the fix input
-oracle/	clean 3 internal-path/seat-name/contract-path hits listed in release/scan/leakage.tsv	path owned outside release/; rows are the fix input
-policy/	clean 61 internal-path/seat-name/contract-path hits listed in release/scan/leakage.tsv	path owned outside release/; rows are the fix input
-proofs/	clean 4 internal-path/seat-name/contract-path hits listed in release/scan/leakage.tsv	path owned outside release/; rows are the fix input
-quench/	clean 825 internal-path/seat-name/contract-path hits listed in release/scan/leakage.tsv	path owned outside release/; rows are the fix input
-rsd/	clean 1 internal-path/seat-name/contract-path hits listed in release/scan/leakage.tsv	path owned outside release/; rows are the fix input
-rcic/	clean 25 internal-path/seat-name/contract-path hits listed in release/scan/leakage.tsv	path owned outside release/; rows are the fix input
-regex/	clean 19 internal-path/seat-name/contract-path hits listed in release/scan/leakage.tsv	path owned outside release/; rows are the fix input
-rsc/	clean 548 internal-path/seat-name/contract-path hits listed in release/scan/leakage.tsv	path owned outside release/; rows are the fix input
-rsdc/	clean 349 internal-path/seat-name/contract-path hits listed in release/scan/leakage.tsv	path owned outside release/; rows are the fix input
-scm/	clean 1 internal-path/seat-name/contract-path hits listed in release/scan/leakage.tsv	path owned outside release/; rows are the fix input
-seal/	clean 111 internal-path/seat-name/contract-path hits listed in release/scan/leakage.tsv	path owned outside release/; rows are the fix input
-semantics/	clean 17 internal-path/seat-name/contract-path hits listed in release/scan/leakage.tsv	path owned outside release/; rows are the fix input
-sql/	clean 13 internal-path/seat-name/contract-path hits listed in release/scan/leakage.tsv	path owned outside release/; rows are the fix input
-template/	clean 3 internal-path/seat-name/contract-path hits listed in release/scan/leakage.tsv	path owned outside release/; rows are the fix input
-rsd/	clean 124 internal-path/seat-name/contract-path hits listed in release/scan/leakage.tsv	path owned outside release/; rows are the fix input
-vbench/	clean 22 internal-path/seat-name/contract-path hits listed in release/scan/leakage.tsv	path owned outside release/; rows are the fix input
-web/	clean 20 internal-path/seat-name/contract-path hits listed in release/scan/leakage.tsv	path owned outside release/; rows are the fix input
-tool/ rsd front door	the `rsd build/test/run/cache/modules` command named by PUBLIC-RELEASE-0's Rsd closure	rsd-close/SEED-BUILD-RSD.wip.md lists "the actual rsd build/test front door" as remaining closure work; RSD-COMMAND doc is a skeleton until it lands
-release tarball	layout, ship-set membership (contracts/, reports/, scratch/, out/, vbench gitlink), two-host reproducibility	open.public_release items p1/p6; INSTALL and VERIFY-RELEASE stay skeletons until the cut exists
+rsd/, lib/rsd/, lib/Rsd.rsd	building the `rsd` build tool from this archive	part of the tool's module closure is repository-side, so `rsd build` cannot rebuild the compiler worker from the archive alone; the runnable compiler here is the seed recipe
+lean/nf-compose/	`lake build` from this archive	the `algorithms` library in `lakefile.lean` reads sources at `../hyper`, a repository-side directory; the shipped tree is the audit copy the check ran on
+semantics/Effect/AdmissionNF.lean	`lean` check from this archive	its imports (`Lib.Exec9Core`, `Lib.Receipt`) are repository-side; the file ships for audit
+instruments/lrc-host/	the `Diff.rsd`/`CheckImage.rsd` check on `Images.tsv` rows	ten `img/*.rscm` images the table names are repository-side; the check runs inside the development repository
+benchmarks/koka/	running `KokaBase.rsd`	from this archive	the OCaml reference front end and the `rsd` tool build chain it drives are repository-side; the shipped file and tables are the audit copy
+rsdc/syntax/	the syntax engine's implementation sources	they ship inside the seed's whole-module source bundles (`bootstrap/seed/stage-14274/sources/`), not as files under `rsdc/syntax/`; the grammar profiles ship at `rsdc/profiles/`
+perf/HISTORY.tsv	0.3 performance rows	the record rule lands each version's rows with its measurement run; the 0.3 run has not landed yet — the archive carries the 0.1 record
+compiler chain (`rsdc`, `rsc`)	`ExecModel` instance	no instance yet; see the MST-NF status table in `docs/RELEASE-NOTES.md`

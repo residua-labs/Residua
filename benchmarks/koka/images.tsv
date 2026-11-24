@@ -1,0 +1,10 @@
+name	kind	source	sha256	refusal
+binarytrees	taken	benchmarks/binarytrees.rsd	283c0761eba018d3c7c0ad3dd2f029bc26d142021477834f571424d7e64ae935	-
+nqueens	taken	benchmarks/nqueens.rsd	2ee1404c7883284bd354796882b21626b228b8dc20046388e4fc5fed7a610445	-
+nqueens-kk	taken	benchmarks/nqueens-kk.rsd	17ea2cfdf65a252b6c50d146ca92bd7ccc3034f04cf6e872f211884f79a89bbf	-
+binarytrees-kk	taken	benchmarks/binarytrees-kk.rsd	43348dc148de2cbc5aa23d2094390f99c391b7c09cb39dad18a4318db8d14148	-
+rbtree	taken	benchmarks/rbtree.rsd	e0454c2661f608a9c287433068307569a1a54765287d72973e3ccd022f64a20b	-
+rbtree-kk	taken	benchmarks/rbtree-kk.rsd	ebc641a261370b61a5016ce57a210f650a58fe6f0b402d45bd815bfcbb53e0fb	-
+rbtreeck	taken	benchmarks/rbtreeck.rsd	54edd9d27bb87d0fff6cd9cfcb1575941dc5e6a5796f8633d103f790d65936db	-
+cfold	taken	benchmarks/cfold.rsd	b568a36f6fc7ab2109bfd8f83da2d7804a77c840411b206d3a206b3db9b7c0f7	-
+deriv	taken	benchmarks/deriv.rsd	a7e48b515056d069c7bdba1d2887e10c1db6f7b3357e93627ff89566bf92da49	-

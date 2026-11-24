@@ -1,0 +1,9 @@
+#lang rsd
+(inductive U #:params ()
+  [wrap (_ : U) #:result (-> U U)]
+  [leaf #:result U]
+)
+(define (build ) : (-> Nat U) (cases
+  [0 U.leaf]
+  [(+ n 1) (U.wrap (paren (build n)))]
+))

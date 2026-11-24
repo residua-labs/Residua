@@ -171,6 +171,16 @@ def fapDepth (e : N) : Nat := e.b.toNat
 -- which makes the call an ordinary one at depth k - 1: the fuel the lifted loop had.
 def mkFapSame (f : Nat) (ys : List Int) : N := { n0 opFap with a := (f : Int), b := -1, ys := ys }
 def fapSame (e : N) : Bool := e.op == opFap && e.b < 0
+-- A call marked cold (field d is 1): a call from a body that runs rarely (lib/lrc/JoinOnce.rsd "A counter that
+-- is a small number": the body a function keeps for numbers of limbs). The mark changes no meaning. The emitter
+-- reads it: such a call does not count where it asks whether a function is called at one place, and the
+-- function is never written at such a call (lib/lrc/Emit.rsd "A function with one caller").
+def fapCold (e : N) : Bool := e.op == opFap && e.d == 1
+-- The call of a part that a function was split into (field d is 2; lib/lrc/Inline.rsd "Splitting"). The mark
+-- changes no meaning either. It says that the callee is to stay a function of its own: the module names such a
+-- function in its table (lib/lrc/Emit.rsd `keptFns`). The call may run often, and it counts as any call does.
+def mkFapApart (f : Nat) (ys : List Int) : N := { n0 opFap with a := (f : Int), b := -1, d := 2, ys := ys }
+def fapApart (e : N) : Bool := e.op == opFap && e.d == 2
 -- The stage's own list functions (lib/lrc/FromWire.rsd `helperDecls`) follow the nImg functions
 -- of the image. They take no fuel: the wire's fuel is the depth of source calls, and they stand
 -- for one operator. A function after them is a loop lifted out of an image function
@@ -323,6 +333,13 @@ def altIsDefault (alt : N) : Bool := alt.op == opAltDefault
 -- Basic:606 mkIf: a case on a `uint8`, the type Lean gives the result of `isShared`. The
 -- alternative for `false` comes first. Type 0 is Bool: constructor 0 false, constructor 1 true.
 def tyU8 : Int := 10
+-- The bytes a scalar of IR type `ty` takes in an object's scalar area, where lib/lrc/Pack.rsd found that every
+-- value stored there has the type: lean.h's uint8, uint16 and uint32 (the codes 10, 11, 12: `tyU8` here,
+-- `tyU16C` and `tyU32C` below); any other scalar is a word of 8 bytes. A `sset` names the type (field `d`); a
+-- `sproj` names the bytes it reads in field `c`: 1, 2 or 4, and 0 for a word.
+def tyWidth (ty : Int) : Nat := if ty == 10 then 1 else if ty == 11 then 2 else if ty == 12 then 4 else 8
+def tyOfWidth (w : Nat) : Int := if w == 1 then 10 else if w == 2 then 11 else if w == 4 then 12 else 0
+def sprojWidth (e : N) : Nat := if e.c == 1 then 1 else if e.c == 2 then 2 else if e.c == 4 then 4 else 8
 def boolInfo (v : Nat) : CtorInfo := { cidx := v, size := 0, ssize := 0, tid := 0 }
 def mkIf (x : Nat) (t e : N) : N :=
   mkCase x tyU8 [mkAltCtor (boolInfo 0) e, mkAltCtor (boolInfo 1) t]
@@ -537,5 +554,110 @@ def dtFlat4 : List (List (List (List Decl))) → List Decl
 
 def dtToList (tab : DeclTab) : List Decl :=
   if !tab.rest.isEmpty then tab.rest else dtFlat4 tab.root
+
+end Lrc
+
+namespace Lrc
+
+/-! ## The lambda-RC IR at revision 2 (WAIST-0 r2)
+
+lib/lrc/Ir.rsd's `Lrc.N` plus the six forms it does not have (its header names them: Basic:206,
+258, 212, 214, 217, 219): `uproj`, `uset`, `pap`, `ap`, `box`, `unbox`. Each form is an
+operation code on the same node structure `Lrc.N`, the way Ir.rsd makes its own forms. The r1
+codes are unchanged (expressions 30 to 39, bodies 1 to 13, alternatives 20 and 21); r2 adds
+expression codes 40 to 44 and body code 14. A program of the r1 IR is one that uses none of the
+r2 codes and no usize constructor (`Lrc.Sem.r1Node`), and a usize count rides in `kids` so that
+an r1 constructor is an r2 constructor unchanged. closure_claim = 0.
+
+The forms are ported, never invented:
+* src/lean/Lean/Compiler/IR/Basic.lean, elan leanprover--lean4---v4.14.0 (commit 410fab728470):
+  `Expr` :194-222, `FnBody` :250-274, `CtorInfo` with its `usize` count :174-178 and `isRef`
+  counting it :187-191.
+* src/lean/Lean/Compiler/IR/EmitC.lean 4.14.0: `emitUSet` :309, `emitUProj` :381,
+  `emitPartialApp` :430-437, `emitApp` :438-443, `emitBoxFn`/`emitBox`/`emitUnbox` :445-459,
+  `emitVDecl` :502-517 (an `unbox`'s type is the bound variable's :515, so it is kept in the
+  node, field `a`).
+* include/lean/lean.h 4.14.0: `lean_box`/`lean_unbox` :290-291, `lean_ctor_get_usize` :572,
+  `lean_ctor_set_usize` :602, `LeanClosure` 245 :70, `lean_alloc_closure` :638-647,
+  `lean_closure_get`/`lean_closure_set` :648-655; src/include/lean/lean.h 4.14.0:
+  `lean_box_uint32`/`lean_unbox_uint32` :1948-1967, `lean_box_uint64`/`lean_unbox_uint64`
+  :1970-1978, `lean_box_usize`/`lean_unbox_usize` :1980-1988, `lean_box_float`/`unbox_float`
+  :1990-1999.
+* src/runtime/apply.cpp 4.14.0 (generated): `fix_args` and `lean_apply_1`..`lean_apply_16`,
+  `lean_apply_m`, `lean_apply_n` — see the `.ap` arm below for what each does.
+* Ullrich and de Moura, "Counting Immutable Beans" (IFL 2019): lambda-RC with pap and
+  application. -/
+
+-- expression operation codes (r1 ends at `opIsShared` = 39)
+def opPap : Nat := 40
+def opAp : Nat := 41
+def opBox : Nat := 42
+def opUnbox : Nat := 43
+def opUProj : Nat := 44
+-- body operation codes (r1 ends at `opUnreachable` = 13)
+def opUSet : Nat := 14
+
+-- lean.h:70 `LeanClosure`: the tag of a closure object in the heap
+def cloTag : Nat := 245
+
+-- the carried scalar type codes (lib/lrc/Ir.rsd `tyU8` :325, `tyIsScalar` :48: scalars are 0 or >= 10)
+def tyU8C : Int := 10
+def tyU16C : Int := 11
+def tyU32C : Int := 12
+def tyUSizeC : Int := 13
+def tyFloatC : Int := 14
+
+/-! ### Expressions -/
+
+-- Basic:212 `Expr.pap c ys`: a closure of function c (its index, as `fap`'s) holding the captured
+-- arguments `ys`, strictly fewer than c's arity (lean.h:639 `assert(num_fixed < arity)`).
+def mkPap (f : Nat) (ys : List Int) : N := { n0 opPap with a := (f : Int), ys := ys }
+def papFn (e : N) : Nat := e.a.toNat
+def papArgs (e : N) : List Int := e.ys
+
+-- Basic:214 `Expr.ap x ys`: the application of the closure value `x` to `ys`.
+def mkAp (x : Nat) (ys : List Int) : N := { n0 opAp with a := (x : Int), ys := ys }
+def apVar (e : N) : Nat := e.a.toNat
+def apArgs (e : N) : List Int := e.ys
+
+-- Basic:217 `Expr.box ty x`: the scalar `x` of type `ty` as an object. For usize, uint64 and
+-- float a constructor of tag 0 with one scalar lane (lean.h:1970, :1980, :1990); for the smaller
+-- scalar types the tagged word (lean.h:290, :1948 on 64-bit).
+def mkBox (ty : Int) (x : Nat) : N := { n0 opBox with a := ty, ys := [(x : Int)] }
+def boxTy (e : N) : Int := e.a
+def boxVar (e : N) : Nat := (intAt 0 e.ys).toNat
+
+-- Basic:219 `Expr.unbox x`: the scalar of the object word `x`. The Expr carries no type; EmitC
+-- reads the bound variable's (`emitVDecl` :515 `emitUnbox z t x`), which the node keeps in `a`.
+def mkUnbox (ty : Int) (x : Nat) : N := { n0 opUnbox with a := ty, ys := [(x : Int)] }
+def unboxTy (e : N) : Int := e.a
+def unboxVar (e : N) : Nat := (intAt 0 e.ys).toNat
+
+-- Basic:206 `Expr.uproj i x`: the usize word at `sizeof(void*)*i` of `x` (lean.h:572
+-- `lean_ctor_get_usize`; i counts from the object fields, so usize slot j stands at index
+-- size + j).
+def mkUProj (i : Nat) (x : Nat) : N := { n0 opUProj with a := (i : Int), ys := [(x : Int)] }
+def uprojIdx (e : N) : Nat := e.a.toNat
+def uprojVar (e : N) : Nat := (intAt 0 e.ys).toNat
+
+/-! ### Bodies -/
+
+-- Basic:258 `FnBody.uset x i y b`: the usize word `y` at `sizeof(void*)*i` of `x`; same shape as
+-- `mkSet` (a = x, b = i, ys = [y], kids = [b]).
+def mkUSet (x : Nat) (i : Nat) (y : Int) (b : N) : N :=
+  { n0 opUSet with a := (x : Int), b := (i : Int), ys := [y], kids := [b] }
+def usetVar (n : N) : Nat := n.a.toNat
+def usetIdx (n : N) : Nat := n.b.toNat
+def usetArg (n : N) : Nat := (intAt 0 n.ys).toNat
+
+/-! ### The usize constructor count -/
+
+-- Basic:174 `CtorInfo` has a `usize` count between `size` and `ssize` that our port dropped (the
+-- wire has none). The count rides in `kids`: `mkUCtor i u ys` is `ctor i ys` whose first kid is
+-- the literal count. An r1 constructor has no kids, so `ctorUsize` reads 0 for it and an r1
+-- program is an r2 program unchanged.
+def mkUCtor (i : CtorInfo) (usize : Nat) (ys : List Int) : N :=
+  { withInfo (n0 opCtor) i with ys := ys, kids := [mkLit (usize : Int)] }
+def ctorUsize (e : N) : Nat := (kidAt 0 e.kids).a.toNat
 
 end Lrc

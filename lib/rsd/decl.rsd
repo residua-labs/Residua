@@ -1,0 +1,221 @@
+-- Declaration driver. docs/RSD.md 2d.
+-- Statements first, then proofs. The worker is quench-d1.
+-- The graph is Lib.Rsd.Graph. The key is Lib.Rsd.Keys.
+-- The cutoff is Lib.Rsd.Schedule.lookup. The store is Lib.Rsd.Store.
+-- No second content address and no second store. closure_claim = 0.
+import Graph
+import Schedule
+import Keys
+import Store
+
+namespace Lib.Rsd.Decl
+
+def workerName : String := "quench-d1"
+def queueBound : Nat := 4
+
+structure Node where
+  name : String
+  phase : String
+  deps : List String
+  order : Nat
+  cost : Nat
+
+def grain (cost : Nat) : Nat :=
+  if cost == 0 then 1 else cost
+
+/-- Every proof waits on the single statement node, when there is one. -/
+def linkStmt (nodes : List Node) : List Node :=
+  let stmts := nodes.filter fun n => n.phase == "statement"
+  match stmts with
+  | [s] =>
+    nodes.map fun n =>
+      if n.phase == "proof" && !(n.deps.any (· == s.name)) then
+        { n with deps := s.name :: n.deps }
+      else n
+  | _ => nodes
+
+def toMod (n : Node) : Lib.Rsd.Graph.Mod :=
+  { name := n.name
+  , imps := n.deps.map fun d => { name := d, kind := "import" } }
+
+def namesOf (nodes : List Node) : List String :=
+  nodes.map fun n => n.name
+
+/-- Statements come out before the proofs that wait on them. -/
+def declWaves (nodes : List Node) (bound : Nat) (fuel : Int) : Lib.Rsd.Graph.Answer :=
+  let nodes := linkStmt nodes
+  Lib.Rsd.Graph.waves (nodes.map toMod) (namesOf nodes) ["import"] bound fuel
+
+def least (loads : List Nat) : Nat :=
+  let rec go (i best : Nat) (bestV : Nat) : List Nat → Nat
+    | [] => best
+    | v :: vs => if v < bestV then go (i + 1) i v vs else go (i + 1) best bestV vs
+  match loads with
+  | [] => 0
+  | v :: vs => go 1 0 v vs
+
+def addLoad (i cost : Nat) : List Nat → List Nat
+  | [] => []
+  | v :: vs => if i == 0 then (v + cost) :: vs else v :: addLoad (i - 1) cost vs
+
+/-- Least loaded worker, in source order. The load added is the grain. -/
+def assign (workers : Nat) (jobs : List (String × Nat)) : List (Nat × String) :=
+  let rec go (loads : List Nat) : List (String × Nat) → List (Nat × String)
+    | [] => []
+    | (name, cost) :: rest =>
+      let i := least loads
+      (i, name) :: go (addLoad i (grain cost) loads) rest
+  if workers == 0 then [] else go (List.replicate workers 0) jobs
+
+def proofsOf (nodes : List Node) : List (String × Nat) :=
+  let rec go : List Node → List (String × Nat)
+    | [] => []
+    | n :: ns =>
+      if n.phase == "proof" then (n.name, n.cost) :: go ns else go ns
+  go nodes
+
+structure Steal where
+  moved : Bool
+  name : String
+  fr : Nat
+  to : Nat
+  queues : List (List String)
+
+def qAt (qs : List (List String)) (i : Nat) : List String :=
+  match qs, i with
+  | [], _ => []
+  | q :: _, 0 => q
+  | _ :: t, n + 1 => qAt t n
+
+def setAt (i : Nat) (q : List String) : List (List String) → List (List String)
+  | [] => []
+  | h :: t => if i == 0 then q :: t else h :: setAt (i - 1) q t
+
+def findEmpty (qs : List (List String)) : Option Nat :=
+  let rec go (i : Nat) : List (List String) → Option Nat
+    | [] => none
+    | q :: rest => if q == [] then some i else go (i + 1) rest
+  go 0 qs
+
+def findRich (qs : List (List String)) : Option Nat :=
+  let rec go (i : Nat) (best : Option Nat) : List (List String) → Option Nat
+    | [] => best
+    | q :: rest => if q.length >= 2 then go (i + 1) (some i) rest else go (i + 1) best rest
+  go 0 none qs
+
+def lastOf : List String → Option (List String × String)
+  | [] => none
+  | [x] => some ([], x)
+  | x :: xs =>
+    match lastOf xs with
+    | none => none
+    | some (ys, y) => some (x :: ys, y)
+
+def noSteal (qs : List (List String)) : Steal :=
+  { moved := false, name := "", fr := 0, to := 0, queues := qs }
+
+/-- The lowest idle worker takes the tail of the rightmost queue that has
+    a waiting job. The head of a queue is the job already running. -/
+def stealOnce (qs : List (List String)) : Steal :=
+  match findEmpty qs, findRich qs with
+  | some dst, some src =>
+    if src == dst then noSteal qs
+    else
+      match lastOf (qAt qs src) with
+      | none => noSteal qs
+      | some (rest, name) =>
+        let queues := setAt dst (qAt qs dst ++ [name]) (setAt src rest qs)
+        { moved := true, name := name, fr := src, to := dst, queues := queues }
+  | _, _ => noSteal qs
+
+def insertDiag (o : Nat) (s : String) : List (Nat × String) → List (Nat × String)
+  | [] => [(o, s)]
+  | (o2, s2) :: rest =>
+    if o <= o2 then (o, s) :: (o2, s2) :: rest else (o2, s2) :: insertDiag o s rest
+
+/-- Diagnostics in source order, whatever order the workers finished. -/
+def joinDiag (events : List (Nat × String)) : List String :=
+  (events.foldl (fun acc e => insertDiag e.1 e.2 acc) []).map fun e => e.2
+
+def orderOf (nodes : List Node) (name : String) : Nat :=
+  match nodes.find? fun n => n.name == name with
+  | some n => n.order
+  | none => 0
+
+def sourceOrder (nodes : List Node) : List String :=
+  joinDiag (nodes.map fun n => (n.order, n.name))
+
+/-- A changed digest is not the stored key. Cutoff is exact equality. -/
+def cutoffMiss (stored request : Lib.Rsd.Schedule.MemoKey) : Bool :=
+  let hit := Lib.Rsd.Schedule.lookup stored Lib.Rsd.Schedule.out1 request
+  !hit.hit && hit.outcome.residue == "incr_unobserved_missing"
+
+/-- Builder name is not an input. An olean from any builder is a certificate. -/
+def admitsBuilder (_builder : String) : Bool := true
+
+def replayResidue (cert replay : List Int) : String :=
+  if cert == replay then "accepted" else "quench_refused_incomplete_replay"
+
+def q1 : List Int := List.replicate 32 1
+def q2 : List Int := List.replicate 32 2
+def q3 : List Int := List.replicate 32 3
+def q4 : List Int := List.replicate 32 4
+def q9 : List Int := List.replicate 32 9
+
+def declNode (q : List Int) : Lib.Rsd.Keys.Result :=
+  Lib.Rsd.Keys.nodeQ "declaration" q
+
+def declArtifact (source generator environment : List Int) : Lib.Rsd.Keys.Result :=
+  Lib.Rsd.Keys.artifactKey source generator environment
+
+def declVerdict (subject checker environment : List Int) : Lib.Rsd.Keys.Result :=
+  Lib.Rsd.Keys.verdictKey subject checker environment
+
+def keyMutantCaught : Bool :=
+  let a := declArtifact q1 q2 q3
+  let b := declArtifact q4 q2 q3
+  a.ok && b.ok && a.bytes != b.bytes
+
+def foreignCaught : Bool :=
+  let own := (declVerdict q1 q2 q3).bytes
+  let foreign := (declVerdict q9 q2 q3).bytes
+  replayResidue own own == "accepted" &&
+    replayResidue own foreign == "quench_refused_incomplete_replay"
+
+def oneStore : Bool :=
+  Lib.Rsd.Store.replaceAllowed == false &&
+    Lib.Rsd.Store.publishPlan "job" "dest" ==
+      [Lib.Rsd.Store.Step.stage "job", Lib.Rsd.Store.Step.fsync "job",
+       Lib.Rsd.Store.Step.renameNoReplace "job" "dest"]
+
+def demo : List Node :=
+  [ { name := "stmt", phase := "statement", deps := [], order := 0, cost := 1 }
+  , { name := "p1", phase := "proof", deps := [], order := 1, cost := 5 }
+  , { name := "p2", phase := "proof", deps := [], order := 2, cost := 1 }
+  , { name := "p3", phase := "proof", deps := ["p1"], order := 3, cost := 1 } ]
+
+def qShow (qs : List (List String)) : String :=
+  String.intercalate ";" (qs.map fun q => String.intercalate "," q)
+
+end Lib.Rsd.Decl
+
+#guard Lib.Rsd.Decl.workerName == "quench-d1"
+#guard Lib.Rsd.Decl.queueBound == 4
+#guard Lib.Rsd.Decl.grain 0 == 1
+#guard Lib.Rsd.Decl.grain 5 == 5
+#guard Lib.Rsd.Graph.showGroups (Lib.Rsd.Decl.declWaves Lib.Rsd.Decl.demo 2 64).groups == "stmt;p1,p2;p3"
+#guard Lib.Rsd.Decl.assign 2 [("p1", 5), ("p2", 1), ("p3", 1)] == [(0, "p1"), (1, "p2"), (1, "p3")]
+#guard Lib.Rsd.Decl.qShow (Lib.Rsd.Decl.stealOnce [["a", "b"], []]).queues == "a;b"
+#guard Lib.Rsd.Decl.qShow (Lib.Rsd.Decl.stealOnce [[], ["a", "b"]]).queues == "b;a"
+#guard (Lib.Rsd.Decl.stealOnce [["a"], ["b"]]).moved == false
+#guard (Lib.Rsd.Decl.stealOnce [["a", "b"], []]).name == "b"
+#guard Lib.Rsd.Decl.joinDiag [(2, "p2"), (0, "stmt"), (1, "p1")] == ["stmt", "p1", "p2"]
+#guard Lib.Rsd.Decl.sourceOrder Lib.Rsd.Decl.demo == ["stmt", "p1", "p2", "p3"]
+#guard Lib.Rsd.Decl.cutoffMiss Lib.Rsd.Schedule.key1 { Lib.Rsd.Schedule.key1 with fuel := 11 }
+#guard (Lib.Rsd.Schedule.lookup Lib.Rsd.Schedule.key1 Lib.Rsd.Schedule.out1 Lib.Rsd.Schedule.key1).hit
+#guard Lib.Rsd.Decl.admitsBuilder "lake" && Lib.Rsd.Decl.admitsBuilder "rsd"
+#guard Lib.Rsd.Decl.keyMutantCaught
+#guard Lib.Rsd.Decl.foreignCaught
+#guard (Lib.Rsd.Decl.declNode Lib.Rsd.Decl.q1).ok
+#guard (Lib.Rsd.Decl.declNode Lib.Rsd.Decl.q1).bytes != (Lib.Rsd.Keys.nodeQ "binding" Lib.Rsd.Decl.q1).bytes
+#guard Lib.Rsd.Decl.oneStore

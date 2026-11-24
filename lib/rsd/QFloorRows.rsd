@@ -1,0 +1,40 @@
+-- Executable NF boundary; helpers are in QFloorRowsData.rsd.
+namespace Lib.Rsd.QFloorRows
+
+inductive Residue where
+  | differentialRefused
+
+def residueName : Residue -> String
+  | Residue.differentialRefused => "nf_qfloor_differential_refused"
+
+structure Request where
+  oracle : String
+  actual : String
+structure State where
+  failures : List String
+  deriving BEq
+structure Result where
+  state : State
+  residue : Option Residue
+
+
+
+def decision (r : Request) : Result :=
+  let failures := compareRows corpus (lines r.oracle) (lines r.actual) ++
+    directChecks.filterMap (fun (n, ok) => if ok then none else some ("direct:" ++ n))
+  { state := { failures }, residue := if failures.isEmpty then none else some .differentialRefused }
+def residue? (r : Request) (_s : State) : Option Residue := (decision r).residue
+def admissible (r : Request) (s : State) : Bool := (residue? r (id s)).isNone
+def runNF (r : Request) (_s : State) : Result := decision r
+
+-- NF-CORRECT-0 r2: the checked decision; runNF retains the original
+-- transition and its failure-state observations for existing callers.
+def decide (r : Request) (_s : State) : Except Residue State :=
+  let answer := runNF r _s
+  match answer.residue with
+  | some residue => .error residue
+  | none => .ok answer.state
+
+
+
+end Lib.Rsd.QFloorRows

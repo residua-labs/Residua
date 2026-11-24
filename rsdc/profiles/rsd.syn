@@ -27,6 +27,12 @@ lexical
   token quoteIdentKind ident @reject-prefix=ident[A-Za-z_0-9.?!'\x80-\xff]
   token quoteStrKind str @reject-prefix=str[A-Za-z_0-9.?!'\x80-\xff]
   token quoteNumKind num @reject-prefix=num[A-Za-z_0-9.?!'\x80-\xff]
+  token levelMax max @reject-prefix=max[A-Za-z_0-9.?!'\x80-\xff]
+  token levelImax imax @reject-prefix=imax[A-Za-z_0-9.?!'\x80-\xff]
+  token quoteTacticKind tactic @reject-prefix=tactic[A-Za-z_0-9.?!'\x80-\xff]
+  token tacIntros intros @reject-prefix=intros[A-Za-z_0-9.?!'\x80-\xff]
+  token tacConv conv @reject-prefix=conv[A-Za-z_0-9.?!'\x80-\xff]
+  token convLhs lhs @reject-prefix=lhs[A-Za-z_0-9.?!'\x80-\xff]
   token tactic [^()\[\]{}\x20\t\n\r\x22\x27]+
   token hex [0-9a-fA-F]+
   token quoted " @string-literal @incomplete=61
@@ -292,10 +298,15 @@ grammar
   TySubstTail := eps @tree=-1 @template=
   TySubstOpenOperands := TyO80 @tree=(12,$0,-1,0) @template=$0
   TySubstOpenOperands := TyC80 '▸ TySubstOpenOperands @tree=(12,$0,$2,0) @template=$0\s▸\s$2
-  TyC80 := TyC100 @tree=$0 @template=$0
-  TyO80 := TyO100 @tree=$0 @template=$0
-  TyC80 := TyC100 '^ TyC80 @tree=(6,28,$0,$2) @template=$0\s^\s$2
-  TyO80 := TyC100 '^ TyO80 @tree=(6,28,$0,$2) @template=$0\s^\s$2
+  TyC80 := TyC90 @tree=$0 @template=$0
+  TyO80 := TyO90 @tree=$0 @template=$0
+  TyC80 := TyC90 '^ TyC80 @tree=(6,28,$0,$2) @template=$0\s^\s$2
+  TyO80 := TyC90 '^ TyO80 @tree=(6,28,$0,$2) @template=$0\s^\s$2
+  # Stock Init/Core.lean: infixr:90 " ∘ " => Function.comp
+  TyC90 := TyC100 @tree=$0 @template=$0
+  TyO90 := TyO100 @tree=$0 @template=$0
+  TyC90 := TyC100 '∘ TyC90 @tree=(6,38,$0,$2) @template=$0\s∘\s$2
+  TyO90 := TyC100 '∘ TyO90 @tree=(6,38,$0,$2) @template=$0\s∘\s$2
   TyC100 := TyC110 @tree=$0 @template=$0
   TyO100 := TyO110 @tree=$0 @template=$0
   TyC100 := '~~~ TyC100 @tree=(7,3,$1,0) @template=~~~$1
@@ -559,6 +570,7 @@ grammar
   CmdFreshCommand := '#guard Expr @tree=(325,(12,$1,-1,0),0,0) @template=#guard\s$1
   CmdFreshCommand := 'run_cmd GenDoFallback @tree=(326,(12,$1,-1,0),0,0) @template=run_cmd\n${1:2}
   CmdFreshCommand := 'run_elab GenDoFallback @tree=(327,(12,$1,-1,0),0,0) @template=run_elab\n${1:2}
+  CmdFreshCommand := 'run_meta GenDoFallback @tree=(327,(12,(599,-1,0,0),(12,$1,-1,0),0),0,0) @template=run_meta\n${1:2}
   CmdFreshCommand := 'attribute '[ CmdAttrCommandInstances '] CmdIdents @tree=(314,(12,$2,(12,$4,-1,0),0),0,0) @template=attribute\s[$2]\s$4 @layout-clear
   CmdAttrCommandInstances := CmdAttrCommandInstance CmdAttrCommandTail @tree=(12,$0,$1,0) @template=$0$1
   CmdAttrCommandTail := ', CmdAttrCommandInstances @tree=$1 @template=,\s$1
@@ -800,6 +812,7 @@ grammar
   # cannot interpret quoted names as executable references. The finite
   # antiquotation variants preserve category, splice and dollar escapes.
   Atom := TmQuote @tree=$0 @template=$0
+  TmQuote := '`( quoteTacticKind '| TacSeq ') @tree=(162,(12,(599,-1,0,0),(12,$3,-1,0),0),0,0) @template=`(tactic|\n${3:2}) @layout-clear @forbid-clear
   TmQuote := '`( QExpr ') @tree=(162,(12,$1,-1,0),0,0) @template=`($1) @layout-clear @forbid-clear
   QName := QIdent @tree=$0 @template=$0
   QName := 'Type @tree=(163,(12,(58,s0,e0,0),-1,0),0,0) @template=$0
@@ -1051,7 +1064,12 @@ grammar
   # leaves; addLit124 retains the left level and the literal numeral.
   TermLevel := TmLevelAtom @tree=$0 @template=$0
   TermLevel := TermLevel '+ TmNum @tree=(124,(12,$0,(12,$2,-1,0),0),0,0) @template=$0\s+\s$2
-  TmLevelAtom := Name @tree=$0 @template=$0
+  TermLevel := levelMax TmLevelAtoms @tree=(124,(12,(599,-1,0,0),(12,(599,-1,0,0),(12,$1,-1,0),0),0),0,0) @template=max\s$1
+  TermLevel := levelImax TmLevelAtoms @tree=(124,(12,(599,-1,0,0),(12,(599,-1,0,0),(12,(599,-1,0,0),(12,$1,-1,0),0),0),0),0,0) @template=imax\s$1
+  TmLevelAtoms := TmLevelAtom TmLevelAtomsTail @tree=(12,$0,$1,0) @template=$0$1
+  TmLevelAtomsTail := TmLevelAtoms @tree=$0 @template=\s$0
+  TmLevelAtomsTail := eps @tree=-1 @template=
+  TmLevelAtom := Name @tree=$0 @template=$0 @not-followed=0:max|imax
   TmLevelAtom := TmNum @tree=$0 @template=$0
   TmLevelAtom := '( TermLevel ') @tree=(13,$1,0,0) @template=($1) @layout-clear
   TermLevels := TermLevel TmLevelTail @tree=(12,$0,$1,0) @template=$0$1
@@ -1289,6 +1307,9 @@ grammar
   ReturnValue := Expr @tree=$0 @template=\s${0:8} @boundary=0:line-eq
   ReturnValue := eps @tree=-1 @template=
   GenDoNonExpr := 'assert! Expr @tree=(217,(12,$1,-1,0),0,0) @template=assert!\s$1
+  TmDbgTraceMsg := NotationInterp @tree=$0 @template=$0
+  TmDbgTraceMsg := NotationErrorTerm @tree=$0 @template=$0
+  GenDoNonExpr := 'dbg_trace TmDbgTraceMsg @tree=(217,(12,(599,-1,0,0),(12,$1,-1,0),0),0,0) @template=dbg_trace\s$1
   GenDoNonExpr := 'do GenDoFallback @tree=(218,(12,$1,-1,0),0,0) @template=do\n${1:2}
   GenDoNonExpr := 'while GenDoBeforeDo 'do GenDoFallback @tree=(219,(12,$1,(12,$3,-1,0),0),0,0) @template=while\s$1\sdo\n${3:2}
   GenDoNonExpr := 'repeat GenDoFallback @tree=(220,(12,$1,-1,0),0,0) @template=repeat\n${1:2}
@@ -1317,6 +1338,9 @@ grammar
   Control := TmHaveHead Expr @tree=(137,(12,$0,(12,$1,-1,0),0),0,0) @template=\n${0:2};\n${1:2} @boundary=1:linebreak
   Control := TmLetRecHead '; Expr @tree=(139,(12,$0,(12,$2,-1,0),0),0,0) @template=\n${0:2};\n${2:2}
   Control := TmLetRecHead Expr @tree=(139,(12,$0,(12,$1,-1,0),0),0,0) @template=\n${0:2};\n${1:2} @boundary=1:linebreak
+  TmDbgTraceHead := 'dbg_trace TmDbgTraceMsg @tree=$1 @template=dbg_trace\s$1 @layout-root
+  Control := TmDbgTraceHead '; Expr @tree=(415,(12,(599,-1,0,0),(12,$0,(12,$2,-1,0),0),0),0,0) @template=\n${0:2};\n${2:2}
+  Control := TmDbgTraceHead Expr @tree=(415,(12,(599,-1,0,0),(12,$0,(12,$1,-1,0),0),0),0,0) @template=\n${0:2};\n${1:2} @boundary=1:linebreak
   Control := 'match TmMatchDiscrs 'with Clauses @tree=(31,$1,$3,0) @template=match\s$1\swith\n${3:2}
   Control := 'match TmGeneralizing TmMotiveOpt TmMatchDiscrs 'with Clauses @tree=(123,(12,$1,(12,$2,(12,$3,(12,$5,-1,0),0),0),0),0,0) @template=match\s$1$2$3\swith\n${5:2}
   Control := 'match TmMotive TmMatchDiscrs 'with Clauses @tree=(123,(12,-1,(12,$1,(12,$2,(12,$4,-1,0),0),0),0),0,0) @template=match\s(motive\s:=\s$1)\s$2\swith\n${4:2}
@@ -1416,7 +1440,7 @@ grammar
   TacLead := 'constructor @tree=(531,-1,0,0) @template=constructor
   TacLead := 'apply Expr @tree=(538,(12,$1,-1,0),0,0) @template=apply\s$1
   TacLead := 'all_goals TacSeq @tree=(543,(12,$1,-1,0),0,0) @template=all_goals\n${1:2}
-  TacLead := '( TacSeqClear ') @tree=(544,(12,$1,-1,0),0,0) @template=($1)
+  TacLead := '( TacSeqClear ') @tree=(544,(12,$1,-1,0),0,0) @template=(${1:1})
   TacSeqClear := TacSeq @tree=$0 @template=$0 @layout-clear
   TacLead := 'try TacSeq @tree=(545,(12,$1,-1,0),0,0) @template=try\n${1:2}
   TacLead := 'next TacBinderIdentsOpt '=> TacSeq @tree=(550,(12,$1,(12,$3,-1,0),0),0,0) @template=next$1\s=>\n${3:2}
@@ -1471,6 +1495,7 @@ grammar
   TacUnreserved := 'decreasing_tactic @tree=(1,s0,e0,0) @template=$0
   TacUnreserved := 'simp_arith @tree=(1,s0,e0,0) @template=$0
   TacUnreserved := 'by_cases @tree=(1,s0,e0,0) @template=$0
+  TacUnreserved := 'funext @tree=(1,s0,e0,0) @template=$0
   TacUnreserved := 'only @tree=(1,s0,e0,0) @template=$0
   TacUnreserved := 'config @tree=(1,s0,e0,0) @template=$0
   TacUnreserved := 'discharger @tree=(1,s0,e0,0) @template=$0
@@ -1565,9 +1590,11 @@ grammar
   TacUsingOpt := eps @tree=-1 @template=
   # Init/Tactics.lean:704,723,801-811,839-885,954,1052,1068-1070,1181.
   TacLead := 'unfold TacIdentList TacLocationOpt @tree=(529,(12,$1,(12,$2,-1,0),0),0,0) @template=unfold$1$2
-  TacIdentList := TacIdent TacIdentListTail @tree=(12,$0,$1,0) @template=\s$0$1 @boundary=0:col-gt
+  TacIdentList := TacUnfoldTarget TacIdentListTail @tree=(12,$0,$1,0) @template=\s$0$1 @boundary=0:col-gt
   TacIdentListTail := TacIdentList @tree=$0 @template=$0
   TacIdentListTail := eps @tree=-1 @template=
+  TacUnfoldTarget := TacIdent @tree=$0 @template=$0
+  TacUnfoldTarget := QAnti @tree=$0 @template=$0
   TacLead := 'have TmHaveDecl @tree=(522,(12,$1,-1,0),0,0) @template=have\s$1
   TacLead := 'induction TacIndTargets TacIndUsingOpt TacGeneralizingOpt TacInductionAltsOpt @tree=(530,(12,$1,(12,$2,(12,$3,(12,$4,-1,0),0),0),0),0,0) @template=induction\s$1$2$3$4
   TacIndTargets := TacExprList @tree=$0 @template=$0 @forbid=generalizing
@@ -1625,6 +1652,43 @@ grammar
   TacLead := 'show Expr @tree=(565,(12,(599,-1,0,0),(12,$1,-1,0),0),0,0) @template=show\s$1
   TacLead := 'refine Expr @tree=(565,(12,(599,-1,0,0),(12,(599,-1,0,0),(12,$1,-1,0),0),0),0,0) @template=refine\s$1
   TacLead := 'let TmLetDecl @tree=(565,(12,(599,-1,0,0),(12,(599,-1,0,0),(12,(599,-1,0,0),(12,$1,-1,0),0),0),0),0,0) @template=let\s$1 @not-followed=1:rec
+  TacLead := 'funext TacFunextArgsOpt @tree=(565,(12,(599,-1,0,0),(12,(599,-1,0,0),(12,(599,-1,0,0),(12,(599,-1,0,0),(12,$1,-1,0),0),0),0),0),0,0) @template=funext$1
+  TacFunextArgsOpt := TacFunextArgs @tree=$0 @template=$0
+  TacFunextArgsOpt := eps @tree=-1 @template=
+  TacFunextArgs := TacRcasesMed TacFunextArgsOpt @tree=(12,$0,$1,0) @template=\s$0$1 @boundary=0:col-gt
+  TacLead := 'match TacMatchGeneralizing TmMotiveOpt GenDoDiscrs 'with TacMatchAltsStart @tree=(565,(12,(599,-1,0,0),(12,(599,-1,0,0),(12,$1,(12,$2,(12,$3,(12,$5,-1,0),0),0),0),0),0),0,0) @template=match\s$1$2$3\swith\n$5
+  TacMatchGeneralizing := '( 'generalizing ':= GenDoBool ') @tree=$3 @template=(generalizing\s:=\s$3)\s @layout-clear
+  TacMatchGeneralizing := eps @tree=-1 @template=
+  TacMatchAltsStart := TacMatchAlts @tree=$0 @template=$0 @layout-root
+  TacMatchAlts := TacMatchAlt TacMatchAltTail @tree=(12,$0,$1,0) @template=$0$1 @boundary=0:col-ge
+  TacMatchAltTail := TacMatchAlts @tree=$0 @template=\n$0
+  TacMatchAltTail := eps @tree=-1 @template=
+  TacMatchAlt := '| GenDoPatternGroups '=> TacBranchRhs @tree=(518,(12,(599,-1,0,0),(12,$1,(12,$3,-1,0),0),0),0,0) @template=|\s$1\s=>\n${3:2} @boundary=3:col-ge
+  TacLead := tacIntros TacIntrosIdsOpt @tree=(565,(12,(599,-1,0,0),(12,(599,-1,0,0),(12,(599,-1,0,0),(12,(599,-1,0,0),(12,(599,-1,0,0),(12,(599,-1,0,0),(12,$1,-1,0),0),0),0),0),0),0),0,0) @template=intros$1
+  TacIntrosIdsOpt := TacBinderIdents @tree=$0 @template=$0
+  TacIntrosIdsOpt := eps @tree=-1 @template=
+  TacLead := tacConv TacLocationOpt '=> ConvSeq @tree=(565,(12,(599,-1,0,0),(12,(599,-1,0,0),(12,(599,-1,0,0),(12,(599,-1,0,0),(12,(599,-1,0,0),(12,(599,-1,0,0),(12,$1,(12,$3,-1,0),0),0),0),0),0),0),0),0,0) @template=conv$1\s=>\n${3:2}
+  ConvSeq := ConvSeqBracketed @tree=(501,(12,$0,-1,0),0,0) @template=$0
+  ConvSeq := ConvSeqIndented @tree=(501,(12,$0,-1,0),0,0) @template=$0
+  ConvSeqIndented := ConvItems @tree=(502,(12,$0,-1,0),0,0) @template=$0 @layout-root
+  ConvSeqBracketed := '{ ConvItemsStart '} @tree=(503,(12,$1,-1,0),0,0) @template={\n${1:2}}
+  ConvItemsStart := ConvItemsOpt @tree=$0 @template=$0 @layout-root
+  ConvItemsOpt := ConvItems @tree=$0 @template=$0
+  ConvItemsOpt := eps @tree=-1 @template=
+  ConvItems := ConvTactic ConvItemsTail @tree=(12,$0,$1,0) @template=$0$1 @boundary=0:col-ge
+  ConvItemsTail := '; ConvItemsOpt @tree=$1 @template=;\n$1
+  ConvItemsTail := ConvItems @tree=$0 @template=\n$0 @boundary=0:col-eq,0:linebreak
+  ConvItemsTail := eps @tree=-1 @template=
+  ConvTactic := ConvLead @tree=$0 @template=$0
+  ConvTactic := ConvTactic '<;> ConvLead @tree=(508,(12,$0,(12,$2,-1,0),0),0,0) @template=$0\s<;>\s$2
+  ConvLead := convLhs @tree=(565,(12,(599,-1,0,0),(12,(599,-1,0,0),(12,(599,-1,0,0),(12,(599,-1,0,0),(12,(599,-1,0,0),(12,(599,-1,0,0),(12,(599,-1,0,0),(12,(599,-1,0,0),(12,-1,-1,0),0),0),0),0),0),0),0),0),0,0) @template=lhs
+  ConvLead := 'rw TacConfig TacRwRules TacLocationOpt @tree=(523,(12,$1,(12,$2,(12,$3,-1,0),0),0),0,0) @template=rw$1\s$2$3
+  ConvLead := 'simp TacConfig TacDischargerOpt TacOnlyOpt TacSimpArgsOpt TacLocationOpt @tree=(505,(12,$1,(12,$2,(12,$3,(12,$4,(12,$5,-1,0),0),0),0),0),0,0) @template=simp$1$2$3$4$5
+  ConvLead := 'unfold TacIdentList TacLocationOpt @tree=(529,(12,$1,(12,$2,-1,0),0),0,0) @template=unfold$1$2
+  ConvLead := 'change Expr TacLocationOpt @tree=(521,(12,$1,(12,$2,-1,0),0),0,0) @template=change\s$1$2
+  ConvLead := 'rfl @tree=(504,-1,0,0) @template=rfl
+  ConvLead := '( ConvSeqClear ') @tree=(544,(12,$1,-1,0),0,0) @template=(${1:1})
+  ConvSeqClear := ConvSeq @tree=$0 @template=$0 @layout-clear
   # Init/RCases.lean:65-85,150,169: retain medium/low precedence nodes.
   TacLead := 'rcases TacCasesTargetsOpt TacRcasesWithOpt @tree=(546,(12,$1,(12,$2,-1,0),0),0,0) @template=rcases\s$1$2
   TacCasesTargetsOpt := TacCasesTargets @tree=$0 @template=$0
@@ -1803,10 +1867,15 @@ grammar
   O75Shift := C75Shift '<<< O80 @tree=(6,22,$0,$2) @template=$0\s<<<\s$2
   C75Shift := C75Shift '>>> C80 @tree=(6,23,$0,$2) @template=$0\s>>>\s$2
   O75Shift := C75Shift '>>> O80 @tree=(6,23,$0,$2) @template=$0\s>>>\s$2
-  C80 := C100 @tree=$0 @template=$0
-  O80 := O100 @tree=$0 @template=$0
-  C80 := C100 '^ C80 @tree=(6,28,$0,$2) @template=$0\s^\s$2
-  O80 := C100 '^ O80 @tree=(6,28,$0,$2) @template=$0\s^\s$2
+  C80 := C90 @tree=$0 @template=$0
+  O80 := O90 @tree=$0 @template=$0
+  C80 := C90 '^ C80 @tree=(6,28,$0,$2) @template=$0\s^\s$2
+  O80 := C90 '^ O80 @tree=(6,28,$0,$2) @template=$0\s^\s$2
+  # Stock Init/Core.lean: infixr:90 " ∘ " => Function.comp
+  C90 := C100 @tree=$0 @template=$0
+  O90 := O100 @tree=$0 @template=$0
+  C90 := C100 '∘ C90 @tree=(6,38,$0,$2) @template=$0\s∘\s$2
+  O90 := C100 '∘ O90 @tree=(6,38,$0,$2) @template=$0\s∘\s$2
   C100 := C110 @tree=$0 @template=$0
   O100 := O110 @tree=$0 @template=$0
   C100 := '~~~ C100 @tree=(7,3,$1,0) @template=~~~$1

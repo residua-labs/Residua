@@ -1,0 +1,60 @@
+-- Pure helpers extracted unchanged from DirStore at f4fa50cb. closure_claim=0.
+namespace Lib.Rsd.DirStore
+
+def toHex : List Int → String
+  | [] => ""
+  | b :: bs =>
+    let n := b.toNat % 256
+    let d := fun (k : Nat) => Char.ofNat (if k < 10 then 48 + k else 87 + k)
+    String.mk [d (n / 16), d (n % 16)] ++ toHex bs
+
+def entryDir (dir : String) : String := s!"{dir}/e"
+-- Q-FORMAT 1 path form: the filename carries the `sha256-` prefix (FORMAT.md
+-- section 3). Writers emit only this name.
+def entryPath (dir : String) (keyHex : String) : String := s!"{dir}/e/sha256-{keyHex}"
+/-- The pre-QFORMAT entry name; readers fall back to it for one version so an
+    existing memo directory stays readable. -/
+def legacyEntryPath (dir : String) (keyHex : String) : String := s!"{dir}/e/{keyHex}"
+
+-- ---- entry codec -----------------------------------------------------------
+
+def encEntry (kb oq v : List Int) : List Int :=
+  [82, 78, 69, 49] ++ Lib.Rsd.Store.encField kb
+    ++ Lib.Rsd.Store.encField oq ++ Lib.Rsd.Store.encField v
+
+def decEntry (bs : List Int) : Option (List Int × List Int × List Int) :=
+  match bs with
+  | 82 :: 78 :: 69 :: 49 :: rest =>
+    match Lib.Rsd.Store.rdField rest with
+    | none => none
+    | some (kb, r1) =>
+      match Lib.Rsd.Store.rdField r1 with
+      | none => none
+      | some (oq, r2) =>
+        match Lib.Rsd.Store.rdField r2 with
+        | some (v, []) => if oq.length == 32 then some (kb, oq, v) else none
+        | _ => none
+  | _ => none
+
+def bytesOfBA (a : ByteArray) : List Int :=
+  a.toList.map (fun b => Int.ofNat b.toNat)
+
+def baOfBytes (bs : List Int) : ByteArray :=
+  ByteArray.mk (bs.map (fun b => UInt8.ofNat b.toNat)).toArray
+
+/-- The entry's stored name verifies under its declared kind — nf-key for the
+    action key, blob for the object q — and a pre-QFORMAT raw digest still
+    verifies through the legacy branch of the reader. -/
+def qOk (kind : String) (q preimage : List Int) : Bool :=
+  Lib.Rsd.Store.readQForm kind q preimage != "mismatch"
+
+def insertDiskEntry (s : Lib.Rsd.Store.Store) (key kb oq v : List Int) : Lib.Rsd.Store.Store :=
+  let act : Lib.Rsd.Store.Action := { key := key, keyBytes := kb, outputs := [("sigma", oq)] }
+  let obj : Lib.Rsd.Store.Obj := { q := oq, bytes := v }
+  { s with
+    actions := act :: s.actions
+  , objects := obj :: s.objects
+  , actMap := Lib.Rsd.Store.QMap.insert s.actMap key act
+  , objMap := Lib.Rsd.Store.QMap.insert s.objMap oq obj }
+
+end Lib.Rsd.DirStore

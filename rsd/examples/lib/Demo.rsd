@@ -1,0 +1,12 @@
+-- Demo lib module for the import row. Compiled-subset only: Int/Nat/List
+-- signatures, match on `0`/`n + 1`, cons patterns, no structures.
+def twice : Int -> Int
+  | x => x + x
+
+def countdown : Int -> Int
+  | 0 => 0
+  | n + 1 => countdown (n - 1)
+
+def sum : List Int -> Int
+  | [] => 0
+  | x :: xs => x + sum xs

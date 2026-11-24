@@ -1,0 +1,173 @@
+-- Admission rows. Concatenate after lib/rsd/keys.rsd.
+-- Predictions are lib/rsd/PREDICTIONS.md step 5. closure_claim = 0.
+namespace Lib.Rsd.AdmitRun
+
+def hexNib (n : Nat) : Char :=
+  Char.ofNat (if n < 10 then 48 + n else 87 + n)
+
+def hexByte (b : Int) : String :=
+  let n := b.toNat
+  String.mk [hexNib (n / 16), hexNib (n % 16)]
+
+def toHex : List Int → String
+  | [] => ""
+  | b :: bs => hexByte b ++ toHex bs
+
+def qb (h : String) : List Int :=
+  Lib.Sha256.hex h
+
+def artifactHex (source generator environment : String) : String :=
+  let r := Lib.Rsd.Keys.artifactKey (qb source) (qb generator) (qb environment)
+  if r.ok then toHex r.bytes else r.residue
+
+def generatorQ : String := "825bcac3f0b6a5988ca3235f2b90d8efcf10bf79a36806bcfeb2ab2cb4240b30"
+
+end Lib.Rsd.AdmitRun
+
+def readStdin : IO String := do
+  let h ← IO.getStdin
+  let rec go (fuel : Nat) (acc : List String) (n : Nat) : IO (List String) :=
+    match fuel with
+    | 0 => pure acc
+    | fuel + 1 => do
+      if n > 1000000 then return acc
+      let line ← h.getLine
+      if line == "" then return acc
+      else go fuel (line :: acc) (n + line.length)
+  let lines ← go 200000 [] 0
+  return String.join lines.reverse
+
+def admitMain (argv : List String) : IO UInt32 := do
+  if argv == ["inventory-q"] then
+    let text ← readStdin
+    let p := Lib.Rsd.Keys.parseInventory text
+    if p.ok then
+      IO.println (Lib.Rsd.AdmitRun.toHex p.bytes)
+      return 0
+    IO.eprintln p.residue
+    return 1
+  if argv == ["random-q"] then
+    let p := Lib.Rsd.Keys.randomStreamQ []
+    if p.ok then
+      IO.println (Lib.Rsd.AdmitRun.toHex p.bytes)
+      return 0
+    IO.eprintln p.residue
+    return 1
+  if argv == ["native-key"] then
+    let text ← readStdin
+    let p := Lib.Rsd.Keys.parseNative text
+    if p.ok then
+      IO.println (Lib.Rsd.AdmitRun.toHex p.env)
+      IO.println (Lib.Rsd.AdmitRun.toHex p.artifact)
+      return 0
+    IO.eprintln p.residue
+    return 1
+  if argv.length == 2 && argv.head? == some "module-of" then
+    match Lib.Rsd.Keys.moduleOfLogical (argv.getD 1 "") with
+    | some n =>
+      IO.println n
+      return 0
+    | none =>
+      IO.eprintln "input_invalid"
+      return 1
+  if argv.length == 2 && argv.head? == some "olean-rel" then
+    match Lib.Rsd.Keys.oleanRel (argv.getD 1 "") with
+    | some n =>
+      IO.println n
+      return 0
+    | none =>
+      IO.eprintln "input_invalid"
+      return 1
+  if argv.length == 4 && argv.head? == some "artifact-key" then
+    let src := argv.getD 1 ""
+    let gen := argv.getD 2 ""
+    let env := argv.getD 3 ""
+    let got := Lib.Rsd.AdmitRun.artifactHex src gen env
+    if got.length == 64 then
+      IO.println got
+      return 0
+    IO.eprintln got
+    return 1
+  let mut bad := false
+  let known := Lib.Rsd.AdmitRun.artifactHex
+    "41cf6794ba4200b839c53531555f0f3998df4cbb01a4d5cb0b94e3ca5e23947d"
+    "9123dcbb0b42652b0e105956c68d3ca2ff34584f324fa41a29aedd32b883e131"
+    "b7d83560f3f23075bd4487f99ddc69a3f1382eb8ab4b1c5025bbd320bd3a7b02"
+  if known != "a3ebb641646586b87dbab3a83b36ae026830279979ba6a5f18a7959b4fd33a9a" then
+    bad := true
+    IO.println s!"known fail {known}"
+  else
+    IO.println "known ok"
+  let gen := Lib.Rsd.AdmitRun.generatorQ
+  let rcic := Lib.Rsd.AdmitRun.artifactHex
+    "766d2bb37c9b81591f37c79cbfad0ab9839abf2db8331d4ac8a1170bde333177"
+    gen
+    "9dcebdab0c6652385ba47a140695cac2895cc4e456eaa21f920f50e626d36821"
+  if rcic != "51a01b1c7e10e18ff5d262524df443b39111becf0ae549cdc08017c35dfac2ac" then
+    bad := true
+    IO.println s!"rcic fail {rcic}"
+  else
+    IO.println "rcic ok"
+  let rcicEdit := Lib.Rsd.AdmitRun.artifactHex
+    "60b9ad7c29865b1ccef441b1531cb0c5e4fcd362b1589bd589b662d0954cd70f"
+    gen
+    "9dcebdab0c6652385ba47a140695cac2895cc4e456eaa21f920f50e626d36821"
+  if rcicEdit != "ca7974a53d500faa64429289f076a3305e93e62249b3d67ae455ed834cea9d50" then
+    bad := true
+    IO.println s!"rcic-edit fail {rcicEdit}"
+  else
+    IO.println "rcic-edit ok"
+  let tiny := Lib.Rsd.AdmitRun.artifactHex
+    "c04c4033a9f7547e5ef303cfc23d1f1431a4feb5049e91ac0bc8ee105b294ec7"
+    gen
+    "6d6d830357bb307d7ce647f9d245063f7fc0be1d8bbc8e5b6a7f7bef1ada77a7"
+  if tiny != "18da9d6459d67f68ac166519b10aedcfbec70c45c9cd777d82d19cec8cce9357" then
+    bad := true
+    IO.println s!"tiny fail {tiny}"
+  else
+    IO.println "tiny ok"
+  let tinyEdit := Lib.Rsd.AdmitRun.artifactHex
+    "2a57d2b781ef3f5069003b8c52adc66abdc9573201e04f83fae6fd2c73508cda"
+    gen
+    "6d6d830357bb307d7ce647f9d245063f7fc0be1d8bbc8e5b6a7f7bef1ada77a7"
+  if tinyEdit != "0aae210cd067c1ab0ca72c6754f0ee8d9b2dc4588adc9c6d109ede18bfa52e6e" then
+    bad := true
+    IO.println s!"tiny-edit fail {tinyEdit}"
+  else
+    IO.println "tiny-edit ok"
+  if rcic == rcicEdit || tiny == tinyEdit then
+    bad := true
+    IO.println "edit-distinct fail"
+  else
+    IO.println "edit-distinct ok"
+  if Lib.Rsd.Admit.compiledCount true != 0 || Lib.Rsd.Admit.compiledCount false != 1 then
+    bad := true
+    IO.println "compiled-count fail"
+  else
+    IO.println "compiled-count ok"
+  if !Lib.Rsd.Keys.parseDepChanges then
+    bad := true
+    IO.println "dep-key fail"
+  else
+    IO.println "dep-key ok"
+  if !Lib.Rsd.Keys.rejectsAbsolute || !Lib.Rsd.Keys.rejectsDupEnv then
+    bad := true
+    IO.println "env-refuse fail"
+  else
+    IO.println "env-refuse ok"
+  if !Lib.Rsd.Keys.inventoryFixtureOk then
+    bad := true
+    IO.println "inventory-rows fail"
+  else
+    IO.println "inventory-rows ok"
+    IO.println s!"inventory-q {Lib.Rsd.Keys.hexOf Lib.Rsd.Keys.fixtureInventory.bytes}"
+    IO.println s!"random-q {Lib.Rsd.Keys.hexOf Lib.Rsd.Keys.emptyRandom.bytes}"
+  if !Lib.Rsd.Keys.clockEntryOk then
+    bad := true
+    IO.println "clock-entry fail"
+  else
+    IO.println "clock-entry ok"
+  if bad then return 1 else return 0
+
+def main (argv : List String) : IO UInt32 :=
+  admitMain argv

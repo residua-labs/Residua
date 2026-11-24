@@ -1,184 +1,205 @@
-# OVERVIEW — what Residua is, what release 0.2 offers, its limits
+# OVERVIEW — what Residua is, what release 0.3 offers, its limits
 
 English | [中文](OVERVIEW.zh-CN.md)
 
-This document is part of the release archive. Claims marked
-*repository-side* cite files that do not ship in this archive; they are
-recorded here for auditors who also hold the source repository.
-Citations without a commit are at the head this document ships with.
+This is the long-form document: the design, the motivation, the evidence,
+the limits, and the references. For the short version, read
+[`README.md`](../README.md).
 
-## One line
+## What it is
 
-Residua is infrastructure for using another party's computation or proof
-without trusting that party: results are identified by content (q) and
-admitted only by mechanical checking, over a network of formally defined
-semantics. Residua is designed so that computation and proof are one:
-in rsd a program and a proof are meant to be terms of the same
-dependent type theory — one object that is both compiled to fast native
-or wasm code and checked by the kernel, not two systems kept in sync.
-That unity is the design and is not yet demonstrated end to end;
-release 0.2 ships the compilation half of it — the proof-checking half
-(the R-CIC kernel) is named under the limits and the order below.
+Residua is a research project on reusing computational and deductive
+results between parties that do not trust one another. A result is
+identified by a content address ([q](GLOSSARY.md): a typed SHA-256 of the
+result's bytes) rather than by its producer or by the version of the
+toolchain that built it, and it is admitted only after mechanical
+checking against formally defined semantics.
 
-Why — three facts, no mission claims: re-checking, repair after upstream
-changes, coordination and review dominate the cost of formal results
-(the kernel check is a small share); most producers will be machines
-that cannot be trusted, so only mechanical checking and content identity
-scale; semantics are siloed (Lean, Rocq, K, wasm, EVM) and results do
-not compose across them.
+The project's language, [rsd](GLOSSARY.md), is designed so that a
+program and a proof are terms of one dependent type theory: the same
+term is compiled to native or WebAssembly code and checked by a proof
+kernel. Releases so far contribute the compilation half of this design:
+a self-bootstrapping compiler chain whose provenance any third party can
+verify from a committed [seed](GLOSSARY.md), together with the toolchain's
+content-identity format, its syntax engine, and the formal semantics of
+its execution boundary. The proof-checking half (the [R-CIC](GLOSSARY.md) kernel) is
+the subject of later releases.
 
-## What 0.2 offers — and only this
+## Why — four facts
 
-Verifiable-provenance compilation: given a source and an artifact,
-anyone can rebuild from a committed wasm seed, with a C compiler and no
-other toolchain, and check byte for byte that the artifact comes from
-the source — trusting neither the publisher nor a large binary
-toolchain.
+1. **Maintenance dominates the cost of formal results.** Re-checking
+   after upstream changes, repair, coordination and review cost far
+   more than the kernel check itself.
+2. **Producers are increasingly automated.** Output from automated
+   agents cannot be accepted on the producer's word; only mechanical
+   checking and content identity scale to that setting.
+3. **Semantics are siloed.** Results live in separate systems (Lean,
+   Rocq, K, WebAssembly, the EVM) and do not carry across them.
+4. **Results are bound to toolchain versions.** A compiled library is
+   tied to the toolchain version that built it (Lean's `.olean` files,
+   for example), so a version change rebuilds and re-checks everything
+   downstream. A result identified by its content remains the same
+   result across versions.
 
-Supporting it:
+## Approach
 
-- The rsd compiler chain `rsd -> rscm -> wasm` (`rsdc`, `rsc`), self-hosted:
-  both compilers ship as wasm seeds in
-  `bootstrap/seed/stage-14274/` (sha256 `dcd40993dcda…` and `ce2cff5b42fd…`,
-  `bootstrap/seed/stage-14274/SHA256SUMS`) together with their 53-member
-  source closure (`SOURCE-MEMBERS-SHA256SUMS`) and the member-to-bundle
-  link (`ASSEMBLY.tsv`: which member sits in which `RscSourceModule_`
-  section of the two whole-module sources, in order).
-- The bootstrap recipe `bootstrap/seed/stage-14274/README.md`: a clean
-  Linux x86-64 environment with GCC/binutils/coreutils/Bash/curl/tar and
-  no Lean, elan, lake, Node or OCaml rebuilds both compilers; the recipe's
-  rebuilt images compare byte-identical to the committed seeds
-  (`seed_roundtrip=2/2`). A third-party run of this
-  recipe on the release archive reached the fixpoint (evidence
-  repository-side).
-- Frozen formal semantics per layer (scm, lambda-RC, wasm0), pinned by
-  content digest: `lean/rsd-cert/Residua/Bootstrap/Semantics.lean`
-  `evalLF` at `1fef580a3`, q
-  `4ffcb7d990e8c77fa5dce42bcb4e1ae798e3cddd04803ac7c1fcbd2cb7fa46d2`
-  (the frozen waist scm row). The whole `Residua.Bootstrap` spec set ships (9
-  files) plus its `Residua.SHA256` import, so the pinned spec's `import`
-  lines resolve inside the archive; `theorem` declarations in these
-  texts are pinned spec content, not proof checking.
-- A per-version performance record (`docs/PERF-RECORD.md` +
-  `PERF-RECORD.tsv`, shipped in this archive; `perf/` also carries the
-  Cedar engine's table).
-- Two-family seals of the release tag and a third-party reproduction of
-  the recipe (repository-side evidence).
+- **Identity by content.** An artifact or result is identified by its
+  content address q. Equality of q is the criterion for reuse; names,
+  locations and producers are not.
+- **Admission by checking.** A result enters the system only through a
+  mechanical check against formal semantics. The producer — a person, a
+  compiler or an automated agent — is outside the trusted base (the
+  de Bruijn criterion [9]).
+- **One language for programs and proofs.** By design, an rsd term is
+  both compiled and checked by one kernel, so a statement about a
+  program is a statement about the term that runs.
+- **A verifiable toolchain.** The compiler that produces every other
+  artifact is itself reproducible from a committed seed, so its
+  provenance is checked rather than assumed.
 
-New in 0.2:
+## What 0.3 offers — and only this
 
-- The final typed content identity `q` (format v1): the kind of the
-  addressed content is inside the hashed bytes; raw SHA-256 remains as
-  `digest` for file integrity only (`docs/QFORMAT.md`; vectors
+**Compilation with verifiable provenance.** Given a source and an
+artifact, anyone can rebuild the compiler from the committed
+WebAssembly seed with a C compiler and the pinned wasm runtime
+(wasmtime v50.0.1 plus binaryen version_133 `wasm-opt`, both
+user-downloaded), and check
+byte for byte that the artifact derives from that source — trusting
+neither the publisher nor a large binary toolchain. The recipe runs on
+Linux x86-64 and macOS arm64.
+
+Carried by this release:
+
+- The rsd compiler chain `rsd → `[rscm](GLOSSARY.md)` → wasm` (front end `rsdc`, back end
+  `rsc`), self-hosted: both compilers ship as committed seeds under
+  `bootstrap/seed/` together with their pinned source membership and
+  the recipe that rebuilds them.
+- The `rsd` build tool (`rsd/` and `lib/rsd/`): `rsd build` compiles a
+  program through the content-addressed store, recompiling only what
+  changed; `rsd test` runs the end-to-end suite; `rsd run` executes;
+  `rsd cache` is the content store itself. See `docs/BUILD.md`.
+- The typed content address `q` (format v1): the kind of the addressed
+  content lives inside the hashed bytes, so addresses of different
+  kinds cannot collide (`docs/QFORMAT.md`, checks
   `release/checks/qformat/`).
-- The syntax engine, closed over its grammar class: engine sources
-  `rsdc/syntax/`, the class with its reference decider and soundness
-  proof `semantics/Syntax/`, the surface profiles `rsdc/profiles/*.syn`
-  shipped as data, and the acceptance suite over generated grammars.
-- The execution-boundary formal semantics E0–E4 (`semantics/Effect/`):
-  the wire format, admission and seal judgments, the conformance
-  classifier and recorded transport sessions; acceptance evidence
-  `reports/effect-sem/` (repository-side).
-- The Cedar authorization engine ported to rsd (`policy/cedar/`,
-  Apache-2.0 `policy/NOTICE-CEDAR`), with its harness, oracle build and
-  request corpus (`bench/cedar-perf/`), a decision-equality gate against
-  the published Rust implementation, and its performance record on the
-  release machine type (`perf/`; evidence `reports/cedar-perf/`).
+- The syntax engine, closed over its grammar class: one function over
+  grammar data, checked against a mechanically verified reference
+  decider (`semantics/Syntax/`; profiles `rsdc/profiles/*.syn`).
+- The bootstrap surface check: the compiler's six source files, `import`
+  lines stripped and joined in member order into a 1,325,136-byte bundle,
+  parse cleanly under the OCaml reference front end (corpus verdicts in
+  `docs/LANGUAGE.md`).
+- The execution-boundary semantics: wire format, admission and seal
+  judgments, the conformance classifier and recorded transport
+  sessions, as Lean 4.14 statements (`semantics/Effect/`).
+- `UInt64` in the language.
+- Frozen formal semantics of each compiler layer (scm, [lambda-RC](GLOSSARY.md),
+  [wasm0](GLOSSARY.md)), pinned by content digest; their `.lean`/`.rsd` texts ship
+  as the pinned specification. `theorem` declarations in these texts are
+  pinned specification, not proof checking; `semantics/Effect/AdmissionNF.lean`
+  ships for audit and its imports (`Lib.Exec9Core`, `Lib.Receipt`) are
+  repository-side — checking it needs the development repository.
+- The benchmark and differential test suites (`benchmarks/`,
+  `instruments/lrc-host/`) and the per-version performance record
+  (`perf/`, `docs/PERF-RECORD.md` + `.tsv`).
+- The seed is recut at this release's sources (it carries `UInt64` and
+  the current compiler membership); a fresh `bootstrap/seed/stage-*`
+  directory replaces the 0.1-era one.
 
-## The chain in this archive
+## How the chain fits together
 
-- `rsdc` compiles `.rsd` source to `.rscm` (the scm layer's binary form;
-  magic `52 53 43 4d` + version byte, written in `rsdc/Compile.rsd` and
-  read in `rsc/rsc.rsd`).
-- `rsc` lowers `.rscm` to `.wasm` at the stage's pinned word (14274).
-- The C host bridge of the `execution-bridge` component (named in
-  `bootstrap/seed/stage-14274/EXECUTOR-SHA256SUMS`) plus the wasm2c
-  runtime pinned in `bootstrap/seed/stage-14274/WABT-SHA256SUMS`
-  execute the seeds; `bootstrap/Wasm2CHost.c` and
-  `bootstrap/ProcWasm2CHost.c` are the generic host variants.
-- Invocation is the stage host's file contract:
-  `"$out/rsdc/run" rsdc <in.rsd> <out.rscm> 0 cons` and
-  `"$out/rsc/run" rsc <in.rscm> <out.wasm> 14274 cons`
-  (`docs/RSD-COMMAND.md`).
+- `rsdc` compiles `.rsd` source to `.rscm`, the binary interface of the
+  scm layer (`docs/EMITTER.md`).
+- `rsc` lowers `.rscm` to `.wasm` at the seed's pinned construction
+  word.
+- The C seed host `bootstrap/seed/stage-14274/seed-host.c` embeds the
+  seed modules on the pinned wasmtime engine;
+  `bootstrap/seed/stage-14274/` carries the host, the pins and the
+  recipe.
+- Invocation is the executor file contract documented in
+  `docs/RSD-COMMAND.md`.
 
-## File formats
+## Stated limits
 
-| format | what it is | source | shipped in 0.2 |
-|---|---|---|---|
-| `.rsd` | text spelling of the pre-elaboration tree; the 0.2 front edge accepts the bootstrap subset | `docs/LANGUAGE.md` | yes — the source members plus the `semantics/`/`gates/semalign/` specification texts |
-| `.rsj` | text spelling of the same tree, Reason-style | grammar profile `rsdc/profiles/rsj.syn` | yes — the profile ships as engine data; the compiler's accepted input remains `.rsd` |
-| `.rsm` | text spelling of the same tree, Racket-family (renamed from `.rsl`) | grammar profile `rsdc/profiles/rsm.syn` | yes — the profile ships as engine data |
-| `.rsx` | canonical kernel form: csexp of the canonical s-expression over the source-level AST | repository-side grammar | no — repository-only |
-| `.scm` | text programs in the scm language; also the named Scheme view over the canonical tree | repository-side grammar | no — repository-only |
-| `.rscm` | binary scm-layer interface | `docs/EMITTER.md` | yes — `bootstrap/seed/rsc.rscm`, and the recipe emits `.rscm` on rebuild |
-| `.wasm` | committed compiler seeds | `bootstrap/seed/stage-14274/{rsdc,rsc}.wasm`, `bootstrap/seed/{rsdc,rsc}.wasm` | yes — 4 files |
-| `.lean` | Lean 4.14 specification texts of the frozen semantics | `lean/rsd-cert/Residua/Bootstrap/`, `lean/rsd-cert/Residua/SHA256.lean` | yes — the specification set only; all other `.lean` is repository-only |
-
-The semantics `.rsd` files under `semantics/` and `gates/semalign/` are
-Lean 4.14 program texts shipped as specifications (`docs/SPECS.md`
-marks the row GATED; `gates/semalign/METHOD.md` names the protocol).
-They are not accepted by the 0.2 `rsdc` front edge — the 0.2 `.rsd`
-grammar is the bootstrap subset of `docs/LANGUAGE.md`, which
-refuses `theorem`, `axiom`, `class`, `abbrev`, `variable`, `opaque`,
-`by` and `import`. The syntax engine itself accepts any grammar of the
-class as data (`semantics/Syntax/Class.rsd`).
-
-## Stated limits of 0.2
-
-- Single-module programs: `import` is refused by the front edge.
-- No I/O execution layer: program input/output is the stage host's
-  file contract, not a language effect.
-- No proof checking: the R-CIC checker, `rsd_proofs` and certificates
-  are not in this release; shipped `theorem` texts are pinned
-  specification, not checked claims.
-- No UInt64; a 4 GiB address space.
-- No publish/query entry for results; no dispatcher command.
+- Single-module programs only: `import` is refused by the front edge.
+- No I/O execution layer: program input/output is the host's file
+  contract, not a language effect.
+- No proof checking: the R-CIC kernel and certificates are not in this
+  release; shipped `theorem` texts are pinned specification.
+- No publish/query entry for results.
 - No importable standard library (`docs/STDLIB.md`).
+- The `.rsd` surface accepted by the front edge is the bootstrap subset
+  of `docs/LANGUAGE.md`, which refuses `theorem`, `axiom`, `class`,
+  `abbrev`, `variable`, `opaque`, `by` and `import`.
 
-Who 0.2 is for: reproducible, auditable compilation — supply chain, the
-step before trusted execution — and research on verified, bootstrappable
-compilers. It is not presented as a general-purpose language.
+Who 0.3 is for: reproducible, auditable compilation — supply chain and
+research on verified, bootstrappable compilers. It is not a
+general-purpose language.
 
-## Order after 0.2
+## Evidence
 
-Each item names its acceptance object; no dates.
+- **Independent reproduction.** The seed recipe was reproduced from the
+  documentation alone, by an independent agent with no prior knowledge
+  of the project, on a fresh Linux virtual machine: both compilers were
+  rebuilt byte-identical to the seed.
+- **Independent review.** The release was reviewed by two independent
+  model families.
+- **Archive identity.** The repository tree at the release tag is
+  byte-identical to the published source archive.
+- **Per-goal audit.** Each feature new in this release carries an
+  independent signed audit; transcripts are collected repository-side.
 
-1. Using another's result without trusting them, first instance: the
-   R-CIC kernel (Lean Kernel Arena: no invalid input accepted, then
-   init/std, then mathlib within 16 GiB) plus a publish/query entry
-   for results — the first point where a stranger can find,
-   check and reuse another's result; it ranks above programming
-   features. R-CIC kernel rules target current Lean including the
-   4.32–4.34 soundness fixes; input is 4.35 exports.
-2. Programming completeness: modules, real programs, UInt64, an
-   execution layer (I/O as typed effects), 64-bit addressing, and the
-   application suites (Cedar, SQLite) as acceptance.
-   Basic data representation follows current Lean from 0.2
-   (Int8..Int64/ISize, Float32, String as UTF-8 ByteArray,
-   Std.TreeMap), one card per type.
-3. Cheap confirmation of execution: wasm0 -> AIR -> zk.
-4. The network: generic connectors to external semantics (K/KORE,
-   Lean/Rocq import), ranked by how many semantics one bridge opens.
+## Research agenda
 
-## Naming and surface spellings
+Feature releases are numbered 0.3, 0.4, … in the order in which their
+goals are completed. No goal is tied to a number in advance, and no
+dates are promised:
 
-Residua is the project; `rsd` is the language and toolchain.
+- **Checking another party's result.** The R-CIC proof kernel, the
+  final q format and a publish-and-query entry for results.
+- **Programming completeness.** Modules, 64-bit addressing, an I/O
+  execution layer, real application suites.
+- **Inexpensive confirmation of execution.** wasm0 → AIR →
+  zero-knowledge proofs.
+- **Connections to external semantics.** K/KORE, Lean and Rocq import.
 
-Repository-side, Residua sources exist in three surface spellings of a
-single pre-elaboration tree — the `surface rsd` grammar (a Lean 4.14.0
-syntax subset ported from stock Lean 4.14.0 commit
-`410fab7284703f41660ca2454218dcca9b2ec896`), a Reason-style spelling and
-a Racket-family spelling — alongside the canonical kernel form `.rsx`.
-In 0.2 only the `.rsd` spelling ships and only the bootstrap subset of
-it is accepted (`docs/LANGUAGE.md`: the chain's own sources parse
-err=0, 6/6 files plus the 1,208,186-byte concatenated bundle; every
-refuse-corpus row refuses, 54/54 — repository-side evidence).
+## Related work
 
-For the layer-by-layer design — the semantic chain, the surface
-syntaxes, identity and trust — see `docs/ARCHITECTURE.md`. The
-outside-reader set `docs/{TRUST.md,GLOSSARY.md,STABILITY.md,FAQ.md,
-RELATED-WORK.md,CONTRIBUTING-SECURITY.md}` covers what 0.2 trusts, its terms,
-its promises and its relations; each ships in English and Chinese.
+The seed-based bootstrap addresses the trusting-trust problem [1];
+related approaches are diverse double-compiling [2] and bootstrappable
+builds [3], and verified bootstrapping of a compiler was established by
+CakeML [4]. The back end manages memory by reference counting with
+reuse, after "Counting Immutable Beans" [6] and Perceus [5]; its passes
+are ported from the compiler of Lean 4 [11], and its target is
+WebAssembly [12]. Accepting results from untrusted producers on
+checkable evidence is in the tradition of proof-carrying code [8]; the
+per-layer translation checks are in the tradition of translation
+validation [10]. The planned proof kernel is compared against
+Lean4Lean [7]. `release/NOTICES.md` and `release/PROVENANCE.tsv` list
+the code this project ported, the tools it used as test oracles, and
+the designs it studied.
 
-`closure_claim=0` (`release/MANIFEST.md`: "No release tag, seal or
-author attestation is made here").
+## References
+
+1. K. Thompson. Reflections on trusting trust. *Communications of the
+   ACM* 27(8), 1984.
+2. D. A. Wheeler. Countering trusting trust through diverse
+   double-compiling. *ACSAC*, 2005.
+3. Bootstrappable Builds. https://bootstrappable.org
+4. R. Kumar, M. O. Myreen, M. Norrish, S. Owens. CakeML: a verified
+   implementation of ML. *POPL*, 2014.
+5. A. Reinking, N. Xie, L. de Moura, D. Leijen. Perceus: garbage free
+   reference counting with reuse. *PLDI*, 2021.
+6. S. Ullrich, L. de Moura. Counting immutable beans: reference
+   counting optimized for purely functional programming. *IFL*, 2019.
+7. M. Carneiro. Lean4Lean: verifying a typechecker for Lean, in Lean.
+   arXiv:2403.14064, 2024.
+8. G. C. Necula. Proof-carrying code. *POPL*, 1997.
+9. H. Barendregt, F. Wiedijk. The challenge of computer mathematics.
+   *Philosophical Transactions of the Royal Society A* 363, 2005.
+10. A. Pnueli, M. Siegel, E. Singerman. Translation validation.
+    *TACAS*, 1998.
+11. L. de Moura, S. Ullrich. The Lean 4 theorem prover and programming
+    language. *CADE*, 2021.
+12. A. Haas et al. Bringing the web up to speed with WebAssembly.
+    *PLDI*, 2017.

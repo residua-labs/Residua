@@ -1,0 +1,1824 @@
+-- benchmarks/koka/KokaBase.rsd — driver for the two-route Koka table:
+-- residua vs koka on two routes (native: residua wasm2c -O2 C exe vs
+-- `koka -O2` exe; wasm: both modules under one node engine) at the
+-- fixed sizes, on one VM of the timing shape, under the host rule in
+-- benchmarks/koka/README.md.
+--
+--   lean --run benchmarks/koka/KokaBase.rsd images [WORD] [MODCMD...]
+--       Mac step: builds the twin, writes today's images (four taken, two
+--       refused with the refusal text saved, two variants when
+--       KB_VARIANT_<prog> names a second source), builds rsc-native by its
+--       import closure under --store, compiles the modules (plus
+--       binarytrees at the qbe layer), writes descriptors and the
+--       images/modules pin tables. WORD is the layer word (14274 =
+--       reg facts alloc ctor on the stage's defaults); MODCMD is the
+--       module compile command, default
+--       `out/kbstore/build/rsc-native compile`.
+--
+--   lean --run benchmarks/koka/KokaBase.rsd table WORD RUNTAG MODCMD...
+--       Host step (one VM of the timing shape, one job): installs tools,
+--       builds both routes' executables, walks ladders for equality, runs
+--       the timed reps pinned to one core under the portable and the host
+--       page configurations, and writes the table. Resumes: every finished
+--       cell and artifact is a file under benchmarks/koka/state/, so
+--       re-running the command continues. MODCMD must match the command
+--       recorded by the images step (module provenance).
+--
+--   lean --run benchmarks/koka/KokaBase.rsd hosts OUTDIR [PROG NARGS]
+--       Writes the generated hosts (rowhost.cjs, wasihost.cjs and, for
+--       PROG with NARGS machine arguments, host-PROG.c) into OUTDIR, so a
+--       module can be tried with them on any machine.
+--
+--   WORD with the bit 16384 (`narrow`, 30658 = 14274 + 16384) gives the
+--   table for modules with object fields of 4 bytes: both hosts read by
+--   the width the module's export `fw` names.
+--
+-- Table rules (the card fixes them; the table's head prints them):
+--   programs binarytrees, cfold, deriv, nqueens, rbtree, rbtree-ck at
+--   sizes 21, 20, 10, 13, 4200000, (5,4200000); every other benchmarks/*.rsd
+--   is a named row `no Koka source`; one pinned core via taskset; wall = the
+--   whole process by timecell (median of five); CPU seconds (user+system)
+--   beside it; peak RSS by timecell; code size = stripped executable bytes
+--   (native) / .wasm bytes (wasm), glue .js a further column; limits wall
+--   600 s, heap cap 4 GiB, fuel 10^12, stacks raised and recorded; two page
+--   columns: portable (as built, kernel THP as found) and host (residua
+--   with madvise(MADV_HUGEPAGE), koka at its fastest measured mimalloc
+--   setting — the target column is the host one). binarytrees twice:
+--   with equal-call sharing and at the qbe layer (sharing off); the qbe row
+--   is the one in the geomean. A cell that cannot be measured at its size
+--   is a named row with the largest equal ladder size and the ratios there;
+--   a refused source is a named row `front end refuses the source` per
+--   route; a variant source's rows are `variant, not the source`, outside
+--   the geomean. Koka's binarytrees sums in 8 tasks and builds 9 more trees
+--   per `trees` line (psum-count): its row is equal when the stretch and
+--   long-lived lines match byte for byte and every `trees` line has
+--   residua's check plus nine times the check of one tree of that depth.
+--   closure_claim = 0.
+
+namespace KokaBase
+
+set_option maxRecDepth 4096
+
+-- ==========================================================================
+-- spawn / files / small helpers
+-- ==========================================================================
+
+def runCmd (cmd : String) (args : List String) (env : List (String × Option String))
+    (wall : Nat) : IO (UInt32 × String × String) := do
+  try
+    let r ← IO.Process.output {
+      cmd := "timeout"
+      args := (#["--kill-after=2s", toString wall, cmd] ++ args.toArray)
+      env := env.toArray
+    }
+    return (r.exitCode, r.stdout.trim, r.stderr.trim)
+  catch _ =>
+    -- no GNU timeout on this host (the Mac images step): run the command
+    -- plain; the wall bound is best-effort there.
+    let r ← IO.Process.output { cmd, args := args.toArray, env := env.toArray }
+    return (r.exitCode, r.stdout.trim, r.stderr.trim)
+
+def shC (script : String) (wall : Nat) : IO (UInt32 × String × String) :=
+  runCmd "sh" ["-c", script] [] wall
+
+def shaFile (p : String) : IO String := do
+  let h ← IO.Process.output { cmd := "sh", args := #["-c", s!"sha256sum '{p}' 2>/dev/null || shasum -a 256 '{p}'"] }
+  return ((h.stdout.splitOn " ").headD "?")
+
+def fileBytes (p : String) : IO Nat := do
+  let (_, s, _) ← shC s!"stat -c%s '{p}' 2>/dev/null || stat -f%z '{p}'" 30
+  return s.trim.toNat?.getD 0
+
+def fieldOf (out key : String) : String :=
+  let hits := out.splitOn "\n" |>.filter (·.startsWith s!"{key}=")
+  match hits.head? with
+  | some l => (l.drop (key.length + 1)).trim
+  | none => ""
+
+def download (url dst : String) : IO Bool := do
+  let (rc, _, _) ← shC s!"curl -fsSL -o '{dst}' '{url}' || wget -q -O '{dst}' '{url}'" 600
+  return rc == 0 && (← System.FilePath.pathExists dst)
+
+def fexists (p : String) : IO Bool := System.FilePath.pathExists p
+
+def readMaybe (p : String) : IO String := do
+  try return ← IO.FS.readFile p catch _ => return ""
+
+def thpFault : IO Nat := do
+  let t ← readMaybe "/proc/vmstat"
+  let l := (t.splitOn "\n").filter (·.startsWith "thp_fault_alloc ")
+  return ((((l.headD "").splitOn " ").getD 1 "0").trim.toNat?).getD 0
+
+def readRc (rcFile : String) : IO UInt32 := do
+  let s ← readMaybe rcFile
+  return s.trim.toNat?.getD 255 |>.toUInt32
+
+def median (xs : List Float) : Float :=
+  let s := xs.mergeSort (· ≤ ·)
+  if s.isEmpty then 0 else s.get! (s.length / 2)
+
+def geomean (xs : List Float) : Float :=
+  if xs.isEmpty then 0
+  else Float.exp ((xs.foldl (· + Float.log ·) 0) / xs.length.toFloat)
+
+def fmtF (x : Float) : String := toString (Float.round (x * 1000) / 1000)
+
+def jline (xs : List String) : String := " ".intercalate (xs.map fun s => "'" ++ s ++ "'")
+
+def KCfg : IO.Process.StdioConfig := { stdin := .null, stdout := .null, stderr := .null }
+
+def spawnLogged (script : String) : IO (IO.Process.Child KCfg) :=
+  IO.Process.spawn { cmd := "sh", args := #["-c", script],
+                     stdin := KCfg.stdin, stdout := KCfg.stdout, stderr := KCfg.stderr }
+
+def runBatches (jobs : List String) (bound : Nat) : IO Unit := do
+  let mut js := jobs
+  while !js.isEmpty do
+    let chunk := js.take bound
+    js := js.drop bound
+    let mut hs : List (IO.Process.Child KCfg) := []
+    for j in chunk do hs := hs ++ [← spawnLogged j]
+    for h in hs do let _ ← h.wait
+
+def mkdirP (p : String) : IO Unit := IO.FS.createDirAll p
+
+def kvGet (text key : String) : String := fieldOf text key
+
+def tfieldOf (out key : String) : String :=
+  let hits := out.splitOn "\n" |>.filter (·.startsWith (key ++ "\t"))
+  match hits.head? with
+  | some l => (l.drop (key.length + 1)).trim
+  | none => ""
+
+def natField (text key : String) : Nat := (kvGet text key).toNat?.getD 0
+
+def strFloat (s : String) : Float :=
+  match s.trim.splitOn "." with
+  | [a] => Float.ofNat (a.toNat?.getD 0)
+  | [a, b] =>
+    let frac := Float.ofNat (b.toNat?.getD 0) / Float.pow 10 (Float.ofNat b.length)
+    Float.ofNat (a.toNat?.getD 0) + frac
+  | _ => 0
+
+def floatField (text key : String) : Float := strFloat (kvGet text key)
+
+def replaceStr (hay needle repl : String) : String :=
+  String.intercalate repl (hay.splitOn needle)
+
+def jsonNum (json key : String) : Nat :=
+  match json.splitOn ("\"" ++ key ++ "\":") with
+  | _ :: tl@(_ :: _) =>
+    ((tl.headD "").dropWhile (· == ' ')).takeWhile Char.isDigit |>.toNat?.getD 0
+  | _ => 0
+
+def jsonArr (json key : String) : List Nat :=
+  match json.splitOn ("\"" ++ key ++ "\":[") with
+  | _ :: tl@(_ :: _) =>
+    let inside := (tl.headD "").takeWhile (· != ']')
+    inside.splitOn "," |>.filterMap (·.trim.toNat?)
+  | _ => []
+
+-- ==========================================================================
+-- the programs: row id, image file, module file, entry index, koka source,
+-- arg template, format, kind (main | variant | refused), geomean flag
+-- ==========================================================================
+
+structure Prog where
+  name : String          -- row id
+  image : String         -- images/<image>.rscm that produced the module
+  module : String        -- modules/<module>; "" for refused rows
+  entry : Nat            -- export f<entry>
+  kk : String            -- vendored koka source file name
+  kkArgs : Bool          -- koka main reads get-args
+  rsrcArgs : List String -- residua source-arg template, "#" marks the size slot
+  kkLit : String         -- fixed-size literal inside `pub fun main` ("" when kkArgs)
+  arena : Bool           -- entry takes the appended arena word (1)
+  fmt : String           -- host render: int | pair | deriv | btrees
+  kind : String          -- main | variant | refused
+  geomean : Bool         -- at-size equal rows enter the geomean
+
+def rbtreeLadder (n : Nat) : List Nat :=
+  if n > 1000 then n :: rbtreeLadder (n / 2) else []
+
+def progsBase : List Prog :=
+  [ { name := "binarytrees", image := "binarytrees", module := "binarytrees",
+      entry := 8, kk := "binarytrees.kk", kkArgs := true, rsrcArgs := ["#"],
+      kkLit := "", arena := true, fmt := "btrees", kind := "main", geomean := false },
+    { name := "binarytrees-qbe", image := "binarytrees", module := "binarytrees-qbe",
+      entry := 8, kk := "binarytrees.kk", kkArgs := true, rsrcArgs := ["#"],
+      kkLit := "", arena := true, fmt := "btrees", kind := "main", geomean := false },
+    { name := "nqueens", image := "nqueens", module := "nqueens",
+      entry := 4, kk := "nqueens.kk", kkArgs := false, rsrcArgs := ["#"],
+      kkLit := "13", arena := false, fmt := "int", kind := "main", geomean := false },
+    { name := "rbtree", image := "rbtree", module := "rbtree",
+      entry := 12, kk := "rbtree.kk", kkArgs := true, rsrcArgs := ["#"],
+      kkLit := "", arena := true, fmt := "int", kind := "main", geomean := false },
+    { name := "binarytrees-kk", image := "binarytrees-kk", module := "binarytrees-kk",
+      entry := 9, kk := "binarytrees.kk", kkArgs := true, rsrcArgs := ["#"],
+      kkLit := "", arena := true, fmt := "btrees", kind := "main", geomean := false },
+    { name := "binarytrees-kk-qbe", image := "binarytrees-kk", module := "binarytrees-kk-qbe",
+      entry := 9, kk := "binarytrees.kk", kkArgs := true, rsrcArgs := ["#"],
+      kkLit := "", arena := true, fmt := "btrees", kind := "main", geomean := true },
+    { name := "nqueens-kk", image := "nqueens-kk", module := "nqueens-kk",
+      entry := 5, kk := "nqueens.kk", kkArgs := false, rsrcArgs := ["#"],
+      kkLit := "13", arena := false, fmt := "int", kind := "main", geomean := true },
+    { name := "rbtree-kk", image := "rbtree-kk", module := "rbtree-kk",
+      entry := 12, kk := "rbtree.kk", kkArgs := true, rsrcArgs := ["#"],
+      kkLit := "", arena := true, fmt := "word", kind := "main", geomean := true },
+    { name := "rbtree-ck", image := "rbtreeck", module := "rbtreeck",
+      entry := 13, kk := "rbtree-ck.kk", kkArgs := false, rsrcArgs := ["5", "#"],
+      kkLit := "4200000", arena := true, fmt := "int", kind := "main", geomean := true },
+    { name := "cfold", image := "cfold", module := "",
+      entry := 0, kk := "cfold.kk", kkArgs := false, rsrcArgs := ["#"],
+      kkLit := "20", arena := true, fmt := "pair", kind := "refused", geomean := false },
+    { name := "deriv", image := "deriv", module := "",
+      entry := 0, kk := "deriv.kk", kkArgs := false, rsrcArgs := ["#"],
+      kkLit := "10", arena := true, fmt := "deriv", kind := "refused", geomean := false },
+    { name := "cfold-variant", image := "cfold.variant", module := "cfold.variant",
+      entry := 7, kk := "cfold.kk", kkArgs := false, rsrcArgs := ["#"],
+      kkLit := "20", arena := true, fmt := "pair", kind := "variant", geomean := false },
+    { name := "deriv-variant", image := "deriv.variant", module := "deriv.variant",
+      entry := 9, kk := "deriv.kk", kkArgs := false, rsrcArgs := ["#"],
+      kkLit := "10", arena := true, fmt := "deriv", kind := "variant", geomean := false } ]
+
+-- The refused/taken split is read from images.tsv, so the day the front end
+-- takes cfold or deriv the same two commands give its row: a taken source is a
+-- measured row in the geomean (`int` on both sides, like for like) and its
+-- variant rows disappear; a refused one stays a named row with variant rows.
+def resolveProgs (imgTsv : String) : List Prog :=
+  let takenAt (img : String) : Bool :=
+    (imgTsv.splitOn "\n").any fun l => (l.splitOn "\t").take 2 == [img, "taken"]
+  let kindAt (img : String) (k : String) : Bool :=
+    (imgTsv.splitOn "\n").any fun l => (l.splitOn "\t").take 2 == [img, k]
+  progsBase.filterMap fun p =>
+    if p.kind == "refused" && takenAt p.image then
+      some { p with kind := "main", module := p.image, geomean := true }
+    else if p.kind == "variant" && takenAt (p.image.dropRight 8) then none
+    -- a variant row exists only when a variant source was supplied (KB_VARIANT_*)
+    else if p.kind == "variant" && !(kindAt p.image "variant") then none
+    -- a main row whose source the front end refuses is a named refusal row
+    else if p.kind == "main" && kindAt p.image "refused" then
+      some { p with kind := "refused", module := "", geomean := false }
+    else some p
+
+-- Ladders, downwards, per the card.
+def ladderOf (p : Prog) : List Nat :=
+  match p.name with
+  | "binarytrees" | "binarytrees-qbe" | "binarytrees-kk" | "binarytrees-kk-qbe" => (List.range' 10 12).reverse
+  | "nqueens" | "nqueens-kk" => (List.range' 8 6).reverse
+  | "deriv" | "deriv-variant" => (List.range' 1 10).reverse
+  | "cfold" | "cfold-variant" => (List.range' 10 11).reverse
+  | _ => rbtreeLadder 4200000
+
+-- Why a measured row is outside the geomean (like for like, revision 1).
+def departureOf (name : String) : String :=
+  match name with
+  | "binarytrees" => "pinned port: plain recursion in the check, equal-call sharing on — a different amount of work"
+  | "binarytrees-qbe" => "pinned port: plain recursion in the check (departure from Koka's checkv)"
+  | "binarytrees-kk" => "-kk port with equal-call sharing — a different amount of work"
+  | "nqueens" => "pinned port: Int for int32 (departure from Koka's program)"
+  | "rbtree" => "pinned port: Int for int32 (departure from Koka's program)"
+  | _ => "variant, not the source"
+
+def sizeOf (p : Prog) : Nat := (ladderOf p).headD 0
+
+def rArgsOf (p : Prog) (size : Nat) : List String :=
+  p.rsrcArgs.map fun a => if a == "#" then toString size else a
+
+-- Residua machine args: a Nat source argument is the small number's word
+-- 2n + 1; the arena word is 1 when the entry's last sig param is
+-- list(heapnode) (every entry here but nqueens's — checked against each
+-- module's export arity).
+def rMachOf (p : Prog) (size : Nat) : List String :=
+  (rArgsOf p size).map (fun a => if p.fmt == "word" then a else toString (2 * a.toNat! + 1)) ++
+    (if p.arena then ["1"] else [])
+
+-- Koka argv for a size: only get-args programs take one.
+def kArgvOf (p : Prog) (size : Nat) : List String :=
+  if p.kkArgs then [toString size] else []
+
+def layerBits : List (String × Nat) :=
+  [("arr",1),("reg",2),("tail",4),("qbe",8),("cte",16),("fuse",32),
+   ("facts",64),("rc",128),("borrow",256),("drop",512),("reuse",1024),
+   ("static",2048),("alloc",4096),("ctor",8192),("narrow",16384)]
+
+def wordLayers (word : Nat) : Option String :=
+  let names := layerBits.filterMap fun (n, b) => if (word / b) % 2 == 1 then some n else none
+  let covered := (layerBits.filter (fun (_, b) => (word / b) % 2 == 1)).foldl (· + ·.2) 0
+  if covered == word then some (",".intercalate names) else none
+
+-- The stage's base layers for modules; binarytrees' second module adds qbe
+-- (sharing of equal calls off, rsc/rsc.rsd `if lay.qbe then 4`).
+def qbeLayers (layers : String) : String := layers ++ ",qbe"
+
+-- Fixed-size koka sources: the size literal is edited ONLY in a build copy
+-- under state/shared/kk/. The recipe is awk: inside the `pub fun main` body,
+-- replace the first occurrence of the old literal by the new size, once.
+def kkEditCmd (kkSrc kkLit size : String) : String :=
+  "awk -v old=" ++ kkLit ++ " -v new=" ++ size ++
+  " 'BEGIN{inm=0; done=0} /pub fun main/{inm=1} { if (inm && !done && sub(old,new)) done=1; print }' '" ++
+  kkSrc ++ "'"
+
+-- ==========================================================================
+-- generated hosts (text the driver writes into state/<runtag>/gen/)
+-- ==========================================================================
+
+-- residua wasm host for node: instantiate, set the rsc-ABI block at 24, call
+-- f<entry>(24, fuel, machine args...), decode the result at +96 by the
+-- descriptor JSON, render the Koka-format text. Status/detail/call_ms go to
+-- stderr. Exit 0 on tag 0.
+--
+-- Value model (verified against lib/lrc/FromWire.rsd and live module
+-- probes): a magnitude word is odd -> (w-1)/2 or even -> cons cells
+-- [hdr@0, next@8, limb@16] of unsigned base-256 limbs, nil = 1. An Int
+-- word is odd -> signed small (w-1)/2 or even -> an intRec object
+-- [hdr, mag word@8, sgn word@16]. Inside a parent record an intRec field
+-- flattens to the field's object slot (the mag word) plus a scalar slot
+-- (the sign word): object slots in declaration order first, then the
+-- scalar slots, 8 bytes each. In the ENTRY BLOCK an intRec is the wire's
+-- two words {sgn word, mag word} and a record's fields are laid out
+-- sequentially at 8*w bytes each. List cells: [hdr, elem word@+pay,
+-- next@+tail].
+--
+-- A module with narrow fields (the layer `narrow`; docs/OBJECT-ABI.md
+-- "Narrow fields") exports `fw`, which returns 4: an object field is 4
+-- bytes at 8 + 4*i, the scalar words follow at 8 + 4*n, a small number in
+-- an object word is its low 32 bits as a signed number shifted right by
+-- one, and every list cell is [hdr, head@8, tail@12] with a scalar head
+-- held as an object word (an immediate, or a box with the word at +8), so
+-- a limb chain is a list of immediates. The block's words stay 8 bytes.
+-- Both hosts read by that width; without the export it is 8 and they read
+-- what they read before.
+def rowHostJs : String := "\n".intercalate [
+  "'use strict';",
+  "const fs = require('node:fs');",
+  "const [wasm, exp, fuelS, descFile, fmt, ...argS] = process.argv.slice(2);",
+  "const desc = JSON.parse(fs.readFileSync(descFile, 'utf8')).descriptor;",
+  "const args = argS.map(a => BigInt(a));",
+  "const fuel = BigInt(fuelS);",
+  "const cap = 4294967296n;",
+  "const base = 24;",
+  "let view, FW = 8n;",
+  "const rd = p => view.getBigInt64(Number(p), true);",
+  "const u8 = p => view.getUint8(Number(p));",
+  "// an object field: 8 bytes, or the 4 the module's export fw names.",
+  "const fld = p => FW === 4n ? BigInt(view.getUint32(Number(p), true)) : rd(p);",
+  "// a small number in an object word.",
+  "const sml = w => FW === 4n ? BigInt.asIntN(32, w) >> 1n : (w - 1n) / 2n;",
+  "// a list cell's object head, its scalar head (off: where the word stands in a",
+  "// cell of 8-byte fields) and its tail. With fields of 4 bytes every head is an",
+  "// object word at +8 (a scalar: an immediate, or a box with the word at +8) and",
+  "// the tail is at +12.",
+  "const cellObj = (q, off) => FW === 4n ? fld(q + 8n) : rd(q + off);",
+  "const cellSca = (q, off) => { if (FW !== 4n) return rd(q + off);",
+  "  const h = fld(q + 8n); return (h & 1n) ? h >> 1n : rd(h + 8n); };",
+  "const cellTail = (q, off) => FW === 4n ? fld(q + 12n) : rd(q + off);",
+  "const isIntRec = t => t.k === 'record' && t.fields.length === 2 &&",
+  "  t.fields[0][0].indexOf('IntSgn') >= 0;",
+  "// magnitude word: odd -> (w-1)/2; even -> unsigned limb chain cells.",
+  "const magWord = w => { if (w & 1n) return (w - 1n) / 2n; let p = w, v = 0n, n = 0;",
+  "  while (p !== 1n && n < 8) { v |= cellSca(p, 16n) << BigInt(8 * n); n++; p = cellTail(p, 8n); }",
+  "  return v; };",
+  "// intRec heap object at p: [hdr, mag word (an object field) @8, sgn word after it].",
+  "const intObj = p => { const m = magWord(fld(p + 8n)); return rd(p + 8n + FW) !== 0n ? -m : m; };",
+  "// an Int word: odd -> signed small; even -> intRec object.",
+  "const slotInt = w => (w & 1n) ? sml(w) : intObj(w);",
+  "// intRec in the entry block's wire form at q: {sgn word, mag word}.",
+  "const recInt = q => { const m = magWord(rd(q + 8n)); return rd(q) !== 0n ? -m : m; };",
+  "// object slots / scalar slots a field's type contributes to a parent",
+  "// record: an intRec flattens to one object slot plus one scalar slot.",
+  "const objCount = t => isIntRec(t) ? 1 : (t.k === 'record' ? t.fields.reduce((s, [, d]) => s + objCount(d), 0) : 1);",
+  "const scaCount = t => isIntRec(t) ? 1 : (t.k === 'record' ? t.fields.reduce((s, [, d]) => s + scaCount(d), 0) : 0);",
+  "// a list element is a word of a cell: what it leads to is in the heap.",
+  "const fieldVal = (t, w) => isIntRec(t) ? slotInt(w) : valAt(t, w, true);",
+  "// heap: p0 is in an object of the heap (its object fields have the module's",
+  "// width); otherwise it is in the entry block (words of 8 bytes).",
+  "function valAt(t, p0, heap) {",
+  "  const p = BigInt(p0);",
+  "  if (t.k === 'list') { const o = []; let q = heap ? fld(p) : rd(p);",
+  "    while (q !== 1n) {",
+  "      if (t.elem.k === 'int' && t.elem.c === 8) o.push(FW === 4n ? cellSca(q, 0n) : BigInt(u8(q + BigInt(t.pay))));",
+  "      else o.push(fieldVal(t.elem, cellObj(q, BigInt(t.pay))));",
+  "      q = cellTail(q, BigInt(t.tail)); }",
+  "    return o; }",
+  "  if (isIntRec(t)) return recInt(BigInt(p));",
+  "  if (t.k === 'record') { const o = {};",
+  "    const totObj = t.fields.reduce((s, [, d]) => s + objCount(d), 0);",
+  "    // a heap record with fields of 4 bytes: the descriptor's offset of an object",
+  "    // slot is 8 + 8*slot, the slot is at 8 + 4*slot, the scalars after the slots.",
+  "    const nar = heap === true && FW === 4n;",
+  "    let cumSca = 0;",
+  "    for (let i = 0; i < t.fields.length; i++) {",
+  "      const [n, d] = t.fields[i];",
+  "      const off = nar ? 8 + 4 * ((t.offsets[i] - 8) / 8) : t.offsets[i];",
+  "      if (isIntRec(d)) {",
+  "        const mag = magWord(nar ? fld(p + BigInt(off)) : rd(p + BigInt(off)));",
+  "        const sgn = rd(p + BigInt(8 + (nar ? 4 : 8) * totObj + 8 * cumSca));",
+  "        o[n] = sgn !== 0n ? -mag : mag;",
+  "      } else if (nar) throw new Error('fw=4: this host reads no record field but an Int');",
+  "      else o[n] = valAt(d, p + BigInt(off), heap);",
+  "      cumSca += scaCount(d); }",
+  "    return o; }",
+  "  return rd(p);",
+  "}",
+  "function render(fmt, v) {",
+  "  if (fmt === 'int') return String(v) + '\\n';",
+  "  if (fmt === 'pair') return v.f0 + '\\n' + v.f1 + '\\n';",
+  "  if (fmt === 'deriv') return v.map((c, i) => (i + 1) + ' count: ' + c).join('\\n') + '\\ndone\\n';",
+  "  if (fmt === 'btrees') {",
+  "    return v.map(l => {",
+  "      if (Number(l.f0) === 0) return 'stretch tree of depth ' + l.f2 + '\\t check: ' + l.f3;",
+  "      if (Number(l.f0) === 1) return l.f1 + '\\t trees of depth ' + l.f2 + '\\t check: ' + l.f3;",
+  "      return 'long lived tree of depth ' + l.f2 + '\\t check: ' + l.f3;",
+  "    }).join('\\n') + '\\n';",
+  "  }",
+  "  return String(v) + '\\n';",
+  "}",
+  "(async () => {",
+  "  const { instance } = await WebAssembly.instantiate(fs.readFileSync(wasm), {});",
+  "  const mem = instance.exports.memory;",
+  "  const heap = instance.exports.__heap_base ? Number(instance.exports.__heap_base.value) >>> 0 : 65536;",
+  "  if (typeof instance.exports.fw === 'function') FW = BigInt(instance.exports.fw());",
+  "  if (FW !== 4n && FW !== 8n) { fs.writeSync(2, 'fw=' + FW + '\\n'); process.exit(5); }",
+  "  view = new DataView(mem.buffer);",
+  "  view.setBigInt64(base + 0, BigInt(heap), true);",
+  "  view.setBigInt64(base + 8, cap < BigInt(mem.buffer.byteLength) ? cap : BigInt(mem.buffer.byteLength), true);",
+  "  for (let p = 16; p <= 32; p += 8) view.setBigInt64(base + p, 0n, true);",
+  "  view.setBigInt64(base + 40, cap, true);",
+  "  const fn = instance.exports[exp];",
+  "  const t0 = performance.now();",
+  "  let tag;",
+  "  try { tag = fn(BigInt(base), fuel, ...args); }",
+  "  catch (e) { fs.writeSync(2, 'trap ' + String(e).slice(0, 200) + '\\n'); process.exit(3); }",
+  "  const call_ms = performance.now() - t0;",
+  "  view = new DataView(mem.buffer);",
+  "  const status = view.getBigInt64(base + 16, true);",
+  "  const detail = view.getBigInt64(base + 24, true);",
+  "  fs.writeSync(2, 'tag=' + tag + ' status=' + status + ' detail=' + detail + ' call_ms=' + call_ms.toFixed(1) + '\\n');",
+  "  fs.writeSync(2, 'fw=' + FW + '\\n');",
+  "  if (tag !== 0n) process.exit(4);",
+  "  // entry block wire form: an Int result is {sgn word, mag word}, two words each.",
+  "  const wirePair = fmt === 'pair' && isIntRec(desc.fields[0][1]);",
+  "  const value = wirePair ? { f0: recInt(BigInt(base + 96)), f1: recInt(BigInt(base + 112)) } : valAt(desc, base + 96, false);",
+  "  process.stdout.write(render(fmt, value));",
+  "})();"
+]
+
+-- koka WASI host for node: run a standalone-WASI .wasm (the release's
+-- --target=wasm product) under node:wasi with the program argv.
+def wasiHostJs : String := "\n".intercalate [
+  "'use strict';",
+  "const fs = require('node:fs');",
+  "const { WASI } = require('node:wasi');",
+  "const [wasm, ...progArgs] = process.argv.slice(2);",
+  "(async () => {",
+  "  const wasi = new WASI({ version: 'preview1', args: ['koka', ...progArgs],",
+  "    env: {}, returnOnExit: true, preopens: {} });",
+  "  const { instance } = await WebAssembly.instantiate(fs.readFileSync(wasm), { wasi_snapshot_preview1: wasi.wasiImport });",
+  "  const t0 = performance.now();",
+  "  let rc;",
+  "  try {",
+  "    if (instance.exports._start) rc = wasi.start(instance);",
+  "    else if (instance.exports._initialize) { instance.exports._initialize(); rc = 0; }",
+  "    else { fs.writeSync(2, 'no_start\\n'); process.exit(3); }",
+  "  } catch (e) { fs.writeSync(2, 'trap ' + String(e).slice(0, 200) + '\\n'); process.exit(3); }",
+  "  const call_ms = performance.now() - t0;",
+  "  fs.writeSync(2, 'wasi_rc=' + (rc === undefined ? 0 : rc) + ' call_ms=' + call_ms.toFixed(1) + '\\n');",
+  "  process.exit(rc === undefined ? 0 : rc);",
+  "})();"
+]
+
+-- wasm2c C host: block at 24, call the entry on a pthread with a 1 GiB
+-- stack, decode the result at +96, print the Koka-format text. Same value
+-- model as rowHostJs. -DKB_HUGE adds madvise(MADV_HUGEPAGE) on the linear
+-- memory (the host page column). nargs = number of machine args after
+-- (base, fuel), i.e. rMachOf's length; the generator emits the exact-arity
+-- call because C type-checks each branch.
+def hostCText (prog : String) (nargs : Nat) : String :=
+  let argDecls := (List.range nargs).map fun i =>
+    s!"  uint64_t a{i} = args[{i + 1}] ? strtoull(args[{i + 1}], 0, 10) : 0;"
+  let callArgs := ", ".intercalate <| (List.range nargs).map fun i => s!"a{i}"
+  "\n".intercalate <| [
+  "/* benchmarks/koka generated wasm2c host for " ++ prog ++ " — rsc-ABI block",
+  "   at 24, result at +96, rendered as the program's Koka text. */",
+  "#include \"" ++ prog ++ ".h\"",
+  "#include \"wasm-rt-impl.h\"",
+  "#include \"wasm-rt-exceptions.h\"",
+  "#include <inttypes.h>",
+  "#include <pthread.h>",
+  "#include <stdio.h>",
+  "#include <stdlib.h>",
+  "#include <string.h>",
+  "#include <time.h>",
+  "#ifdef KB_HUGE",
+  "#include <sys/mman.h>",
+  "#endif",
+  "static wasm_rt_memory_t *memory;",
+  "static char **args;",
+  "static int code = 1;",
+  "static uint64_t rd(uint64_t p) { uint64_t x; memcpy(&x, memory->data + p, 8); return x; }",
+  "static void wr(uint64_t p, uint64_t x) { memcpy(memory->data + p, &x, 8); }",
+  "static uint64_t now(void) { struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t); return (uint64_t)t.tv_sec * 1000000000 + t.tv_nsec; }",
+  "/* Verified against lib/lrc/FromWire.rsd and live module probes:",
+  "   magnitude word: odd -> (w-1)/2; even -> cons cells",
+  "   [hdr@0, next@8, limb@16], unsigned base-256, nil = 1.",
+  "   Int word: odd -> signed small (w-1)/2; even -> intRec object",
+  "   [hdr, mag-word@8, sgn-word@16]. Inside a parent record an intRec",
+  "   field flattens to the object slot (the mag word) plus a scalar",
+  "   slot (the sign), scalars after all object words, 8-byte stride. */",
+  "/* KB_FW: the bytes of an object field, 8, or 4 for a module with narrow",
+  "   fields (docs/OBJECT-ABI.md \"Narrow fields\"; the driver passes 4 when",
+  "   the module exports fw, and run() checks what fw returns). With 4:",
+  "   object field i at 8 + 4i, the scalar words after the object fields, a",
+  "   small number its low 32 bits as a signed number shifted right by one,",
+  "   every list cell [hdr, head@8, tail@12], a scalar head an object word",
+  "   (an immediate, or a box with the word at +8). */",
+  "#ifndef KB_FW",
+  "#define KB_FW 8",
+  "#endif",
+  "#if KB_FW == 4",
+  "#undef KB_PAY",
+  "#undef KB_TAIL",
+  "#define KB_PAY 8",
+  "#define KB_TAIL 12",
+  "#endif",
+  "static uint64_t fld(uint64_t p) {",
+  "  if (KB_FW == 8) return rd(p);",
+  "  uint32_t x; memcpy(&x, memory->data + p, 4); return x;",
+  "}",
+  "static uint64_t mag_word(uint64_t w) {",
+  "  if (w & 1) return (uint64_t)(w - 1) / 2;",
+  "  uint64_t p = w, v = 0, limb, h; int n = 0;",
+  "  while (p != 1 && n < 8) {",
+  "    if (KB_FW == 8) { limb = rd(p + 16); p = rd(p + 8); }",
+  "    else { h = fld(p + 8); limb = (h & 1) ? h >> 1 : rd(h + 8); p = fld(p + 12); }",
+  "    v |= limb << (8 * n); n++; }",
+  "  return v;",
+  "}",
+  "/* intRec heap object at p: [hdr, mag word (an object field) @8, sgn word after it]. */",
+  "static int64_t int_obj(uint64_t p) {",
+  "  int64_t m = (int64_t)mag_word(fld(p + 8));",
+  "  return rd(p + 8 + KB_FW) ? -m : m;",
+  "}",
+  "static int64_t field_int(uint64_t w) {",
+  "  if (w & 1) return KB_FW == 8 ? (int64_t)(w - 1) / 2 : ((int64_t)(int32_t)(uint32_t)w - 1) / 2;",
+  "  return int_obj(w);",
+  "}",
+  "/* intRec flattened in a parent record: field i's magnitude word is in",
+  "   object slot i (rec + 8 + KB_FW*i), its sign word in scalar slot i at",
+  "   rec + 8 + KB_FW*nObj + 8i; nObj = the record's object-slot count. */",
+  "static int64_t rec_field_int(uint64_t e, int i, int nObj) {",
+  "  int64_t m = (int64_t)mag_word(fld(e + 8 + KB_FW * (uint64_t)i));",
+  "  return rd(e + 8 + KB_FW * (uint64_t)nObj + 8 * (uint64_t)i) ? -m : m;",
+  "}",
+  "/* intRec in the entry block's wire form: [sgn word, mag word]. */",
+  "static int64_t rec_int(uint64_t q) {",
+  "  int64_t m = (int64_t)mag_word(rd(q + 8));",
+  "  return rd(q) ? -m : m;",
+  "}",
+  "#ifndef KB_FUEL",
+  "#define KB_FUEL 1000000000000ull",
+  "#endif",
+  "#ifndef KB_CAP",
+  "#define KB_CAP 4294967296ull",
+  "#endif",
+  "static void *run(void *u) {",
+  "  (void)u;",
+  "  wasm_rt_init();",
+  "  wasm_rt_trap_t trap = wasm_rt_impl_try();",
+  "  if (trap) { fprintf(stderr, \"trap:%s\\n\", wasm_rt_strerror(trap)); return NULL; }",
+  "  w2c_seed inst;",
+  "  wasm2c_seed_instantiate(&inst);",
+  "  memory = w2c_seed_memory(&inst);",
+  "#if KB_FW == 4",
+  "  if (w2c_seed_fw(&inst) != 4) { fprintf(stderr, \"fw\\n\"); return NULL; }",
+  "#endif",
+  "#ifdef KB_HUGE",
+  "  if (madvise(memory->data, (size_t)4 << 30, MADV_HUGEPAGE) != 0) perror(\"madvise\");",
+  "#endif",
+  "  wr(24, 65536);",
+  "  wr(32, memory->size < KB_CAP ? memory->size : KB_CAP);",
+  "  wr(40, 0); wr(48, 0); wr(56, 0);",
+  "  wr(64, KB_CAP);" ] ++ argDecls ++ [
+  "  uint64_t t0 = now();",
+  s!"  uint64_t tag = KB_ENTRY(&inst, 24, KB_FUEL, {callArgs});",
+  "  double call_ms = (double)(now() - t0) / 1e6;",
+  "  uint64_t status = rd(40), detail = rd(48);",
+  "  fprintf(stderr, \"tag=%llu status=%llu detail=%llu call_ms=%.1f\\n\",",
+  "    (unsigned long long)tag, (unsigned long long)status,",
+  "    (unsigned long long)detail, call_ms);",
+  "  fprintf(stderr, \"fw=%d\\n\", KB_FW);",
+  "  if (tag) return NULL;",
+  "  uint64_t p, q, e, i = 0; long long v0, v1, kind, iter, dep, chk;",
+  "  switch (KB_SHAPE) {",
+  "  case 4: /* one machine word (UInt32) at the result slot */",
+  "    printf(\"%llu\\n\", (unsigned long long)rd(120)); break;",
+  "  case 0: /* one Int record at the result slot */",
+  "    printf(\"%lld\\n\", (long long)rec_int(120)); break;",
+  "  case 1: /* Int × Int: two inline Int fields, 2 words each */",
+  "    printf(\"%lld\\n%lld\\n\", (long long)rec_int(120), (long long)rec_int(136)); break;",
+  "  case 2: /* List Int: cons cells [hdr@0, elem word@+KB_PAY, tail@+KB_TAIL] */",
+  "    p = rd(120);",
+  "    while (p != 1) { i++; printf(\"%llu count: %lld\\n\", (unsigned long long)i, (long long)field_int(fld(p + KB_PAY))); p = fld(p + KB_TAIL); }",
+  "    printf(\"done\\n\"); break;",
+  "  default: /* btrees: list of records of 4 flattened intRec fields:",
+  "              mag words at +8..+32, sign words at +40..+64 (with fields",
+  "              of 4 bytes: +8..+20 and +24..+48) */",
+  "    p = rd(120);",
+  "    while (p != 1) { e = fld(p + KB_PAY);",
+  "      kind = rec_field_int(e, 0, 4); iter = rec_field_int(e, 1, 4);",
+  "      dep = rec_field_int(e, 2, 4); chk = rec_field_int(e, 3, 4);",
+  "      if (kind == 0) printf(\"stretch tree of depth %lld\\t check: %lld\\n\", dep, chk);",
+  "      else if (kind == 1) printf(\"%lld\\t trees of depth %lld\\t check: %lld\\n\", iter, dep, chk);",
+  "      else printf(\"long lived tree of depth %lld\\t check: %lld\\n\", dep, chk);",
+  "      p = fld(p + KB_TAIL); } break;",
+  "  }",
+  "  fflush(stdout);",
+  "  code = 0;",
+  "  return NULL;",
+  "}",
+  "int main(int argc, char **argv) {",
+  "  if (argc < " ++ toString (nargs + 1) ++ ") { fprintf(stderr, \"args\\n\"); return 64; }",
+  "  args = argv;",
+  "  pthread_attr_t attr; pthread_t thread;",
+  "  if (pthread_attr_init(&attr) || pthread_attr_setstacksize(&attr, (size_t)1024 * 1024 * 1024) ||",
+  "      pthread_create(&thread, &attr, run, NULL)) { fprintf(stderr, \"thread\\n\"); return 1; }",
+  "  pthread_attr_destroy(&attr);",
+  "  pthread_join(thread, NULL);",
+  "  return code;",
+  "}"
+]
+
+-- ==========================================================================
+-- equality: byte-exact, with the declared binarytrees exception
+-- ==========================================================================
+
+-- "<iter>\t trees of depth <dep>\t check: <chk>" -> (iter, dep, chk)
+def parseTreesLine (l : String) : Option (Int × Int × Int) :=
+  match l.splitOn "\t" with
+  | [a, mid, c] =>
+    let m := mid.trim
+    let cT := c.trim
+    if m.startsWith "trees of depth" && cT.startsWith "check:" then
+      some (a.trim.toInt!, (m.drop "trees of depth".length).trim.toInt!,
+        (cT.drop "check:".length).trim.toInt!)
+    else none
+  | _ => none
+
+def isTreesLine (l : String) : Bool :=
+  match l.splitOn "\t" with
+  | [_, mid, _] => mid.trim.startsWith "trees of depth"
+  | _ => false
+
+def isBtrees (p : Prog) : Bool := p.fmt == "btrees"
+
+def textEqual (p : Prog) (rText kText : String) : Bool :=
+  if rText == kText then true
+  else if !isBtrees p || rText == "" || kText == "" then false
+  else
+    let rl := rText.splitOn "\n" |>.filter (· != "")
+    let kl := kText.splitOn "\n" |>.filter (· != "")
+    rl.length == kl.length && (rl.zip kl).all fun (r, k) =>
+      if isTreesLine r || isTreesLine k then
+        match parseTreesLine r, parseTreesLine k with
+        | some (ri, rd, rc), some (ki, kd, kc) =>
+          ri == ki && rd == kd && rc / ri != 0 && kc == rc + 9 * (rc / ri)
+        | _, _ => false
+      else r == k
+
+-- ==========================================================================
+-- tool installs on the host (under $HOME/.cache/koka-table, VM-persistent)
+-- ==========================================================================
+
+def installKoka (tools kokaTag : String) : IO (String × String) := do
+  let dir := tools ++ "/koka"
+  let pkg := dir ++ "/pkg"
+  let tgz := dir ++ "/koka-" ++ kokaTag ++ ".tar.gz"
+  IO.FS.createDirAll dir
+  unless ← fexists (pkg ++ "/bin/koka") do
+    unless ← fexists tgz do
+      unless ← download
+        s!"https://github.com/koka-lang/koka/releases/download/{kokaTag}/koka-{kokaTag}-linux-x64.tar.gz" tgz do
+        IO.eprintln "koka_table: koka download failed"
+    discard <| shC s!"mkdir -p '{pkg}' && tar xzf '{tgz}' -C '{pkg}'" 600
+  return (pkg ++ "/bin/koka", tgz)
+
+def installWabt (tools wabtTag : String) : IO (String × String) := do
+  let dir := tools ++ "/wabt-" ++ wabtTag
+  let tgz := dir ++ ".tar.gz"
+  IO.FS.createDirAll tools
+  unless ← fexists (dir ++ "/bin/wasm2c") do
+    unless ← fexists tgz do
+      discard <| download
+        s!"https://github.com/WebAssembly/wabt/releases/download/{wabtTag}/wabt-{wabtTag}-linux-x64.tar.gz" tgz
+    discard <| shC s!"tar xzf '{tgz}' -C '{tools}'" 600
+  return (dir, tgz)
+
+def installEmsdk (tools emsdkTag : String) : IO String := do
+  let dir := tools ++ "/emsdk"
+  unless ← fexists (dir ++ "/upstream/emscripten/emcc") do
+    unless ← fexists (dir ++ "/emsdk") do
+      discard <| runCmd "git" ["clone", "--depth", "1",
+        "https://github.com/emscripten-core/emsdk.git", dir] [] 900
+    discard <| shC s!"cd '{dir}' && ./emsdk install {emsdkTag} && ./emsdk activate {emsdkTag}" 1800
+  return (dir ++ "/upstream/emscripten/emcc")
+
+-- Koka's --target=wasm passes -march=<host arch>/-mtune=native to its C
+-- compiler, which emscripten's clang rejects for wasm32. The wrapper drops
+-- those two option forms and execs the real emcc; the driver writes it under
+-- the tools dir and passes it as --cc. Args are rebuilt newline-separated so
+-- none of koka's compile flags (which carry no whitespace) are mangled.
+def emccWrapText (emcc : String) : String := "\n".intercalate [
+  "#!/bin/sh",
+  "kept=$(",
+  "for a; do",
+  "  case \"$a\" in",
+  "    (-march=*|-mtune=*) : ;;",
+  "    (*) printf '%s\\n' \"$a\" ;;",
+  "  esac",
+  "done",
+  ")",
+  "IFS='",
+  "'",
+  "set -- $kept",
+  "unset IFS",
+  "exec " ++ emcc ++ " \"$@\""]
+
+-- ==========================================================================
+-- images step (Mac): twin, images, refusals, variants, rsc-native, modules
+-- ==========================================================================
+
+-- The sources the twin is asked to emit. The four it takes are today's
+-- front-end images; the two it refuses are named rows with the saved
+-- refusal text. Variant sources come from KB_VARIANT_<name>.
+def imageSources : List (String × String) :=
+  [("binarytrees", "benchmarks/binarytrees.rsd"),
+   ("nqueens", "benchmarks/nqueens.rsd"),
+   ("nqueens-kk", "benchmarks/nqueens-kk.rsd"),
+   ("binarytrees-kk", "benchmarks/binarytrees-kk.rsd"),
+   ("rbtree", "benchmarks/rbtree.rsd"),
+   ("rbtree-kk", "benchmarks/rbtree-kk.rsd"),
+   ("rbtreeck", "benchmarks/rbtreeck.rsd"),
+   ("cfold", "benchmarks/cfold.rsd"),
+   ("deriv", "benchmarks/deriv.rsd")]
+
+-- Which images become modules: (module name, image name, qbe?)
+def moduleSpecs : List (String × String × Bool) :=
+  [("binarytrees", "binarytrees", false),
+   ("binarytrees-qbe", "binarytrees", true),
+   ("binarytrees-kk", "binarytrees-kk", false),
+   ("binarytrees-kk-qbe", "binarytrees-kk", true),
+   ("nqueens-kk", "nqueens-kk", false),
+   ("nqueens", "nqueens", false),
+   ("rbtree", "rbtree", false),
+   ("rbtree-kk", "rbtree-kk", false),
+   ("rbtreeck", "rbtreeck", false),
+   ("cfold", "cfold", false),
+   ("deriv", "deriv", false),
+   ("cfold.variant", "cfold.variant", false),
+   ("deriv.variant", "deriv.variant", false)]
+
+-- Entries whose descriptor the host needs: (desc name, image, entry).
+-- Entries are found by NAME in the twin's entry table (the index moves when a
+-- source changes: binarytrees-kk's `lines` was f9, is f7). (image, entry name).
+def entryNames : List (String × String) :=
+  [("binarytrees", "lines"), ("binarytrees-kk", "lines"), ("nqueens", "queens"),
+   ("nqueens-kk", "queens"), ("rbtree", "rbtree"), ("rbtree-kk", "rbtree"), ("rbtreeck", "rbtreeCk"),
+   ("cfold", "cfoldMain"), ("deriv", "derivMain"),
+   ("cfold.variant", "cfoldMain"), ("deriv.variant", "derivMain")]
+
+-- Entries whose descriptor the host needs: (desc name, image).
+def descSpecs : List (String × String) :=
+  [("binarytrees", "binarytrees"), ("binarytrees-kk", "binarytrees-kk"),
+   ("nqueens-kk", "nqueens-kk"), ("nqueens", "nqueens"), ("rbtree", "rbtree"), ("rbtree-kk", "rbtree-kk"),
+   ("rbtreeck", "rbtreeck"), ("cfold", "cfold"), ("deriv", "deriv"), ("cfold.variant", "cfold.variant"),
+   ("deriv.variant", "deriv.variant")]
+
+-- index of `name` in an entries file's lines "entry<TAB>idx<TAB>name"
+def entryIdxIn (tab name : String) : Option Nat :=
+  ((tab.splitOn "\n").filterMap fun l =>
+    match l.splitOn "\t" with
+    | ["entry", i, n] => if n == name then i.toNat? else none
+    | _ => none).head?
+
+def findOcamlopt : IO String := do
+  let (rc, _, _) ← runCmd "ocamlopt" ["-version"] [] 30
+  if rc == 0 then return "ocamlopt"
+  let home := (← IO.getEnv "HOME").getD "."
+  let cand := home ++ "/.opam/default/bin/ocamlopt"
+  if ← fexists cand then return cand
+  throw (IO.userError "koka_table: ocamlopt not found")
+
+-- Directory part of a path (everything before the last '/').
+def dirOf (p : String) : String :=
+  match (p.splitOn "/").reverse with
+  | [] => "."
+  | [_] => "."
+  | _ :: rest => "/".intercalate rest.reverse
+
+def baseOf (p : String) : String :=
+  (p.splitOn "/").getLastD p
+
+-- The import-closure builder. KB_NATIVE_COMPILER overrides; else a
+-- previously built `rsc-native`/`rsd` builder binary on PATH.
+def findNativeCompiler : IO String := do
+  match ← IO.getEnv "KB_NATIVE_COMPILER" with
+  | some p => return p
+  | none => return "rsd"
+
+-- Current tree head: `git rev-parse HEAD`, empty when git cannot answer.
+def treeHead : IO String := do
+  let (rc, o, _) ← runCmd "git" ["rev-parse", "HEAD"] [] 30
+  if rc == 0 then return o.trim else return ""
+
+def imagesStep (word : String) (modcmd : List String) : IO UInt32 := do
+  let some wordN := word.toNat? | throw (IO.userError "koka_table_word")
+  let some layers := wordLayers wordN | do
+    IO.eprintln s!"koka_table: word {word} has bits outside the layer table"
+    return 64
+  let imgDir := "benchmarks/koka/images"
+  let modDir := "benchmarks/koka/modules"
+  let refDir := "benchmarks/koka/refusals"
+  let store := (← IO.getEnv "KB_STORE").getD "out/kbstore"
+  let twin := (← IO.getEnv "KB_TWIN").getD "out/lrc/twin"
+  let twinDir := dirOf twin
+  for d in [imgDir, modDir, refDir, store, twinDir, "out"] do mkdirP d
+  let head ← treeHead
+  -- the twin, built once (lib/lrc/host/Diff.rsd's own recipe)
+  let rsdcSrc ← IO.FS.readFile "instruments/rsdc-ml/rsdc.ml"
+  let twinStale := !(← fexists twin) || (← readMaybe (twinDir ++ "/rsdc.ml")) != rsdcSrc
+  if twinStale then
+    IO.FS.writeFile (twinDir ++ "/rsdc.ml") rsdcSrc
+    let oc ← findOcamlopt
+    let b ← IO.Process.output {
+      cmd := oc
+      args := #["-w", "-a", "-I", "+unix", "unix.cmxa", "-o", baseOf twin, "rsdc.ml"]
+      cwd := some twinDir }
+    unless b.exitCode == 0 do throw (IO.userError s!"koka_table_twin: {b.stderr}")
+  -- emit or refuse each source; record the entry table and the refusal text
+  let mut imgLines : List String := ["name\tkind\tsource\tsha256\trefusal"]
+  let mut refused : List String := []
+  for (name, src) in imageSources do
+    let out := s!"{imgDir}/{name}.rscm"
+    let stages ← IO.Process.output {
+      cmd := twin, args := #["stages", src],
+      env := #[("RSDC_TRACE_ENTRIES", some "1")] }
+    let entryTab := "\n".intercalate ((stages.stderr.splitOn "\n").filter (·.startsWith "entry"))
+    IO.FS.writeFile s!"{imgDir}/{name}.entries" (entryTab ++ "\n")
+    let r ← IO.Process.spawn { cmd := twin, args := #["bytes", src],
+                               stdout := .piped, stderr := .piped }
+    let bytes ← r.stdout.readBinToEnd
+    let errS ← r.stderr.readToEnd
+    let rrc ← r.wait
+    if rrc == 0 then
+      IO.FS.writeBinFile out bytes
+      let q ← shaFile out
+      imgLines := imgLines ++ [s!"{name}\ttaken\t{src}\t{q}\t-"]
+    else
+      let refTxt := (errS.trim.splitOn "\n").getLastD ""
+      IO.FS.writeFile s!"{refDir}/{name}.txt"
+        (s!"cmd={twin} bytes {src}\nrc={rrc}\n{errS.trim}\n")
+      refused := refused ++ [name]
+      try IO.FS.removeFile out catch _ => pure ()
+      imgLines := imgLines ++ [s!"{name}\trefused\t{src}\t-\t{refTxt}"]
+      IO.println s!"koka_table: front end refuses {src}: {refTxt}"
+  -- variant sources: KB_VARIANT_<prog> names a second source for a refused
+  -- program; rows made from it are listed apart as `variant, not the source`.
+  for name in ["cfold", "deriv"] do
+    let vEnv ← IO.getEnv s!"KB_VARIANT_{name}"
+    match (if refused.contains name then vEnv else none) with
+    | none => pure ()
+    | some vsrc =>
+      let out := s!"{imgDir}/{name}.variant.rscm"
+      let r ← IO.Process.spawn { cmd := twin, args := #["bytes", vsrc], stdout := .piped }
+      let bytes ← r.stdout.readBinToEnd
+      unless (← r.wait) == 0 do throw (IO.userError s!"koka_table_variant: {vsrc} refused")
+      IO.FS.writeBinFile out bytes
+      let q ← shaFile out
+      let vst ← IO.Process.output { cmd := twin, args := #["stages", vsrc], env := #[("RSDC_TRACE_ENTRIES", some "1")] }
+      IO.FS.writeFile s!"{imgDir}/{name}.variant.entries" ("\n".intercalate ((vst.stderr.splitOn "\n").filter (·.startsWith "entry")) ++ "\n")
+      imgLines := imgLines ++ [s!"{name}.variant\tvariant\t{vsrc}\t{q}\t-"]
+  IO.FS.writeFile "benchmarks/koka/images.tsv" ("\n".intercalate imgLines ++ "\n")
+  -- the compiler by its import closure: the rsd tool's store build
+  -- leaves rsc-native at <store>/build/rsc-native. Rebuilt when the
+  -- store binary is missing or its head stamp differs, so a merged
+  -- head never reuses a stale compiler.
+  let builder ← findNativeCompiler
+  let rscNative := store ++ "/build/rsc-native"
+  let stampF := store ++ "/build/.koka-head"
+  let stamp ← if ← fexists stampF then pure ((← IO.FS.readFile stampF).trim) else pure ""
+  if !(← fexists rscNative) || stamp != head then
+    let warm := "out/kb-warm.rsd"
+    IO.FS.writeFile warm "def main : Int := 42\n"
+    let (rrc, rout, rerr) ← runCmd builder ["--store", store, "--home", ".", warm] [] 3600
+    unless rrc == 0 || (← fexists rscNative) do
+      IO.eprintln s!"koka_table: native compiler build failed rc={rrc}\n{rout}\n{rerr}"
+      return 67
+    IO.FS.writeFile stampF (head ++ "\n")
+  -- module compile: MODCMD IMAGE OUT LAYERS... with RSC_LAYERS set. A module
+  -- is recompiled when missing or when its head stamp differs.
+  let modbin := (modcmd.headD rscNative)
+  let modArgs := if modcmd.isEmpty then ["compile"] else modcmd.drop 1
+  let mut modLines : List String := ["module\timage\tlayers\tsha256\tbytes\trc"]
+  let mut modsOk := true
+  for (mname, image, qbe) in moduleSpecs do
+    let img := s!"{imgDir}/{image}.rscm"
+    unless ← fexists img do
+      modLines := modLines ++ [s!"{mname}\t{image}\t-\t-\t0\tmissing-image"]
+      continue
+    let out := s!"{modDir}/{mname}"
+    let mstamp := s!"{modDir}/{mname}.compile.head"
+    let mhead ← if ← fexists mstamp then pure ((← IO.FS.readFile mstamp).trim) else pure "?"
+    let lays := if qbe then qbeLayers layers else layers
+    if !(← fexists out) || mhead != head then
+      let (rc, o, e) ← runCmd modbin (modArgs ++ [img, out] ++ lays.splitOn ",")
+        [("RSC_LAYERS", some lays)] 1200
+      IO.FS.writeFile s!"{modDir}/{mname}.compile.log" (o ++ "\n" ++ e ++ "\n")
+      IO.FS.writeFile s!"{modDir}/{mname}.compile.rc" (toString rc ++ "\n")
+      if rc == 0 then IO.FS.writeFile mstamp (head ++ "\n")
+    let crcS ← if ← fexists s!"{modDir}/{mname}.compile.rc"
+      then pure (toString (← readRc s!"{modDir}/{mname}.compile.rc"))
+      else pure "prebuilt"
+    if ← fexists out then
+      let q ← shaFile out
+      let b ← fileBytes out
+      modLines := modLines ++ [s!"{mname}\t{image}\t{lays}\t{q}\t{b}\t{crcS}"]
+    else
+      modsOk := false
+      modLines := modLines ++ [s!"{mname}\t{image}\t{lays}\t-\t0\t{crcS}"]
+  -- entries by name -> benchmarks/koka/entries.tsv (image, name, index)
+  let mut entLines : List String := ["image\tname\tindex"]
+  for (image, ename) in entryNames do
+    let tab ← readMaybe s!"{imgDir}/{image}.entries"
+    if tab.trim == "" then continue
+    match entryIdxIn tab ename with
+    | some i => entLines := entLines ++ [s!"{image}\t{ename}\t{i}"]
+    | none =>
+      IO.eprintln s!"koka_table: entry {ename} not in {imgDir}/{image}.entries"
+      return 69
+  IO.FS.writeFile "benchmarks/koka/entries.tsv" ("\n".intercalate entLines ++ "\n")
+  -- descriptors: rsc-native describe IMAGE ENTRY; the JSON's \x escapes are
+  -- rewritten to \u00.. so node's JSON.parse accepts them.
+  for (dname, image) in descSpecs do
+    let entry := (entryIdxIn (← readMaybe s!"{imgDir}/{image}.entries") ((entryNames.find? (·.1 == image)).map (·.2) |>.getD "")).getD 0
+    let img := s!"{imgDir}/{image}.rscm"
+    let df := s!"{modDir}/{dname}.desc.json"
+    let dstamp := s!"{modDir}/{dname}.desc.head"
+    let dhead ← if ← fexists dstamp then pure ((← IO.FS.readFile dstamp).trim) else pure "?"
+    if (← fexists img) && (!(← fexists df) || dhead != head) then
+      let (rc, o, e) ← runCmd modbin ["describe", img, toString entry] [] 300
+      let json := replaceStr o.trim "\\x" "\\u00"
+      IO.FS.writeFile df ("{\"descriptor\":" ++ ((json.splitOn "\n").getLastD "") ++ "}\n")
+      if rc == 0 then IO.FS.writeFile dstamp (head ++ "\n")
+      unless rc == 0 do IO.println s!"koka_table: describe {dname} rc={rc} {e}"
+  let modcmdRec := " ".intercalate (modbin :: modArgs)
+  IO.FS.writeFile "benchmarks/koka/modules.tsv"
+    (s!"modcmd\t{modcmdRec}\nword\t{word}\nlayers\t{layers}\n" ++
+     "\n".intercalate modLines ++ "\n")
+  unless modsOk do
+    IO.eprintln "koka_table: module compile gap"
+    return 68
+  IO.println "koka_table images+modules ok"
+  return 0
+
+-- ==========================================================================
+-- table step (host)
+-- ==========================================================================
+
+structure CellRow where
+  prog : String
+  route : String
+  size : Nat
+  atSize : Bool
+  neverEq : Bool
+  ladderSize : Nat
+  rWallP : Float
+  kWallP : Float
+  rWallH : Float
+  kWallH : Float
+  rCpuP : Float
+  kCpuP : Float
+  rCpuH : Float
+  kCpuH : Float
+  rRss : Float
+  kRss : Float
+  rBytes : Nat
+  kBytes : Nat
+  callMs : Float
+  glueR : Nat
+  glueK : Nat
+  cause : String
+  rStatus : String
+  kStatus : String
+  geomean : Bool
+  named : String
+
+-- One rep line of timecell output into (walls_ms, rss_kb, cpu_ms, status).
+def parseRepLine (l : String) (acc : List Float × List Float × List Float × String) :
+    List Float × List Float × List Float × String :=
+  let (ws, rs, cs, st) := acc
+  match l.splitOn "\t" with
+  | w :: rss :: rest =>
+    let ws' := ws ++ [Float.ofNat ((w.toNat?).getD 0) / 1000000]
+    let rs' := rs ++ [Float.ofNat ((rss.toNat?).getD 0)]
+    match rest with
+    | [s] => (ws', rs', cs, if s != "rc-0" then s else st)
+    | cpu :: s :: _ =>
+      (ws', rs', cs ++ [Float.ofNat ((cpu.toNat?).getD 0) / 1000000],
+       if s != "rc-0" then s else st)
+    | _ => (ws', rs', cs, st)
+  | _ => acc
+
+-- One timed rep set for a command line pinned to `core` via `taskset -c`,
+-- each rep run by timecell (wall_ns, maxrss_kb, cpu_us, status), serial.
+-- Each rep's TSV line is appended to `repPath` as it lands, and lines
+-- already there are reused — a re-run resumes the rep set.
+def measure (timecell core repPath : String) (wall : Nat) (cmd : List String) (reps : Nat) :
+    IO (Float × Float × Float × String × List Float) := do
+  let prior ← readMaybe repPath
+  let priorLines := (prior.splitOn "\n").filter (·.contains '\t') |>.filter (· != "")
+  let mut acc : List Float × List Float × List Float × String := ([], [], [], "ok")
+  for l in priorLines do acc := parseRepLine l acc
+  let wrapped := ["sh", "-c", "ulimit -s unlimited 2>/dev/null; exec \"$@\"", "_"] ++ cmd
+  for _ in List.range (reps - priorLines.length) do
+    let r ← IO.Process.output {
+      cmd := "taskset"
+      args := (#["-c", core, timecell, toString wall, "--"] ++ wrapped.toArray) }
+    let last := (r.stdout.trim.splitOn "\n").getLastD ""
+    if last.contains '\t' then
+      acc := parseRepLine last acc
+      discard <| shC s!"printf '%s\\n' {jline [last]} >> '{repPath}'" 30
+    else
+      let (a, b, c, _) := acc
+      acc := (a, b, c, s!"cellfail:{last}")
+  let (ws, rs, cs, st) := acc
+  return (median ws, median rs, median cs, st, ws)
+
+-- One equality run for a command line, pinned to `core`, capped at `wall`s;
+-- writes <base>.out/.err/.rc. kenv is extra env for the koka side (mimalloc).
+def eqRun (base core : String) (wall : Nat) (cmd : List String) : IO (UInt32 × String) := do
+  let argv := (#["taskset", "-c", core, "timeout", "--kill-after=2s", toString wall,
+    "sh", "-c", "ulimit -s unlimited 2>/dev/null; exec \"$@\"", "_"] ++ cmd.toArray)
+  let r ← IO.Process.output {
+    cmd := "sh"
+    args := #["-c", s!"{jline argv.toList} > '{base}.out' 2> '{base}.err'"] }
+  IO.FS.writeFile (base ++ ".rc") (toString r.exitCode ++ "\n")
+  return (r.exitCode, ← readMaybe (base ++ ".out"))
+
+-- One equality attempt: reuse the recorded .rc/.out when both sides'
+-- artifacts have already run (resume), else run them under eqRun. Returns
+-- (residua rc, residua text, koka rc, koka text).
+def eqSettled (eq coreS : String) (wall : Nat) (kokaBuilt : Bool) (kDir : String)
+    (rCmd kCmd : List String) : IO (UInt32 × String × UInt32 × String) := do
+  let rrcF := eq ++ "/residua.rc"; let kkrcF := eq ++ "/koka.rc"
+  if (← fexists rrcF) && ((← fexists kkrcF) || !kokaBuilt) then
+    let rText ← readMaybe (eq ++ "/residua.out")
+    let kText ← readMaybe (eq ++ "/koka.out")
+    let kkrc ← if kokaBuilt then readRc kkrcF else pure 1
+    let rrc ← readRc rrcF
+    return (rrc, rText, kkrc, kText)
+  let (rrc, rText) ← eqRun (eq ++ "/residua") coreS wall rCmd
+  let (kkrc, kText) ← if kokaBuilt
+    then eqRun (eq ++ "/koka") coreS wall kCmd
+    else pure ((1 : UInt32), "koka build failed: " ++ kDir ++ "/build.log\n")
+  return (rrc, rText, kkrc, kText)
+
+-- A koka build artifact for (kk source, route, size). The build directory is
+-- shared across runs and rows; get-args programs share one dir per route
+-- (size is argv), fixed-size programs one per size.
+def kkDir (shared : String) (p : Prog) (route : String) (size : Nat) : String :=
+  s!"{shared}/kk/{(p.kk.dropRight 3)}-{route}-{if p.kkArgs then "argv" else toString size}"
+
+-- The build script for one koka artifact: copy or literal-edit the vendored
+-- source into the build dir, then `koka` it. Writes build.rc + build.log.
+-- wasmExtra carries the thread switches for the binarytrees wasm attempt.
+def kkScript (kkSrc kokaBin emcc dir : String) (p : Prog) (route : String)
+    (size : Nat) (wasmExtra : String) : String :=
+  let prep := if p.kkArgs
+    then s!"cp '{kkSrc}/{p.kk}' '{dir}/{p.kk}'"
+    else kkEditCmd s!"{kkSrc}/{p.kk}" p.kkLit (toString size) ++ s!" > '{dir}/{p.kk}'"
+  let build := if route == "native"
+    then s!"'{kokaBin}' -O2 -o prog '{p.kk}'"
+    else s!"'{kokaBin}' --target=wasm -O2 --cc='{emcc}' {wasmExtra} -o prog '{p.kk}'"
+  s!"{prep} && cd '{dir}' && timeout --kill-after=5s 3000 {build} > build.log 2>&1; echo $? > build.rc"
+
+def kkNeedsBuild (dir art : String) : IO Bool := do
+  if ← fexists art then return false
+  unless ← fexists (dir ++ "/build.rc") do return true
+  let rc ← readRc (dir ++ "/build.rc")
+  if rc == 0 then return true
+  let tries := (((← readMaybe (dir ++ "/build.tries")).splitOn "\n").headD "").toNat?.getD 0
+  return tries < 3
+
+def kkBuild (shared kkSrc kokaBin emcc : String) (p : Prog) (route : String)
+    (size : Nat) (wasmExtra : String) : IO String := do
+  let dir := kkDir shared p route size
+  let art := dir ++ "/" ++ (if route == "native" then "prog" else "prog.wasm")
+  unless ← kkNeedsBuild dir art do return art
+  mkdirP dir
+  let tries := (((← readMaybe (dir ++ "/build.tries")).splitOn "\n").headD "").toNat?.getD 0
+  IO.FS.writeFile (dir ++ "/build.tries") (toString (tries + 1) ++ "\n")
+  discard <| shC (kkScript kkSrc kokaBin emcc dir p route size wasmExtra) 2400
+  return art
+
+def tableStep (word runtag : String) (modcmd : List String) : IO UInt32 := do
+  let entriesTxt ← readMaybe "benchmarks/koka/entries.tsv"
+  let progs := resolveProgs (← readMaybe "benchmarks/koka/images.tsv")
+  let entryOf (p : Prog) : Nat :=
+    ((entriesTxt.splitOn "\n").filterMap fun l =>
+      match l.splitOn "\t" with
+      | [i, _, n] => if i == p.image then n.toNat? else none
+      | _ => none).headD p.entry
+  let some wordN := word.toNat? | throw (IO.userError "koka_table_word")
+  let some layers := wordLayers wordN | do
+    IO.eprintln s!"koka_table: word {word} has bits outside the layer table"
+    return 64
+  let state := s!"benchmarks/koka/state/{runtag}"
+  let shared := "benchmarks/koka/state/shared"
+  let outd := s!"{state}/gen"
+  for d in [state, shared, outd, s!"{state}/cells", s!"{state}/eq", s!"{state}/build",
+            s!"{shared}/kk"] do mkdirP d
+  let home := (← IO.getEnv "HOME").getD "."
+  let tools := s!"{home}/.cache/koka-table"
+    let kokaTag := (← IO.getEnv "KB_KOKA_TAG").getD "v3.2.9"
+  let wabtTag := (← IO.getEnv "KB_WABT_TAG").getD "1.0.42"
+  let emsdkTag := (← IO.getEnv "KB_EMSDK_TAG").getD "3.1.74"
+  let reps := ((← IO.getEnv "KB_REPS").getD "5").toNat!
+  let wall := ((← IO.getEnv "KB_WALL").getD "600").toNat!
+  let fuel := (← IO.getEnv "KB_FUEL").getD "1000000000000"
+  let cap := (← IO.getEnv "KB_CAP").getD "4294967296"
+  let stkLimit := (← IO.getEnv "KB_STACK").getD "unlimited"
+  let nodeStack := (← IO.getEnv "KB_NODE_STACK").getD "1048576"
+  let btWasmWall := ((← IO.getEnv "KB_BT_WASM_WALL").getD "7200").toNat!
+  let (_, uname, _) ← runCmd "uname" ["-smr"] [] 30
+  let (_, hostn, _) ← runCmd "hostname" [] [] 30
+  let (_, nprocS, _) ← runCmd "nproc" [] [] 30
+  let nproc := nprocS.toNat?.getD 8
+  let coreN := ((← IO.getEnv "KB_CORE").getD "last" |> fun c =>
+    if c == "last" then nproc - 1 else c.toNat?.getD (nproc - 1))
+  let coreS := toString coreN
+  let (_, ccV, _) ← shC "cc --version | head -1" 30
+  let (_, nodeV, _) ← runCmd "node" ["--version"] [] 30
+  let (_, utcNow, _) ← shC "date -u +%Y-%m-%dT%H:%M:%SZ" 30
+  let (_, head, _) ← runCmd "git" ["rev-parse", "HEAD"] [] 30
+  let (_, cpuModel, _) ← shC "grep -m1 'model name' /proc/cpuinfo | cut -d: -f2 | tr -s ' '" 30
+  let (_, mtype, _) ← shC "curl -fsS -m5 -H 'Metadata-Flavor: Google' http://metadata.google.internal/computeMetadata/v1/instance/machine-type 2>/dev/null | rev | cut -d/ -f1 | rev || echo unknown" 30
+  let (_, thp, _) ← shC "cat /sys/kernel/mm/transparent_hugepage/enabled 2>/dev/null || echo unknown" 30
+  let pinsPath := s!"{state}/pins.tsv"
+  let mut pins : List String :=
+    [s!"utc\t{utcNow}", s!"host_uname\t{uname}", s!"hostname\t{hostn}", s!"head\t{head}",
+     s!"cpu_model\t{cpuModel}", s!"machine_type\t{mtype}", s!"kernel\t{uname}",
+     s!"thp_enabled\t{thp}", s!"cc_version\t{ccV}", s!"node_version\t{nodeV}", s!"nproc\t{nproc}",
+     s!"pinned_core\t{coreS}", s!"layer_word\t{word}", s!"layers\t{layers}",
+     s!"wall_s\t{wall}", s!"fuel\t{fuel}", s!"heap_cap_bytes\t{cap}",
+     s!"reps\t{reps}", s!"process_stack_ulimit\t{stkLimit}", s!"pthread_stack\t1GiB", "wasm_rt_max_call_stack_depth\t200000000",
+     s!"node_stack_size_kb\t{nodeStack}"]
+
+  -- ---------- sanity: images + modules pins from the Mac step ----------
+  let imgTsv ← readMaybe "benchmarks/koka/images.tsv"
+  if imgTsv == "" then
+    IO.eprintln "koka_table: benchmarks/koka/images.tsv missing — run the images step on the Mac"
+    return 66
+  let modTsv ← readMaybe "benchmarks/koka/modules.tsv"
+  if modTsv == "" then
+    IO.eprintln "koka_table: benchmarks/koka/modules.tsv missing — run the images step on the Mac"
+    return 66
+  let recordedModcmd := tfieldOf modTsv "modcmd"
+  let modcmdStr := " ".intercalate modcmd
+  unless recordedModcmd == modcmdStr do
+    IO.eprintln s!"koka_table: MODCMD {modcmdStr} != recorded {recordedModcmd}"
+    return 65
+  for l in (modTsv.splitOn "\n").filter (·.contains '\t') do
+    match l.splitOn "\t" with
+    | m :: _ :: lays :: q :: b :: _ =>
+      unless q == "-" do
+        let p := s!"benchmarks/koka/modules/{m}"
+        if ← fexists p then
+          let got ← shaFile p
+          pins := pins ++ [s!"module_{m}\tsha256={got} layers={lays} bytes={b} expect={q} match={got == q}"]
+    | _ => pure ()
+  for l in (imgTsv.splitOn "\n").drop 1 do
+    match l.splitOn "\t" with
+    | n :: kind :: src :: q :: _ =>
+      pins := pins ++ [s!"image_{n}\tkind={kind} source={src} sha256={q}"]
+    | _ => pure ()
+  pins := pins ++ [s!"module_command\t{modcmdStr}"]
+  IO.FS.writeFile pinsPath ("\n".intercalate pins ++ "\n")
+
+  -- ---------- tools ----------
+  let (kokaBin, kokaTgz) ← installKoka tools kokaTag
+  let kokaTgzQ ← shaFile kokaTgz
+  let kokaQ ← shaFile kokaBin
+  let (_, kokaV, _) ← runCmd kokaBin ["--version"] [] 120
+  let (wabtRoot, wabtTgz) ← installWabt tools wabtTag
+  let wabtQ ← shaFile wabtTgz
+  let wasm2c := wabtRoot ++ "/bin/wasm2c"
+  let (_, wasm2cV, _) ← runCmd wasm2c ["--version"] [] 30
+  let emcc ← installEmsdk tools emsdkTag
+  let emccWrap := tools ++ "/emcc-wrap"
+  IO.FS.writeFile emccWrap (emccWrapText emcc)
+  discard <| shC s!"chmod +x '{emccWrap}'" 30
+  let (_, emccV, _) ← shC s!"'{emcc}' --version | head -2 | tail -1" 60
+  let (_, emsdkSha, _) ← shC s!"cd '{tools}/emsdk' && git log -1 --format=%H" 30
+  pins := pins ++ [s!"koka_release\t{kokaTag}", s!"koka_archive_sha256\t{kokaTgzQ}",
+    s!"koka_bin_sha256\t{kokaQ}", "koka_version_text\t" ++ (kokaV.splitOn "\n").headD "",
+    s!"wabt_release\t{wabtTag}", s!"wabt_archive_sha256\t{wabtQ}",
+    s!"wasm2c_version\t{wasm2cV}", s!"emsdk_version\t{emsdkTag}",
+    s!"emsdk_git_sha\t{emsdkSha.trim}", s!"emcc_version\t{emccV}"]
+  IO.FS.writeFile pinsPath ("\n".intercalate pins ++ "\n")
+
+  -- ---------- residua native exes: wasm2c + host.c, portable and KB_HUGE --
+  let buildDir := s!"{state}/build"
+  let mut compiles : List String := ["program\tkind\tpath\tsha256\trc"]
+  let mut modsOk := true
+  for p in progs do
+    if p.module == "" then continue
+    let wasm := s!"benchmarks/koka/modules/{p.module}"
+    let desc := s!"benchmarks/koka/modules/{p.module}.desc.json"
+    -- descriptor keyed by module? descs are per image+entry: the module
+    -- shares its image's descriptor except the qbe variant.
+    let descReal := if p.module.endsWith "-qbe"
+      then s!"benchmarks/koka/modules/{p.module.dropRight 4}.desc.json" else desc
+    unless ← fexists wasm do
+      IO.eprintln s!"koka_table: module {wasm} missing — run the images step"
+      modsOk := false
+    let w2cdir := s!"{outd}/w2c/{p.name}"
+    mkdirP w2cdir
+    for huge in [false, true] do
+      let tag := if huge then ".huge" else ""
+      let native := s!"{buildDir}/{p.name}{tag}.native"
+      unless ← fexists native do
+        if huge then pure () else do
+          let (rc, _, err) ← runCmd wasm2c [wasm, "-n", "seed", "-o", s!"{w2cdir}/{p.name}.c"] [] 900
+          IO.FS.writeFile s!"{w2cdir}/w2c.log" err
+          unless rc == 0 do IO.println s!"koka_table: wasm2c {p.name}: {err}"
+        let nargs := (rMachOf p (sizeOf p)).length
+        IO.FS.writeFile s!"{w2cdir}/host{tag}.c" (hostCText p.name nargs)
+        let shape : Nat := match p.fmt with | "int" => 0 | "pair" => 1 | "deriv" => 2 | "word" => 4 | _ => 3
+        let descTxt ← readMaybe descReal
+        let (pay, tail) := (jsonNum descTxt "pay", jsonNum descTxt "tail")
+        let offs := jsonArr descTxt "offsets"
+        -- the module's field width: its export fw is in the generated header
+        let fw : Nat := if ((← readMaybe s!"{w2cdir}/{p.name}.h").splitOn "w2c_seed_fw(").length > 1 then 4 else 8
+        let inc := ["-I", w2cdir, "-I", wabtRoot ++ "/include", "-I", wabtRoot ++ "/share/wabt/wasm2c"]
+        let defs := ["-D_GNU_SOURCE", "-D_POSIX_C_SOURCE=200809L", s!"-DKB_ENTRY=w2c_seed_f{entryOf p}",
+          s!"-DKB_SHAPE={shape}", s!"-DKB_PAY={pay}", s!"-DKB_TAIL={tail}", s!"-DKB_FW={fw}",
+          s!"-DKB_O0={offs.getD 0 0}", s!"-DKB_O1={offs.getD 1 0}",
+          s!"-DKB_O2={offs.getD 2 0}", s!"-DKB_O3={offs.getD 3 0}",
+          s!"-DKB_FUEL={fuel}ull", s!"-DKB_CAP={cap}ull",
+          "-DWASM_RT_MAX_CALL_STACK_DEPTH=200000000"] ++
+          (if huge then ["-DKB_HUGE"] else [])
+        let cr ← IO.Process.output {
+          cmd := "cc"
+          args := (["-std=c11", "-O2"] ++ inc ++ defs ++
+            ["-c", s!"{w2cdir}/{p.name}.c", "-o", s!"{w2cdir}/{p.name}.o"]).toArray }
+        IO.FS.writeFile s!"{w2cdir}/cc.log" (cr.stdout ++ cr.stderr)
+        let hr ← IO.Process.output {
+          cmd := "cc"
+          args := (["-std=c11", "-O2"] ++ inc ++ defs ++
+            ["-c", s!"{w2cdir}/host{tag}.c", "-o", s!"{w2cdir}/host{tag}.o"]).toArray }
+        IO.FS.writeFile s!"{w2cdir}/cchost{tag}.log" (hr.stdout ++ hr.stderr)
+        discard <| shC s!"(cc '{w2cdir}/host{tag}.o' '{w2cdir}/{p.name}.o' -L'{wabtRoot}/lib' -lwasm-rt-impl -lpthread -lm -o '{native}' && strip '{native}') > '{w2cdir}/link{tag}.log' 2>&1" 300
+      let nq ← if ← fexists native then shaFile native else pure "-"
+      compiles := compiles ++ [s!"{p.name}{if huge then "-huge" else ""}\tnative-exe\t{native}\t{nq}\t-"]
+  IO.FS.writeFile s!"{state}/compiles.tsv" ("\n".intercalate compiles ++ "\n")
+  unless modsOk do
+    IO.eprintln "koka_table: module set incomplete"
+    return 68
+
+  -- ---------- hosts ----------
+  let rowhost := s!"{outd}/rowhost.cjs"
+  let wasihost := s!"{outd}/wasihost.cjs"
+  IO.FS.writeFile rowhost rowHostJs
+  IO.FS.writeFile wasihost wasiHostJs
+  let timecell := s!"{shared}/timecell"
+  unless ← fexists timecell do
+    discard <| shC s!"cc -O2 -o '{timecell}' benchmarks/koka/timecell.c" 300
+
+  -- ---------- command lines ----------
+  -- residua: native exe or node rowhost; the desc file is the image's.
+  let rDescOf (p : Prog) : String :=
+    if p.module.endsWith "-qbe" then s!"benchmarks/koka/modules/{p.module.dropRight 4}.desc.json"
+    else s!"benchmarks/koka/modules/{p.module}.desc.json"
+  let rCmdOf (p : Prog) (route : String) (huge : Bool) (size : Nat) : List String :=
+    if route == "native"
+    then [s!"{buildDir}/{p.name}{if huge then ".huge" else ""}.native"] ++ rMachOf p size
+    else ["node", "--stack-size=" ++ nodeStack, rowhost, s!"benchmarks/koka/modules/{p.module}",
+      "f" ++ toString (entryOf p), fuel, rDescOf p, p.fmt] ++ rMachOf p size
+  let kCmdOf (p : Prog) (route : String) (art : String) (size : Nat) : List String :=
+    if route == "native" then [art] ++ kArgvOf p size
+    else ["node", "--stack-size=" ++ nodeStack, wasihost, art] ++ kArgvOf p size
+
+  -- ---------- koka builds at the table sizes (parallel batches) ----------
+  -- The binarytrees wasm artifact gets the bounded thread-switch attempt
+  -- instead of the plain build (the card's condition 6); it lives in its
+  -- own dir so the plain-attempt verdict stays separate.
+  let mut kjobs : List String := []
+  let mut kdirs : List String := []
+  let kkSrc := "benchmarks/koka/src/test/bench/koka"
+  for p in progs do
+    if p.kind == "refused" || p.kind == "missing" then continue
+    for route in ["native", "wasm"] do
+      if route == "wasm" && p.name.startsWith "binarytrees" then continue
+      let dir := kkDir shared p route (sizeOf p)
+      let art := dir ++ "/" ++ (if route == "native" then "prog" else "prog.wasm")
+      unless ← kkNeedsBuild dir art do continue
+      if kdirs.contains dir then continue
+      kdirs := kdirs ++ [dir]
+      mkdirP dir
+      let tries := (((← readMaybe (dir ++ "/build.tries")).splitOn "\n").headD "").toNat?.getD 0
+      IO.FS.writeFile (dir ++ "/build.tries") (toString (tries + 1) ++ "\n")
+      kjobs := kjobs ++ [kkScript kkSrc kokaBin emccWrap dir p route (sizeOf p) ""]
+  runBatches kjobs 8
+
+  -- ---------- koka binarytrees wasm: the bounded thread-switch attempt ----
+  -- Release-documented route to real threads: koka's --ccopts/--cclinkopts
+  -- reach the emscripten compile and link; -pthread turns on emscripten's
+  -- pthread support with a worker pool. Bounded by KB_BT_WASM_WALL (7200s).
+  let btDir := s!"{shared}/kk/binarytrees-wasm-bt"
+  let btArt := btDir ++ "/prog.wasm"
+  if ← kkNeedsBuild btDir btArt then
+    mkdirP btDir
+    let tries := (((← readMaybe (btDir ++ "/build.tries")).splitOn "\n").headD "").toNat?.getD 0
+    IO.FS.writeFile (btDir ++ "/build.tries") (toString (tries + 1) ++ "\n")
+    let bts := s!"cp '{kkSrc}/binarytrees.kk' '{btDir}/binarytrees.kk' && cd '{btDir}' && " ++
+      s!"timeout --kill-after=5s {btWasmWall} '{kokaBin}' --target=wasm -O2 --cc='{emccWrap}' " ++
+      "--ccopts=-pthread --cclinkopts='-pthread -sPTHREAD_POOL_SIZE=8' -o prog binarytrees.kk" ++
+      " > build.log 2>&1; echo $? > build.rc"
+    discard <| shC bts (btWasmWall + 120)
+  let btWasmBuilt ← fexists btArt
+
+  -- ---------- koka native mimalloc setting for the host column ----------
+  -- The host column runs koka at the fastest mimalloc setting measured on
+  -- THIS VM: median of five on rbtree/native at the table size per
+  -- candidate, then the winner's env for every koka native host rep.
+  let some rbP := progs.find? (·.name == "rbtree") | return 65
+  let rbArt := (kkDir shared rbP "native" (sizeOf rbP)) ++ "/prog"
+  let mut mimallocLines : List String := ["env\tmedian_wall_ms\tsamples_ms"]
+  let mut bestEnv := ""
+  let mut bestW := 0.0
+  if ← fexists rbArt then
+    for cand in ["", "MIMALLOC_RESERVE_HUGE_OS_PAGES=1",
+                 "MIMALLOC_RESERVE_HUGE_OS_PAGES=1 MIMALLOC_EAGER_COMMIT=1"] do
+      let repF := s!"{state}/cells/.mimalloc-{if cand == "" then "default" else replaceStr (replaceStr cand " " "+") "=" "-"}"
+      let wrapped := if cand == "" then kCmdOf rbP "native" rbArt (sizeOf rbP)
+        else ["env"] ++ cand.splitOn " " ++ kCmdOf rbP "native" rbArt (sizeOf rbP)
+      let (w, _, _, _, ws) ← measure timecell coreS repF wall wrapped reps
+      mimallocLines := mimallocLines ++ [s!"{if cand == "" then "default" else cand}\t{fmtF w}\t{",".intercalate (ws.map fmtF)}"]
+      if bestW == 0.0 || (w > 0 && w < bestW) then bestW := w; bestEnv := cand
+  else
+    mimallocLines := mimallocLines ++ ["-\t0\tno rbtree native artifact"]
+  IO.FS.writeFile s!"{state}/mimalloc.tsv" ("\n".intercalate mimallocLines ++ "\n")
+  let kokaHostEnv : List String := if bestEnv == "" then [] else bestEnv.splitOn " "
+  pins := pins ++ [s!"koka_host_mimalloc\t{if bestEnv == "" then "default" else bestEnv}",
+    "residua_host_pages\tmadvise MADV_HUGEPAGE on the linear memory (native); none on the wasm route",
+    "koka_host_pages_wasm\tas built (no host page switch on the wasm route)",
+    "residua_host_pages_wasm\tas built (no madvise reachable from node)"]
+  IO.FS.writeFile pinsPath ("\n".intercalate pins ++ "\n")
+
+  -- ---------- measure cells: serial on the pinned core ----------
+  let routes := ["native", "wasm"]
+  let mut blockers : List String := []
+  let wrapK (p : Prog) (route : String) (art : String) (size : Nat) (hostCol : Bool) : List String :=
+    let base := kCmdOf p route art size
+    if route == "native" && hostCol && !kokaHostEnv.isEmpty then ["env"] ++ kokaHostEnv ++ base else base
+  for p in progs do
+    for route in routes do
+      let cp := s!"{state}/cells/{p.name}-{route}.cell"
+      if (← fexists cp) then continue
+      if p.kind == "missing" then
+        IO.FS.writeFile cp ("\n".intercalate
+          [s!"prog={p.name}", s!"route={route}", s!"size={sizeOf p}", "at_size=0",
+           "equal=0", "never_equal=0", "ladder_size=0", "named=1",
+           s!"cause=the like-for-like port benchmarks/{p.name}.rsd is not on main"] ++ "\n")
+        continue
+      -- a refused program is a named row per route: the front end's text.
+      if p.kind == "refused" then
+        let rt ← readMaybe s!"benchmarks/koka/refusals/{p.name}.txt"
+        IO.FS.writeFile cp ("\n".intercalate
+          [s!"prog={p.name}", s!"route={route}", s!"size={sizeOf p}", "at_size=0",
+           "equal=0", "never_equal=0", "ladder_size=0", "named=1",
+           s!"cause=front end refuses the source",
+           "refusal=" ++ (replaceStr rt "\n" " | ")] ++ "\n")
+        continue
+      -- koka's wasm binarytrees: named unless the bounded build printed.
+      if route == "wasm" && p.name.startsWith "binarytrees" && !btWasmBuilt then
+        let brc ← readRc (btDir ++ "/build.rc")
+        IO.FS.writeFile cp ("\n".intercalate
+          [s!"prog={p.name}", s!"route={route}", s!"size={sizeOf p}", "at_size=0",
+           "equal=0", "never_equal=0", "ladder_size=0", "named=1",
+           s!"cause=koka's wasm build does not finish",
+           s!"build_rc={brc}", s!"log={btDir}/build.log",
+           s!"cmd=koka --target=wasm -O2 --cc=emcc-wrap --ccopts=-pthread --cclinkopts='-pthread -sPTHREAD_POOL_SIZE=8' -o prog binarytrees.kk"] ++ "\n")
+        continue
+      let tsize := sizeOf p
+      let geoBit := if p.geomean then "1" else "0"
+      let mut found : Nat := 0
+      let mut first : Option (String × String × String × UInt32 × UInt32) := none
+      let mut lastRun : (String × String × UInt32 × UInt32) := ("", "", 0, 0)
+      let mut buildFail : Option String := none
+      let mut firstIter := true
+      for size in ladderOf p do
+        let eq := s!"{state}/eq/{p.name}-{route}-{size}"
+        mkdirP eq
+        -- the koka artifact: the bt-wasm dir for binarytrees/wasm, the
+        -- ordinary dir elsewhere.
+        let kArt ← if route == "wasm" && p.name.startsWith "binarytrees"
+          then pure btArt
+          else kkBuild shared kkSrc kokaBin emccWrap p route size ""
+        let kokaBuilt ← fexists kArt
+        unless kokaBuilt do
+          let kbldRc ← readRc ((kkDir shared p route size) ++ "/build.rc")
+          buildFail := some s!"koka build failed rc={kbldRc} log={(kkDir shared p route size) ++ "/build.log"}"
+        let (rrc, rText, kkrc, kText) ←
+          eqSettled eq coreS wall kokaBuilt (kkDir shared p route size)
+            (rCmdOf p route false size) (wrapK p route kArt size false)
+        if rrc == 0 && kkrc == 0 && textEqual p rText kText then
+          found := size
+          break
+        lastRun := (rText, kText, rrc, kkrc)
+        if firstIter then
+          let failCmd := if rrc != 0 then jline (rCmdOf p route false size) else jline (wrapK p route kArt size false)
+          first := some (failCmd, rText, kText, rrc, kkrc)
+        firstIter := false
+        -- binarytrees/wasm: a koka side that finished building but never
+        -- prints is the named non-finishing row — stop the ladder here.
+        if route == "wasm" && p.name.startsWith "binarytrees" && kkrc != 0 then
+          buildFail := some s!"koka's wasm build does not finish: {btDir}/build.log"
+          break
+      if found == tsize then
+        -- equal at size: timed reps, serial on the pinned core, under the
+        -- portable page config and each side's host config.
+        let kArt := if route == "wasm" && p.name.startsWith "binarytrees"
+          then btArt
+          else (kkDir shared p route tsize) ++ "/" ++
+            (if route == "native" then "prog" else "prog.wasm")
+        let (rwP, rrssP, rcpuP, rsP, rwsP) ← measure timecell coreS (cp ++ ".reps-r") wall (rCmdOf p route false tsize) reps
+        let t0 ← thpFault
+        let (kwP, krssP, kcpuP, ksP, kwsP) ← measure timecell coreS (cp ++ ".reps-k") wall (wrapK p route kArt tsize false) reps
+        let t1 ← thpFault
+        let (rwH, rrssH, rcpuH, rsH, _) ← measure timecell coreS (cp ++ ".reps-rh") wall (rCmdOf p route true tsize) reps
+        let t2 ← thpFault
+        let (kwH, krssH, kcpuH, ksH, _) ← measure timecell coreS (cp ++ ".reps-kh") wall (wrapK p route kArt tsize true) reps
+        let t3 ← thpFault
+        let rSize ← fileBytes (if route == "native" then s!"{buildDir}/{p.name}.native" else s!"benchmarks/koka/modules/{p.module}")
+        let kSize ← fileBytes kArt
+        let rGlue ← if route == "native" then pure 0 else fileBytes rowhost
+        let kGlue ← if route == "native" then pure 0 else fileBytes wasihost
+        let rlog ← readMaybe s!"{state}/eq/{p.name}-{route}-{tsize}/residua.err"
+        let callTok := (((rlog.splitOn "call_ms=").getD 1 "").splitOn "\n").headD "0"
+        let callMs := strFloat callTok
+        let lines1 := [s!"prog={p.name}", s!"route={route}", s!"size={tsize}",
+           "at_size=1", "equal=1", "never_equal=0", "ladder_size=0", "named=0",
+           s!"geomean={geoBit}", s!"kind={p.kind}", "cause=",
+           s!"r_wall_p_ms={fmtF rwP}", s!"k_wall_p_ms={fmtF kwP}",
+           s!"thp_k_built={t1 - t0}", s!"thp_r_host={t2 - t1}", s!"thp_k_best={t3 - t2}",
+           s!"r_wall_h_ms={fmtF rwH}", s!"k_wall_h_ms={fmtF kwH}",
+           s!"r_cpu_p_ms={fmtF rcpuP}", s!"k_cpu_p_ms={fmtF kcpuP}",
+           s!"r_cpu_h_ms={fmtF rcpuH}", s!"k_cpu_h_ms={fmtF kcpuH}"]
+        let lines2 := [s!"r_rss_kb={fmtF rrssP}", s!"k_rss_kb={fmtF krssP}",
+           s!"r_rss_h_kb={fmtF rrssH}", s!"k_rss_h_kb={fmtF krssH}",
+           s!"r_bytes={rSize}", s!"k_bytes={kSize}",
+           s!"call_ms={fmtF callMs}", s!"glue_r={rGlue}", s!"glue_k={kGlue}",
+           s!"r_status={rsP}/{rsH}", s!"k_status={ksP}/{ksH}",
+           "r_reps=" ++ ",".intercalate (rwsP.map fmtF),
+           "k_reps=" ++ ",".intercalate (kwsP.map fmtF)]
+        IO.FS.writeFile cp ("\n".intercalate (lines1 ++ lines2) ++ "\n")
+        IO.println s!"koka_cell {p.name}/{route} wall_p {fmtF rwP}/{fmtF kwP} wall_h {fmtF rwH}/{fmtF kwH}"
+      else if found == 0 then
+        let (lr, lk, lrrc, lkrc) := lastRun
+        let (fcmd, _, _, _, _) := first.getD ("", "", "", 0, 0)
+        let cause := buildFail.getD "results-never-equal"
+        IO.FS.writeFile cp ("\n".intercalate
+          [s!"prog={p.name}", s!"route={route}", s!"size={tsize}", "at_size=0",
+           "equal=0", "never_equal=1", "ladder_size=0", "named=1",
+           s!"geomean={geoBit}", s!"kind={p.kind}",
+           s!"cause={cause}",
+           s!"failing_cmd={fcmd}",
+           s!"residua_rc={lrrc}", s!"koka_rc={lkrc}",
+           "residua_last=" ++ " | ".intercalate ((lr.splitOn "\n").take 4),
+           "koka_last=" ++ " | ".intercalate ((lk.splitOn "\n").take 4)] ++ "\n")
+        blockers := blockers ++ [s!"{p.name}/{route} {cause}"]
+      else
+        let (fcmd, fr, fk, frrc, fkrc) := first.getD ("", "", "", 0, 0)
+        let kArtF := (kkDir shared p route found) ++ "/" ++
+          (if route == "native" then "prog" else "prog.wasm")
+        let (rw, rrss, rcpu, rs, _) ← measure timecell coreS (cp ++ ".reps-r") wall (rCmdOf p route false found) reps
+        let (kw, krss, kcpu, ks, _) ← measure timecell coreS (cp ++ ".reps-k") wall (wrapK p route kArtF found false) reps
+        let rSize ← fileBytes (if route == "native" then s!"{buildDir}/{p.name}.native" else s!"benchmarks/koka/modules/{p.module}")
+        let kSize ← fileBytes kArtF
+        IO.FS.writeFile cp ("\n".intercalate
+          [s!"prog={p.name}", s!"route={route}", s!"size={tsize}", "at_size=0",
+           "equal=1", "never_equal=0", s!"ladder_size={found}", "named=1",
+           s!"geomean={geoBit}", s!"kind={p.kind}",
+           s!"cause={if frrc != 0 then s!"residua rc={frrc}" else if fkrc != 0 then s!"koka rc={fkrc}" else "outputs-differ"}",
+           s!"failing_cmd={fcmd}",
+           s!"r_wall_p_ms={fmtF rw}", s!"k_wall_p_ms={fmtF kw}",
+           s!"r_cpu_p_ms={fmtF rcpu}", s!"k_cpu_p_ms={fmtF kcpu}",
+           s!"r_rss_kb={fmtF rrss}", s!"k_rss_kb={fmtF krss}",
+           s!"r_bytes={rSize}", s!"k_bytes={kSize}",
+           s!"r_status={rs}", s!"k_status={ks}",
+           s!"residua_rc={frrc}", s!"koka_rc={fkrc}",
+           "residua_last=" ++ " | ".intercalate ((fr.splitOn "\n").take 4),
+           "koka_last=" ++ " | ".intercalate ((fk.splitOn "\n").take 4)] ++ "\n")
+
+  -- ---------- control: one program's module in another's place ----------
+  -- residua's nqueens module is run in the rbtree cell's place: its printed
+  -- result is compared against koka's rbtree output. It must come out NOT
+  -- equal — equality is read from the printed result.
+  let cpC := s!"{state}/cells/control.cell"
+  unless ← fexists cpC do
+    let some nqP := progs.find? (·.name == "nqueens") | return 65
+    let eq := s!"{state}/eq/control"
+    mkdirP eq
+    let rbArtC := (kkDir shared rbP "native" (sizeOf rbP)) ++ "/prog"
+    let (rrc, rText) ← eqRun (eq ++ "/residua") coreS wall (rCmdOf nqP "native" false (sizeOf nqP))
+    let (kkrc, kText) ← if ← fexists rbArtC
+      then eqRun (eq ++ "/koka") coreS wall (kCmdOf rbP "native" rbArtC (sizeOf rbP))
+      else pure ((1 : UInt32), "no koka rbtree artifact\n")
+    let eq_ := rrc == 0 && kkrc == 0 && textEqual nqP rText kText
+    let eqB := if eq_ then "1" else "0"
+    let notEqB := if eq_ then "0" else "1"
+    IO.FS.writeFile cpC ("\n".intercalate
+      ["prog=control", "route=native", "size=0", "at_size=0", "equal=0",
+       s!"never_equal={eqB}", "ladder_size=0",
+       s!"named={notEqB}",
+       "cause=module-swap control: nqueens module in rbtree's cell",
+       s!"not_equal={notEqB}",
+       s!"residua_rc={rrc}", s!"koka_rc={kkrc}",
+       "residua_last=" ++ " | ".intercalate ((rText.splitOn "\n").take 2),
+       "koka_last=" ++ " | ".intercalate ((kText.splitOn "\n").take 2)] ++ "\n")
+    unless eq_ == false do blockers := blockers ++ ["control reported equal — equality is not being read"]
+
+  -- ---------- assemble the table ----------
+  let mut cells : List CellRow := []
+  for p in progs do
+    for route in routes do
+      let cp := s!"{state}/cells/{p.name}-{route}.cell"
+      unless (← fexists cp) do continue
+      let t ← readMaybe cp
+      cells := cells ++ [CellRow.mk p.name route
+        (natField t "size")
+        (natField t "at_size" == 1)
+        (natField t "never_equal" == 1)
+        (natField t "ladder_size")
+        (floatField t "r_wall_p_ms") (floatField t "k_wall_p_ms")
+        (floatField t "r_wall_h_ms") (floatField t "k_wall_h_ms")
+        (floatField t "r_cpu_p_ms") (floatField t "k_cpu_p_ms")
+        (floatField t "r_cpu_h_ms") (floatField t "k_cpu_h_ms")
+        (floatField t "r_rss_kb") (floatField t "k_rss_kb")
+        (natField t "r_bytes") (natField t "k_bytes")
+        (floatField t "call_ms")
+        (natField t "glue_r") (natField t "glue_k")
+        (kvGet t "cause")
+        (kvGet t "r_status") (kvGet t "k_status")
+        (natField t "geomean" == 1)
+        (kvGet t "cause")]
+  let ratio (a b : Float) := if b > 0 then a / b else 0
+  let cellLine (c : CellRow) : String :=
+    s!"{c.prog}\t{c.route}\t{c.size}\t{fmtF c.rWallP}\t{fmtF c.kWallP}\t{fmtF (ratio c.rWallP c.kWallP)}\t" ++
+    s!"{fmtF c.rWallH}\t{fmtF c.kWallH}\t{fmtF (ratio c.rWallH c.kWallP)}\t" ++
+    s!"{fmtF c.rCpuP}\t{fmtF c.kCpuP}\t{fmtF c.rCpuH}\t{fmtF c.kCpuH}\t" ++
+    s!"{fmtF c.rRss}\t{fmtF c.kRss}\t{fmtF (ratio c.rRss c.kRss)}\t" ++
+    s!"{c.rBytes}\t{c.kBytes}\t{fmtF (ratio (Float.ofNat c.rBytes) (Float.ofNat c.kBytes))}\t" ++
+    s!"{fmtF c.callMs}\t{c.glueR}\t{c.glueK}"
+  let geoCells := cells.filter fun c => c.atSize && c.geomean
+  let mut table : List String :=
+    [s!"# Koka table — residua vs koka, two routes, host rule",
+     "", s!"word={word} runtag={runtag} module_command={modcmdStr}",
+     s!"rules: programs=6 sizes=fixed one-core taskset serial wall={wall}s fuel={fuel} cap={cap}B reps={reps}",
+     "rules: wall=whole-process timecell median5; cpu=user+sys median5; rss=median of rep maxrss; bytes=stripped exe | .wasm",
+     "rules: wall_p=portable pages (as built, kernel THP as found); wall_h=host pages (residua madvise; koka at its fastest measured mimalloc, information); COUNTING column wall_c = residua wall_h over koka wall_p (koka as built asks for huge pages itself, thp_fault_alloc per side in the cell files; host-rule item 5)",
+     "rules: on the wasm route both sides' host column is as built (no madvise reachable from node; no mimalloc switch in the wasm product)",
+     "rules: ratio=residua/koka, like-for-like rows on this one VM only; call_ms=residua entry call alone (out of ratio); glue=js bytes beside .wasm (out of ratio)",
+     "rules: the binarytrees geomean row is binarytrees-qbe (equal-call sharing off, like-for-like against koka); the sharing row is labelled and out of the geomean",
+     "rules: binarytrees — koka's psum-count builds 9 extra trees per `trees` line on the pinned core; the row is equal per the declared exception",
+     "rules: variant rows are measured on the variant sources, not the refused ones — outside the geomean",
+     "",
+     "## pins"]
+  table := table ++ pins
+  table := table ++ ["", "## rows at size",
+    "program\troute\tsize\tr_wall_p\tk_wall_p\twall_p_ratio\tr_wall_h\tk_wall_h\twall_h_ratio\tr_cpu_p\tk_cpu_p\tr_cpu_h\tk_cpu_h\tr_rss_kb\tk_rss_kb\trss_ratio\tr_bytes\tk_bytes\tbytes_ratio\tcall_ms\tglue_r_bytes\tglue_k_bytes"]
+  for c in cells do
+    if c.atSize then table := table ++ [cellLine c]
+  table := table ++ ["", "## per route and measure (geomean rows at size)",
+    "route\tmeasure\tgeomean\tn\tbelow1\tbelowEq1\tmax"]
+  for route in routes do
+    let cs := geoCells.filter (·.route == route)
+    for (tag, getR, getK) in ([
+        ("wall_p", fun (c : CellRow) => c.rWallP, fun (c : CellRow) => c.kWallP),
+        ("wall_c", fun c => c.rWallH, fun c => c.kWallP),
+        ("wall_h_kbest", fun c => c.rWallH, fun c => c.kWallH),
+        ("rss", fun c => c.rRss, fun c => c.kRss),
+        ("bytes", fun c => Float.ofNat c.rBytes, fun c => Float.ofNat c.kBytes)] :
+        List (String × (CellRow → Float) × (CellRow → Float))) do
+      let rs := cs.map fun c => ratio (getR c) (getK c)
+      table := table ++ [s!"{route}\t{tag}\t{fmtF (geomean rs)}\t{rs.length}\t{rs.filter (· < 1) |>.length}\t{rs.filter (· ≤ 1) |>.length}\t{fmtF (rs.foldl max 0)}"]
+  table := table ++ ["", "## named rows (outside the geomean)"]
+  for c in cells do
+    if !c.atSize then
+      let tag := if c.neverEq then "never equal"
+        else if c.ladderSize != 0 then s!"ladder_size={c.ladderSize} (not at size)"
+        else c.named
+      table := table ++ [s!"{c.prog}\t{c.route}\t{tag}\tcause={c.cause}"]
+  for c in cells do
+    if c.atSize && !c.geomean then
+      table := table ++ [s!"{c.prog}\t{c.route}\tmeasured, out of geomean ({departureOf c.prog})"]
+  table := table ++ ["", "## no Koka source (named rows, outside the geomean)",
+    "pidigits and every other benchmarks/*.rsd without a vendored test/bench/koka source"]
+  let tableText := "\n".intercalate table ++ "\n"
+  let tpath := s!"{state}/table.md"
+  IO.FS.writeFile tpath tableText
+  let tq ← shaFile tpath
+  IO.FS.writeFile (tpath ++ ".sha256") (tq ++ "\n")
+  let nCells := progs.length * routes.length
+  let gotCells := (progs.map fun p => routes.map fun r => s!"{state}/cells/{p.name}-{r}.cell").flatten
+  let mut cellCount := 0
+  for cpath in gotCells do
+    if (← fexists cpath) then cellCount := cellCount + 1
+  let allCells := cellCount == nCells
+  let allBlockers := (cells.filter (·.neverEq)).map fun c => s!"{c.prog}/{c.route} never equal"
+  let controlOk ← do
+    let t ← readMaybe cpC
+    pure (natField t "not_equal" == 1)
+  -- a complete table exits 0 even with named rows: `never equal` and the
+  -- non-finishing koka wasm build are answers, not blockers. Only a missing
+  -- cell or a control that came out equal is a failure.
+  let outcome := if !allCells then 1 else if !controlOk then 70 else 0
+  if allCells then IO.FS.writeFile s!"{state}/DONE" "done\n"
+  -- ---------- counter line ----------
+  let atSizeN := (cells.filter (·.atSize)).length
+  let namedN := (cells.filter fun c => !c.atSize).length + 1  -- + control row
+  let refusedN := (cells.filter fun c => (c.named.splitOn "front end").length > 1).length
+  let nw := geomean ((geoCells.filter (·.route == "native")).map fun c => ratio c.rWallH c.kWallP)
+  let ww := geomean ((geoCells.filter (·.route == "wasm")).map fun c => ratio c.rWallH c.kWallP)
+  let mut doneRuns : List String := []
+  let mut timingRuns : List String := []
+  let dirs ← try System.FilePath.readDir "benchmarks/koka/state" catch _ => pure #[]
+  for e in dirs do
+    let p := "benchmarks/koka/state/" ++ e.fileName
+    if e.fileName != "shared" && (← fexists (p ++ "/DONE")) then
+      doneRuns := doneRuns ++ [e.fileName]
+      let pt ← readMaybe (p ++ "/pins.tsv")
+      let mt := tfieldOf pt "machine_type"
+      if (mt.splitOn "t2d").length > 1 || mt == "" then
+        timingRuns := timingRuns ++ [e.fileName]
+  -- the table's conditions:
+  let cond1 ← fexists pinsPath  -- from main: driver+report exist on the branch
+  let cond2 := allCells && (cells.all fun c => c.atSize || c.named != "")
+  let cond3 := allCells  -- every refused source is a named row; none is refused when the front end takes all
+  let pinsTxt ← readMaybe pinsPath
+  let cond4 := tfieldOf pinsTxt "cpu_model" != "" && tfieldOf pinsTxt "koka_host_mimalloc" != ""
+  let btShareT ← readMaybe s!"{state}/cells/binarytrees-kk-native.cell"
+  let btQbeT ← readMaybe s!"{state}/cells/binarytrees-kk-qbe-native.cell"
+  let cond5 := natField btShareT "at_size" == 1 && natField btQbeT "at_size" == 1
+  let btW ← readMaybe s!"{state}/cells/binarytrees-kk-qbe-wasm.cell"
+  let cond6 := natField btW "at_size" == 1 ||
+    ((kvGet btW "cause").splitOn "does not finish").length > 1
+  let cond7 := doneRuns.length >= 2
+  let cond8 := controlOk
+  let condN := ([cond1, cond2, cond3, cond4, cond5, cond6, cond7, cond8].filter (· == true)).length
+  let blockerTxt := if allBlockers.isEmpty then "-" else ";".intercalate allBlockers
+  let counterLine := s!"{utcNow} {head} koka-table {condN}/8 at_size={atSizeN}/12 named={namedN} refused={refusedN} native_wall={fmtF nw} wasm_wall={fmtF ww} {blockerTxt}\n"
+  IO.FS.writeFile (s!"{state}/counter.line") counterLine
+  if allCells then
+    IO.println s!"koka_table done cells={cellCount} blockers={blockerTxt} table_sha256={tq}"
+  else
+    IO.println s!"koka_table partial cells={cellCount}/{nCells} blockers={blockerTxt} table_sha256={tq}"
+  return outcome
+
+-- ==========================================================================
+-- report step (local): merge run states into reports/koka-table/
+-- ==========================================================================
+
+def reportStep (outdir : String) : IO UInt32 := do
+  let stateRoot := "benchmarks/koka/state"
+  mkdirP outdir
+  let mut runDirs : List String := []
+  let dirs ← try System.FilePath.readDir stateRoot catch _ => pure #[]
+  for e in dirs do
+    let p := stateRoot ++ "/" ++ e.fileName
+    if e.fileName != "shared" && (← fexists (p ++ "/pins.tsv")) then
+      runDirs := runDirs ++ [e.fileName]
+  runDirs := runDirs.mergeSort (· ≤ ·)
+  let mut body : List String :=
+    ["# Koka table — residua vs Koka, two routes, the host rule",
+     "",
+     "## commands",
+     "",
+     "    lean --run benchmarks/koka/KokaBase.rsd images [WORD] [MODCMD...]   # on the Mac",
+     "    lean --run benchmarks/koka/KokaBase.rsd table WORD RUNTAG MODCMD...   # on the timing VM",
+     "",
+     "The host step resumes: every finished cell/artifact is a file under",
+     "benchmarks/koka/state/<runtag>/; a re-run continues where it stopped.",
+     "Two runs on two VMs of the timing shape; a ratio differing by more",
+     "than 10 percent between them is listed with both values.",
+     "",
+     "compiler source head (rsc-native, word " ++ (let w := tfieldOf (← readMaybe "benchmarks/koka/modules.tsv") "word"; if w == "" then "14274" else w) ++ "): " ++ (← readMaybe "benchmarks/koka/modules/binarytrees.compile.head").trim,
+     "each module's sha256 and layers are in the pins of each run below.",
+     ""]
+  let mut noiseCells : List String := []
+  let mut firstRatios : Option (List (String × Float)) := none
+  for runtag in runDirs do
+    let st := stateRoot ++ "/" ++ runtag
+    let out := outdir ++ "/" ++ runtag
+    mkdirP (out ++ "/cells")
+    for f in (← try System.FilePath.readDir st catch _ => pure #[]) do
+      if f.fileName.endsWith ".tsv" || f.fileName.endsWith ".md" || f.fileName.endsWith ".sha256" then
+        discard <| shC s!"cp '{st}/{f.fileName}' '{out}/'" 60
+    let cellDir := st ++ "/cells"
+    for f in (← try System.FilePath.readDir cellDir catch _ => pure #[]) do
+      discard <| shC s!"cp '{cellDir}/{f.fileName}' '{out}/cells/'" 60
+    body := body ++ [s!"## run {runtag}", ""]
+    let pt ← readMaybe (st ++ "/pins.tsv")
+    body := body ++ ["```", pt.trim, "```", ""]
+    for f in (← try System.FilePath.readDir st catch _ => pure #[]) do
+      if f.fileName.startsWith "table" && f.fileName.endsWith ".md" then
+        body := body ++ ["```", (← readMaybe (st ++ "/" ++ f.fileName)).trim, "```", ""]
+    -- pages per side, Koka's mimalloc settings, the control row, and the
+    -- eleven binarytrees checks, read from this run's own files.
+    let mut thpRows : List String := ["program/route\tthp_k_built\tthp_r_host\tthp_k_best"]
+    for f in (← try System.FilePath.readDir cellDir catch _ => pure #[]) do
+      if f.fileName.endsWith ".cell" then
+        let t ← readMaybe (cellDir ++ "/" ++ f.fileName)
+        if (kvGet t "thp_k_built") != "" then
+          thpRows := thpRows ++ [s!"{f.fileName.dropRight 5}\t{kvGet t "thp_k_built"}\t{kvGet t "thp_r_host"}\t{kvGet t "thp_k_best"}"]
+    body := body ++ [s!"## pages, mimalloc, control ({runtag})", "",
+      "thp_fault_alloc deltas per side (kernel /proc/vmstat), one row per cell:", "", "```"]
+      ++ thpRows ++ ["```", "", "Koka's mimalloc settings measured on rbtree (the fastest is named in pins as koka_host_mimalloc):", "", "```",
+      (← readMaybe (st ++ "/mimalloc.tsv")).trim, "```", "",
+      "Control (one program's module in another's place; the row must report not equal):", "", "```",
+      (← readMaybe (cellDir ++ "/control.cell")).trim, "```", "",
+      "binarytrees n=21 residua output (shared row; the eleven checks are 8388607 65011991 66585719 66982391 67094519 67174391 67401719 68287991 71827319 85983191 4194303):", "", "```",
+      (← readMaybe (st ++ "/eq/binarytrees-kk-qbe-native-21/residua.out")).trim, "```", ""]
+    let mut ratios : List (String × Float) := []
+    for f in (← try System.FilePath.readDir cellDir catch _ => pure #[]) do
+      let t ← readMaybe (cellDir ++ "/" ++ f.fileName)
+      if natField t "at_size" == 1 then
+        let rw := floatField t "r_wall_h_ms"
+        let kw := floatField t "k_wall_h_ms"
+        if kw > 0 then ratios := ratios ++ [(f.fileName, rw / kw)]
+    match firstRatios with
+    | none => firstRatios := some ratios
+    | some fr =>
+      for (name, r) in ratios do
+        match fr.find? (·.1 == name) with
+        | some (_, r0) =>
+          if r0 > 0 && Float.abs (r - r0) / r0 > 0.1 then
+            noiseCells := noiseCells ++ [s!"{name}: run={fmtF r0} run{runtag}={fmtF r}"]
+        | none => pure ()
+  body := body ++ ["", "## noise (host-column wall ratio differing >10% between runs)", ""]
+  body := body ++ (if noiseCells.isEmpty then ["none"] else noiseCells)
+  let repPath := outdir ++ "/REPORT.md"
+  IO.FS.writeFile repPath ("\n".intercalate body ++ "\n")
+  let rq ← shaFile repPath
+  -- append each run's counter.line to the counter file, once per run;
+  -- it lives inside the run state, never in $HOME.
+  let counterDir := (← IO.getEnv "KB_COUNTER_DIR").getD (stateRoot ++ "/counter")
+  let cname := (← IO.getEnv "KB_COUNTER_NAME").getD "local"
+  let counterPath := counterDir ++ s!"/{cname}.txt"
+  discard <| shC s!"mkdir -p '{counterDir}'" 30
+  for runtag in runDirs do
+    let st := stateRoot ++ "/" ++ runtag
+    let cl := st ++ "/counter.line"
+    let done := st ++ "/.counted"
+    if (← fexists cl) && !(← fexists done) then
+      let line ← readMaybe cl
+      unless line == "" do
+        discard <| shC s!"printf '%s' {jline [line]} >> '{counterPath}'" 30
+        IO.FS.writeFile done "1\n"
+  IO.println s!"koka_table report {repPath} sha256={rq} runs={runDirs.length}"
+  return 0
+
+-- ==========================================================================
+-- hosts: the generated hosts as files, to try a module where no table runs
+-- ==========================================================================
+
+def hostsStep (outd : String) (rest : List String) : IO UInt32 := do
+  mkdirP outd
+  IO.FS.writeFile s!"{outd}/rowhost.cjs" rowHostJs
+  IO.FS.writeFile s!"{outd}/wasihost.cjs" wasiHostJs
+  match rest with
+  | [prog, nargs] => IO.FS.writeFile s!"{outd}/host-{prog}.c" (hostCText prog (nargs.toNat?.getD 0))
+  | _ => pure ()
+  IO.println s!"koka_table hosts {outd}"
+  return 0
+
+-- ==========================================================================
+-- main
+-- ==========================================================================
+
+def main (argv : List String) : IO UInt32 := do
+  match argv with
+  | ["images"] => imagesStep "14274" []
+  | "images" :: word :: modcmd => imagesStep word modcmd
+  | "table" :: word :: runtag :: modcmd => tableStep word runtag modcmd
+  | "report" :: outdir :: _ => reportStep outdir
+  | "hosts" :: outd :: rest => hostsStep outd rest
+  | _ =>
+    IO.eprintln "usage: KokaBase.rsd images [WORD] [MODCMD...] | table WORD RUNTAG MODCMD... | report OUTDIR | hosts OUTDIR [PROG NARGS]"
+    return 64
+
+end KokaBase
+
+def main := KokaBase.main

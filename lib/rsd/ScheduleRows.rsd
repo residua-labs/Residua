@@ -1,0 +1,39 @@
+#guard Lib.Rsd.Schedule.qOk Lib.Rsd.Schedule.qA
+#guard Lib.Rsd.Schedule.qOk (Lib.Rsd.Schedule.repByte 31 1) == false
+#guard (Lib.Rsd.Schedule.lookup Lib.Rsd.Schedule.key1 Lib.Rsd.Schedule.out1 Lib.Rsd.Schedule.key1).hit
+#guard (Lib.Rsd.Schedule.lookup Lib.Rsd.Schedule.key1 Lib.Rsd.Schedule.out1 Lib.Rsd.Schedule.key1).outcome.residue == "incr_fuel_exhausted"
+#guard (Lib.Rsd.Schedule.lookup Lib.Rsd.Schedule.key1 Lib.Rsd.Schedule.out1 Lib.Rsd.Schedule.key1).outcome.fuelUsed == 10
+#guard (Lib.Rsd.Schedule.lookup Lib.Rsd.Schedule.key1 Lib.Rsd.Schedule.out1 { Lib.Rsd.Schedule.key1 with fuel := 11 }).hit == false
+#guard (Lib.Rsd.Schedule.lookup Lib.Rsd.Schedule.key1 Lib.Rsd.Schedule.out1 { Lib.Rsd.Schedule.key1 with fuel := 11 }).outcome.residue == "incr_unobserved_missing"
+#guard (Lib.Rsd.Schedule.lookup Lib.Rsd.Schedule.key1 Lib.Rsd.Schedule.out1 { Lib.Rsd.Schedule.key1 with inputQs := [Lib.Rsd.Schedule.qC] }).hit == false
+#guard (Lib.Rsd.Schedule.lookup Lib.Rsd.Schedule.key1 Lib.Rsd.Schedule.out1 { Lib.Rsd.Schedule.key1 with bodyQ := Lib.Rsd.Schedule.repByte 31 1 }).outcome.residue == "incr_consumer_domain_refused"
+#guard (Lib.Rsd.Schedule.closeDiscovery Lib.Rsd.Schedule.qA 10 Lib.Rsd.Schedule.disc false).ready == false
+#guard (Lib.Rsd.Schedule.closeDiscovery Lib.Rsd.Schedule.qA 10 Lib.Rsd.Schedule.disc true).ready
+#guard Lib.Rsd.Schedule.eqQs (Lib.Rsd.Schedule.closeDiscovery Lib.Rsd.Schedule.qA 10 Lib.Rsd.Schedule.disc true).key.inputQs [Lib.Rsd.Schedule.qB, Lib.Rsd.Schedule.qC]
+#guard Lib.Rsd.Schedule.hintAdmissible Lib.Rsd.Schedule.disc Lib.Rsd.Schedule.disc
+#guard Lib.Rsd.Schedule.hintAdmissible Lib.Rsd.Schedule.disc { Lib.Rsd.Schedule.disc with controlQ := Lib.Rsd.Schedule.qB } == false
+
+namespace Lib.Rsd.Schedule
+
+def closedDisc : Discovered := { controlQ := qA, reads := [qB] }
+
+#guard (lookupDiscovered key1 out1 qA qA 10 closedDisc false).residue.map residueName == some "nf_rsd_read_ledger_open"
+#guard (lookupDiscovered key1 out1 qA qA 10 closedDisc false).state.outcome.residue == "nf_rsd_read_ledger_open"
+#guard (lookupDiscovered key1 out1 qA qB 10 closedDisc true).residue.map residueName == some "nf_rsd_discovery_control_changed"
+#guard (lookupDiscovered key1 out1 qA qB 10 closedDisc true).state.outcome.residue == "nf_rsd_discovery_control_changed"
+#guard (lookupDiscovered key1 out1 qA qA 10 closedDisc true).state.hit
+#guard (lookupDiscovered key1 out1 qA qA 10 closedDisc true).state.outcome.residue == "incr_fuel_exhausted"
+#guard (lookupDiscovered key1 out1 qA qA 10 { closedDisc with reads := [qB, qB] } true).residue.map residueName == some "nf_rsd_unobserved_missing"
+#guard eqQs (discoveryRequest key1 out1 qA qA 10 { closedDisc with reads := [qB, qC, qB] } true).request.inputQs [qB, qC, qB]
+#guard (lookupDiscovered { key1 with inputQs := [qB, qC, qB] } out1 qA qA 10 { closedDisc with reads := [qB, qC, qB] } true).state.hit
+#guard (lookupDiscovered { key1 with inputQs := [qB, qC] } out1 qA qA 10 { closedDisc with reads := [qC, qB] } true).residue.map residueName == some "nf_rsd_unobserved_missing"
+#guard (lookupDiscovered key1 out1 qA (repByte 31 1) 10 closedDisc true).residue.map residueName == some "nf_rsd_consumer_domain_refused"
+#guard (lookupDiscovered key1 out1 qA qA 10 closedDisc true).state.outcome.fuelUsed == 10
+#guard eqQ (lookup key1 out1 key1).outcome.valueQ qC
+#guard (lookup key1 out1 { key1 with bodyQ := qB }).outcome.residue == "incr_unobserved_missing"
+#guard (lookup key1 out1 { key1 with bodyQ := repByte 33 1 }).outcome.residue == "incr_consumer_domain_refused"
+#guard (lookup key1 out1 { key1 with fuel := -1 }).outcome.residue == "incr_consumer_domain_refused"
+#guard (lookup { key1 with fuel := 9223372036854775807 } out1 { key1 with fuel := 9223372036854775807 }).hit
+#guard (lookup { key1 with fuel := 9223372036854775807 } out1 { key1 with fuel := 9223372036854775807 + 1 }).outcome.residue == "incr_consumer_domain_refused"
+
+end Lib.Rsd.Schedule

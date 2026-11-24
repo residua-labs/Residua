@@ -1,0 +1,543 @@
+/-! LRC host check: the fuel of a module the stage writes, against the present lowering's (stock Lean only).
+closure_claim = 0.
+
+The wire's fuel is the depth of source calls. lib/lrc/FromWire.rsd turns the reserved calls into inline code and
+leaves a guard of the depth each call needed; it translates a call of a function that takes the node record in
+place, one call deeper. Whether those depths are the wire's is not seen by Diff.rsd, which compares the pipeline's
+IR with the translated IR: both come from the same translation. It is seen here: for every row of Images.tsv the
+image is compiled twice by the real compiler, with the stage's layers without `ctor` (the present lowering) and
+with them (the stage), and both modules are run by the row host at every fuel budget 1..FM and at 10^9. The
+status and the detail must be the same at every budget. Where the row's VALUE is one integer or a list of
+integers (an image of the front end that wrote integers as words), both modules must also give that value at the
+largest budget: this is the only place where what lib/lrc/Emit.rsd writes is run and its value read. A VALUE of
+another form (limbs, a list of them, an integer's box) the row host does not read; the stage's module is then
+read by this file's own reader (`valueReader`), which writes the result's words as instruments/lrc-host/Interp.rsd
+`showV` writes them, and the text must be the row's VALUE. The present lowering's module is not read for those
+rows: its cells carry no size, which the reader needs for a box.
+An optional seventh column gives the wire tag the present lowering must refuse. A row with such a tag reads
+only the stage, narrow and addr64 modules. Each value at each budget must be the row's VALUE.
+A row whose VALUE is `!NAME class=N function=F` names the stage's refusal: under the stage's layers the compile must
+fail and print `[lrc_refused class=N function=F]` (rsc/RscHost.lean `reason`), and nothing is run.
+
+Every row is compiled a third time, under the stage's layers and `narrow` (object fields of four bytes,
+docs/OBJECT-ABI.md "Narrow fields"). That module must end with the stage's status and detail at every budget, and
+its value at the largest budget, read by this file's reader with fields of the width the module's export `fw`
+names, must be the text the same reader gives for the stage's module (which for a VALUE the row host does not read
+is the row's VALUE). A list's scalar heads are object words under `narrow`. Compare them with `sameValue`.
+A row that names a refusal must be refused under those layers in the same words.
+The fourth module adds `addr64` to the stage's layers. The host checks its `aw` export and compares status,
+detail, and value to the stage's module at the same budgets. A named compile refusal must also agree.
+Each row uses one engine translation per width and a fresh instance for each budget. If a module needs more
+than moduleWallMs, end its process and count every budget of that module as a timeout.
+
+  lean --run instruments/lrc-host/Sides.rsd NATIVE [FM] [NAME...]
+  lean --run instruments/lrc-host/Sides.rsd row-host
+
+NATIVE is the compiler the import closure of rsc/rsc.rsd builds (`rsd --store S --home . t.rsd` leaves it as
+S/build/rsc-native); FM defaults to 40; NAME restricts the rows. Needs node. Exit 1 when a row differs.
+`row-host` writes the Node host and prints its path for direct runs; set `LRC_AW` to 32 or 64 when invoking it.
+A row whose image has nodes takes the arena as its last argument (the word 1).
+
+The verdict is an NF instance, `Lrc.SidesVerdict`: the host hands over what it
+saw of each row, `q` counts, `admit` decides; exit 0 exactly when `admit` gives no residue. -/
+
+namespace Lrc.SidesVerdict
+
+inductive Residue where
+  -- no row was run: nothing differing among nothing is not agreement
+  | noRow
+  -- the compiler does not write a row's module, under the present lowering's layers or under the stage's
+  | notCompiled
+  -- at a fuel budget the two modules of a row end with another status or detail
+  | statusDiffers
+  -- the present lowering's module gives no value at the largest budget: the row compares refusals only
+  | noValue
+  -- a module's value at the largest budget is not the row's
+  | valueWrong
+  -- the row names the stage's refusal, and the compiler writes the module or fails otherwise
+  | refusalOther
+  -- under the stage's layers and `narrow` the compiler does not write a row's module
+  | narrowNotCompiled
+  -- at a fuel budget the module of narrow fields ends with another status or detail than the stage's module
+  | narrowDiffers
+  -- the value of the module of narrow fields at the largest budget is not the stage's module's
+  | narrowValue
+  | addr64NotCompiled
+  | addr64Differs
+  | addr64Value
+  | presentRefusalOther
+  | moduleTimeout
+
+def residueName : Residue -> String
+  | Residue.noRow => "lrc_sides_no_row"
+  | Residue.notCompiled => "lrc_sides_not_compiled"
+  | Residue.statusDiffers => "lrc_sides_status_differs"
+  | Residue.noValue => "lrc_sides_no_value"
+  | Residue.valueWrong => "lrc_sides_value_wrong"
+  | Residue.refusalOther => "lrc_sides_refusal_other"
+  | Residue.narrowNotCompiled => "lrc_sides_narrow_not_compiled"
+  | Residue.narrowDiffers => "lrc_sides_narrow_differs"
+  | Residue.narrowValue => "lrc_sides_narrow_value"
+  | Residue.addr64NotCompiled => "lrc_sides_addr64_not_compiled"
+  | Residue.addr64Differs => "lrc_sides_addr64_differs"
+  | Residue.addr64Value => "lrc_sides_addr64_value"
+  | Residue.presentRefusalOther => "lrc_sides_present_refusal_other"
+  | Residue.moduleTimeout => "lrc_sides_module_timeout"
+
+-- one row as the host saw it
+structure Seen where
+  name : String
+  compiled : Bool
+  -- the budgets at which status or detail differ
+  differ : Nat
+  -- the present lowering's module gives a value at the largest budget
+  gaveValue : Bool
+  -- the row's VALUE can be read from a module, and both modules gave it
+  valueRead : Bool
+  valueRight : Bool
+  -- the row names the stage's refusal, and the compiler failed as the row says
+  refusalNamed : Bool := false
+  refusalRight : Bool := false
+  -- the module of narrow fields: written, the budgets at which it ends otherwise than the stage's module, and
+  -- whether its value at the largest budget is the stage's module's
+  narrowCompiled : Bool := true
+  narrowDiffer : Nat := 0
+  narrowRight : Bool := true
+  addr64Compiled : Bool := false
+  addr64Differ : Nat := 0
+  addr64Right : Bool := false
+  presentWrong : Bool := false
+  wallBudgets : Nat := 0
+
+structure Request where
+  rows : List Seen
+
+structure Class where
+  rows : Nat
+  notCompiled : Nat
+  differ : Nat
+  noValue : Nat
+  valueWrong : Nat
+  refusalWrong : Nat
+  narrowNotCompiled : Nat
+  narrowDiffer : Nat
+  narrowWrong : Nat
+  addr64NotCompiled : Nat
+  addr64Differ : Nat
+  addr64Wrong : Nat
+  presentWrong : Nat
+  wallBudgets : Nat
+
+def q (r : Request) : Class :=
+  { rows := r.rows.length,
+    notCompiled := (r.rows.filter fun s => !s.refusalNamed && !s.compiled).length,
+    differ := (r.rows.filter fun s => s.compiled && s.differ != 0).length,
+    noValue := (r.rows.filter fun s => s.compiled && !s.gaveValue).length,
+    valueWrong := (r.rows.filter fun s => s.compiled && s.valueRead && !s.valueRight).length,
+    refusalWrong := (r.rows.filter fun s => s.refusalNamed && !s.refusalRight).length,
+    narrowNotCompiled := (r.rows.filter fun s => !s.refusalNamed && !s.narrowCompiled).length,
+    narrowDiffer := (r.rows.filter fun s => s.compiled && s.narrowDiffer != 0).length,
+    narrowWrong := (r.rows.filter fun s => s.compiled && s.valueRead && !s.narrowRight).length,
+    addr64NotCompiled := (r.rows.filter fun s => !s.refusalNamed && !s.addr64Compiled).length,
+    addr64Differ := (r.rows.filter fun s => s.compiled && s.addr64Differ != 0).length,
+    addr64Wrong := (r.rows.filter fun s => s.compiled && s.valueRead && !s.addr64Right).length,
+    presentWrong := (r.rows.filter (·.presentWrong)).length,
+    wallBudgets := r.rows.foldl (fun n s => n + s.wallBudgets) 0 }
+
+structure Agreed where
+  rows : Nat
+
+def admit (c : Class) : Except Residue Agreed :=
+  if c.rows == 0 then Except.error Residue.noRow
+  else if c.wallBudgets != 0 then Except.error Residue.moduleTimeout
+  else if c.presentWrong != 0 then Except.error Residue.presentRefusalOther
+  else if c.notCompiled != 0 then Except.error Residue.notCompiled
+  else if c.narrowNotCompiled != 0 then Except.error Residue.narrowNotCompiled
+  else if c.addr64NotCompiled != 0 then Except.error Residue.addr64NotCompiled
+  else if c.differ != 0 then Except.error Residue.statusDiffers
+  else if c.noValue != 0 then Except.error Residue.noValue
+  else if c.valueWrong != 0 then Except.error Residue.valueWrong
+  else if c.refusalWrong != 0 then Except.error Residue.refusalOther
+  else if c.narrowDiffer != 0 then Except.error Residue.narrowDiffers
+  else if c.narrowWrong != 0 then Except.error Residue.narrowValue
+  else if c.addr64Differ != 0 then Except.error Residue.addr64Differs
+  else if c.addr64Wrong != 0 then Except.error Residue.addr64Value
+  else Except.ok { rows := c.rows }
+
+end Lrc.SidesVerdict
+
+def rowsPath : String := "instruments/lrc-host/Images.tsv"
+def outDir : String := "out/lrc/sides"
+
+structure Row where
+  name : String
+  source : String
+  kinds : String
+  entry : String
+  args : List String
+  value : String
+  presentTag : Option Nat := none
+  deriving Inhabited
+
+-- how the row host is to read the result: 1 a word, 1001 a list of words, 0 when VALUE is neither
+def retOf (value : String) : Nat :=
+  if value.toInt?.isSome then 1
+  else if value.startsWith "[" && value.endsWith "]" && (((value.drop 1).dropRight 1).splitOn " ").all (fun w => w.toInt?.isSome) then 1001
+  else 0
+
+def readRows : IO (List Row) := do
+  let mut rows := []
+  for line in (← IO.FS.readFile rowsPath).splitOn "\n" do
+    if line.startsWith "#" || line.trim.isEmpty then continue
+    match line.splitOn "\t" with
+    | name :: source :: kinds :: entry :: args :: value :: extra =>
+      let tag ← match extra with
+        | [] => pure none
+        | [field] =>
+          match field.toNat? with
+          | some n =>
+            if 64 ≤ n && n ≤ 77 && !value.startsWith "!" then pure (some n)
+            else throw (IO.userError s!"lrc_sides_present_tag: {line}")
+          | none => throw (IO.userError s!"lrc_sides_present_tag: {line}")
+        | _ => throw (IO.userError s!"lrc_sides_row: {line}")
+      rows := rows ++ [{ name, source, kinds, entry, args := if args.isEmpty then [] else args.splitOn ",",
+                         value, presentTag := tag }]
+    | _ => throw (IO.userError s!"lrc_sides_row: {line}")
+  return rows
+
+-- the row host: the text gates/corpus/Check.rsd holds as `hostJs`, evaluated by stock Lean itself
+def rowHost (batch : Bool := false) : IO String := do
+  let source ← IO.FS.readFile "gates/corpus/Check.rsd"
+  let [_, tail] := source.splitOn "def hostJs : String := \"\\n\".intercalate [" |
+    throw (IO.userError "lrc_sides_host_anchor")
+  let body := (tail.splitOn "\n]\n").headD ""
+  IO.FS.createDirAll outDir
+  let host := outDir ++ "/rowhost.cjs"
+  IO.FS.writeFile (outDir ++ "/Host.lean") ("def hostJs : String := \"\\n\".intercalate [" ++ body ++ "\n]\n" ++
+    "def main : IO Unit := IO.FS.writeFile \"" ++ host ++ "\" hostJs\n")
+  let r ← IO.Process.output { cmd := "lean", args := #["--run", outDir ++ "/Host.lean"] }
+  unless r.exitCode == 0 do throw (IO.userError s!"lrc_sides_host: {r.stderr}")
+  let text ← IO.FS.readFile host
+  let anchor := "  const mem = inst.exports.memory;"
+  unless (text.splitOn anchor).length == 2 do throw (IO.userError "lrc_sides_address_anchor")
+  let check := "\n".intercalate [
+    "  const aw = inst.exports.aw;",
+    "  const width = aw === undefined ? 32n : typeof aw === 'function' ? aw() : 0n;",
+    "  const expectedWidth = BigInt(process.env.LRC_AW ?? '32');",
+    "  if ((aw !== undefined && width !== 64n) || width !== expectedWidth)",
+    "    throw Error('lrc_address_width expected=' + expectedWidth + ' actual=' + width);"]
+  let text := text.replace anchor (check ++ "\n" ++ anchor)
+  let edits := [
+    ("  const fuel = BigInt(process.argv[4]);",
+     "  const fuels = process.argv[4].split(',').map(BigInt);"),
+    ("  const inst = new WebAssembly.Instance(new WebAssembly.Module(patch(fs.readFileSync(wasmPath))));",
+     "  const mod = new WebAssembly.Module(patch(fs.readFileSync(wasmPath)));\n  for (const fuel of fuels) {\n  const inst = new WebAssembly.Instance(mod);"),
+    ("} catch (e) {",
+     "  process.stdout.write('end_budget\\n');\n  }\n} catch (e) {")]
+  let mut text := text
+  if batch then
+    for (old, new) in edits do
+      unless (text.splitOn old).length == 2 do throw (IO.userError "lrc_sides_batch_anchor")
+      text := text.replace old new
+  IO.FS.writeFile host text
+  return host
+
+-- The row host with a reader of the stage's forms (docs/OBJECT-ABI.md revision 2 as lib/lrc/Emit.rsd writes it): after
+-- the value's text it prints `value_words`, the result's words in the forms of instruments/lrc-host/Interp.rsd `showV`.
+-- An object field has the bytes the module's export `fw` returns, 8 in a module without that export
+-- (docs/OBJECT-ABI.md "Narrow fields"); a scalar of a box is a word of 8 bytes after the fields either way.
+-- The environment names each word's kind (LRC_WORDS: `i` a number, `o` an object) and whether a box's scalars are
+-- flags of one byte (LRC_FLAGS=1; the stage writes a Bool into a box as a byte) or whole words.
+def valueReader (host : String) : IO String := do
+  let text ← IO.FS.readFile host
+  let anchor := "    process.stdout.write(`value_text ${text}\\n`);"
+  unless (text.splitOn anchor).length == 2 do throw (IO.userError "lrc_sides_reader_anchor")
+  let dump := "\n".intercalate [
+    "    if (process.env.LRC_WORDS) {",
+    "      const G = (a) => view2.getBigUint64(a, true);",
+    "      const S = (a) => view2.getBigInt64(a, true);",
+    "      const FW = typeof inst.exports.fw === 'function' ? Number(inst.exports.fw()) : 8;",
+    "      const F = (a) => FW === 4 ? BigInt(view2.getUint32(a, true)) : G(a);",
+    "      const flags = process.env.LRC_FLAGS === '1';",
+    "      const show = (w) => {",
+    "        if (w & 1n) return w === 1n ? '[]' : '#' + (w >> 1n).toString();",
+    "        const p = Number(w), h = G(p), tagv = Number(h >> 56n), other = Number((h >> 48n) & 0xffn);",
+    "        if (tagv === 0) {",
+    "          const size = Number((h >> 32n) & 0xffffn), parts = [];",
+    "          for (let i = 0; i < other; i++) parts.push(show(F(p + 8 + FW * i)));",
+    "          for (let o = 8 + FW * other; o + 8 <= size; o += 8) parts.push(flags ? String(view2.getUint8(p + o)) : S(p + o).toString());",
+    "          return '{' + parts.join(' ') + '}';",
+    "        }",
+    "        if (tagv !== 1) return '<tag ' + tagv + '>';",
+    "        const out = [];",
+    "        let c = w;",
+    "        for (let n = 0; n < 10000000 && !(c & 1n); n++) {",
+    "          const q = Number(c), oth = Number((G(q) >> 48n) & 0xffn);",
+    "          if (Number(G(q) >> 56n) !== 1) { out.push('<tag ' + Number(G(q) >> 56n) + '>'); break; }",
+    "          if (oth === 1) { out.push(S(q + 8 + FW).toString()); c = F(q + 8); } else { out.push(show(F(q + 8))); c = F(q + 8 + FW); }",
+    "        }",
+    "        return '[' + out.join(' ') + ']';",
+    "      };",
+    "      const ws = [];",
+    "      for (let i = 0; i < process.env.LRC_WORDS.length; i++)",
+    "        ws.push(process.env.LRC_WORDS[i] === 'o' ? show(G(BLOCK + RES + 8 * i)) : S(BLOCK + RES + 8 * i).toString());",
+    "      process.stdout.write(`value_words ${ws.join(' ')}\\n`);",
+    "    }"]
+  let reader := outDir ++ "/valhost.cjs"
+  IO.FS.writeFile reader (text.replace anchor (anchor ++ "\n" ++ dump))
+  return reader
+
+-- the kinds of the words of a VALUE: a word written as a number is `i`, any other (a list, a box, a small magnitude) is `o`
+def wordKinds (value : String) : String :=
+  let step := fun (acc : String × Nat × Bool) (c : Char) =>
+    let (out, depth, inWord) := acc
+    if c == ' ' && depth == 0 then (out, depth, false)
+    else
+      let out := if !inWord then out.push (if c.isDigit || c == '-' then 'i' else 'o') else out
+      let depth := if c == '[' || c == '{' then depth + 1 else if c == ']' || c == '}' then depth - 1 else depth
+      (out, depth, true)
+  (value.foldl step ("", 0, false)).1
+
+-- Are the scalars of every box of a VALUE flags: it has a box, and the numbers written directly inside braces are 0
+-- or 1. A VALUE without a box has none of flags, so a box met in its module (with narrow fields, the box of a
+-- list's scalar head) is read as a word.
+def boxFlagsAll (value : String) : Bool :=
+  let step := fun (acc : Bool × List Char × String) (c : Char) =>
+    let (ok, stack, word) := acc
+    let closed := if !word.isEmpty && stack.head? == some '{' && word.all Char.isDigit then ok && (word == "0" || word == "1") else ok
+    if c == '[' || c == '{' then (ok, c :: stack, "")
+    else if c == ']' || c == '}' then (closed, stack.drop 1, "")
+    else if c == ' ' then (closed, stack, "")
+    else (ok, stack, word.push c)
+  (value.foldl step (true, [], "")).1
+
+def boxFlags (value : String) : Bool := (value.splitOn "{").length > 1 && boxFlagsAll value
+
+-- Is `narrow` the text of the value whose text is `wide`, when `narrow` was read where an object field is four bytes?
+-- There a list's scalar head is an object word (lib/lrc/FromWire.rsd "A scalar head where an object field is four
+-- bytes"; docs/OBJECT-ABI.md "Narrow fields"): where `wide` has the word `n`, `narrow` has the boxed number `#n`
+-- (which for the word 0 is the word of the empty list, written `[]`) or the box that holds it, `{n}`. Every other
+-- word has one text in both. The texts are compared word by word, `wide` saying where a scalar stands.
+def valueTokens (s : String) : List String :=
+  let marked := s.replace "[]" " NIL "
+  let spaced := (((marked.replace "[" " [ ").replace "]" " ] ").replace "{" " { ").replace "}" " } "
+  ((spaced.splitOn " ").filter (· != "")).map (fun t => if t == "NIL" then "[]" else t)
+
+partial def sameWords : List String → List String → Bool
+  | [], [] => true
+  | w :: ws, n :: ns =>
+    if w == n then sameWords ws ns
+    else if n == "#" ++ w then sameWords ws ns
+    else if w == "0" && n == "[]" then sameWords ws ns
+    else
+      match n, ns with
+      | "{", k :: "}" :: rest => w == k && sameWords ws rest
+      | _, _ => false
+  | _, _ => false
+
+def sameValue (wide narrow : String) : Bool := sameWords (valueTokens wide) (valueTokens narrow)
+
+-- the image of a row as a file (a pinned file, or one of another commit)
+def imageOf (r : Row) : IO String := do
+  if r.source.startsWith "file:" then return r.source.drop 5
+  if r.source.startsWith "git:" then
+    let out := outDir ++ "/" ++ r.name ++ ".rscm"
+    let g ← IO.Process.spawn { cmd := "git", args := #["show", r.source.drop 4], stdout := .piped }
+    let bytes ← g.stdout.readBinToEnd
+    unless (← g.wait) == 0 do throw (IO.userError s!"lrc_sides_image: {r.source}")
+    IO.FS.writeBinFile out bytes
+    return out
+  throw (IO.userError s!"lrc_sides_source: {r.source}")
+
+-- whether the compiler wrote the module, and what it printed
+def compileSaid (native image out : String) (layers : List String) : IO (Bool × String) := do
+  let r ← IO.Process.output {
+    cmd := native, args := #["compile", image, out] ++ layers.toArray,
+    env := #[("RSC_LAYERS", some (",".intercalate layers))] }
+  return (r.exitCode == 0, r.stdout ++ r.stderr)
+
+def moduleWallMs : Nat := 10000
+
+-- One translation per module and one fresh instance per budget. A host
+-- error, malformed transcript, or timeout invalidates the whole batch.
+def statusesOf (host wasm entry : String) (fuels : Array Nat) (args : List String) (ret : Nat) (width : Nat)
+    (shape : String := "") : IO (Array (String × String × String)) := do
+  let budgets := ",".intercalate (fuels.toList.map toString)
+  let child ← IO.Process.spawn {
+    cmd := "node",
+    args := #["--stack-size=60000", host, wasm, "f" ++ entry, budgets, toString (if ret == 0 then 1 else ret)] ++ args.toArray,
+    env := #[("LRC_AW", some (toString width)), ("LRC_WORDS", some (wordKinds shape)),
+             ("LRC_FLAGS", some (if boxFlags shape then "1" else "0"))],
+    stdout := .piped, stderr := .piped }
+  let out ← IO.asTask child.stdout.readToEnd Task.Priority.dedicated
+  let err ← IO.asTask child.stderr.readToEnd Task.Priority.dedicated
+  let start ← IO.monoMsNow
+  let mut code ← child.tryWait
+  let mut timedOut := false
+  while code.isNone do
+    if (← IO.monoMsNow) - start ≥ moduleWallMs then
+      child.kill
+      code := some (← child.wait)
+      timedOut := true
+    else
+      IO.sleep 20
+      code ← child.tryWait
+  let stdout ← IO.ofExcept out.get
+  let stderr ← IO.ofExcept err.get
+  if timedOut then return Array.mkArray fuels.size ("host_timeout", "", "")
+  if code != some 0 then return Array.mkArray fuels.size ("host_error " ++ stderr.trim, "", "")
+  let frames := stdout.splitOn "end_budget\n"
+  let keep := fun (l : String) => l.startsWith "status " || l.startsWith "detail "
+  let read := fun (frame : String) =>
+    let lines := frame.splitOn "\n"
+    match lines.filter keep with
+    | [status, detail] =>
+      if status.startsWith "status " && detail.startsWith "detail " then
+        let text := ((lines.filter (·.startsWith "value_text ")).headD "").drop 11
+        let words := ((lines.filter (·.startsWith "value_words ")).headD "").drop 12
+        (status ++ " " ++ detail, text, words)
+      else ("host_error invalid verdict", "", "")
+    | _ => ("host_error invalid verdict", "", "")
+  if frames.length != fuels.size + 1 || frames.getLast? != some "" then
+    return Array.mkArray fuels.size ("host_error invalid budget frames", "", "")
+  return ((frames.take fuels.size).map read).toArray
+
+def main (argv : List String) : IO UInt32 := do
+  if argv == ["row-host"] then
+    IO.println (← rowHost)
+    return 0
+  let (native, rest) ← match argv with
+    | native :: rest => pure (native, rest)
+    | [] => throw (IO.userError "lean --run instruments/lrc-host/Sides.rsd NATIVE [FM] [NAME...]")
+  let (fm, names) := match rest with
+    | n :: more => if n.toNat?.isSome then (n.toNat!, more) else (40, rest)
+    | [] => (40, [])
+  let host ← rowHost true
+  let reader ← valueReader host
+  let mut bad := 0
+  let mut seen := 0
+  let mut saw : List Lrc.SidesVerdict.Seen := []
+  for r in ← readRows do
+    unless names.isEmpty || names.contains r.name do continue
+    seen := seen + 1
+    let image ← imageOf r
+    let old := outDir ++ "/" ++ r.name ++ ".old.wasm"
+    let lrc := outDir ++ "/" ++ r.name ++ ".lrc.wasm"
+    let nar := outDir ++ "/" ++ r.name ++ ".narrow.wasm"
+    let wide := outDir ++ "/" ++ r.name ++ ".addr64.wasm"
+    let stage := ["reg", "facts", "alloc", "ctor"]
+    if r.value.startsWith "!" then
+      -- a named refusal must agree under each of the stage's three width settings
+      let want := "[lrc_refused " ++ " ".intercalate ((r.value.splitOn " ").drop 1) ++ "]"
+      let (wrote, said) ← compileSaid native image lrc stage
+      let (wroteN, saidN) ← compileSaid native image nar (stage ++ ["narrow"])
+      let (wroteW, saidW) ← compileSaid native image wide (stage ++ ["addr64"])
+      let right := !wrote && (said.splitOn want).length == 2 && !wroteN && (saidN.splitOn want).length == 2 &&
+        !wroteW && (saidW.splitOn want).length == 2
+      if !right then bad := bad + 1
+      saw := saw ++ [{ name := r.name, compiled := false, differ := 0, gaveValue := false, valueRead := false, valueRight := false, refusalNamed := true, refusalRight := right }]
+      IO.println s!"side {r.name}: the stage's compile {if wrote then "wrote a module" else "failed"}, with narrow fields it {if wroteN then "wrote a module" else "failed"}, addr64 wrote={wroteW}, the row says {want}: {if right then "as the row says" else "OTHERWISE " ++ ((said ++ saidN ++ saidW).replace "\n" " ").take 300}"
+      continue
+    let (okOld, saidOld) ← compileSaid native image old ["reg", "facts", "alloc"]
+    let (okLrc, saidLrc) ← compileSaid native image lrc stage
+    let (okNar, saidNar) ← compileSaid native image nar (stage ++ ["narrow"])
+    let (okWide, saidWide) ← compileSaid native image wide (stage ++ ["addr64"])
+    let hasPresent := r.presentTag.isNone
+    let mut presentWrong := false
+    if let some tag := r.presentTag then
+      let want := s!"[unsupported_{tag}]"
+      presentWrong := okOld || ((saidOld.splitOn "\n").filter (fun line => line.trim == want)).length != 1
+      IO.println s!"side {r.name} present refusal {want}: {if presentWrong then s!"WRONG wrote={okOld} {saidOld.trim.take 240}" else "as expected"}"
+    if (hasPresent && !okOld) || !okLrc || !okNar || !okWide then
+      bad := bad + 1
+      saw := saw ++ [{ name := r.name, compiled := (okOld || !hasPresent) && okLrc, differ := 0, gaveValue := false,
+                       valueRead := false, valueRight := false, narrowCompiled := okNar, addr64Compiled := okWide,
+                       presentWrong }]
+      let failures := [(okOld, saidOld), (okLrc, saidLrc), (okNar, saidNar), (okWide, saidWide)]
+      let details := " ".intercalate (failures.filterMap fun (ok, said) => if ok then none else some said.trim)
+      IO.println s!"side {r.name}: not compiled (present lowering {okOld}, stage {okLrc}, narrow {okNar}, addr64 {okWide}) {details.take 500}"
+      continue
+    let args := r.args ++ (if r.kinds == "-" then [] else ["1"])
+    let mut differ := 0
+    let mut first := ""
+    let mut differN := 0
+    let mut firstN := ""
+    let mut differW := 0
+    let mut firstW := ""
+    let mut wrongW := ""
+    let mut wrongAt := ""
+    let mut wrongNAt := ""
+    let mut wallBudgets := 0
+    let mut valueOld := 0
+    let mut valueLrc := 0
+    let mut last := ""
+    let ret := retOf r.value
+    let mut texts := ("", "")
+    let mut stageWordsLast := ""
+    let mut wordsN := ""
+    let fuels := ((List.range fm).map (· + 1) ++ [1000000000]).toArray
+    let stageResults ← statusesOf reader lrc r.entry fuels args ret 32 r.value
+    let oldResults ← if hasPresent then statusesOf host old r.entry fuels args ret 32 else pure stageResults
+    -- The row host's default reader assumes eight-byte fields. Use one
+    -- word here and let valueReader read each module's own field width.
+    let narrowResults ← statusesOf reader nar r.entry fuels args 1 32 r.value
+    let wideResults ← statusesOf reader wide r.entry fuels args 1 64 r.value
+    for i in [:fuels.size] do
+      let fuel := fuels[i]!
+      let (a, ta, _) := oldResults[i]!
+      let (b, tb, stageWords) := stageResults[i]!
+      if hasPresent && a.startsWith "status value" && valueOld == 0 then valueOld := fuel
+      if b.startsWith "status value" then
+        if valueLrc == 0 then valueLrc := fuel
+        if !hasPresent && wrongAt.isEmpty && stageWords != r.value then
+          wrongAt := s!" fuel={fuel} stage[{stageWords.take 300}]"
+      if a != b || !a.startsWith "status " then
+        differ := differ + 1
+        if first.isEmpty then first := s!" first: fuel={fuel} present[{a}] stage[{b}]"
+      let (c, _, narrowWords) := narrowResults[i]!
+      let narrowWrong := if ret == 1 then narrowWords != r.value else !sameValue r.value narrowWords
+      if !hasPresent && c.startsWith "status value" && wrongNAt.isEmpty && narrowWrong then
+        wrongNAt := s!" fuel={fuel} narrow[{narrowWords.take 300}]"
+      if b != c then
+        differN := differN + 1
+        if firstN.isEmpty then firstN := s!" narrow first: fuel={fuel} stage[{b}] narrow[{c}]"
+      let (w, _, wideWords) := wideResults[i]!
+      if hasPresent && a == "host_timeout" then wallBudgets := wallBudgets + 1
+      for status in [b, c, w] do
+        if status == "host_timeout" then wallBudgets := wallBudgets + 1
+      if b != w || !w.startsWith "status " then
+        differW := differW + 1
+        if firstW.isEmpty then firstW := s!" addr64 first: fuel={fuel} stage[{b}] addr64[{w}]"
+      else if w.startsWith "status value" && wrongW.isEmpty && (wideWords.isEmpty || wideWords != stageWords) then
+        wrongW := s!"fuel={fuel} addr64[{wideWords.take 300}] stage[{stageWords.take 300}]"
+      last := a
+      texts := (ta, tb)
+      stageWordsLast := stageWords
+      wordsN := narrowWords
+    -- a row that never gives a value compares nothing but refusals: it counts as a failure of the row
+    let dead := !(last.startsWith "status value")
+    -- the value at the largest budget: from both modules where the row host reads the row's VALUE, from the stage's
+    -- module by this file's reader where it does not
+    let words := if ret == 0 then stageWordsLast else ""
+    let wrong := if !hasPresent then !wrongAt.isEmpty
+                 else if ret != 0 then texts.1 != r.value || texts.2 != r.value else !dead && words != r.value
+    if !hasPresent then texts := ("refused", wrongAt)
+    else if ret == 0 then texts := ("not read", words)
+    -- the value of the module of narrow fields, by this file's reader, against the stage's module's by the same reader
+    let wrongN := !wrongNAt.isEmpty || (!dead && (wordsN.isEmpty || !sameValue stageWordsLast wordsN))
+    if presentWrong || wallBudgets != 0 || differ != 0 || dead || wrong || differN != 0 || wrongN ||
+        differW != 0 || !wrongW.isEmpty then bad := bad + 1
+    if wallBudgets != 0 then IO.println s!"side {r.name} lrc_sides_module_timeout wall_budgets={wallBudgets}"
+    saw := saw ++ [{ name := r.name, compiled := true, differ := differ, gaveValue := !dead, valueRead := !dead, valueRight := !wrong,
+                     narrowDiffer := differN, narrowRight := !wrongN,
+                     addr64Compiled := true, addr64Differ := differW, addr64Right := wrongW.isEmpty,
+                     presentWrong, wallBudgets }]
+    IO.println s!"side {r.name} entry=f{r.entry} budgets={fm + 1} differ={differ} first_value_at present={valueOld} stage={valueLrc} value={if dead then "none" else if wrong then s!"WRONG present[{texts.1}] stage[{texts.2}] expected[{r.value}]" else if ret == 0 then s!"as expected from the stage's module ({texts.2.length} characters read here)" else "as expected"}{if dead then s!" no value at the largest budget [{last}]" else ""}{first} narrow: differ={differN} value={if dead then "none" else if wrongN then s!"WRONG narrow[{wordsN.take 300}] stage[{stageWordsLast.take 300}]" else "the stage's"}{firstN}{wrongNAt} addr64: differ={differW} value={if !wrongW.isEmpty then "WRONG " ++ wrongW else if dead then "none" else "the stage's"}{firstW}"
+  IO.println s!"sides rows={seen} mismatch={bad}"
+  match Lrc.SidesVerdict.admit (Lrc.SidesVerdict.q { rows := saw }) with
+  | .ok a =>
+    IO.println s!"verdict=agreed rows={a.rows}"
+    return 0
+  | .error e =>
+    IO.println s!"verdict={Lrc.SidesVerdict.residueName e}"
+    return 1

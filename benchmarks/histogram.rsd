@@ -1,0 +1,323 @@
+-- histogram: the Bend bench/runtime histogram program (HigherOrderCO/Bend,
+-- bench/runtime/histogram/main.bend), ported to P1' Lean 4.14. Same algorithm: a parallel
+-- histogram of 2^D U32 keys into K = 256 buckets over one flat array, with no atomics — the
+-- suite's shared-array, multi-pass case (bend-parallel's histogram.bend, ported as is but for
+-- its dropped sort-only path). A run histograms R fresh batches of 2^D keys in the same key
+-- array and buffers. Round r: fill cuts the keys into 2^B blocks, each block writing its own
+-- slots, key j = prng(prng((j + 1) * 2654435761 + 7 + r)) % 256 (round 0 is the stream of
+-- bend-parallel's tests); count pass 1 zeroes each block's row of a 2^B x 256 table and counts
+-- its keys into it; count pass 2 sums each bucket's column — from 2^12 rows up the rows are cut
+-- into 2^(B/2) groups, each (group, bucket) summing into the group's last row, then each bucket
+-- summing the groups (below 2^12 rows, one pass steps over all rows); fold mixes the round's
+-- 256 counts in order, h = h * 2654435761 ^ c, carried across rounds. Knobs: D (2^D keys), B
+-- (the fork depth: 2^B blocks, every B gives the same counts) and R.
+-- Departures (named): SRC-BEND-U32 — the source's U32 words are modeled exactly in checked Int
+-- arithmetic (wrap mod 2^32, xor/and bit-decomposed; values stay in [0, 2^32)); SRC-BEND-ARR —
+-- the source's flat Array<U32> (keys, table, counts) ride as List Int with drop-based read and
+-- take/drop write (the frozen language has no array primitive); the @unsafe Array.fork /
+-- Array.join discipline is sequentialized: every pass gives each lane its own slots, so running
+-- the left lane on the array and the right lane on its result is the join. The source's
+-- (Array<U32> & U32) read pairs ride as (List Int × Int) tuples.
+-- The source's small size (D 10, B 4, R 2) expects 3825188900 (verified against the C twin
+-- there); its main() runs (24, 11, 128), out of reach here.
+-- Source pin (BENCH-SRC-0, 2026-11-07): HigherOrderCO/Bend commit be236f324ed0338fe907fe50474468e4d3b94157
+-- (main), bench/runtime/histogram/main.bend, sha256
+-- c8d83ea9f09cc2fed9a8635a09564cd25176897ef70f9af33605cf7a0f9e0fe4
+-- (raw.githubusercontent.com/HigherOrderCO/Bend/be236f324ed0338fe907fe50474468e4d3b94157/bench/runtime/histogram/main.bend).
+
+def W : Int := 4294967296
+
+def w32 (x : Int) : Int := x % W
+
+def bitXorLoop : Nat → Int → Int → Int → Int → Int
+  | 0, _, _, acc, _ => acc
+  | k + 1, a, b, acc, sc => bitXorLoop k (a / 2) (b / 2) (acc + ((a % 2 + b % 2) % 2) * sc) (sc * 2)
+
+def xor32 (a b : Int) : Int := bitXorLoop 32 a b 0 1
+
+def bitAndLoop : Nat → Int → Int → Int → Int → Int
+  | 0, _, _, acc, _ => acc
+  | k + 1, a, b, acc, sc => bitAndLoop k (a / 2) (b / 2) (acc + (a % 2 * b % 2) * sc) (sc * 2)
+
+def and32 (a b : Int) : Int := bitAndLoop 32 a b 0 1
+
+def wAdd (a b : Int) : Int := w32 (a + b)
+def wSub (a b : Int) : Int := w32 (a - b + W)
+-- wMul is split at 16 bits so the intermediates stay under the checked-i64
+-- bound (a_lo * b, a_hi * b < 2^48); a*b mod 2^32 is unchanged
+-- (checkedArithmeticStuck at ~2^63 on the flat form, probe-verified)
+def wMul (a b : Int) : Int :=
+  w32 (w32 (w32 (a % 65536) * b) + w32 (w32 (w32 (a / 65536) * b) % 65536) * 65536)
+def wInc (a : Int) : Int := w32 (a + 1)
+
+def wMin (a b : Int) : Int := if a <= b then a else b
+def wMax (a b : Int) : Int := if a <= b then b else a
+
+def pw2 : Nat → Int
+  | 0 => 1
+  | k + 1 => 2 * pw2 k
+
+def wShlN (a : Int) (k : Nat) : Int := w32 (a * pw2 k)
+def wShrN (a : Int) (k : Nat) : Int := a / pw2 k
+
+-- U32.log2 (floor), as a bounded halving loop
+def log2Loop : Nat → Int → Int → Int
+  | 0, _, acc => acc
+  | k + 1, a, acc => if a <= 1 then acc else log2Loop k (a / 2) (acc + 1)
+
+def wLog2 (a : Int) : Int := log2Loop 32 a 0
+
+def nMin (a b : Nat) : Nat := if a <= b then a else b
+
+-- word-array read (drop-based) and write (take/drop splice) — SRC-BEND-ARR
+def getAt : List Int → Int → Int
+  | [], _ => 0
+  | a, b => match (a.drop b.toNat).head? with
+    | some v => v
+    | none => 0
+
+def setAt (b : Int) (v : Int) : List Int → List Int
+  | [] => []
+  | a => (a.take b.toNat) ++ [v] ++ (a.drop (b.toNat + 1))
+
+-- Array.get / Array.swap: the (array, value) pair as (List Int × Int)
+def aget (a : List Int) (i : Int) : List Int × Int := (a, getAt a i)
+
+def aswap (a : List Int) (i v : Int) : List Int × Int := (setAt i v a, getAt a i)
+
+-- floor(d / 2)
+def half : Nat → Nat
+  | 0 => 0
+  | 1 => 0
+  | n + 2 => 1 + half n
+
+/-- The source's Bufs: the counts and table buffers. -/
+structure Bufs where
+  counts : List Int
+  table : List Int
+
+/-- The source's Two: the (keys, table) or (table, counts) handle pair —
+sequentialized fork/join: lanes write disjoint slots, so each lane runs on the
+previous lane's result. -/
+structure Two where
+  a : List Int
+  b : List Int
+
+/-- The source's St: the keys, the buffers and the checksum so far. -/
+structure St where
+  keys : List Int
+  bufs : Bufs
+  h : Int
+
+-- ceil(log2 K), for K >= 1
+def kbits (k : Int) : Nat := if 1 < k then 1 + (wLog2 (k - 1)).toNat else 0
+
+-- Buffers for 2^lg keys at fork depth b and k buckets, allocated now
+def bufsSized (b : Nat) (k : Int) (lg : Nat) : Bufs :=
+  let kb := kbits (wMax k 1)
+  Bufs.mk (List.replicate (pw2 kb).toNat 0) (List.replicate (pw2 (nMin b lg + kb)).toNat 0)
+
+-- t when it holds exactly 2^d entries, else a new one
+def fitEq (d : Nat) (r : List Int × Int) : List Int :=
+  if r.2 == pw2 d then r.1 else List.replicate (pw2 d).toNat 0
+
+-- t when it holds at least 2^d entries, else a new one
+def fitGe (d : Nat) (r : List Int × Int) : List Int :=
+  if r.2 >= pw2 d then r.1 else List.replicate (pw2 d).toNat 0
+
+-- Pass 1: rows
+-- ------------
+
+-- n + 1 zeros from at
+def zeroGo : Nat → Int → List Int → List Int
+  | 0, atw, t => setAt atw 0 t
+  | p + 1, atw, t => zeroGo p (wInc atw) (setAt atw 0 t)
+
+-- one more at t[i]
+def bump (i : Int) (t : List Int) : List Int := setAt i (wInc (getAt t i)) t
+
+-- r holds the keys and the key x read at j: one more in x's bucket of the
+-- row at row, then the same for the n keys after j. k1 is K - 1.
+def countGo : Nat → Int → Int → Int → List Int → List Int × Int → Two
+  | 0, _, row, k1, t, r => Two.mk r.1 (bump (wAdd row (wMin r.2 k1)) t)
+  | p + 1, j, row, k1, t, r =>
+    countGo p (wInc j) row k1 (bump (wAdd row (wMin r.2 k1)) t)
+      (r.1, getAt r.1 (wInc j))
+
+-- Block i (2^e keys from i * 2^e): its row, at i * 2^kb, zeroed, then its
+-- keys counted into it. k is K (at least 1).
+def rowsLeaf (i : Int) (e kb : Nat) (k : Int) (ks t : List Int) : Two :=
+  let row := wShlN i kb
+  let atw := wShlN i e
+  countGo ((pw2 e) - 1).toNat atw row (wSub k 1) (zeroGo (wSub k 1).toNat row t) (aget ks atw)
+
+-- Pass 1's forks: d levels down to the blocks under block index i.
+-- Sequentialized: block i reads only its keys and reads and writes only its
+-- row (entries i * 2^kb to i * 2^kb + K - 1), so running the right lane on
+-- the left lane's result is the join.
+def rowsS : Nat → Int → Nat → Nat → Int → List Int → List Int → Two
+  | 0, i, e, kb, k, ks, t => rowsLeaf i e kb k ks t
+  | p + 1, i, e, kb, k, ks, t =>
+    let l := rowsS p (wMul i 2) e kb k ks t
+    let r := rowsS p (wInc (wMul i 2)) e kb k l.a l.b
+    Two.mk l.a r.b
+
+-- Pass 2: columns
+-- ---------------
+
+-- r holds the table and the entry x read at at: adds x and the n entries
+-- after it, each step further on, to s.
+def colGo : Nat → Int → Int → Int → List Int × Int → List Int × Int
+  | 0, _, _, s, r => (r.1, wAdd s r.2)
+  | p + 1, atw, step, s, r =>
+    colGo p (wAdd atw step) step (wAdd s r.2) (aget r.1 (wAdd atw step))
+
+def grpPut (atw : Int) (r : List Int × Int) : List Int := setAt atw r.2 r.1
+
+-- Column c of a group (rows from top, nm + 1 of them, step apart), when
+-- c < K: the sum goes into the last row (at last).
+def grpOne (lt : Bool) (c top last step : Int) (nm : Nat) (t : List Int) : List Int :=
+  match lt with
+  | true => grpPut (wAdd last c) (colGo nm (wAdd top c) step 0 (aget t (wAdd top c)))
+  | false => t
+
+-- Columns c to c + n of a group.
+def grpGo : Nat → Int → Int → Int → Int → Int → Nat → List Int → List Int
+  | 0, c, k, top, last, step, nm, t => grpOne (c < k) c top last step nm t
+  | p + 1, c, k, top, last, step, nm, t =>
+    grpGo p (wInc c) k top last step nm (grpOne (c < k) c top last step nm t)
+
+-- Lane i: rows group i / 2^gc (2^m rows of 2^kb), columns group i % 2^gc
+-- (2^w columns).
+def grpLeaf (i : Int) (gc w m kb : Nat) (k : Int) (t : List Int) : List Int :=
+  let g := wShrN i gc
+  let j := wSub i (wShlN g gc)
+  let top := wShlN g (m + kb)
+  let last := wAdd top (wShlN (pw2 m - 1) kb)
+  grpGo ((pw2 w) - 1).toNat (wShlN j w) k top last (pw2 kb) ((pw2 m) - 1).toNat t
+
+-- Pass 2a's forks: d levels down to the lanes under lane i. Lane i reads and
+-- writes only its group's rows in its columns.
+def grpS : Nat → Int → Nat → Nat → Nat → Nat → Int → List Int → List Int
+  | 0, i, gc, w, m, kb, k, t => grpLeaf i gc w m kb k t
+  | p + 1, i, gc, w, m, kb, k, t =>
+    let l := grpS p (wMul i 2) gc w m kb k t
+    grpS p (wInc (wMul i 2)) gc w m kb k l
+
+def colPut (c : Int) (cs : List Int) (r : List Int × Int) : Two :=
+  Two.mk r.1 (setAt c r.2 cs)
+
+-- Column c's count into cs[c]: the sum of its nb + 1 entries from o + c,
+-- step apart (the groups' last rows), when c < K; else 0.
+def colOne (lt : Bool) (c o step : Int) (nb : Nat) (p : Two) : Two :=
+  match lt with
+  | true => colPut c p.b (colGo nb (wAdd o c) step 0 (aget p.a (wAdd o c)))
+  | false => Two.mk p.a (setAt c 0 p.b)
+
+-- Columns c to c + n.
+def colsGo : Nat → Int → Int → Int → Int → Nat → Two → Two
+  | 0, c, k, o, step, nb, p => colOne (c < k) c o step nb p
+  | q + 1, c, k, o, step, nb, p =>
+    colsGo q (wInc c) k o step nb (colOne (c < k) c o step nb p)
+
+-- Pass 2b's forks: d levels down to groups of 2^w columns under group index
+-- j. Group j reads only its columns of the table and writes only its counts.
+def colsS : Nat → Int → Nat → Int → Int → Int → Nat → List Int → List Int → Two
+  | 0, j, w, k, o, step, nb, t, cs =>
+    colsGo ((pw2 w) - 1).toNat (wShlN j w) k o step nb (Two.mk t cs)
+  | q + 1, j, w, k, o, step, nb, t, cs =>
+    let l := colsS q (wMul j 2) w k o step nb t cs
+    let r := colsS q (wInc (wMul j 2)) w k o step nb l.a l.b
+    Two.mk l.a r.b
+
+-- Driver
+-- ------
+
+def countFin (keys : List Int) (r : Two) : List Int × Bufs :=
+  (keys, Bufs.mk r.b r.a)
+
+-- Pass 2b over the 2^kb columns, 2^min(d, kb) groups: each sums its
+-- columns over the 2^r groups' last rows.
+def countCols (r m g : Nat) (k : Int) (kb : Nat) (keys counts table : List Int) : List Int × Bufs :=
+  countFin keys (colsS g 0 (kb - g) k (wShlN (pw2 m - 1) kb) (pw2 (m + kb)) ((pw2 r) - 1).toNat
+    table (fitEq kb (counts, (counts.length : Int))))
+
+-- Pass 2a over 2^r groups of 2^m rows by 2^min(d, kb) groups of columns,
+-- then 2b; below 2^12 rows, 2b alone, over 2^d groups of one row.
+def countGrp (lo : Bool) (d : Nat) (k : Int) (kb : Nat) (counts : List Int) (p : Two) : List Int × Bufs :=
+  match lo with
+  | true => countCols d 0 (nMin d kb) k kb p.a counts p.b
+  | false =>
+    let g := nMin d kb
+    let r := half d
+    let m := d - r
+    countCols r m g k kb p.a counts (grpS (r + g) 0 g (kb - g) m kb k p.b)
+
+def countAt (b : Nat) (k : Int) (bufs : Bufs) (r : List Int × Int) : List Int × Bufs :=
+  let kk := wMax k 1
+  let kb := kbits kk
+  let lg := (wLog2 r.2).toNat
+  let d := nMin b lg
+  countGrp (d < 12) d kk kb bufs.counts
+    (rowsS d 0 (lg - d) kb kk r.1 (fitGe (d + kb) (bufs.table, (bufs.table.length : Int))))
+
+-- The histogram of keys into k buckets at fork depth b. Returns the keys,
+-- unchanged, and the buffers, whose counts field holds the counts.
+def count (b : Nat) (k : Int) (keys : List Int) (bufs : Bufs) : List Int × Bufs :=
+  countAt b k bufs (keys, (keys.length : Int))
+
+-- Keys
+-- ----
+
+-- xorshift32 (13, 17, 5)
+def prng (x : Int) : Int :=
+  let b := xor32 x (wShlN x 13)
+  let d := xor32 b (wShrN b 17)
+  xor32 d (wShlN d 5)
+
+-- Key j of stream s
+def key (s j : Int) : Int := prng (prng (wAdd (wMul (wInc j) 2654435761) s)) % 256
+
+-- Keys j to j + n of stream s.
+def fillGo : Nat → Int → Int → List Int → List Int
+  | 0, j, s, ks => setAt j (key s j) ks
+  | p + 1, j, s, ks => fillGo p (wInc j) s (setAt j (key s j) ks)
+
+-- The fill's forks: d levels down to the blocks of 2^e keys under block i.
+def fillS : Nat → Int → Nat → Int → List Int → List Int
+  | 0, i, e, s, ks => fillGo ((pw2 e) - 1).toNat (wShlN i e) s ks
+  | p + 1, i, e, s, ks =>
+    let l := fillS p (wMul i 2) e s ks
+    fillS p (wInc (wMul i 2)) e s l
+
+-- Run
+-- ---
+
+-- r holds the counts and the count x read at j: h folds x, then the n
+-- counts after j.
+def sumGo : Nat → Int → Int → List Int × Int → List Int × Int
+  | 0, _, h, r => (r.1, xor32 (wMul h 2654435761) r.2)
+  | p + 1, j, h, r => sumGo p (wInc j) (xor32 (wMul h 2654435761) r.2) (aget r.1 (wInc j))
+
+-- The round's counts folded into h.
+def fold (h : Int) (r : List Int × Bufs) : St :=
+  let s := sumGo 255 0 h (aget r.2.counts 0)
+  St.mk r.1 (Bufs.mk s.1 r.2.table) s.2
+
+-- n more rounds from stream s, at fork depth b over blocks of 2^e keys.
+def reps : Nat → Int → Nat → Nat → St → Int
+  | 0, _, _, _, st => st.h
+  | p + 1, s, b, e, st =>
+    reps p (wInc s) b e (fold st.h (count b 256 (fillS b 0 e s st.keys) st.bufs))
+
+-- n rounds over 2^d keys at fork depth b.
+def run (n d b : Nat) (keys : List Int) (bufs : Bufs) : Int :=
+  let fb := nMin b d
+  reps n 7 fb (d - fb) (St.mk keys bufs 0)
+
+/-- Root: `histogram d b r` is run(r, d, b) on freshly sized keys and buffers;
+the source's documented small size (D 10, B 4, R 2) expects 3825188900, its
+main() runs (24, 11, 128). -/
+def histogram (d b r : Int) : Int :=
+  run r.toNat d.toNat b.toNat (List.replicate (pw2 d.toNat).toNat 0)
+    (bufsSized b.toNat 256 d.toNat)

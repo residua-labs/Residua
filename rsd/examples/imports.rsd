@@ -1,0 +1,2 @@
+import Demo
+def main : Int := twice (sum [10, 20, 30]) + countdown 5

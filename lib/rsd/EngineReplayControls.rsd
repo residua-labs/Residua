@@ -1,0 +1,197 @@
+-- The frozen engine collector's two controls, four executed AST mutants, and
+-- entry-fuel boundary. This NF decides over observations; it attests no effects.
+namespace Lib.Rsd.EngineReplayControls
+def get := Lib.Rsd.QFloorJson.get
+def arr? := Lib.Rsd.EngineReplay.arr?
+def stringify := Lib.Rsd.EngineReplay.stringify
+def parsed := Lib.Rsd.EngineReplay.parsed
+def equal := Lib.Rsd.EngineReplay.equal
+
+inductive Kind where
+  | control | bodyField | witness | bodyFuel | memo | entryFuel
+  deriving BEq, Repr
+
+def kinds : List Kind := [.control,.bodyField,.witness,.bodyFuel,.memo,.entryFuel]
+def label : Kind -> String
+  | .control => "runtime-unmutated-controls"
+  | .bodyField => "mutant-runtime-body-field"
+  | .witness => "mutant-runtime-complete-witness"
+  | .bodyFuel => "mutant-runtime-body-fuel-off-by-one"
+  | .memo => "mutant-runtime-memo-skip"
+  | .entryFuel => "entry-fuel-zero"
+
+inductive Residue where
+  | base
+  | inventory
+  | anchor
+  | input
+  | command
+  | json
+  | control
+  | mutant
+  | fuel
+
+def residueName : Residue -> String
+  | Residue.base => "nf_engine_controls_base" | Residue.inventory => "nf_engine_controls_inventory"
+  | Residue.anchor => "nf_engine_controls_anchor" | Residue.input => "nf_engine_controls_input"
+  | Residue.command => "nf_engine_controls_command" | Residue.json => "nf_engine_controls_json"
+  | Residue.control => "nf_engine_controls_control" | Residue.mutant => "nf_engine_controls_mutant"
+  | Residue.fuel => "nf_engine_controls_fuel"
+structure Request where
+  programs : Lib.Rsd.EngineReplay.Request
+  samples : List Lib.Rsd.EngineReplay.Sample
+  deriving BEq, Repr
+structure Control where
+  label : String
+  input : String
+  observation : Lib.Rsd.CommandReceipt.Observation
+  deriving BEq, Repr
+structure State where
+  controls : List Control
+  replayNoise : Nat := 0
+  deriving BEq, Repr
+structure Key where
+  request : Request
+  observations : State
+  deriving BEq, Repr
+structure Result where
+  state : State
+  residue : Option Residue
+
+def put (v : Lib.Rsd.QFloorJson.Value) (key : String) (value : Lib.Rsd.QFloorJson.Value) : Lib.Rsd.QFloorJson.Value :=
+  match v with
+  | .obj xs => .obj (xs.map fun (k,old) => (k, if k == key then value else old))
+  | _ => v
+
+def edit (kind : Kind) (v : Lib.Rsd.QFloorJson.Value) : Prod Lib.Rsd.QFloorJson.Value Nat :=
+  match kind with
+  | .bodyField => if get v "op" == some (.str "fieldAccess") && get v "f" == some (.str "outcome") then
+      (put v "f" (.str "actionWitness"), 1) else (v,0)
+  | .witness =>
+      if get v "op" == some (.str "makeRecord") then
+        match (get v "flds").bind arr? with
+        | none => (v,0)
+        | some xs =>
+            let n := (xs.filter fun p => match p with | .arr [.str k,_] => k == "input_witness" | _ => false).length
+            let fields := xs.map fun p => match p with
+              | .arr [.str "input_witness",_] => .arr [.str "input_witness", .obj [("op",.str "emptyList")]]
+              | _ => p
+            (put v "flds" (.arr fields), n)
+      else (v,0)
+  | .bodyFuel =>
+      let a := (get v "a").getD .null
+      let b := (get v "b").getD .null
+      if get v "op" == some (.str "lt") && get a "op" == some (.str "num") &&
+          get a "n" == some (.int 0) && get b "op" == some (.str "fieldAccess") && get b "f" == some (.str "fuel") then
+        (put v "a" (put a "n" (.int 1)), 1) else (v,0)
+  | .memo =>
+      let a := (get v "a").getD .null
+      if get v "op" == some (.str "eqE") && get a "op" == some (.str "fieldAccess") && get a "f" == some (.str "key") then
+        let one := .obj [("op",.str "num"),("n",.int 1)]
+        (put (put v "a" one) "b" one,1) else (v,0)
+  | _ => (v,0)
+
+def walk : Nat -> Kind -> Lib.Rsd.QFloorJson.Value -> Prod Lib.Rsd.QFloorJson.Value Nat
+  | 0, _, v => (v,0)
+  | fuel + 1, kind, original =>
+      let (v,n) := edit kind original
+      match v with
+      | .arr xs =>
+          let (ys,count) := xs.foldl (fun (ys,total) x =>
+            let (y,k) := walk fuel kind x
+            (ys ++ [y],total+k)) ([],n)
+          (.arr ys,count)
+      | .obj xs =>
+          let (ys,count) := xs.foldl (fun (ys,total) (name,x) =>
+            let (y,k) := walk fuel kind x
+            (ys ++ [(name,y)],total+k)) ([],n)
+          (.obj ys,count)
+      | _ => (v,n)
+
+def mutate (kind : Kind) (request : Lib.Rsd.QFloorJson.Value) : Except Residue Lib.Rsd.QFloorJson.Value := do
+  let programs <- match (get request "programs").bind arr? with
+    | none => throw .anchor | some xs => pure xs
+  let index := if kind == .bodyField then 0 else 2
+  let mut count := 0
+  let mut next := []
+  for (i,p) in programs.enum do
+    if i == index then
+      match p with
+      | .arr [name,params,body] =>
+          let (changed,n) := walk 512 kind body
+          count := count + n
+          next := next ++ [.arr [name,params,changed]]
+      | _ => throw .anchor
+    else next := next ++ [p]
+  if count != 1 then throw .anchor
+  pure (put request "programs" (.arr next))
+
+def selected (r : Request) : Except Residue (List Lib.Rsd.EngineReplay.Sample) :=
+  ["cold","body-identity"].mapM fun name =>
+    match r.samples.find? (fun s => s.label == name) with
+    | none => .error .inventory | some s => .ok s
+
+def parse (s : String) : Except Residue Lib.Rsd.QFloorJson.Value :=
+  match parsed s with | .ok x => .ok x | .error _ => .error .json
+
+def plan (r : Request) (kind : Kind) : Except Residue String := do
+  let samples <- selected r
+  if kind == .entryFuel then
+    let first <- match samples.head? with | none => throw .inventory | some s => pure s
+    return stringify (put (<- parse first.input) "fuel" (.int 0))
+  let requests <- samples.mapM fun s => do
+    let v <- parse s.input
+    if kind == .control then pure v else mutate kind v
+  return String.intercalate "\n" (requests.map stringify) ++ "\n"
+
+def verify (r : Request) (kind : Kind) (c : Control) : Except Residue Unit := do
+  if c.label != label kind then throw .inventory
+  if c.input != (<- plan r kind) then throw .input
+  if !Lib.Rsd.CommandReceipt.good .engine c.observation then throw .command
+  if kind == .entryFuel then
+    let v <- parse c.observation.stdout
+    if get v "val" != some .null then throw .fuel
+  else
+    let lines := c.observation.stdout.trim.splitOn "\n"
+    let actual <- lines.mapM parse
+    let expected <- (<- selected r).mapM fun s => parse s.compiled.stdout
+    if actual.length != 2 then throw .json
+    let same := (actual.zip expected).all fun (a,b) => equal 513 a b
+    if kind == .control then
+      if !same then throw .control
+    else if same then throw .mutant
+
+def sigma (s : State) : State := { s with replayNoise := 0 }
+def q (r : Request) (s : State) : Key := { request := r, observations := sigma s }
+def controlResidue (r : Request) : List (Prod Kind Control) -> Option Residue
+  | [] => none
+  | (kind,c) :: rest => match verify r kind c with
+    | .error e => some e | .ok _ => controlResidue r rest
+
+def residue? (r : Request) (s : State) : Option Residue :=
+  if (Lib.Rsd.EngineReplay.runNF r.programs { samples := r.samples }).residue.isSome then some .base
+  else if s.controls.length != kinds.length then some .inventory
+  else controlResidue r (kinds.zip s.controls)
+
+def admissible (r : Request) (s : State) : Bool := (residue? r (sigma s)).isNone
+def runNF (r : Request) (s : State) : Result := { state := sigma s, residue := residue? r (sigma s) }
+
+-- NF-CORRECT-0 r2: the checked decision; runNF retains the original
+-- transition and its failure-state observations for existing callers.
+def admit (observation : Key) : Except Residue State :=
+  let answer := (runNF observation.request observation.observations)
+  match answer.residue with
+  | some residue => .error residue
+  | none => .ok answer.state
+
+def decide (r : Request) (s : State) : Except Residue State :=
+  let answer := runNF r s
+  match answer.residue with
+  | some residue => .error residue
+  | none => .ok answer.state
+
+theorem quotient_factorization (r : Request) (s : State) : decide r s = admit (q r s) := rfl
+
+
+
+end Lib.Rsd.EngineReplayControls

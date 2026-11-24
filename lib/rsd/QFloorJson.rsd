@@ -1,0 +1,211 @@
+-- Port of the reachable qfloor JSON surface, frozen at the source pins in
+-- qfloor/upstream-pins.json. Integers stay exact; duplicate keys keep first
+-- lookup semantics. The legacy parser accepts unescaped control characters
+-- and leading zeroes: this compatibility port keeps those decisions.
+-- No Lean.Json, process, file or foreign-language dependency. closure_claim = 0.
+namespace Lib.Rsd.QFloorJson
+
+inductive Value where
+  | null
+  | bool : Bool → Value
+  | int : Int → Value
+  | str : String → Value
+  | arr : List Value → Value
+  | obj : List (String × Value) → Value
+  deriving BEq, Repr
+
+def get (v : Value) (k : String) : Option Value :=
+  match v with
+  | .obj xs => (xs.find? (fun x => x.1 == k)).map Prod.snd
+  | _ => none
+
+def int? : Value → Option Int | .int n => some n | _ => none
+def str? : Value → Option String | .str s => some s | _ => none
+def bool? : Value → Option Bool | .bool b => some b | _ => none
+
+def maxDepth : Nat := 512
+
+def space (c : Char) : Bool := c == ' ' || c == '\t' || c == '\r' || c == '\n'
+structure Cursor where
+  rest : List Char
+  pos : Nat := 0
+  deriving Repr
+
+def pop (s : Cursor) : Cursor :=
+  match s.rest with
+  | [] => s
+  | c :: cs => { rest := cs, pos := s.pos + c.utf8Size }
+
+def skip (s : Cursor) : Cursor :=
+  let ws := s.rest.takeWhile space
+  { rest := s.rest.drop ws.length, pos := s.pos + ws.length }
+
+-- Frozen Rust diagnostics use byte offsets and Option<u8> debug spelling.
+def peekDebug (s : Cursor) : String :=
+  match s.rest with
+  | [] => "None"
+  | c :: _ => "Some(" ++ toString ((String.singleton c).toUTF8[0]!.toNat) ++ ")"
+def unexpected (s : Cursor) : String := s!"unexpected byte {peekDebug s} at {s.pos}"
+def hexChar (n : Nat) : Char := Char.ofNat (if n < 10 then 48 + n else 87 + n)
+def debugHex : Nat → Nat → String
+  | 0, _ => ""
+  | f + 1, n => (if n < 16 then "" else debugHex f (n / 16)) ++ String.singleton (hexChar (n % 16))
+-- Rust Debug string spelling differs from JSON for NUL and controls.
+def debugQuote (s : String) : String :=
+  "\"" ++ String.join (s.toList.map fun c =>
+    if c == '"' then "\\\"" else if c == '\\' then "\\\\"
+    else if c == '\n' then "\\n" else if c == '\r' then "\\r" else if c == '\t' then "\\t"
+    else if c.toNat == 0 then "\\0"
+    else if c.toNat < 32 || c.toNat == 127 then "\\u{" ++ debugHex 6 c.toNat ++ "}"
+    else String.singleton c) ++ "\""
+
+def jsonError (s : Cursor) (what : String) : String := s!"nf_qfloor_json_{what} at byte {s.pos}"
+def depthError (s : Cursor) : String :=
+  s!"[evalr_decode_depth_exceeded] JSON nesting deeper than MAX_DEPTH=512 at byte {s.pos}"
+
+def hexDigit (c : Char) : Option Nat :=
+  if c >= '0' && c <= '9' then some (c.toNat - 48)
+  else if c >= 'a' && c <= 'f' then some (c.toNat - 87)
+  else if c >= 'A' && c <= 'F' then some (c.toNat - 55) else none
+
+def hex4 (s : Cursor) : Except String (Nat × Cursor) := do
+  if (String.mk s.rest).utf8ByteSize < 4 then throw "truncated \\u escape"
+  let mut n := 0
+  let mut cur := s
+  for _ in [0:4] do
+    match cur.rest with
+    | [] => throw "truncated \\u escape"
+    | c :: _ =>
+      match hexDigit c with
+      | none => throw "bad \\u hex"
+      | some d => n := n * 16 + d; cur := pop cur
+  return (n, cur)
+
+def stringBody : Nat → Cursor → List Char → Except String (String × Cursor)
+  | 0, s, _ => .error (jsonError s "fuel")
+  | f + 1, s, acc => do
+    match s.rest with
+    | [] => throw "unterminated string"
+    | '"' :: _ => return (String.mk acc.reverse, pop s)
+    | '\\' :: _ =>
+      let t := pop s
+      let (c, next) ← match t.rest with
+        | '"' :: _ => pure ('"', pop t)
+        | '\\' :: _ => pure ('\\', pop t)
+        | '/' :: _ => pure ('/', pop t)
+        | 'n' :: _ => pure ('\n', pop t)
+        | 'r' :: _ => pure ('\r', pop t)
+        | 't' :: _ => pure ('\t', pop t)
+        | 'b' :: _ => pure (Char.ofNat 8, pop t)
+        | 'f' :: _ => pure (Char.ofNat 12, pop t)
+        | 'u' :: _ => do
+          let (hi, r) ← hex4 (pop t)
+          if hi >= 0xd800 && hi <= 0xdbff then
+            match r.rest with
+            | '\\' :: 'u' :: _ =>
+              let lowResult := hex4 (pop (pop r))
+              match lowResult with
+              | .error _ => throw "high surrogate not followed by low surrogate"
+              | .ok (lo, rest) =>
+                if lo >= 0xdc00 && lo <= 0xdfff then
+                  pure (Char.ofNat (0x10000 + (hi - 0xd800) * 1024 + lo - 0xdc00), rest)
+                else throw "high surrogate not followed by low surrogate"
+            | _ => throw "high surrogate not followed by low surrogate"
+          else if hi >= 0xdc00 && hi <= 0xdfff then throw "lone low surrogate"
+          else pure (Char.ofNat hi, r)
+        | _ => throw ("bad escape " ++ peekDebug t)
+      stringBody f next (c :: acc)
+    | c :: _ => stringBody f (pop s) (c :: acc)
+
+def stringAt (f : Nat) (s : Cursor) : Except String (String × Cursor) :=
+  match s.rest with
+  | '"' :: _ => stringBody f (pop s) []
+  | _ => .error s!"expected '\"' at {s.pos}"
+
+def integer (s : Cursor) : Except String (Value × Cursor) := do
+  let negative := s.rest.head? == some '-'
+  let t := if negative then pop s else s
+  let ds := t.rest.takeWhile Char.isDigit
+  let rest := t.rest.drop ds.length
+  if rest.head? == some '.' || rest.head? == some 'e' || rest.head? == some 'E' then
+    throw s!"non-integer number at {s.pos} (integer-core / E1_float_OPEN)"
+  if ds.isEmpty then throw "bad int \"-\": invalid digit found in string"
+  let n := ds.foldl (fun n c => 10 * n + c.toNat - 48) 0
+  let i : Int := if negative then -(Int.ofNat n) else Int.ofNat n
+  if i < -9223372036854775808 || i > 9223372036854775807 then
+    throw ("bad int " ++ debugQuote ((if negative then "-" else "") ++ String.mk ds) ++
+      (if negative then ": number too small to fit in target type" else ": number too large to fit in target type"))
+  return (.int i, { rest := rest, pos := t.pos + ds.length })
+
+mutual
+  def value : Nat → Nat → Cursor → Except String (Value × Cursor)
+    | 0, _, s => .error (jsonError s "fuel")
+    | f + 1, depth, s0 => do
+      let s := skip s0
+      match s.rest with
+      | '{' :: _ =>
+        if depth >= maxDepth then throw (depthError s)
+        objectItems f (depth + 1) (skip (pop s)) [] true
+      | '[' :: _ =>
+        if depth >= maxDepth then throw (depthError s)
+        arrayItems f (depth + 1) (skip (pop s)) [] true
+      | '"' :: _ =>
+        let (text, rest) ← stringAt f s
+        return (.str text, rest)
+      | 't' :: 'r' :: 'u' :: 'e' :: cs => return (.bool true, { rest := cs, pos := s.pos + 4 })
+      | 'f' :: 'a' :: 'l' :: 's' :: 'e' :: cs => return (.bool false, { rest := cs, pos := s.pos + 5 })
+      | 'n' :: 'u' :: 'l' :: 'l' :: cs => return (.null, { rest := cs, pos := s.pos + 4 })
+      | c :: _ =>
+        if c == '-' || c.isDigit then integer s
+        else if c == 't' || c == 'f' || c == 'n' then throw s!"bad literal at {s.pos}"
+        else throw (unexpected s)
+      | [] => throw (unexpected s)
+  def arrayItems : Nat → Nat → Cursor → List Value → Bool → Except String (Value × Cursor)
+    | 0, _, s, _, _ => .error (jsonError s "fuel")
+    | f + 1, depth, s, acc, first => do
+      if first && s.rest.head? == some ']' then return (.arr [], pop s)
+      let (v, r) ← value f depth s
+      let t := skip r
+      match t.rest with
+      | ']' :: _ => return (.arr (v :: acc).reverse, pop t)
+      | ',' :: _ => arrayItems f depth (skip (pop t)) (v :: acc) false
+      | _ => throw s!"expected ',' or ']' at {t.pos}, got {peekDebug t}"
+  def objectItems : Nat → Nat → Cursor → List (String × Value) → Bool → Except String (Value × Cursor)
+    | 0, _, s, _, _ => .error (jsonError s "fuel")
+    | f + 1, depth, s, acc, first => do
+      if first && s.rest.head? == some '}' then return (.obj [], pop s)
+      let (k, r) ← stringAt f s
+      let t := skip r
+      if t.rest.head? != some ':' then throw s!"expected ':' at {t.pos}"
+      let (v, r) ← value f depth (pop t)
+      let t := skip r
+      match t.rest with
+      | '}' :: _ => return (.obj ((k, v) :: acc).reverse, pop t)
+      | ',' :: _ => objectItems f depth (skip (pop t)) ((k, v) :: acc) false
+      | _ => throw ("expected ',' or '}' at " ++ toString t.pos ++ ", got " ++ peekDebug t)
+end
+
+def parse (input : String) : Except String Value := do
+  let (v, rest) ← value (4 * input.length + 16) 0 { rest := input.toList }
+  let s := skip rest
+  if !s.rest.isEmpty then throw s!"trailing input at byte {s.pos}"
+  return v
+
+def quote (s : String) : String :=
+  "\"" ++ String.join (s.toList.map fun c =>
+    if c == '"' then "\\\"" else if c == '\\' then "\\\\"
+    else if c == '\n' then "\\n" else if c == '\r' then "\\r" else if c == '\t' then "\\t"
+    else if c.toNat < 32 then "\\u00" ++ String.mk [hexChar (c.toNat / 16), hexChar (c.toNat % 16)]
+    else String.singleton c) ++ "\""
+
+def encode : Nat → Value → String
+  | 0, _ => "null"
+  | f + 1, v => match v with
+    | .null => "null"
+    | .bool b => if b then "true" else "false"
+    | .int n => toString n
+    | .str s => quote s
+    | .arr xs => "[" ++ String.intercalate "," (xs.map (encode f)) ++ "]"
+    | .obj xs => "{" ++ String.intercalate "," (xs.map (fun (k, v) => quote k ++ ":" ++ encode f v)) ++ "}"
+
+end Lib.Rsd.QFloorJson

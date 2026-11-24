@@ -1,0 +1,17 @@
+modcmd	benchmarks/koka/state/kbstore/build/rsc-native compile
+word	30658
+layers	reg,facts,rc,borrow,drop,reuse,alloc,ctor,narrow
+module	image	layers	sha256	bytes	rc
+binarytrees	binarytrees	reg,facts,rc,borrow,drop,reuse,alloc,ctor,narrow	a0c75ccc8eb840db7ade6d22cb556032cb5ced37b318d788d08191939c66d0cf	108044	0
+binarytrees-qbe	binarytrees	reg,facts,rc,borrow,drop,reuse,alloc,ctor,narrow,qbe	708d924f112f8a5347bfbb643cb8cb747149f2cf8c76d4620e8fc9201e400069	111281	0
+binarytrees-kk	binarytrees-kk	reg,facts,rc,borrow,drop,reuse,alloc,ctor,narrow	0fa52425079df13dd59e25dbb7c86ea4c523ad4c6ec5d439add1533c68d04c0e	135837	0
+binarytrees-kk-qbe	binarytrees-kk	reg,facts,rc,borrow,drop,reuse,alloc,ctor,narrow,qbe	b50310b67943645307afaa812dc8cea96a773807e81648e565b494fa0885b067	139286	0
+nqueens-kk	nqueens-kk	reg,facts,rc,borrow,drop,reuse,alloc,ctor,narrow	f5a7c20c80372b6b9a3eee8f6369fe322e173882e229798bf71dd3752ede6a8e	46795	0
+nqueens	nqueens	reg,facts,rc,borrow,drop,reuse,alloc,ctor,narrow	919d869519c68aa4bd40db1baea73bdb5a90cfb30891303f6a6578d638bad40b	77380	0
+rbtree	rbtree	reg,facts,rc,borrow,drop,reuse,alloc,ctor,narrow	eb562923c09c3547c63f3f6abfa10151b50c1120b02c067c053527bdf8c3c1a8	130547	0
+rbtree-kk	rbtree-kk	reg,facts,rc,borrow,drop,reuse,alloc,ctor,narrow	eccc237272807042d3c8f45bd7b3645b381d01c715c435a7d40e63a42b1506ad	106008	0
+rbtreeck	rbtreeck	reg,facts,rc,borrow,drop,reuse,alloc,ctor,narrow	c7cbea5166b43ce8fe60b940c1d6b9d9e7682465b4fdd5bd55fa22e64049125a	138016	0
+cfold	cfold	reg,facts,rc,borrow,drop,reuse,alloc,ctor,narrow	429bfc84683c9b38cdb61d5802c840fe4f2fc6865914a89dcf02b586b2d76fe7	129641	0
+deriv	deriv	reg,facts,rc,borrow,drop,reuse,alloc,ctor,narrow	4244c412a1bcd036f4b0ebfb0d6c479d4a612af63a7559f9e268901ea0e0f493	212745	0
+cfold.variant	cfold.variant	-	-	0	missing-image
+deriv.variant	deriv.variant	-	-	0	missing-image

@@ -1,0 +1,4 @@
+# r4-merkle.tsv — NF-RUNS-0 r4 Merkle import-graph target-hash fixture
+# fields: name kind program program_q entry args input_q expected expected_q oracle eval extras
+r4-dep	rsd	reports/rsd-dogfood/planted/R4Main.rsd	037d193fc2b18b2f60d82bfdc5ed1fffd3a8c3748693d85cf2011f598d023b83	0	-	-	import_unresolved	-	self	-	
+r4-indep	rsd	reports/rsd-dogfood/planted/R4Indep.rsd	-	0	-	-	import_unresolved	-	self	-	

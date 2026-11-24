@@ -27,6 +27,7 @@
 --   in the same way, with the same window.
 -- It runs between explicitRC and expandResetReuse.
 import Lib.Lrc.NormIds
+import Lib.Lrc.Prim
 
 namespace Lrc
 

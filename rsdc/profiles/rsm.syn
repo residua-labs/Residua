@@ -389,6 +389,7 @@ grammar
   CLExpr := '( '#:binary35 CTree CTree ') @tree=(6,35,$2,$3) @template=(#:binary35\s$2\s$3)
   CLExpr := '( '#:binary36 CTree CTree ') @tree=(6,36,$2,$3) @template=(#:binary36\s$2\s$3)
   CLExpr := '( '#:binary37 CTree CTree ') @tree=(6,37,$2,$3) @template=(#:binary37\s$2\s$3)
+  CLExpr := '( '#:binary38 CTree CTree ') @tree=(6,38,$2,$3) @template=(#:binary38\s$2\s$3)
   CLExpr := '( '#:unary1 CTree ') @tree=(7,1,$2,0) @template=(#:unary1\s$2)
   CLExpr := '( '#:unary2 CTree ') @tree=(7,2,$2,0) @template=(#:unary2\s$2)
   CLExpr := '( '#:unary3 CTree ') @tree=(7,3,$2,0) @template=(#:unary3\s$2)
@@ -475,6 +476,7 @@ grammar
   CDo := '( '#:syntax215 ') @tree=(215,-1,0,0) @template=(#:syntax215)
   CDo := '( '#:syntax216 ') @tree=(216,-1,0,0) @template=(#:syntax216)
   CDo := '( '#:syntax217 C1 ') @tree=(217,$2,0,0) @template=(#:syntax217\s$2)
+  CDo := '( '#:syntax217-dbg C2 ') @tree=(217,$2,0,0) @template=(#:syntax217-dbg\s$2)
   CDo := '( '#:syntax218 C1 ') @tree=(218,$2,0,0) @template=(#:syntax218\s$2)
   CDo := '( '#:syntax219 C2 ') @tree=(219,$2,0,0) @template=(#:syntax219\s$2)
   CDo := '( '#:syntax220 C1 ') @tree=(220,$2,0,0) @template=(#:syntax220\s$2)
@@ -518,6 +520,7 @@ grammar
   CDecl := '( '#:syntax325 C1 ') @tree=(325,$2,0,0) @template=(#:syntax325\s$2)
   CDecl := '( '#:syntax326 C1 ') @tree=(326,$2,0,0) @template=(#:syntax326\s$2)
   CDecl := '( '#:syntax327 C1 ') @tree=(327,$2,0,0) @template=(#:syntax327\s$2)
+  CDecl := '( '#:syntax327-meta C2 ') @tree=(327,$2,0,0) @template=(#:syntax327-meta\s$2)
   CDecl := '( '#:syntax328 C3 ') @tree=(328,$2,0,0) @template=(#:syntax328\s$2)
   CDecl := '( '#:syntax329 C1 ') @tree=(329,$2,0,0) @template=(#:syntax329\s$2)
   CDecl := '( '#:syntax330 C6 ') @tree=(330,$2,0,0) @template=(#:syntax330\s$2)
@@ -591,6 +594,8 @@ grammar
   CHelper := '( '#:syntax122 ') @tree=(122,-1,0,0) @template=(#:syntax122)
   CExpr := '( '#:syntax123 C4 ') @tree=(123,$2,0,0) @template=(#:syntax123\s$2)
   CHelper := '( '#:syntax124 C2 ') @tree=(124,$2,0,0) @template=(#:syntax124\s$2)
+  CHelper := '( '#:syntax124-max C3 ') @tree=(124,$2,0,0) @template=(#:syntax124-max\s$2)
+  CHelper := '( '#:syntax124-imax C4 ') @tree=(124,$2,0,0) @template=(#:syntax124-imax\s$2)
   CHelper := '( '#:syntax125 C2 ') @tree=(125,$2,0,0) @template=(#:syntax125\s$2)
   CHelper := '( '#:syntax126 C1 ') @tree=(126,$2,0,0) @template=(#:syntax126\s$2)
   CHelper := '( '#:syntax127 C1 ') @tree=(127,$2,0,0) @template=(#:syntax127\s$2)
@@ -621,6 +626,7 @@ grammar
   # Command.lean:13-15 / Basic.lean:1722-1723,1759-1779 quotation ABI.
   # A quoted name contains one lexical leaf58, never raw quotation text.
   CExpr := '( '#:syntax162 C1 ') @tree=(162,$2,0,0) @template=(#:syntax162\s$2)
+  CExpr := '( '#:syntax162-tactic C2 ') @tree=(162,$2,0,0) @template=(#:syntax162-tactic\s$2)
   CHelper := '( '#:quoted-name rawname ') @tree=(163,(12,(58,s2,e2,0),-1,0),0,0) @template=(#:quoted-name\s$2)
   CHelper := '( '#:syntax164 C1 ') @tree=(164,$2,0,0) @template=(#:syntax164\s$2)
   CHelper := '( '#:syntax165 C1 ') @tree=(165,$2,0,0) @template=(#:syntax165\s$2)
@@ -648,6 +654,7 @@ grammar
   CExpr := '( '#:syntax413 C1 ') @tree=(413,$2,0,0) @template=(#:syntax413\s$2)
   CExpr := '( '#:syntax414 C2 ') @tree=(414,$2,0,0) @template=(#:syntax414\s$2)
   CExpr := '( '#:syntax415 C1 ') @tree=(415,$2,0,0) @template=(#:syntax415\s$2)
+  CExpr := '( '#:syntax415-dbg C3 ') @tree=(415,$2,0,0) @template=(#:syntax415-dbg\s$2)
   CInterp := CChunkClosed @tree=(12,$0,-1,0) @template=$0
   CInterp := CChunkOpen CTree CInterpTail @tree=(12,$0,(12,$1,$2,0),0) @template=$0\s$1\s$2
   CInterpTail := CChunkEnd @tree=(12,$0,-1,0) @template=$0
@@ -677,6 +684,7 @@ grammar
   CHelper := '( '#:syntax516 C1 ') @tree=(516,$2,0,0) @template=(#:syntax516\s$2)
   CHelper := '( '#:syntax517 C2 ') @tree=(517,$2,0,0) @template=(#:syntax517\s$2)
   CHelper := '( '#:syntax518 C2 ') @tree=(518,$2,0,0) @template=(#:syntax518\s$2)
+  CHelper := '( '#:syntax518-match C3 ') @tree=(518,$2,0,0) @template=(#:syntax518-match\s$2)
   CHelper := '( '#:syntax519 C2 ') @tree=(519,$2,0,0) @template=(#:syntax519\s$2)
   CHelper := '( '#:syntax520 ') @tree=(520,-1,0,0) @template=(#:syntax520)
   CHelper := '( '#:syntax521 C2 ') @tree=(521,$2,0,0) @template=(#:syntax521\s$2)
@@ -728,6 +736,11 @@ grammar
   CHelper := '( '#:syntax565-show C2 ') @tree=(565,$2,0,0) @template=(#:syntax565-show\s$2)
   CHelper := '( '#:syntax565-refine C3 ') @tree=(565,$2,0,0) @template=(#:syntax565-refine\s$2)
   CHelper := '( '#:syntax565-let C4 ') @tree=(565,$2,0,0) @template=(#:syntax565-let\s$2)
+  CHelper := '( '#:syntax565-funext C5 ') @tree=(565,$2,0,0) @template=(#:syntax565-funext\s$2)
+  CHelper := '( '#:syntax565-match C6 ') @tree=(565,$2,0,0) @template=(#:syntax565-match\s$2)
+  CHelper := '( '#:syntax565-intros C7 ') @tree=(565,$2,0,0) @template=(#:syntax565-intros\s$2)
+  CHelper := '( '#:syntax565-conv C8 ') @tree=(565,$2,0,0) @template=(#:syntax565-conv\s$2)
+  CHelper := '( '#:syntax565-lhs C9 ') @tree=(565,$2,0,0) @template=(#:syntax565-lhs\s$2)
   CHelper := '( '#:syntax566 ') @tree=(566,-1,0,0) @template=(#:syntax566)
   CHelper := '( '#:syntax567 C1 ') @tree=(567,$2,0,0) @template=(#:syntax567\s$2)
   CHelper := '( '#:syntax568 C1 ') @tree=(568,$2,0,0) @template=(#:syntax568\s$2)

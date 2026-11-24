@@ -1,0 +1,400 @@
+-- Exact discover: stmt_q and σ to declaration nodes.
+-- stmt_q is E2E-2b canonStmtOf, carried in the record. This file defines no hash.
+-- The statement key does not read an environment. The premise cone is a q on the node.
+-- Postings are sorted by q through Lib.OrderedMap.
+-- σ is defined for a duplicate statement class: the least node q, and that key
+-- returns the class. A single statement has no σ.
+-- A miss names this cut. A hit is a candidate proposal. admits is false.
+-- Near: normalized tokens and BM25. No embedding and no vector search.
+-- This file does not call a device. closure_claim = 0.
+namespace Lib.Rsd.Discover
+
+open Lib.OrderedMap
+
+structure Node where
+  kind : String
+  q : String
+  name : String
+  evidence : String
+  axioms : String
+  semantics : String
+  text : String
+  cone : String
+  deriving BEq
+
+structure Rec where
+  stmtQ : String
+  sigma : String
+  node : Node
+
+structure Index where
+  cut : String
+  byStmt : List (KV (List Node))
+  bySigma : List (KV (List Node))
+  explicit : List (KV (List Node))
+
+/-- Ranked output never admits. The consumer checks. -/
+def admits : Bool := false
+
+/-- Named outcomes stay apart. A miss is absence in this cut, not unprovable. -/
+def outcomeUnprovable : String := "unprovable"
+
+def outcomeBudget : String := "budget exhausted"
+
+def absentInThisCut (cut : String) : String :=
+  "absent in this cut as of " ++ cut
+
+def readsAsUnprovable (s : String) : Bool :=
+  (s.splitOn "unprovable").length > 1
+
+def outcomesNamedApart (cut : String) : Bool :=
+  let a := absentInThisCut cut
+  a != outcomeUnprovable && a != outcomeBudget && outcomeUnprovable != outcomeBudget
+    && !readsAsUnprovable a
+
+/-- The index key is the statement q. `cone` is bound on the node. `env` is not read. -/
+def statementKey (stmtQ : String) (_cone : String) (_env : String) : String :=
+  stmtQ
+
+def nodeSortKey (n : Node) : String :=
+  n.q ++ "\n" ++ n.kind ++ "\n" ++ n.name ++ "\n" ++ n.evidence
+
+/-- Kind and q stay apart. Name and evidence keep two nodes with one statement. -/
+def nodeId (n : Node) : String :=
+  n.kind ++ "\n" ++ n.q ++ "\n" ++ n.name ++ "\n" ++ n.evidence ++ "\n" ++ n.cone
+
+def sortByQ (ns : List Node) : List Node :=
+  stableSortQ nodeSortKey ns
+
+def dedupeSorted (xs : List Node) : List Node :=
+  let rec go (acc : List Node) : List Node → List Node
+    | [] => reverse acc
+    | n :: ns =>
+      match acc with
+      | [] => go [n] ns
+      | p :: _ =>
+        if p.kind == n.kind && p.q == n.q then go acc ns else go (n :: acc) ns
+  go [] xs
+
+def unionNodes (a b : List Node) : List Node :=
+  sortByQ (dedupeSorted (stableSortQ nodeId (a ++ b)))
+
+def collapse (xs : List (KV (List Node))) : List (KV (List Node)) :=
+  let sorted := stableSortQ (fun p => p.k) xs
+  let rec go (cur : Option (KV (List Node))) (acc : List (KV (List Node)))
+      (rest : List (KV (List Node))) : List (KV (List Node)) :=
+    match rest with
+    | [] =>
+      match cur with
+      | none => reverse acc
+      | some c => reverse (c :: acc)
+    | x :: xs =>
+      match cur with
+      | none => go (some x) acc xs
+      | some c =>
+        if x.k == c.k then
+          go (some { k := c.k, v := unionNodes c.v x.v }) acc xs
+        else
+          go (some x) (c :: acc) xs
+    termination_by rest.length
+  go none [] sorted
+
+def pairsStmt (rs : List Rec) : List (KV (List Node)) :=
+  rs.filterMap fun r =>
+    if r.stmtQ == "" then none
+    else some { k := r.stmtQ, v := [r.node] }
+
+def pairsSigma (rs : List Rec) : List (KV (List Node)) :=
+  rs.filterMap fun r =>
+    if r.sigma == "" then none
+    else some { k := r.sigma, v := [r.node] }
+
+/-- Least node q in a class. Defined only when the class has two nodes. -/
+def minQ (ns : List Node) : String :=
+  match ns with
+  | [] => ""
+  | n :: rest => rest.foldl (fun a m => if m.q < a then m.q else a) n.q
+
+def derivedSigma (m : List (KV (List Node))) : List (KV (List Node)) :=
+  m.filterMap fun p =>
+    if p.v.length < 2 then none
+    else some { k := minQ p.v, v := p.v }
+
+def mergeMaps (a b : List (KV (List Node))) : List (KV (List Node)) :=
+  let rec go (xs ys : List (KV (List Node))) : List (KV (List Node)) :=
+    match xs, ys with
+    | [], zs => zs
+    | zs, [] => zs
+    | x :: xt, y :: yt =>
+      if x.k == y.k then
+        { k := x.k, v := unionNodes x.v y.v } :: go xt yt
+      else if x.k < y.k then
+        x :: go xt (y :: yt)
+      else
+        y :: go (x :: xt) yt
+    termination_by xs.length + ys.length
+  go a b
+
+def closeIndex (cut : String) (stmt explicit : List (KV (List Node))) : Index :=
+  { cut
+  , byStmt := stmt
+  , explicit
+  , bySigma := mergeMaps explicit (collapse (derivedSigma stmt)) }
+
+def rebuild (rs : List Rec) (cut : String) : Index :=
+  closeIndex cut (collapse (pairsStmt rs)) (collapse (pairsSigma rs))
+
+/-- Append-only delta. Statement postings and σ are resealed, so the result
+    equals rebuild of the union. -/
+def applyDelta (ix : Index) (delta : List Rec) (cut : String) : Index :=
+  closeIndex cut
+    (mergeMaps ix.byStmt (collapse (pairsStmt delta)))
+    (mergeMaps ix.explicit (collapse (pairsSigma delta)))
+
+def renderNode (n : Node) : String :=
+  "candidate propose " ++ n.kind ++ " " ++ n.q
+    ++ " cone " ++ n.cone
+    ++ " evidence " ++ n.evidence
+    ++ " axioms " ++ n.axioms
+    ++ " semantics " ++ n.semantics
+    ++ " name " ++ n.name
+
+def renderHits (ns : List Node) : String :=
+  String.intercalate "\n" (ns.map renderNode)
+
+def queryKey (m : List (KV (List Node))) (cut key : String) : String :=
+  match lookupQ key m with
+  | none => absentInThisCut cut
+  | some ns => renderHits ns
+
+def oneCone (ns : List Node) : Bool :=
+  match ns with
+  | [] => true
+  | n :: rest => rest.all fun m => m.cone == n.cone
+
+def conesUniform (m : List (KV (List Node))) : Bool :=
+  m.all fun p => oneCone p.v
+
+def queryStmt (ix : Index) (stmtQ : String) : String :=
+  queryKey ix.byStmt ix.cut stmtQ
+
+def querySigma (ix : Index) (sigma : String) : String :=
+  queryKey ix.bySigma ix.cut sigma
+
+def posting (m : List (KV (List Node))) (key : String) : List Node :=
+  match lookupQ key m with
+  | none => []
+  | some ns => ns
+
+def sortedByQ (ns : List Node) : Bool :=
+  match ns with
+  | [] => true
+  | [_] => true
+  | a :: b :: rest =>
+    (nodeSortKey a <= nodeSortKey b) && sortedByQ (b :: rest)
+
+def renderMap (m : List (KV (List Node))) : String :=
+  String.intercalate "\n" (m.map fun p =>
+    p.k ++ "=" ++ String.intercalate "," (p.v.map fun n => n.kind ++ ":" ++ n.q ++ ":" ++ n.name))
+
+/- Near retrieval. BM25 over normalized statement tokens. k1 and b are the
+   Robertson weights. Ranked names are candidates. -/
+
+def topK : Nat := 10
+def k1 : Float := 1.2
+def bPar : Float := 0.75
+
+def renderNear (name : String) : String :=
+  "candidate propose near " ++ name
+
+def isTok (c : Char) : Bool :=
+  let n := c.toNat
+  (n >= 48 && n <= 57) || (n >= 65 && n <= 90) || (n >= 97 && n <= 122)
+    || c == '_' || c == '\'' || n > 127
+
+def lower (c : Char) : Char :=
+  let n := c.toNat
+  if n >= 65 && n <= 90 then Char.ofNat (n + 32) else c
+
+def tokenize (s : String) : List String :=
+  let rec go (cur : List Char) (acc : List String) (cs : List Char) : List String :=
+    match cs with
+    | [] =>
+      if cur.isEmpty then reverse acc else reverse (String.mk (reverse cur) :: acc)
+    | c :: rest =>
+      if isTok c then go (lower c :: cur) acc rest
+      else if cur.isEmpty then go [] acc rest
+      else go [] (String.mk (reverse cur) :: acc) rest
+    termination_by cs.length
+  go [] [] s.data
+
+def idf (df N : Nat) : Float :=
+  Float.log (((Float.ofNat (N - df) + 0.5) / (Float.ofNat df + 0.5)) + 1.0)
+
+def bm25Term (tf : Nat) (dl avg idfV : Float) : Float :=
+  if avg == 0.0 then 0.0 else
+    let t := Float.ofNat tf
+    idfV * (t * (k1 + 1.0)) / (t + k1 * (1.0 - bPar + bPar * dl / avg))
+
+def addCount (t : String) : List (KV Nat) → List (KV Nat)
+  | [] => [{ k := t, v := 1 }]
+  | x :: xs =>
+    if t == x.k then { k := t, v := x.v + 1 } :: xs
+    else if t < x.k then { k := t, v := 1 } :: x :: xs
+    else x :: addCount t xs
+
+def countTokens (ts : List String) : List (KV Nat) :=
+  ts.foldl (fun acc t => if t == "" then acc else addCount t acc) []
+
+structure Occ where
+  tok : String
+  idx : Nat
+  tf : Nat
+
+def occurrences (docs : List (List String)) : List Occ :=
+  let rec go (i : Nat) (acc : List Occ) : List (List String) → List Occ
+    | [] => reverse acc
+    | d :: ds =>
+      let part := (countTokens d).map fun p => { tok := p.k, idx := i, tf := p.v : Occ }
+      go (i + 1) (revAppend part acc) ds
+  go 0 [] docs
+
+def groupOcc (xs : List Occ) : List (KV (List (Nat × Nat))) :=
+  match stableSortQ (fun o => o.tok) xs with
+  | [] => []
+  | o :: os =>
+    let rec go (curTok : String) (cur : List (Nat × Nat))
+        (acc : List (KV (List (Nat × Nat)))) : List Occ → List (KV (List (Nat × Nat)))
+      | [] => reverse ({ k := curTok, v := reverse cur } :: acc)
+      | x :: xs =>
+        if x.tok == curTok then go curTok ((x.idx, x.tf) :: cur) acc xs
+        else go x.tok [(x.idx, x.tf)] ({ k := curTok, v := reverse cur } :: acc) xs
+    go o.tok [(o.idx, o.tf)] [] os
+
+structure Doc where
+  name : String
+  text : String
+  deriving BEq
+
+structure Corpus where
+  docs : List Doc
+  posts : List (KV (List (Nat × Nat)))
+  dls : List Nat
+  avg : Float
+  n : Nat
+
+def avgOf (dls : List Nat) : Float :=
+  match dls.length with
+  | 0 => 0.0
+  | n => Float.ofNat (dls.foldl (fun a b => a + b) 0) / Float.ofNat n
+
+def corpusOf (docs : List Doc) : Corpus :=
+  let toks := docs.map fun d => tokenize d.text
+  let dls := toks.map fun t => t.length
+  { docs
+  , posts := groupOcc (occurrences toks)
+  , dls
+  , avg := avgOf dls
+  , n := docs.length }
+
+structure Acc where
+  idx : Nat
+  score : Float
+
+def addAcc (i : Nat) (w : Float) : List Acc → List Acc
+  | [] => [{ idx := i, score := w }]
+  | a :: as =>
+    if a.idx == i then { a with score := a.score + w } :: as
+    else a :: addAcc i w as
+
+def natAt (xs : List Nat) (i : Nat) : Nat :=
+  match xs.get? i with
+  | some n => n
+  | none => 0
+
+def scoreQuery (c : Corpus) (q : List String) : List Acc :=
+  Id.run do
+    let mut acc : Array Float := Array.mkArray c.n 0.0
+    for t in q do
+      if t != "" then
+        match lookupQ t c.posts with
+        | none => pure ()
+        | some ps =>
+          let w := idf ps.length c.n
+          for p in ps do
+            let i := p.fst
+            if i < acc.size then
+              let cur := acc.get! i
+              let dl := natAt c.dls i
+              acc := acc.set! i (cur + bm25Term p.snd (Float.ofNat dl) c.avg w)
+    let mut out : List Acc := []
+    for i in List.range c.n do
+      if i < acc.size then
+        let s := acc.get! i
+        if s != 0.0 then
+          out := { idx := i, score := s } :: out
+    return out
+
+def docName (docs : List Doc) (i : Nat) : String :=
+  match docs.get? i with
+  | some d => d.name
+  | none => ""
+
+structure Scored where
+  name : String
+  score : Float
+
+def scoreGt (a b : Float) : Bool :=
+  a > b
+
+def better (a b : Scored) : Bool :=
+  if scoreGt a.score b.score then true
+  else if scoreGt b.score a.score then false
+  else a.name <= b.name
+
+def insertScore (x : Scored) : List Scored → List Scored
+  | [] => [x]
+  | y :: ys => if better x y then x :: y :: ys else y :: insertScore x ys
+
+def takeN {α : Type} : Nat → List α → List α
+  | 0, _ => []
+  | _, [] => []
+  | n + 1, x :: xs => x :: takeN n xs
+
+/-- Best `k` only. The list stays in rank order, so a long posting does not
+    insertion-sort every positive document. -/
+def topScores (k : Nat) (xs : List Scored) : List Scored :=
+  xs.foldl (fun acc x => takeN k (insertScore x acc)) []
+
+def retrieveC (c : Corpus) (goal : String) (k : Nat) : List String :=
+  let scored := (scoreQuery c (tokenize goal)).filterMap fun a =>
+    let name := docName c.docs a.idx
+    if name == "" || a.score == 0.0 then none
+    else some { name, score := a.score : Scored }
+  (topScores k scored).map fun s => s.name
+
+def inTop (c : Corpus) (goal lemma : String) (k : Nat) : Bool :=
+  (retrieveC c goal k).contains lemma
+
+def ownBest (c : Corpus) (i : Nat) : Bool :=
+  match c.docs.get? i with
+  | none => false
+  | some d =>
+    let acc := scoreQuery c (tokenize d.text)
+    let mine := match acc.find? (fun a => a.idx == i) with
+      | some a => a.score
+      | none => 0.0
+    let best := acc.foldl (fun m a => if scoreGt a.score m then a.score else m) mine
+    !(scoreGt best mine)
+
+/-- The first `limit` documents are best hits for their own text. -/
+def selfPrefix (c : Corpus) (limit : Nat) : Bool :=
+  let rec go (fuel i : Nat) : Bool :=
+    match fuel with
+    | 0 => true
+    | fuel + 1 =>
+      if i >= limit || i >= c.n then true
+      else ownBest c i && go fuel (i + 1)
+  go (limit + 1) 0
+
+end Lib.Rsd.Discover

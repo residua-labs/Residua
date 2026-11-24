@@ -1,5 +1,7 @@
 -- LRC: expand reset and reuse into a slow and a fast path.
 -- A port of Lean 4.14.0 src/lean/Lean/Compiler/IR/ExpandResetReuse.lean, cited as ExpandResetReuse:LINE.
+-- Not Lean's: the section "One copy of the code after a reset" and the limit `lim` that chooses it
+-- (0 everywhere in `declExpandResetReuse`, which is the port).
 -- closure_claim = 0.
 -- absent: ProjMap Collector Context M mkFresh Mask isSelfUSet
 --   (the projection map is a list of ErProj entries and the mask a list of indices with -1 for
@@ -9,6 +11,7 @@
 --   no unboxed area, so `uproj` and `uset` do not exist in this IR (lib/lrc/Ir.rsd) and
 --   isSelfUSet has nothing to test)
 import Lib.Lrc.NormIds
+import Lib.Lrc.Prim
 
 namespace Lrc
 
@@ -229,59 +232,227 @@ end
 def erMkFastPath (pm : List ErProj) (x y : Nat) (mask : List Int) (b : N) (next : Nat) : ErR :=
   erReleaseGo y mask 0 (erReuseToSet pm x y b) next
 
+/-! ## One copy of the code after a reset
+
+Lean's expansion writes the code after a `reset` twice: once for a cell that is shared, with the `reuse` as a
+constructor, and once for a cell that is unique, with the `reuse` as stores. Each reset on a path doubles what
+follows it. That is the right form for a few instructions; for a function whose every alternative resets
+its argument and then goes on for long it is several times the function (cfold on the Koka suite's expression
+type: 3.6 times, and the program is slower by the time the engine spends compiling it).
+
+Here the two paths hold only what differs between them, and meet again:
+
+    c := isShared y
+    jdecl J (x) := b
+    if c then  the counts of the fields that were read; dec y; x := the boxed zero; jmp J x
+    else       the release of the fields that were not read; jmp J y
+
+and b is written once, with the token x a value of the run: a cell, or the boxed zero. This is Perceus'
+drop-reuse specialization (Reinking, Xie, de Moura and Leijen, "Perceus: Garbage Free Reference Counting with
+Reuse", PLDI 2021, section 2.4): the test for uniqueness is moved to the `reset`, where the unique path gives
+the read fields to their variables with no count at all. In b a `reuse x` stays the instruction it is, which
+asks at run time whether x is a cell (lib/lrc/Emit.rsd `emReuse`, EmitC.lean:369), and a `dec x` of a token
+that was not used becomes "free the cell if there is one": on the unique path the cell's fields are no longer
+its own, so the cell is freed as it stands (`del`), never released.
+
+The building blocks are the expansion's own (`erEraseProjInc`, `erIncs`, `erReleaseGo`), as in
+lib/lrc/DropSpec.rsd, which gives a `dec` the same two short paths.
+
+Which resets take this form (`erShares`). The two copies are not the same code with another allocation when
+Lean's fast path leaves stores out: a field of the rebuilt cell that was read from that field
+(ExpandResetReuse:169 removeSelfSet), with the read that only the store needed. A function that walks down a
+tree and rebuilds one field of each node (rbtree's insert) is all such stores; one copy of its code has to read
+and store them for the sake of the cell it does not have, and rbtree runs 6 to 8 percent longer under node. So:
+  * A reset that Lean does not expand stays the instruction it is (ExpandResetReuse.lean:252 `consumed` fails:
+    a `reuse` inside a join point's body). The one copy would serve it too, and was measured: no program
+    faster, the stage's own functions on numbers of limbs a third larger.
+  * Code of fewer than `lim` nodes keeps Lean's two copies: a join point's body of at most 16 nodes goes to a
+    jump that carries a box anyway (lib/lrc/JoinOnce.rsd `joinSmall`, `jsLimit`), which would be two copies
+    again, with the `reuse` left an instruction in each.
+  * Longer code where the fast path leaves a store out (`erHasSelf`) keeps Lean's two copies.
+  * Longer code otherwise gets the one copy: the two paths would differ in where the cell comes from and in
+    nothing else.
+`lim` 0: never, which is Lean's pass. `lim` 1: every reset, expanded by Lean or not and whatever its stores
+(the option that the image check runs every row with). -/
+
+-- is one of the arguments, from field i on, read from that field of y
+def erAnySelf (pm : List ErProj) (y : Nat) : Nat → List Int → Bool
+  | _, [] => false
+  | i, z :: zs => erIsSelfSet pm y i z || erAnySelf pm y (i + 1) zs
+
+mutual
+-- the size of a body: its instructions, its terminals, and a case for each of its alternatives' bodies
+partial def erSize (n : N) : Nat :=
+  if n.op == opJDecl then 1 + erSize (jdeclBody n) + erSize (bodyOf n)
+  else if n.op == opCase then 1 + erSizeAlts (caseAlts n)
+  else if isTerminal n then 1
+  else 1 + erSize (bodyOf n)
+partial def erSizeAlts : List N → Nat
+  | [] => 0
+  | alt :: alts => erSize (altBody alt) + erSizeAlts alts
+end
+
+-- the stage's limit (lib/lrc/Pipeline.rsd): one more than lib/lrc/JoinOnce.rsd `jsLimit`
+def erShareLimit : Nat := 17
+
+mutual
+-- Would Lean's fast path leave a store out in the code after `x := reset y`: a `reuse` of x with a field
+-- that was read from that field of y (ExpandResetReuse:148 isSelfSet), or a scalar stored that was read
+-- from that place of y (ExpandResetReuse:163 isSelfSSet).
+partial def erHasSelf (pm : List ErProj) (x y : Nat) (b : N) : Bool :=
+  if b.op == opVDecl then
+    let v := vdeclExpr b
+    (v.op == opReuse && reuseVar v == x && erAnySelf pm y 0 (reuseArgs v)) || erHasSelf pm x y (bodyOf b)
+  else if b.op == opSSet then
+    erIsSelfSSet pm y (ssetN b) (ssetOff b) (ssetArg b) || erHasSelf pm x y (bodyOf b)
+  else if b.op == opJDecl then erHasSelf pm x y (jdeclBody b) || erHasSelf pm x y (bodyOf b)
+  else if b.op == opCase then erHasSelfAlts pm x y (caseAlts b)
+  else if isTerminal b then false
+  else erHasSelf pm x y (bodyOf b)
+partial def erHasSelfAlts (pm : List ErProj) (x y : Nat) : List N → Bool
+  | [] => false
+  | alt :: alts => erHasSelf pm x y (altBody alt) || erHasSelfAlts pm x y alts
+end
+
+-- does the code after a reset get the one copy
+def erShares (lim : Nat) (consumed self : Bool) (b : N) : Bool :=
+  lim != 0 && (lim == 1 || (consumed && !self && erSize b >= lim))
+
+mutual
+-- every `dec x` of the token x, in join points' bodies too: when x is a cell it is freed as it stands (a token
+-- is counted down by one, ExpandResetReuse.lean:94: "n must be 1 since `x := reset ...`")
+partial def erTokenDec (x : Nat) (b : N) (next : Nat) : ErR :=
+  if b.op == opDec && rcVar b == x then
+    let r := erTokenDec x (bodyOf b) (next + 2)
+    { next := r.next,
+      body := mkJDecl next [] r.body
+        (mkVDecl (next + 1) tyI64 (mkPrim primIsScalar 0 0 [(x : Int)])
+          (mkIfW (next + 1) (mkJmp next []) (mkDel x (mkJmp next [])))) }
+  else if b.op == opVDecl then
+    let r := erTokenDec x (bodyOf b) next
+    { next := r.next, body := { b with kids := [vdeclExpr b, r.body] } }
+  else if b.op == opJDecl then
+    let rv := erTokenDec x (jdeclBody b) next
+    let rb := erTokenDec x (bodyOf b) rv.next
+    { next := rb.next, body := { b with kids := [rv.body, rb.body] } }
+  else if b.op == opCase then
+    let r := erTokenDecAlts x (caseAlts b) next
+    { next := r.next, body := { b with kids := r.alts } }
+  else if isTerminal b then { next := next, body := b }
+  else
+    let r := erTokenDec x (bodyOf b) next
+    { next := r.next, body := setBody b r.body }
+partial def erTokenDecAlts (x : Nat) : List N → Nat → ErA
+  | [], next => { next := next, alts := [] }
+  | alt :: alts, next =>
+    let r := erTokenDec x (altBody alt) next
+    let rest := erTokenDecAlts x alts r.next
+    { next := rest.next, alts := altSetBody alt r.body :: rest.alts }
+end
+
+structure ErSplit where
+  stay : List N
+  move : List N
+  deriving Inhabited
+
+-- The reads of y's fields among the instructions before the reset that only the shared path's counts use (a read
+-- whose `inc` was erased, and that nothing after it reads: lib/lrc/SinkInc.rsd puts such a pair in front of the
+-- reset): they go to that path. Lean's two copies get this from the pushProj that follows
+-- (lib/lrc/SinkProj.rsd), which stops at a join point. `rev`: the instructions, the last one first; `used`: what
+-- the code after them reads. Both results are in program order.
+def erSlowReads (y : Nat) (mask : List Int) : List N → VSet → List N → List N → ErSplit
+  | [], _, stay, move => { stay := stay, move := move }
+  | h :: rest, used, stay, move =>
+    if h.op == opVDecl && h.ys.isEmpty && (vdeclExpr h).op == opProj && projVar (vdeclExpr h) == y
+        && hasIdxArgs (vdeclVar h) mask && !vsContains used (vdeclVar h) then
+      erSlowReads y mask rest used stay (h :: move)
+    else erSlowReads y mask rest (collectFreeIndices (setBody h mkUnreachable) used) (h :: stay) move
+
+-- The two short paths in front of the one copy `body` of the code after `x := reset y` (n fields). `bsRev`
+-- holds the instructions before the reset, the last one first. Fresh: the join point, the test, a zero and its box.
+def erShared (bsRev : List N) (x n y : Nat) (body : N) (next : Nat) : ErR :=
+  let r := erEraseProjInc n y bsRev
+  let j := next
+  let c := next + 1
+  let zw := next + 2
+  let zb := next + 3
+  let fast := erReleaseGo y r.mask 0 (mkJmp j [(y : Int)]) (next + 4)
+  let sp := erSlowReads y r.mask r.bs.reverse (collectFreeIndices fast.body (freeIndices body)) [] []
+  let slow := reshape sp.move (erIncs r.mask (mkDec y 1 true false
+    (mkVDecl zw tyI64 (mkLit 0) (mkVDecl zb tyObj (mkPrim primBox 0 0 [(zw : Int)]) (mkJmp j [(zb : Int)])))))
+  { next := fast.next,
+    body := reshape sp.stay (mkJDecl j [{ x := x, borrow := false, ty := tyObj }] body
+              (mkVDecl c tyU8 (mkIsShared y) (mkIf c slow fast.body))) }
+
 /-! ## The search -/
 
 mutual
 -- ExpandResetReuse:237 expand: the slow path takes the shared cell (dec y after the reuses have
 -- become constructors), the fast path reuses it, and only the fast path is expanded further
 -- (ExpandResetReuse.lean:245); a fresh `c := isShared y` chooses between them (Basic.lean:606 mkIf)
-partial def erExpand (pm : List ErProj) (bsRev : List N) (x n y : Nat) (b : N) (next : Nat) : ErR :=
+partial def erExpand (lim : Nat) (pm : List ErProj) (bsRev : List N) (x n y : Nat) (b : N) (next : Nat) : ErR :=
   let r := erEraseProjInc n y bsRev
   let bSlow := erMkSlowPath x y r.mask b
   let bFast := erMkFastPath pm x y r.mask b next
-  let rf := erSearch pm bFast.body [] bFast.next
+  let rf := erSearch lim pm bFast.body [] bFast.next
   { next := rf.next + 1, body := reshape r.bs (mkVDecl rf.next tyU8 (mkIsShared y) (mkIf rf.next bSlow rf.body)) }
+
+-- the one copy (the section above): the token's releases rewritten, the code searched on, the two paths in front
+partial def erExpandShared (lim : Nat) (pm : List ErProj) (bsRev : List N) (x n y : Nat) (b : N) (next : Nat) : ErR :=
+  let bd := erTokenDec x b next
+  let rb := erSearch lim pm bd.body [] bd.next
+  erShared bsRev x n y rb.body rb.next
 
 -- ExpandResetReuse:250 searchAndExpand. `bsRev` holds the instructions before b, the last one
 -- first; a join point is expanded alone and carried in front of the rest
 -- (ExpandResetReuse.lean:256), and each alternative of a case starts over
 -- (ExpandResetReuse.lean:261)
-partial def erSearch (pm : List ErProj) (b : N) (bsRev : List N) (next : Nat) : ErR :=
+partial def erSearch (lim : Nat) (pm : List ErProj) (b : N) (bsRev : List N) (next : Nat) : ErR :=
   if b.op == opVDecl then
     let v := vdeclExpr b
     if v.op == opReset then
+      let consumed := erConsumed (vdeclVar b) (bodyOf b)
+      if erShares lim consumed (erHasSelf pm (vdeclVar b) (resetVar v) (bodyOf b)) (bodyOf b) then
+        erExpandShared lim pm bsRev (vdeclVar b) (resetN v) (resetVar v) (bodyOf b) next
       -- ExpandResetReuse.lean:252: a reset whose variable is consumed in its body is expanded
-      if erConsumed (vdeclVar b) (bodyOf b) then
-        erExpand pm bsRev (vdeclVar b) (resetN v) (resetVar v) (bodyOf b) next
-      else erSearch pm (bodyOf b) (b :: bsRev) next
-    else erSearch pm (bodyOf b) (b :: bsRev) next
+      else if consumed then
+        erExpand lim pm bsRev (vdeclVar b) (resetN v) (resetVar v) (bodyOf b) next
+      else erSearch lim pm (bodyOf b) (b :: bsRev) next
+    else erSearch lim pm (bodyOf b) (b :: bsRev) next
   else if b.op == opJDecl then
-    let rv := erSearch pm (jdeclBody b) [] next
-    erSearch pm (bodyOf b) (mkJDecl (jdeclId b) (jdeclParams b) rv.body mkUnreachable :: bsRev) rv.next
+    let rv := erSearch lim pm (jdeclBody b) [] next
+    erSearch lim pm (bodyOf b) (mkJDecl (jdeclId b) (jdeclParams b) rv.body mkUnreachable :: bsRev) rv.next
   else if b.op == opCase then
-    let r := erSearchAlts pm (caseAlts b) next
+    let r := erSearchAlts lim pm (caseAlts b) next
     { next := r.next, body := reshape (bsRev.reverse) ({ b with kids := r.alts }) }
   else if isTerminal b then { next := next, body := reshape (bsRev.reverse) b }
-  else erSearch pm (bodyOf b) (b :: bsRev) next
-partial def erSearchAlts (pm : List ErProj) : List N → Nat → ErA
+  else erSearch lim pm (bodyOf b) (b :: bsRev) next
+partial def erSearchAlts (lim : Nat) (pm : List ErProj) : List N → Nat → ErA
   | [], next => { next := next, alts := [] }
   | alt :: alts, next =>
-    let r := erSearch pm (altBody alt) [] next
-    let rest := erSearchAlts pm alts r.next
+    let r := erSearch lim pm (altBody alt) [] next
+    let rest := erSearchAlts lim pm alts r.next
     { next := rest.next, alts := altSetBody alt r.body :: rest.alts }
 end
 
 -- ExpandResetReuse:266 main; the projection map of ExpandResetReuse:32 mkProjMap is erCollect's
 -- list, and the fresh indices start above the declaration's largest one
-def erMain (d : Decl) : Decl :=
+def erMainWith (lim : Nat) (d : Decl) : Decl :=
   if d.ext then d
   else
     let pm := erCollect d.body []
-    let r := erSearch pm d.body [] (declMaxIndex d + 1)
+    let r := erSearch lim pm d.body [] (declMaxIndex d + 1)
     { d with body := r.body }
+
+def erMain (d : Decl) : Decl := erMainWith 0 d
 
 -- ExpandResetReuse:278 expandResetReuse: main, then normalizeIds (the two paths may bind the
 -- same indices, NormIds.lean:37)
 def declExpandResetReuse (d : Decl) : Decl := declNormalizeIds (erMain d)
+
+-- the stage's: the code after a reset is written once where `erShares` says so ("One copy of the code after a
+-- reset": a reset Lean expands, `lim` nodes or more, no store that the fast path leaves out); 0 is the port,
+-- 1 every reset
+def declExpandResetReuseWith (lim : Nat) (d : Decl) : Decl := declNormalizeIds (erMainWith lim d)
 
 end Lrc

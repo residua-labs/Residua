@@ -1,0 +1,140 @@
+-- Pure admission of command observations. Profiles preserve the two frozen
+-- collectors' resource-classification order. Effects and their authenticity
+-- belong to the observing device; this NF does not execute a process.
+namespace Lib.Rsd.CommandReceipt
+
+inductive Profile where
+  | front
+  | engine
+  deriving BEq, Repr
+
+inductive Residue where
+  | planWall
+  | sourceBefore
+  | sourceAfter
+  | bindingMismatch
+  | commandWall
+  | commandOutput
+  | toolLaunch
+  | commandMemory
+  | commandRecursion
+  | commandHeartbeats
+  | commandTerminated
+  | commandExit
+
+def residueName : Residue -> String
+  | Residue.planWall => "nf_rsd_plan_wall"
+  | Residue.sourceBefore => "nf_rsd_source_before"
+  | Residue.sourceAfter => "nf_rsd_source_after"
+  | Residue.bindingMismatch => "nf_rsd_receipt_binding"
+  | Residue.commandWall => "nf_rsd_command_wall"
+  | Residue.commandOutput => "nf_rsd_command_output"
+  | Residue.toolLaunch => "nf_rsd_tool_launch"
+  | Residue.commandMemory => "nf_rsd_command_memory"
+  | Residue.commandRecursion => "nf_rsd_command_recursion"
+  | Residue.commandHeartbeats => "nf_rsd_command_heartbeats"
+  | Residue.commandTerminated => "nf_rsd_command_terminated"
+  | Residue.commandExit => "nf_rsd_command_exit"
+
+structure Observation where
+  exit : Option Int := none
+  errorCode : Option String := none
+  signal : Option String := none
+  stdout : String := ""
+  stderr : String := ""
+  deriving BEq, Repr
+
+structure Binding where
+  subject : String
+  sourceQ : String
+  command : List String
+  executableQ : String
+  inputQ : String
+  stdoutQ : String
+  stderrQ : String
+  deriving BEq, Repr
+
+structure Request where
+  profile : Profile
+  wallMs : Nat
+  expected : Binding
+  deriving BEq, Repr
+
+structure State where
+  observed : Binding
+  beforeSourceQ : String
+  afterSourceQ : String
+  observation : Observation
+  replayNoise : Nat := 0
+  deriving BEq, Repr
+
+structure Key where
+  request : Request
+  observations : State
+  deriving BEq, Repr
+
+structure Result where
+  state : State
+  residue : Option Residue
+
+def hasText (text needle : String) : Bool := (text.splitOn needle).length > 1
+
+def resource? (profile : Profile) (o : Observation) : Option Residue :=
+  if o.exit == some 124 || o.errorCode == some "ETIMEDOUT" then some Residue.commandWall
+  else if profile == Profile.engine && o.errorCode == some "ENOBUFS" then some Residue.commandOutput
+  else if o.errorCode.isSome then some Residue.toolLaunch
+  else
+    let text := o.stdout ++ "\n" ++ o.stderr
+    if profile == Profile.engine &&
+        (hasText text "excessive memory consumption detected" || hasText text "maximum memory consumption") then
+      some Residue.commandMemory
+    else if profile == Profile.engine && hasText text "maximum recursion depth has been reached" then
+      some Residue.commandRecursion
+    else if profile == Profile.engine && hasText text "maximum number of heartbeats" then
+      some Residue.commandHeartbeats
+    else if o.signal.any (fun s => !s.isEmpty) || (profile == Profile.engine && o.exit == some 137) then
+      some Residue.commandTerminated
+    else none
+
+-- A nonzero ordinary exit is not a legacy resource refusal, but is never good.
+def good (profile : Profile) (o : Observation) : Bool :=
+  o.exit == some 0 && (resource? profile o).isNone
+
+def sigma (s : State) : State := { s with replayNoise := 0 }
+
+-- Full identity preimage, including the raw diagnostics and both source reads.
+def q (r : Request) (s : State) : Key := { request := r, observations := sigma s }
+
+def residue? (r : Request) (s : State) : Option Residue :=
+  if r.wallMs == 0 || r.wallMs > 300000 then some Residue.planWall
+  else if s.beforeSourceQ != r.expected.sourceQ then some Residue.sourceBefore
+  else if s.afterSourceQ != r.expected.sourceQ then some Residue.sourceAfter
+  else if s.observed != r.expected then some Residue.bindingMismatch
+  else
+    match resource? r.profile s.observation with
+    | some e => some e
+    | none => if s.observation.exit == some 0 then none else some Residue.commandExit
+
+def admissible (r : Request) (s : State) : Bool := (residue? r (sigma s)).isNone
+
+def runNF (r : Request) (s : State) : Result :=
+  { state := sigma s, residue := residue? r (sigma s) }
+
+-- NF-CORRECT-0 r2: the checked decision; runNF retains the original
+-- transition and its failure-state observations for existing callers.
+def admit (observation : Key) : Except Residue State :=
+  let answer := (runNF observation.request observation.observations)
+  match answer.residue with
+  | some residue => .error residue
+  | none => .ok answer.state
+
+def decide (r : Request) (s : State) : Except Residue State :=
+  let answer := runNF r s
+  match answer.residue with
+  | some residue => .error residue
+  | none => .ok answer.state
+
+theorem quotient_factorization (r : Request) (s : State) : decide r s = admit (q r s) := rfl
+
+
+end Lib.Rsd.CommandReceipt

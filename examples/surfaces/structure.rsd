@@ -1,0 +1,4 @@
+structure Pair where
+  a : Int
+  b : Int
+def total : Int := let p : Pair := { a := 4, b := 5 }; p.a + p.b

@@ -1,0 +1,959 @@
+-- Key rows. docs/RSD_SPEC.md field order, docs/RSD.md node key (kind, q).
+-- q is the SHA-256 of encodeRVal output. A digest field is 32 bytes.
+-- The artifact environment is envQ of a full EnvV1. imports.object is the
+-- dependency olean sha256, in header order. A logical-path digest is not an environment.
+-- The toolchain field is the q of a sysroot row list. A commit line is not that list.
+-- The producer path records clock and random. None is not an entry there.
+-- Concatenate after lib/rsd/codec.rsd and lib/Gpu.rsd. closure_claim = 0.
+namespace Lib.Rsd.Keys
+
+open Lib.Rsd.Codec
+
+structure Result where
+  ok : Bool
+  residue : String
+  bytes : List Int
+
+def bad (r : String) : Result :=
+  { ok := false, residue := r, bytes := [] }
+
+def good (b : List Int) : Result :=
+  { ok := true, residue := "", bytes := b }
+
+def qOk (b : List Int) : Bool :=
+  b.length == 32 && bytesOk b
+
+/-- The producing hash. rsc emits the wasm template for this name. -/
+def hashName : String := Lib.Sha256.intrinsic
+
+/-- The producing hash stays the SHA-256 template; the identity it names is a
+    Q-FORMAT 1 q: `kind` is the registry tag inside the hashed bytes. -/
+def hashOf (kind : String) (canon : List Int) : Result :=
+  let h := Lib.Sha256.qOf kind canon
+  if !h.ok then bad h.residue
+  else if h.bytes.length != 32 then bad "q_invalid"
+  else good h.bytes
+
+def ofRVal (rv : RVal) : Result :=
+  let o := encodeRVal rv defaultBounds
+  if !o.ok then bad o.residue else hashOf "rval" o.bytes
+
+def nodeTy : Ty :=
+  .record [("kind", .str), ("q", .bytes)]
+
+def nodeRVal (kind : String) (q : List Int) : RVal :=
+  { ty := nodeTy, val := .record [("kind", .str kind), ("q", .bytes q)] }
+
+def nodeQ (kind : String) (q : List Int) : Result :=
+  if !keyOk kind || !qOk q then bad "q_invalid" else ofRVal (nodeRVal kind q)
+
+def artifactTy : Ty :=
+  .record [("recipe", .str), ("source", .bytes), ("generator", .bytes), ("environment", .bytes)]
+
+def artifactRVal (source generator environment : List Int) : RVal :=
+  { ty := artifactTy, val := .record [
+      ("recipe", .str "rsd.artifact-key/1"),
+      ("source", .bytes source),
+      ("generator", .bytes generator),
+      ("environment", .bytes environment)] }
+
+def artifactKey (source generator environment : List Int) : Result :=
+  if !qOk source || !qOk generator || !qOk environment then bad "q_invalid"
+  else ofRVal (artifactRVal source generator environment)
+
+def verdictTy : Ty :=
+  .record [("recipe", .str), ("subject", .bytes), ("checker", .bytes), ("environment", .bytes)]
+
+def verdictRVal (subject checker environment : List Int) : RVal :=
+  { ty := verdictTy, val := .record [
+      ("recipe", .str "rsd.verdict-key/1"),
+      ("subject", .bytes subject),
+      ("checker", .bytes checker),
+      ("environment", .bytes environment)] }
+
+def verdictKey (subject checker environment : List Int) : Result :=
+  if !qOk subject || !qOk checker || !qOk environment then bad "q_invalid"
+  else ofRVal (verdictRVal subject checker environment)
+
+def searchTy : Ty := .record [("logical", .str), ("tree", .bytes)]
+def importTy : Ty := .record [("module", .str), ("runtime", .bool), ("facet", .str), ("object", .bytes)]
+def readTy : Ty := .record [("operation", .str), ("path", .str), ("observation", .bytes)]
+def limitsTy : Ty := .record [
+  ("memory_mib", .i64), ("tstack_kib", .i64), ("fuel", .i64),
+  ("heartbeats", .i64), ("timeout_ms", .i64)]
+
+def envTy : Ty := .record [
+  ("recipe", .str), ("toolchain", .bytes), ("target", .str), ("argv", .list .str),
+  ("cwd", .str), ("module", .str), ("search", .list searchTy), ("imports", .list importTy),
+  ("environment", .list (.pair .str .str)), ("stdin", .bytes), ("reads", .list readTy),
+  ("limits", limitsTy), ("profile", .bytes), ("axioms", .option .bytes),
+  ("grammar", .option .bytes), ("catalog", .bytes), ("devices", .bytes),
+  ("clock", .option .i64), ("random", .option .bytes)]
+
+def recipeOf : List (String × Val) → Option String
+  | [] => none
+  | ("recipe", .str s) :: _ => some s
+  | _ :: rest => recipeOf rest
+
+def envQ (rv : RVal) : Result :=
+  if rv.ty != envTy then bad "input_invalid"
+  else
+    match rv.val with
+    | .record fs =>
+      match recipeOf fs with
+      | some "rsd.env/1" => ofRVal rv
+      | _ => bad "input_invalid"
+    | _ => bad "input_invalid"
+
+/-- Verifies a stored object under its declared kind (the writer-side check:
+    only the tagged q passes; legacy reads go through Store.readQForm). -/
+def verifyObject (kind : String) (q bytes : List Int) : Result :=
+  if !Lib.Sha256.kindOk kind || !qOk q then bad "q_invalid"
+  else
+    let h := Lib.Sha256.qOf kind bytes
+    if !h.ok then bad h.residue
+    else if h.bytes != q then bad "hash_mismatch"
+    else
+      let d := decodeRVal bytes defaultBounds
+      if !d.ok then bad d.residue else good bytes
+
+def textQ (s : String) : Result :=
+  hashOf "text" (utf8 s.data)
+
+def profileQ : Result := textQ "rsd.profile/1\n"
+def catalogQ : Result := textQ "rsd.catalog/1\n"
+def devicesQ : Result := textQ "rsd.devices/1\n"
+
+def pathDigest (logical : String) : Result :=
+  textQ logical
+
+def qHex (h : String) : Option (List Int) :=
+  let b := Lib.Sha256.hex h
+  if h.length == 64 && qOk b then some b else none
+
+def hasNul (s : String) : Bool :=
+  s.data.any fun c => c == '\u0000'
+
+def hasTab (s : String) : Bool :=
+  s.data.any fun c => c == '\t'
+
+/-- A relative logical path. A leading slash is not one. -/
+def relOk (s : String) : Bool :=
+  s != "" && !hasNul s && !hasTab s && !(s.data.head? == some '/') &&
+    !(s.splitOn "/").any fun p => p == "" || p == "." || p == ".."
+
+def tokenOk (s : String) : Bool :=
+  s != "" && !hasNul s && !hasTab s &&
+    !s.data.any fun c => c == '/' || c == ' ' || c == '\n'
+
+def argOk (s : String) : Bool :=
+  s != "" && !hasNul s && !hasTab s && !s.data.any fun c => c == '/'
+
+def valOk (s : String) : Bool :=
+  !hasNul s && !hasTab s && !s.data.any fun c => c == '/' || c == '\n'
+
+def cwdOk (s : String) : Bool :=
+  s == "." || relOk s
+
+structure ImportPort where
+  module : String
+  runtime : Bool
+  facet : String
+  object : List Int
+
+structure SearchRoot where
+  logical : String
+  tree : List Int
+
+structure ReadObs where
+  operation : String
+  path : String
+  observation : List Int
+
+structure LimitsV where
+  memory : Int
+  tstack : Int
+  fuel : Int
+  heartbeats : Int
+  timeout : Int
+
+def limitsOk (l : LimitsV) : Bool :=
+  let ok (n : Int) := 0 ≤ n && n ≤ i64Max
+  ok l.memory && ok l.tstack && ok l.fuel && ok l.heartbeats && ok l.timeout
+
+def portOk (p : ImportPort) : Bool :=
+  tokenOk p.module && tokenOk p.facet && qOk p.object
+
+def portsOk : List ImportPort → Bool
+  | [] => true
+  | p :: ps => portOk p && portsOk ps
+
+/-- The published fixture uses a logical mount. The host protocol is stricter. -/
+def readFieldOk (r : ReadObs) : Bool :=
+  tokenOk r.operation && r.path != "" && !hasNul r.path && !hasTab r.path && qOk r.observation
+
+def readsOk : List ReadObs → Bool
+  | [] => true
+  | r :: rs => readFieldOk r && readsOk rs
+
+def portVal (p : ImportPort) : Val :=
+  .record [
+    ("module", .str p.module), ("runtime", .bool p.runtime),
+    ("facet", .str p.facet), ("object", .bytes p.object)]
+
+def searchVal (s : SearchRoot) : Val :=
+  .record [("logical", .str s.logical), ("tree", .bytes s.tree)]
+
+def readVal (r : ReadObs) : Val :=
+  .record [
+    ("operation", .str r.operation), ("path", .str r.path),
+    ("observation", .bytes r.observation)]
+
+def limitsVal (l : LimitsV) : Val :=
+  .record [
+    ("memory_mib", .int l.memory), ("tstack_kib", .int l.tstack),
+    ("fuel", .int l.fuel), ("heartbeats", .int l.heartbeats),
+    ("timeout_ms", .int l.timeout)]
+
+def optBytes : Option (List Int) → Val
+  | none => .none
+  | some b => .some (.bytes b)
+
+def optInt : Option Int → Val
+  | none => .none
+  | some n => .some (.int n)
+
+def qOpt : Option (List Int) → Bool
+  | none => true
+  | some b => qOk b
+
+def insertPair (p : String × String) : List (String × String) → List (String × String)
+  | [] => [p]
+  | q :: qs =>
+    if p.1 < q.1 || p.1 == q.1 then p :: q :: qs
+    else q :: insertPair p qs
+
+def sortPairs (ps : List (String × String)) : List (String × String) :=
+  ps.foldl (fun acc p => insertPair p acc) []
+
+def hasDupName : List (String × String) → Bool
+  | [] => false
+  | [_] => false
+  | a :: b :: rest => a.1 == b.1 || hasDupName (b :: rest)
+
+def envPairs (ps : List (String × String)) : Option (List (String × String)) :=
+  if ps.any fun p => !tokenOk p.1 || !valOk p.2 then none
+  else
+    let s := sortPairs ps
+    if hasDupName s then none else some s
+
+def searchRootsOk : List SearchRoot → Bool
+  | [] => true
+  | s :: ss => tokenOk s.logical && qOk s.tree && searchRootsOk ss
+
+/-- Full EnvV1. imports stay in the order given. environment is sorted by name. -/
+def nativeEnv (toolchain : List Int) (target cwd module : String)
+    (argv : List String) (search : List SearchRoot) (imports : List ImportPort)
+    (environment : List (String × String)) (stdin : List Int) (reads : List ReadObs)
+    (limits : LimitsV) (profile catalog devices : List Int)
+    (axioms grammar random : Option (List Int)) (clock : Option Int) : Option RVal :=
+  if !qOk toolchain || !qOk stdin || !qOk profile || !qOk catalog || !qOk devices then none
+  else if !qOpt axioms || !qOpt grammar || !qOpt random then none
+  else if !limitsOk limits || !portsOk imports || !readsOk reads || !searchRootsOk search then none
+  else if !tokenOk target || !tokenOk module || cwd == "" || hasNul cwd then none
+  else if argv.any fun a => !argOk a then none
+  else
+    match envPairs environment with
+    | none => none
+    | some env =>
+      some { ty := envTy, val := .record [
+        ("recipe", .str "rsd.env/1"),
+        ("toolchain", .bytes toolchain),
+        ("target", .str target),
+        ("argv", .list (argv.map .str)),
+        ("cwd", .str cwd),
+        ("module", .str module),
+        ("search", .list (search.map searchVal)),
+        ("imports", .list (imports.map portVal)),
+        ("environment", .list (env.map fun p => .pair (.str p.1) (.str p.2))),
+        ("stdin", .bytes stdin),
+        ("reads", .list (reads.map readVal)),
+        ("limits", limitsVal limits),
+        ("profile", .bytes profile),
+        ("axioms", optBytes axioms),
+        ("grammar", optBytes grammar),
+        ("catalog", .bytes catalog),
+        ("devices", .bytes devices),
+        ("clock", optInt clock),
+        ("random", optBytes random)] }
+
+/-- The artifact key. environment is envQ of that EnvV1, not a path digest. -/
+def artifactOfEnv (source generator : List Int) (env : RVal) : Result :=
+  let e := envQ env
+  if !e.ok then bad e.residue else artifactKey source generator e.bytes
+
+def hexNib (n : Nat) : Char :=
+  Char.ofNat (if n < 10 then 48 + n else 87 + n)
+
+def hexByte (b : Int) : String :=
+  let n := b.toNat
+  String.mk [hexNib (n / 16), hexNib (n % 16)]
+
+def hexOf : List Int → String
+  | [] => ""
+  | b :: bs => hexByte b ++ hexOf bs
+
+/-- A sysroot path. The logical root is the empty string. -/
+def logicalOk (s : String) : Bool :=
+  s == "" || relOk s
+
+structure PlatformIn where
+  os : String
+  release : String
+  arch : String
+  abi : String
+  filesystem : String
+
+structure InvRow where
+  logical : String
+  kind : Int
+  mode : Int
+  size : Int
+  content : Option (List Int)
+  link : Option String
+
+def platformTy : Ty := .record [
+  ("recipe", .str), ("os", .str), ("release", .str), ("arch", .str), ("abi", .str),
+  ("cpu_features", .list .str), ("filesystem", .str), ("facts", .list (.pair .str .bytes))]
+
+def rowTy : Ty := .record [
+  ("logical", .str), ("kind", .i64), ("mode", .i64), ("size", .i64),
+  ("content", .option .bytes), ("link", .option .str)]
+
+def toolchainTy : Ty := .record [
+  ("recipe", .str), ("platform", .bytes), ("rows", .list rowTy)]
+
+def randomTy : Ty := .record [("recipe", .str), ("stream", .bytes)]
+
+def inventoryBounds : Bounds :=
+  { maxBytes := 8388608, maxDepth := 64, fuel := 8000000 }
+
+def ofRValBound (b : Bounds) (rv : RVal) : Result :=
+  let o := encodeRVal rv b
+  if !o.ok then bad o.residue else hashOf "rval" o.bytes
+
+def sortStrings (ss : List String) : List String :=
+  ss.mergeSort (fun a b => a <= b)
+
+def adjDup : List String → Bool
+  | [] => false
+  | [_] => false
+  | a :: b :: rest => if a == b then true else adjDup (b :: rest)
+
+def sortFacts (ps : List (String × List Int)) : List (String × List Int) :=
+  ps.mergeSort (fun a b => a.1 <= b.1)
+
+def adjDupFact : List (String × List Int) → Bool
+  | [] => false
+  | [_] => false
+  | a :: b :: rest => if a.1 == b.1 then true else adjDupFact (b :: rest)
+
+def platformFieldsOk (p : PlatformIn) : Bool :=
+  tokenOk p.os && tokenOk p.release && tokenOk p.arch && tokenOk p.abi && tokenOk p.filesystem
+
+def rowOk (r : InvRow) : Bool :=
+  logicalOk r.logical && 0 ≤ r.mode && r.mode ≤ 4095 && 0 ≤ r.size && r.size ≤ i64Max &&
+    match r.kind, r.content, r.link with
+    | 0, some b, none => qOk b
+    | 1, none, none => r.size == 0
+    | 2, none, some link => r.size == 0 && relOk link
+    | _, _, _ => false
+
+def rowsOk : List InvRow → Bool
+  | [] => true
+  | r :: rs => rowOk r && rowsOk rs
+
+def hasFile : List InvRow → Bool
+  | [] => false
+  | r :: rs => if r.kind == 0 then true else hasFile rs
+
+def sortRows (rs : List InvRow) : List InvRow :=
+  rs.mergeSort (fun a b => a.logical <= b.logical)
+
+def adjDupRow : List InvRow → Bool
+  | [] => false
+  | [_] => false
+  | a :: b :: rest => if a.logical == b.logical then true else adjDupRow (b :: rest)
+
+def optContent : Option (List Int) → Val
+  | none => .none
+  | some b => .some (.bytes b)
+
+def optLink : Option String → Val
+  | none => .none
+  | some s => .some (.str s)
+
+def rowVal (r : InvRow) : Val :=
+  .record [
+    ("logical", .str r.logical), ("kind", .int r.kind), ("mode", .int r.mode),
+    ("size", .int r.size), ("content", optContent r.content), ("link", optLink r.link)]
+
+def platformRVal (p : PlatformIn) (features : List String)
+    (facts : List (String × List Int)) : RVal :=
+  { ty := platformTy, val := .record [
+      ("recipe", .str "rsd.platform/1"),
+      ("os", .str p.os), ("release", .str p.release), ("arch", .str p.arch),
+      ("abi", .str p.abi),
+      ("cpu_features", .list (features.map .str)),
+      ("filesystem", .str p.filesystem),
+      ("facts", .list (facts.map fun f => .pair (.str f.1) (.bytes f.2)))] }
+
+/-- Q of the sysroot list. Rows sort by logical path. A commit string is not this q. -/
+def inventoryOf (p : PlatformIn) (features : List String) (facts : List (String × List Int))
+    (rows : List InvRow) : Result :=
+  if !platformFieldsOk p then bad "input_invalid"
+  else if features.any fun s => !tokenOk s then bad "input_invalid"
+  else if facts.any fun f => !tokenOk f.1 || !qOk f.2 then bad "input_invalid"
+  else
+    let fs := sortStrings features
+    let facts := sortFacts facts
+    let rows := sortRows rows
+    if adjDup fs || adjDupFact facts || adjDupRow rows then bad "input_invalid"
+    else if !rowsOk rows || !hasFile rows then bad "input_invalid"
+    else
+      let plat := ofRVal (platformRVal p fs facts)
+      if !plat.ok then plat
+      else
+        let rv : RVal := { ty := toolchainTy, val := .record [
+          ("recipe", .str "rsd.toolchain/1"),
+          ("platform", .bytes plat.bytes),
+          ("rows", .list (rows.map rowVal))] }
+        ofRValBound inventoryBounds rv
+
+/-- Q of the random-stream record. The empty stream is an entry, not ambient entropy. -/
+def randomStreamQ (stream : List Int) : Result :=
+  if !bytesOk stream then bad "input_invalid"
+  else ofRVal { ty := randomTy, val := .record [
+    ("recipe", .str "rsd.random-stream/1"),
+    ("stream", .bytes stream)] }
+
+def searchBody : List (String × String) → String
+  | [] => ""
+  | (n, p) :: rest => "module " ++ n ++ " " ++ p ++ "\n" ++ searchBody rest
+
+def searchQ (rows : List (String × String)) : Result :=
+  let s := sortPairs rows
+  if hasDupName s then bad "input_invalid"
+  else if s.any fun r => !tokenOk r.1 || !relOk r.2 then bad "input_invalid"
+  else textQ ("rsd.search/1\n" ++ searchBody s)
+
+/-- Pinned profile, catalog, and devices. Axioms and grammar stay unavailable.
+    clock and random are entries. None is refused. -/
+def standardEnv (toolchain : List Int) (target cwd module : String)
+    (argv : List String) (search : List SearchRoot) (imports : List ImportPort)
+    (environment : List (String × String)) (stdin : List Int) (reads : List ReadObs)
+    (limits : LimitsV) (clock : Option Int) (random : Option (List Int)) : Option RVal :=
+  match clock, random with
+  | some c, some r =>
+    let p := profileQ
+    let cat := catalogQ
+    let d := devicesQ
+    if !p.ok || !cat.ok || !d.ok then none
+    else if c < 0 || i64Max < c || !qOk r then none
+    else nativeEnv toolchain target cwd module argv search imports environment
+      stdin reads limits p.bytes cat.bytes d.bytes none none (some r) (some c)
+  | _, _ => none
+
+def moduleOfLogical (logical : String) : Option String :=
+  if hasNul logical || logical == "" then none
+  else
+    let parts := logical.splitOn "/"
+    if parts.any fun p => p == "" || p == "." || p == ".." then none
+    else
+      match parts.getLast? with
+      | none => none
+      | some file =>
+        if file.endsWith ".lean" && file.length > 5 then
+          let stem := file.dropRight 5
+          if stem == "" || stem.data.any (· == '.') then none
+          else some (String.intercalate "." (parts.take (parts.length - 1) ++ [stem]))
+        else none
+
+def takeQuoted (fuel : Nat) (cs : List Char) : Option (List Char × List Char) :=
+  let rec go (fuel : Nat) (acc : List Char) (cs : List Char) : Option (List Char × List Char) :=
+    match fuel, cs with
+    | 0, _ => none
+    | _ + 1, [] => none
+    | _ + 1, '»' :: rest => some (acc ++ ['»'], rest)
+    | fuel + 1, c :: rest => go fuel (acc ++ [c]) rest
+  go fuel ['«'] cs
+
+def modParts (cs : List Char) : Option (List String) :=
+  let rec go (fuel : Nat) (cur : List Char) (acc : List String) (cs : List Char) : Option (List String) :=
+    match fuel, cs with
+    | 0, _ => none
+    | _ + 1, [] =>
+      let part := String.mk cur
+      if part == "" && acc != [] then none
+      else if part == "" then some acc
+      else some (acc ++ [part])
+    | fuel + 1, '«' :: rest =>
+      match takeQuoted (rest.length + 1) rest with
+      | none => none
+      | some (q, rest) => go fuel (cur ++ q) acc rest
+    | fuel + 1, '.' :: rest =>
+      if cur == [] then none
+      else go fuel [] (acc ++ [String.mk cur]) rest
+    | fuel + 1, c :: rest =>
+      go fuel (cur ++ [c]) acc rest
+  go (cs.length + 2) [] [] cs
+
+def oleanRel (module : String) : Option String :=
+  match modParts module.data with
+  | none => none
+  | some [] => none
+  | some parts =>
+    if parts.any (· == "") then none
+    else some (String.intercalate "/" parts ++ ".olean")
+
+structure NativeOut where
+  ok : Bool
+  residue : String
+  env : List Int
+  artifact : List Int
+
+def nativeBad (r : String) : NativeOut :=
+  { ok := false, residue := r, env := [], artifact := [] }
+
+structure NK where
+  source : Option (List Int)
+  generator : Option (List Int)
+  target : Option String
+  cwd : Option String
+  module : Option String
+  toolchain : Option (List Int)
+  stdinHex : Option String
+  limits : Option LimitsV
+  argv : List String
+  search : List (String × String)
+  imports : List ImportPort
+  env : List (String × String)
+  reads : List ReadObs
+  clock : Option Int
+  random : Option (List Int)
+  ended : Bool
+
+def emptyNK : NK :=
+  { source := none, generator := none, target := none, cwd := none, module := none
+  , toolchain := none, stdinHex := none, limits := none
+  , argv := [], search := [], imports := [], env := [], reads := []
+  , clock := none, random := none, ended := false }
+
+def parseU (s : String) : Option Nat :=
+  let cs := s.data
+  if cs == [] then none
+  else if cs.any fun c => c < '0' || c > '9' then none
+  else if cs.length > 1 && cs.head? == some '0' then none
+  else some (cs.foldl (fun n c => n * 10 + (c.toNat - 48)) 0)
+
+def split1 (s : String) : Option (String × String) :=
+  let rec go (acc : List Char) (cs : List Char) : Option (String × String) :=
+    match cs with
+    | [] => none
+    | c :: rest =>
+      if c == '\t' then some (String.mk acc, String.mk rest)
+      else go (acc ++ [c]) rest
+  go [] s.data
+
+def splitTabs (s : String) : List String :=
+  let rec go (acc : List Char) (out : List String) (cs : List Char) : List String :=
+    match cs with
+    | [] => out ++ [String.mk acc]
+    | c :: rest =>
+      if c == '\t' then go [] (out ++ [String.mk acc]) rest
+      else go (acc ++ [c]) out rest
+  go [] [] s.data
+
+inductive Step where
+  | go (a : NK)
+  | bad (r : String)
+
+def addLine (a : NK) (line : String) : Step :=
+  if line == "" then .go a
+  else if line.length > 8192 then .bad "input_invalid"
+  else if line == "end" then
+    if a.ended then .bad "input_invalid" else .go { a with ended := true }
+  else if a.ended then .bad "input_invalid"
+  else
+    match split1 line with
+    | none => .bad "input_invalid"
+    | some (k, rest) =>
+      match k with
+      | "source" =>
+        match a.source, qHex rest with
+        | none, some b => .go { a with source := some b }
+        | none, none => .bad "q_invalid"
+        | _, _ => .bad "input_invalid"
+      | "generator" =>
+        match a.generator, qHex rest with
+        | none, some b => .go { a with generator := some b }
+        | none, none => .bad "q_invalid"
+        | _, _ => .bad "input_invalid"
+      | "target" =>
+        if a.target != none || !tokenOk rest then .bad "input_invalid"
+        else .go { a with target := some rest }
+      | "cwd" =>
+        if a.cwd != none || !cwdOk rest then .bad "input_invalid"
+        else .go { a with cwd := some rest }
+      | "module" =>
+        if a.module != none || !tokenOk rest then .bad "input_invalid"
+        else .go { a with module := some rest }
+      | "toolchain" =>
+        match a.toolchain, qHex rest with
+        | none, some b => .go { a with toolchain := some b }
+        | none, none => .bad "q_invalid"
+        | _, _ => .bad "input_invalid"
+      | "clock" =>
+        match a.clock, parseU rest with
+        | none, some n =>
+          let c : Int := n
+          if c ≤ i64Max then .go { a with clock := some c } else .bad "input_invalid"
+        | none, none => .bad "input_invalid"
+        | _, _ => .bad "input_invalid"
+      | "random" =>
+        match a.random, qHex rest with
+        | none, some b => .go { a with random := some b }
+        | none, none => .bad "q_invalid"
+        | _, _ => .bad "input_invalid"
+      | "stdin" =>
+        match a.stdinHex, qHex rest with
+        | none, some _ => .go { a with stdinHex := some rest }
+        | none, none => .bad "q_invalid"
+        | _, _ => .bad "input_invalid"
+      | "limits" =>
+        match a.limits with
+        | some _ => .bad "input_invalid"
+        | none =>
+          match splitTabs rest with
+          | [m, t, f, h, o] =>
+            match parseU m, parseU t, parseU f, parseU h, parseU o with
+            | some m, some t, some f, some h, some o =>
+              let l : LimitsV := { memory := (m : Int), tstack := (t : Int), fuel := (f : Int)
+                                 , heartbeats := (h : Int), timeout := (o : Int) }
+              if limitsOk l then .go { a with limits := some l } else .bad "input_invalid"
+            | _, _, _, _, _ => .bad "input_invalid"
+          | _ => .bad "input_invalid"
+      | "argv" =>
+        if !argOk rest then .bad "input_invalid"
+        else .go { a with argv := a.argv ++ [rest] }
+      | "search" =>
+        match split1 rest with
+        | some (n, p) =>
+          if !tokenOk n || !relOk p || hasTab p then .bad "input_invalid"
+          else .go { a with search := a.search ++ [(n, p)] }
+        | none => .bad "input_invalid"
+      | "import" =>
+        match splitTabs rest with
+        | [m, r, f, o] =>
+          match qHex o with
+          | none => .bad "q_invalid"
+          | some b =>
+            let runtime := if r == "1" then some true else if r == "0" then some false else none
+            match runtime with
+            | none => .bad "input_invalid"
+            | some rt =>
+              let p := { module := m, runtime := rt, facet := f, object := b }
+              if portOk p then .go { a with imports := a.imports ++ [p] }
+              else .bad "input_invalid"
+        | _ => .bad "input_invalid"
+      | "env" =>
+        match split1 rest with
+        | some (n, v) =>
+          if !tokenOk n || !valOk v || hasTab v then .bad "input_invalid"
+          else .go { a with env := a.env ++ [(n, v)] }
+        | none => .bad "input_invalid"
+      | "read" =>
+        match splitTabs rest with
+        | [op, p, o] =>
+          match qHex o with
+          | none => .bad "q_invalid"
+          | some b =>
+            let r := { operation := op, path := p, observation := b }
+            if relOk p && readsOk [r] then .go { a with reads := a.reads ++ [r] }
+            else .bad "input_invalid"
+        | _ => .bad "input_invalid"
+      | _ => .bad "input_invalid"
+
+def finishNative (a : NK) : NativeOut :=
+  if !a.ended || a.search == [] then nativeBad "input_invalid"
+  else
+    match a.source, a.generator, a.target, a.cwd, a.module, a.toolchain,
+        a.stdinHex, a.limits, a.clock, a.random with
+    | some source, some generator, some target, some cwd, some module, some toolchain,
+        some stdinHex, some limits, some _, some _ =>
+      match searchQ a.search, qHex stdinHex with
+      | sea, some stdin =>
+        if !sea.ok then nativeBad sea.residue
+        else
+          let roots : List SearchRoot := [{ logical := "workspace", tree := sea.bytes }]
+          match standardEnv toolchain target cwd module a.argv roots a.imports a.env
+              stdin a.reads limits a.clock a.random with
+          | none => nativeBad "input_invalid"
+          | some env =>
+            let e := envQ env
+            if !e.ok then nativeBad e.residue
+            else
+              let k := artifactKey source generator e.bytes
+              if k.ok then { ok := true, residue := "", env := e.bytes, artifact := k.bytes }
+              else nativeBad k.residue
+      | _, none => nativeBad "q_invalid"
+    | _, _, _, _, _, _, _, _, _, _ => nativeBad "input_invalid"
+
+def parseLines : Nat → List String → NK → NativeOut
+  | 0, _, _ => nativeBad "budget_exhausted"
+  | _ + 1, [], a => finishNative a
+  | fuel + 1, line :: rest, a =>
+    match addLine a line with
+    | .bad r => nativeBad r
+    | .go a => parseLines fuel rest a
+
+def stripCr (s : String) : String :=
+  String.mk (s.data.filter fun c => c != '\r')
+
+structure InvIn where
+  platform : Option PlatformIn
+  features : List String
+  facts : List (String × List Int)
+  rows : List InvRow
+  ended : Bool
+
+def emptyInv : InvIn :=
+  { platform := none, features := [], facts := [], rows := [], ended := false }
+
+def parseOptQ (s : String) : Option (Option (List Int)) :=
+  if s == "-" then some none
+  else match qHex s with
+    | some b => some (some b)
+    | none => none
+
+def parseOptLink (s : String) : Option (Option String) :=
+  if s == "-" then some none
+  else if relOk s then some (some s) else none
+
+def parseKind (s : String) : Option Int :=
+  if s == "0" then some 0 else if s == "1" then some 1 else if s == "2" then some 2 else none
+
+inductive InvStep where
+  | go (a : InvIn)
+  | bad (r : String)
+
+def addInv (a : InvIn) (line : String) : InvStep :=
+  if line == "" then .go a
+  else if line.length > 8192 then .bad "input_invalid"
+  else if line == "end" then
+    if a.ended then .bad "input_invalid" else .go { a with ended := true }
+  else if a.ended then .bad "input_invalid"
+  else
+    match split1 line with
+    | none => .bad "input_invalid"
+    | some (k, rest) =>
+      match k with
+      | "platform" =>
+        match a.platform with
+        | some _ => .bad "input_invalid"
+        | none =>
+          match splitTabs rest with
+          | [os, release, arch, abi, filesystem] =>
+            let p : PlatformIn :=
+              { os := os, release := release, arch := arch, abi := abi, filesystem := filesystem }
+            if platformFieldsOk p then .go { a with platform := some p } else .bad "input_invalid"
+          | _ => .bad "input_invalid"
+      | "feature" =>
+        if !tokenOk rest then .bad "input_invalid"
+        else .go { a with features := rest :: a.features }
+      | "fact" =>
+        match split1 rest with
+        | some (n, q) =>
+          match qHex q with
+          | some b =>
+            if tokenOk n then .go { a with facts := (n, b) :: a.facts } else .bad "input_invalid"
+          | none => .bad "q_invalid"
+        | none => .bad "input_invalid"
+      | "row" =>
+        match splitTabs rest with
+        | [logical, kind, mode, size, content, link] =>
+          match parseKind kind, parseU mode, parseU size, parseOptQ content, parseOptLink link with
+          | some k, some m, some z, some c, some lk =>
+            let r : InvRow :=
+              { logical := logical, kind := k, mode := m, size := z, content := c, link := lk }
+            if rowOk r then .go { a with rows := r :: a.rows } else .bad "input_invalid"
+          | _, _, _, _, _ => .bad "input_invalid"
+        | _ => .bad "input_invalid"
+      | _ => .bad "input_invalid"
+
+def finishInventory (a : InvIn) : Result :=
+  if !a.ended then bad "input_invalid"
+  else
+    match a.platform with
+    | none => bad "input_invalid"
+    | some p => inventoryOf p a.features a.facts a.rows
+
+def parseInvLines : Nat → List String → InvIn → Result
+  | 0, _, _ => bad "budget_exhausted"
+  | _ + 1, [], a => finishInventory a
+  | fuel + 1, line :: rest, a =>
+    match addInv a line with
+    | .bad r => bad r
+    | .go a => parseInvLines fuel rest a
+
+/-- Host text for one sysroot list. The row order is not the q. -/
+def parseInventory (text : String) : Result :=
+  if text.length > 8000000 then bad "input_invalid"
+  else
+    let lines := (stripCr text).splitOn "\n"
+    parseInvLines (lines.length + 1) lines emptyInv
+
+/-- Host text for one native action. The decision of field order and the key stays here. -/
+def parseNative (text : String) : NativeOut :=
+  if text.length > 1000000 then nativeBad "input_invalid"
+  else
+    let lines := (stripCr text).splitOn "\n"
+    parseLines (lines.length + 1) lines emptyNK
+
+def objA : String := "53c58344b22d9441f9c554e0d7bb0ac2366fc2914b47ed936ba4b2aa3690d968"
+def objB : String := "53c58344b22d9441f9c554e0d7bb0ac2366fc2914b47ed936ba4b2aa3690d969"
+def oldInventoryQ : String := "35af2cbbd0a7a395964643bb329b86168d258e2cc4f661fb8025a322f7e5e93c"
+def emptyDigest : String := "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+
+def fixturePlatform : PlatformIn :=
+  { os := "darwin", release := "23.6.0", arch := "arm64"
+  , abi := "arm64-apple-darwin", filesystem := "case-insensitive" }
+
+def fixtureFile (hex : String) : InvRow :=
+  { logical := "bin/lean", kind := 0, mode := 493, size := 1
+  , content := qHex hex, link := none }
+
+def fixtureDir : InvRow :=
+  { logical := "", kind := 1, mode := 493, size := 0, content := none, link := none }
+
+def fixtureRows : List InvRow :=
+  [fixtureDir, fixtureFile "41cf6794ba4200b839c53531555f0f3998df4cbb01a4d5cb0b94e3ca5e23947d"]
+
+def fixtureInventory : Result :=
+  inventoryOf fixturePlatform [] [] fixtureRows
+
+def emptyRandom : Result :=
+  randomStreamQ []
+
+def sampleProto (cwd obj extra : String) : String :=
+  let tool := if fixtureInventory.ok then hexOf fixtureInventory.bytes else ""
+  let rnd := if emptyRandom.ok then hexOf emptyRandom.bytes else ""
+  "source\t41cf6794ba4200b839c53531555f0f3998df4cbb01a4d5cb0b94e3ca5e23947d\n"
+  ++ "generator\t9123dcbb0b42652b0e105956c68d3ca2ff34584f324fa41a29aedd32b883e131\n"
+  ++ "target\tdarwin-arm64\n"
+  ++ "cwd\t" ++ cwd ++ "\n"
+  ++ "module\tA\n"
+  ++ "toolchain\t" ++ tool ++ "\n"
+  ++ "stdin\t" ++ emptyDigest ++ "\n"
+  ++ "limits\t0\t0\t0\t0\t0\n"
+  ++ "argv\tlean\n"
+  ++ "argv\t-o\n"
+  ++ "argv\tA.olean\n"
+  ++ "argv\tA.lean\n"
+  ++ "search\tA\tA.lean\n"
+  ++ "import\tInit\t0\tolean\t" ++ obj ++ "\n"
+  ++ "env\tTZ\tUTC\n"
+  ++ "env\tLANG\tC\n"
+  ++ "clock\t0\n"
+  ++ "random\t" ++ rnd ++ "\n"
+  ++ extra
+  ++ "end\n"
+
+/-- One changed dependency olean changes envQ and the artifact key. -/
+def parseDepChanges : Bool :=
+  let a := parseNative (sampleProto "." objA "")
+  let b := parseNative (sampleProto "." objB "")
+  let p := pathDigest "rcic/RcicLeanImportNative.lean"
+  a.ok && b.ok && p.ok && a.env != b.env && a.artifact != b.artifact
+    && a.env != p.bytes && b.env != p.bytes
+
+def rejectsAbsolute : Bool :=
+  !(parseNative (sampleProto ("/" ++ "abs") objA "")).ok
+
+def rejectsDupEnv : Bool :=
+  !(parseNative (sampleProto "." objA "env\tLANG\tX\n")).ok
+
+def inventoryFixtureOk : Bool :=
+  let flipped := inventoryOf fixturePlatform [] [] (fixtureRows.reverse)
+  let other := inventoryOf fixturePlatform [] []
+    [fixtureDir, fixtureFile "41cf6794ba4200b839c53531555f0f3998df4cbb01a4d5cb0b94e3ca5e23947e"]
+  let dup := inventoryOf fixturePlatform [] [] (fixtureRows ++ fixtureRows)
+  let linked := inventoryOf fixturePlatform [] []
+    [fixtureDir, { fixtureFile "41cf6794ba4200b839c53531555f0f3998df4cbb01a4d5cb0b94e3ca5e23947d" with
+        link := some "bin/other" }]
+  let sized := inventoryOf fixturePlatform [] [] [{ fixtureDir with size := 1 }, fixtureRows.getD 1 fixtureDir]
+  fixtureInventory.ok && flipped.ok && other.ok && emptyRandom.ok
+    && fixtureInventory.bytes == flipped.bytes
+    && fixtureInventory.bytes != other.bytes
+    && hexOf fixtureInventory.bytes != oldInventoryQ
+    && hexOf emptyRandom.bytes != emptyDigest
+    && !dup.ok && !linked.ok && !sized.ok
+
+def clockEntryOk : Bool :=
+  let text := sampleProto "." objA ""
+  let bare := parseNative text
+  let noClock := parseNative (text.replace "clock\t0\n" "")
+  let noRandom := parseNative (text.replace ("random\t" ++ hexOf emptyRandom.bytes ++ "\n") "")
+  let moved := parseNative (text.replace "clock\t0\n" "clock\t1\n")
+  bare.ok && !noClock.ok && !noRandom.ok && moved.ok && bare.env != moved.env
+
+-- The six /gpu definitions. Concatenate lib/Gpu.rsd before this file.
+-- Names match this file: nodeRVal, nodeQ, qOk, keyOk, encodeRVal, defaultBounds.
+
+/-- Bytes that `nodeQ` hashes. The `/gpu` batch carries these canons. -/
+def nodeCanon (kind : String) (q : List Int) : Option (List Int) :=
+  if !keyOk kind || !qOk q then none
+  else
+    let o := encodeRVal (nodeRVal kind q) defaultBounds
+    if o.ok then some o.bytes else none
+
+def declarationCanons : List (List Int) → Option (List (List Int))
+  | [] => some []
+  | q :: qs =>
+    match nodeCanon "declaration" q, declarationCanons qs with
+    | some c, some cs => some (c :: cs)
+    | _, _ => none
+
+/-- The `/gpu` request for a batch of node canons. The flag that calls this
+    is the runner's. Receipts still go through `Lib.Gpu.enterReceipt`. -/
+def gpuBatch (canons : List (List Int)) : Lib.Gpu.T :=
+  Lib.Gpu.request canons
+
+def keyNodeReply (canons : List (List Int)) (reply : List Int) : Option (List Lib.Gpu.Keyed) :=
+  Lib.Gpu.keyBatch (canons.map Lib.Gpu.node) reply
+
+def sampleQ : List Int := List.replicate 32 1
+
+def sampleCanonOk : Bool :=
+  match nodeCanon "declaration" sampleQ with
+  | some b =>
+      b.length <= 1024 &&
+      Lib.Gpu.wantsGpuLens (List.replicate 661 b.length) == false &&
+      (gpuBatch [b]).path == [Lib.Gpu.pathGpu, Lib.Gpu.pathKernel]
+  | none => false
+
+#guard sampleCanonOk
+#guard (nodeQ "declaration" sampleQ).ok
+#guard Lib.Gpu.enterReceipt sampleQ (Lib.Gpu.flipped sampleQ) == none
+
+end Lib.Rsd.Keys
+
+#guard Lib.Rsd.Keys.moduleOfLogical "rcic/RcicLeanImportNative.lean" == some "rcic.RcicLeanImportNative"
+#guard Lib.Rsd.Keys.moduleOfLogical "S1aMod.lean" == some "S1aMod"
+#guard Lib.Rsd.Keys.moduleOfLogical "a/../../b.lean" == none
+#guard Lib.Rsd.Keys.moduleOfLogical ("/" ++ "A.lean") == none
+#guard Lib.Rsd.Keys.oleanRel "Init" == some "Init.olean"
+#guard Lib.Rsd.Keys.oleanRel "rcic.RcicLeanImportNative" == some "rcic/RcicLeanImportNative.olean"
+#guard Lib.Rsd.Keys.oleanRel "«A.B».C" == some "«A.B»/C.olean"
+#guard Lib.Rsd.Keys.oleanRel "" == none
+#guard Lib.Rsd.Keys.oleanRel "«A" == none

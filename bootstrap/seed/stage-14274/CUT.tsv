@@ -1,8 +1,8 @@
-cut_sha	7aec17aa416092e45f595c0b13c607ff8120b812
-cut_utc	2026-11-18T07:43:54Z
+cut_sha	fc0fb23a3a0710436d35290149f966d18171bb01
+cut_utc	2026-11-22T00:03:17Z
 construction_word	14274
-rsdc_entry	f779
-rsc_entry	f1971
-rsdc_wasm_q	7d19be6ddad02032d97ccaee6bcdbd1119fc70c0950faa3150397140f6e99bb6
-rsc_wasm_q	14b8210da519327341112e0a472277794267f9e4913305d3a795de806ac05ee6
-producer	ASSIGN-5 S4 on burst-32-1 (reports/codex4-assign5-stage-word/S4-ARENA.md)
+rsdc_entry	f832
+rsc_entry	f2268
+rsdc_wasm_q	1aeacfb6b0977f9da1efd895c929962e2a2e8d476c3b1133256d7f71dbc6be75
+rsc_wasm_q	b7db967608fe6c42dcf94140c951aec9659ab336c204c8c5cecdecdab40b2e90
+producer	SEED-RECUT-0 cut (bootstrap/seed/Cut.rsd)

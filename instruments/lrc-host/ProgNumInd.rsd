@@ -1,0 +1,41 @@
+-- micro program for the numbers a node holds (lib/lrc/FromWire.rsd "Numbers in nodes"), second part: an inductive
+-- type whose constructors hold a number of a different type each (a Nat, an Int, a List Nat, a List Int).
+def big : Nat := 1208925819614629174706181
+
+def bigI : Int := 1208925819614629174706181
+
+-- constructors that hold a number of a different type each
+inductive E where
+  | z
+  | a (n : Nat) (rest : E)
+  | b (i : Int) (rest : E)
+  | c (ns : List Nat) (rest : E)
+  | d (js : List Int) (rest : E)
+
+def chain : Nat → Nat → Int → E
+  | 0, k, _ => E.a k E.z
+  | m + 1, k, i =>
+    if m % 4 == 0 then E.a (k * 5) (chain m (k + 1) (i - 2))
+    else if m % 4 == 1 then E.b (i * 11) (chain m (k + 1) (i - 2))
+    else if m % 4 == 2 then E.c [k, k * k, big + k] (chain m (k + 1) (i - 2))
+    else E.d [i, 0 - i * i, bigI - i] (chain m (k + 1) (i - 2))
+
+def lastOr : List Int → Int → Int
+  | [], z => z
+  | x :: xs, _ => lastOr xs x
+
+def total : Nat → E → Int
+  | 0, _ => 0
+  | m + 1, e =>
+    match e with
+    | E.z => 1
+    | E.a n rest => (if n < 20 then 3 else 5) + total m rest
+    | E.b i rest => i + total m rest
+    | E.c ns rest => (if ns.length == 3 then 100 else 0) + total m rest
+    | E.d js rest => lastOr js 0 + total m rest
+
+def numChain (m : Nat) : List Int :=
+  [total (m + 2) (chain m 1 4), total m (chain m 1 4), total (m + 2) (chain m 3 (0 - 9))]
+
+-- the entry of the row: no argument (a row's host passes words, and `numChain` takes a Nat)
+def chainAt9 : List Int := numChain 9

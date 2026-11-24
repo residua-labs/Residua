@@ -1,0 +1,5 @@
+#lang rsd
+(import Init.Data.Nat.Basic)
+(namespace Answer
+(define (value ) : Nat (+ 41 1))
+)

@@ -1,0 +1,249 @@
+--Residuaellt
+-- closure_claim = 0
+-- Host glue for the 9P2000 client (RSD-REF-Q-0 revision 4 merged state):
+-- live Unix domain socket transport via the existing test host's `node`
+-- (`net.connect`), session frame collection for the canonical
+-- `Lib.Rsd.Ninep.readQ`, and object seeding into a real server's `/q`
+-- over 9P2000 (Tcreate / Twrite / Tclunk). Zero custom C.
+-- Concatenate after lib/Session.rsd, lib/Word32.rsd, lib/Word64.rsd,
+-- lib/Sha256.rsd, lib/rsd/store.rsd, lib/rsd/ninep.rsd.
+
+namespace Lib.Rsd.NinepIO
+
+open Lib.Rsd.Ninep
+
+-- ============================================================================
+-- 1. Host Socket Glue Using Existing Test Host `node` (`require("net").connect`)
+-- ============================================================================
+
+def nodeSocketBridgeJs : String :=
+  "const net = require('net'), rl = require('readline');" ++
+  "const c = net.connect(process.argv[1]);" ++
+  "let buf = Buffer.alloc(0), q = [], closed = false, busy = false;" ++
+  "const r = rl.createInterface({ input: process.stdin, crlfDelay: Infinity });" ++
+  "function pump() {" ++
+  "  if (!busy && q.length > 0) { busy = true; c.write(Buffer.from(q.shift(), 'hex')); }" ++
+  "  else if (!busy && closed) { r.close(); c.destroy(); process.exit(0); }" ++
+  "}" ++
+  "c.on('data', d => {" ++
+  "  buf = Buffer.concat([buf, d]);" ++
+  "  while (buf.length >= 4) {" ++
+  "    const n = buf.readUInt32LE(0);" ++
+  "    if (buf.length < n) break;" ++
+  "    const f = buf.subarray(0, n);" ++
+  "    buf = buf.subarray(n);" ++
+  "    process.stdout.write(f.toString('hex') + '\\n');" ++
+  "    busy = false;" ++
+  "    pump();" ++
+  "  }" ++
+  "});" ++
+  "c.on('error', () => { process.stdout.write('\\n'); process.exit(0); });" ++
+  "c.on('close', () => { process.exit(0); });" ++
+  "r.on('line', l => {" ++
+  "  const s = l.trim();" ++
+  "  if (!s) { closed = true; pump(); } else { q.push(s); pump(); }" ++
+  "});" ++
+  "r.on('close', () => { closed = true; pump(); });"
+
+abbrev NodeConn := IO.Process.Child ⟨IO.Process.Stdio.piped, IO.Process.Stdio.piped, IO.Process.Stdio.inherit⟩
+
+def openNodeConn (sockPath : String) : IO NodeConn :=
+  IO.Process.spawn {
+    cmd    := "node"
+    args   := #["-e", nodeSocketBridgeJs, sockPath]
+    stdin  := IO.Process.Stdio.piped
+    stdout := IO.Process.Stdio.piped
+    stderr := IO.Process.Stdio.inherit
+  }
+
+def closeNodeConn (conn : NodeConn) : IO Unit := do
+  conn.stdin.putStr "\n"
+  conn.stdin.flush
+  let _ ← conn.wait
+  pure ()
+
+def rpcWire (conn : NodeConn) (tWire : List Int) : IO (List Int) := do
+  conn.stdin.putStr (bytesToStr (bytesToHex tWire) ++ "\n")
+  conn.stdin.flush
+  let line ← conn.stdout.getLine
+  let hex := line.trim
+  return (hexToBytes hex).getD []
+
+def rpcMsg (conn : NodeConn) (t : TMsg) : IO (List Int × Option RMsg) := do
+  let rWire ← rpcWire conn (encodeT t)
+  return (rWire, decodeRForT t rWire)
+
+def collectSessionRFramesLoop (fuel : Nat) (conn : NodeConn) (cli : SessionState) (tWire : List Int) (acc : List (List Int)) : IO (QReply × List (List Int)) := do
+  match fuel with
+  | 0 => return (qRefuse cli.targetQ cli.qHex (stringToWireBytes "session_step_limit"), acc.reverse)
+  | f + 1 =>
+    let rWire ← rpcWire conn tWire
+    if rWire.isEmpty then
+      return (qRefuse cli.targetQ cli.qHex (stringToWireBytes "source_unavailable"), acc.reverse)
+    else
+      let acc' := rWire :: acc
+      match step cli rWire with
+      | StepOut.done _ reply => return (reply, acc'.reverse)
+      | StepOut.send cli' _ nextTWire => collectSessionRFramesLoop f conn cli' nextTWire acc'
+
+/-- Runs a live `/q/<hash>` session against the Unix socket via `node` (`net.connect`),
+    returning both the interactive `step` reply and the collected server `R` wire frames
+    so `readQ` and `readQNoCheckMutant` can be evaluated directly on the real server frames. -/
+def runLiveQSession (sockPath : String) (q : List Int) (aname : List Int := []) : IO (QReply × List (List Int)) := do
+  let conn ← openNodeConn sockPath
+  let (cli, _, t0Wire) := startSession q aname
+  let res ← collectSessionRFramesLoop 4096 conn cli t0Wire []
+  closeNodeConn conn
+  return res
+
+-- ============================================================================
+-- 2. Object Writes Over 9P2000 (Tcreate / chunked Twrite / Tclunk)
+-- ============================================================================
+
+def listIntToByteArray (bs : List Int) : ByteArray :=
+  ByteArray.mk (bs.map (fun x => UInt8.ofNat x.toNat)).toArray
+
+def write9PChunksF (fuel : Nat) (conn : NodeConn) (fid : Int) (payload : List Int) (off : Int) : IO Unit := do
+  match fuel with
+  | 0 => pure ()
+  | f + 1 =>
+    match payload with
+    | [] => pure ()
+    | _ =>
+      let chunk := payload.take 8000
+      let _ ← rpcMsg conn (TMsg.write 0 fid off chunk)
+      write9PChunksF f conn fid (payload.drop 8000) (off + (chunk.length : Int))
+
+/-- Write `payload` to file `name` under directory fid `dirFid` (idempotent:
+    an existing entry — which under content addressing can only hold the same
+    bytes — is left alone). Generic chunk writer; any payload size. -/
+def write9PFile (conn : NodeConn) (dirFid newFid : Int) (name : String) (payload : List Int) : IO Unit := do
+  let (_, rWalkExisting) ← rpcMsg conn (TMsg.walk 0 dirFid newFid (strsToWire [name]))
+  match rWalkExisting with
+  | some (RMsg.walk 0 [_]) =>
+    let _ ← rpcMsg conn (TMsg.clunk 0 newFid)
+    pure ()
+  | _ =>
+    let _ ← rpcMsg conn (TMsg.walk 0 dirFid newFid (strsToWire []))
+    let _ ← rpcMsg conn (TMsg.create 0 newFid (stringToWireBytes name) 420 OWRITE)
+    write9PChunksF (payload.length / 8000 + 2) conn newFid payload 0
+    let _ ← rpcMsg conn (TMsg.clunk 0 newFid)
+    pure ()
+
+/-- Force write: replace an existing entry (used to plant tampered objects). -/
+def write9PFileForce (conn : NodeConn) (dirFid newFid : Int) (name : String) (payload : List Int) : IO Unit := do
+  let (_, rWalkExisting) ← rpcMsg conn (TMsg.walk 0 dirFid newFid (strsToWire [name]))
+  match rWalkExisting with
+  | some (RMsg.walk 0 [_]) =>
+    let _ ← rpcMsg conn (TMsg.remove 0 newFid)
+    pure ()
+  | _ =>
+    let _ ← rpcMsg conn (TMsg.clunk 0 newFid)
+    pure ()
+  let _ ← rpcMsg conn (TMsg.walk 0 dirFid newFid (strsToWire []))
+  let _ ← rpcMsg conn (TMsg.create 0 newFid (stringToWireBytes name) 420 OWRITE)
+  write9PChunksF (payload.length / 8000 + 2) conn newFid payload 0
+  let _ ← rpcMsg conn (TMsg.clunk 0 newFid)
+  pure ()
+
+def write9PFile3Chunks (conn : NodeConn) (dirFid newFid : Int) (name : String) (payload : List Int) : IO Unit := do
+  let (_, rWalkExisting) ← rpcMsg conn (TMsg.walk 0 dirFid newFid (strsToWire [name]))
+  match rWalkExisting with
+  | some (RMsg.walk 0 [_]) =>
+    let _ ← rpcMsg conn (TMsg.clunk 0 newFid)
+    pure ()
+  | _ =>
+    let c0 := sliceBytes payload 0 8168
+    let c1 := sliceBytes payload 8168 8168
+    let c2 := sliceBytes payload 16336 3664
+    let _ ← rpcMsg conn (TMsg.walk 0 dirFid newFid (strsToWire []))
+    let _ ← rpcMsg conn (TMsg.create 0 newFid (stringToWireBytes name) 420 OWRITE)
+    let _ ← rpcMsg conn (TMsg.write 0 newFid 0 c0)
+    let _ ← rpcMsg conn (TMsg.write 0 newFid 8168 c1)
+    let _ ← rpcMsg conn (TMsg.write 0 newFid 16336 c2)
+    let _ ← rpcMsg conn (TMsg.clunk 0 newFid)
+    pure ()
+
+/-- Attach a fresh session on `conn`, ensure `/q` exists, and bind it to `qFid`.
+    Returns false when the server's namespace has no `/q` to mount (`not_in_view`). -/
+def bindQDir9P (conn : NodeConn) (qFid : Int) : IO Bool := do
+  let liveUser := (← IO.getEnv "USER").getD "user"
+  let _ ← rpcMsg conn (TMsg.version NOTAG DEFAULT_MSIZE W9P2000)
+  let _ ← rpcMsg conn (TMsg.attach 0 0 NOFID (stringToWireBytes liveUser) (stringToWireBytes ""))
+  let (_, rWalkQ) ← rpcMsg conn (TMsg.walk 0 0 qFid (strsToWire ["q"]))
+  match rWalkQ with
+  | some (RMsg.walk 0 [_]) => return true
+  | _ =>
+    let _ ← rpcMsg conn (TMsg.walk 0 0 qFid (strsToWire []))
+    let _ ← rpcMsg conn (TMsg.create 0 qFid (stringToWireBytes "q") (DMDIR + 493) OREAD)
+    let _ ← rpcMsg conn (TMsg.clunk 0 qFid)
+    let (_, rWalkQ2) ← rpcMsg conn (TMsg.walk 0 0 qFid (strsToWire ["q"]))
+    match rWalkQ2 with
+    | some (RMsg.walk 0 [_]) => return true
+    | _ => return false
+
+/-- Put each `(qHex, bytes)` object under `/q/<qHex>` on the server `sockPath`.
+    This is the only store write path; objects are seeded over the wire. -/
+def seedObjects9P (sockPath : String) (objects : List (String × List Int)) : IO Bool := do
+  let conn ← openNodeConn sockPath
+  let ok ← bindQDir9P conn 1
+  if !ok then
+    closeNodeConn conn
+    return false
+  for (qHex, bytes) in objects do
+    write9PFile conn 1 2 qHex bytes
+  let _ ← rpcMsg conn (TMsg.clunk 0 1)
+  let _ ← rpcMsg conn (TMsg.clunk 0 0)
+  closeNodeConn conn
+  return true
+
+/-- Replace `/q/<qHex>`'s bytes on `sockPath` (plants a tampered object). -/
+def corruptObject9P (sockPath : String) (qHex : String) (bytes : List Int) : IO Bool := do
+  let conn ← openNodeConn sockPath
+  let ok ← bindQDir9P conn 1
+  if !ok then
+    closeNodeConn conn
+    return false
+  write9PFileForce conn 1 2 qHex bytes
+  let _ ← rpcMsg conn (TMsg.clunk 0 1)
+  let _ ← rpcMsg conn (TMsg.clunk 0 0)
+  closeNodeConn conn
+  return true
+
+def makePayload20000 : List Int :=
+  List.map (fun k => Int.ofNat (k % 251)) (List.range 20000)
+
+def prepareQStore (qSock : String) (qDir : String) : IO (List Int × List Int × List Int) := do
+  let payloadGood := makePayload20000
+  let qGood := (Lib.Sha256.qOf "blob" payloadGood).bytes
+  let qGoodHex := bytesToHex qGood
+
+  let payloadOrigTampered := payloadGood.take 19999 ++ [1]
+  let qTampered := (Lib.Sha256.qOf "blob" payloadOrigTampered).bytes
+  let qTamperedHex := bytesToHex qTampered
+  let corruptedBytes := payloadGood.take 19999 ++ [255]
+
+  let qMissing := (Lib.Sha256.qOf "blob" [111, 222, 33]).bytes
+
+  if qDir != "-" then
+    let qPath : System.FilePath := qDir
+    IO.FS.createDirAll qPath
+    IO.FS.writeBinFile (qPath / bytesToStr qGoodHex) (listIntToByteArray payloadGood)
+    IO.FS.writeBinFile (qPath / bytesToStr qTamperedHex) (listIntToByteArray corruptedBytes)
+
+  -- Also ensure `/q/<qGoodHex>` and `/q/<qTamperedHex>` exist via 9P2000 over `qSock`
+  -- so in-memory servers (`plan9port` `9pserve` + `ramfs`) are seeded over the wire.
+  let conn ← openNodeConn qSock
+  let ok ← bindQDir9P conn 1
+  if !ok then
+    closeNodeConn conn
+    return ([], [], [])
+  write9PFile3Chunks conn 1 2 (bytesToStr qGoodHex) payloadGood
+  write9PFile3Chunks conn 1 2 (bytesToStr qTamperedHex) corruptedBytes
+  let _ ← rpcMsg conn (TMsg.clunk 0 1)
+  let _ ← rpcMsg conn (TMsg.clunk 0 0)
+  closeNodeConn conn
+
+  return (qGood, qTampered, qMissing)
+
+end Lib.Rsd.NinepIO

@@ -1,0 +1,141 @@
+-- gameoflife: the Bend bench/runtime gameoflife program (HigherOrderCO/Bend,
+-- bench/runtime/gameoflife/main.bend), ported to P1' Lean 4.14. Same algorithm: 64*2^size random
+-- 4x4-toroidal soups, each packed in one word, fork as a batch tree of 64-soup chunks; every soup
+-- runs gens bit-packed Conway steps, then is classified by two probe steps (still life, period-2
+-- oscillator, or chaos) and popcounted by a 16-bit SWAR fold; chunks accumulate population, class
+-- tallies and a board hash in scalar registers, czip merges censuses up the fork tree and the
+-- checksum mixes the final census.
+-- Departure (named, SRC-BEND-U32): the source's U32 words are modeled exactly in checked Int
+-- arithmetic — every op wraps mod 2^32, and/or/xor decompose bit by bit, shl/shr scale by 2^k;
+-- values stay in [0, 2^32), so every modeled op equals the U32 op it replaces (verified by the
+-- value check). Class codes Still 0 / Osc 1 / Chaos 2 ride as Ints as in the source.
+-- The source's small size (size 1, gens 2) expects 2601177279 (verified against a Bend3 C run
+-- there); its main() runs (18, 32), out of reach here.
+-- Source pin (BENCH-SRC-0, 2026-11-06): HigherOrderCO/Bend commit be236f324ed0338fe907fe50474468e4d3b94157
+-- (main), bench/runtime/gameoflife/main.bend, sha256
+-- 31f82656e9b54917803d9fa6b07284bc260f3c62c1c15976b118236151565eae
+-- (raw.githubusercontent.com/HigherOrderCO/Bend/be236f324ed0338fe907fe50474468e4d3b94157/bench/runtime/gameoflife/main.bend).
+
+def W : Int := 4294967296
+
+def w32 (x : Int) : Int := x % W
+
+def bitXorLoop : Nat → Int → Int → Int → Int → Int
+  | 0, _, _, acc, _ => acc
+  | k + 1, a, b, acc, sc => bitXorLoop k (a / 2) (b / 2) (acc + ((a % 2 + b % 2) % 2) * sc) (sc * 2)
+
+def xor32 (a b : Int) : Int := bitXorLoop 32 a b 0 1
+
+def bitAndLoop : Nat → Int → Int → Int → Int → Int
+  | 0, _, _, acc, _ => acc
+  | k + 1, a, b, acc, sc => bitAndLoop k (a / 2) (b / 2) (acc + (a % 2 * b % 2) * sc) (sc * 2)
+
+def and32 (a b : Int) : Int := bitAndLoop 32 a b 0 1
+
+def bitOrLoop : Nat → Int → Int → Int → Int → Int
+  | 0, _, _, acc, _ => acc
+  | k + 1, a, b, acc, sc => bitOrLoop k (a / 2) (b / 2) (acc + (a % 2 + b % 2 - a % 2 * b % 2) * sc) (sc * 2)
+
+def or32 (a b : Int) : Int := bitOrLoop 32 a b 0 1
+
+def wAdd (a b : Int) : Int := w32 (a + b)
+def wSub (a b : Int) : Int := w32 (a - b + W)
+-- wMul is split at 16 bits so the intermediates stay under the checked-i64
+-- bound (a_lo * b, a_hi * b < 2^48); a*b mod 2^32 is unchanged
+-- (checkedArithmeticStuck at ~2^63 on the flat form, probe-verified)
+def wMul (a b : Int) : Int :=
+  w32 (w32 (w32 (a % 65536) * b) + w32 (w32 (w32 (a / 65536) * b) % 65536) * 65536)
+
+def pw2 : Nat → Int
+  | 0 => 1
+  | k + 1 => 2 * pw2 k
+
+def wShlN (a : Int) (k : Nat) : Int := w32 (a * pw2 k)
+def wShrN (a : Int) (k : Nat) : Int := a / pw2 k
+
+def b2u (b : Bool) : Int := if b then 1 else 0
+
+def cellGet (board r c : Int) : Int :=
+  and32 (wShrN board (and32 (wAdd (wMul (and32 r 3) 4) (and32 c 3)) 31).toNat) 1
+
+def neighborCount (board r c : Int) : Int :=
+  wAdd (cellGet board (wSub r 1) (wSub c 1)) (
+  wAdd (cellGet board (wSub r 1) c) (
+  wAdd (cellGet board (wSub r 1) (wAdd c 1)) (
+  wAdd (cellGet board r (wSub c 1)) (
+  wAdd (cellGet board r (wAdd c 1)) (
+  wAdd (cellGet board (wAdd r 1) (wSub c 1)) (
+  wAdd (cellGet board (wAdd r 1) c) (cellGet board (wAdd r 1) (wAdd c 1))))))))
+
+def nextDead (n : Int) : Int := b2u (n == 3)
+
+def nextAlive (n : Int) : Int := b2u (n == 2 || n == 3)
+
+def nextCell (a n : Int) : Int := if a == 0 then nextDead n else nextAlive n
+
+def stepCell (board pos : Int) : Int :=
+  let rr := wShrN pos 2
+  let cc := and32 pos 3
+  let alive := cellGet board rr cc
+  let neighbors := neighborCount board rr cc
+  wShlN (nextCell alive neighbors) (and32 pos 31).toNat
+
+def step (b : Int) : Int :=
+  or32 (stepCell b 0) (or32 (stepCell b 1) (or32 (stepCell b 2) (or32 (stepCell b 3)
+  (or32 (stepCell b 4) (or32 (stepCell b 5) (or32 (stepCell b 6) (or32 (stepCell b 7)
+  (or32 (stepCell b 8) (or32 (stepCell b 9) (or32 (stepCell b 10) (or32 (stepCell b 11)
+  (or32 (stepCell b 12) (or32 (stepCell b 13) (or32 (stepCell b 14) (stepCell b 15)))))))))))))))
+
+def run : Nat → Int → Int
+  | 0, board => board
+  | p + 1, board => run p (step board)
+
+-- 16-bit SWAR population count
+def popcount (b : Int) : Int :=
+  let a := wSub b (and32 (wShrN b 1) 21845)
+  let c := wAdd (and32 a 13107) (and32 (wShrN a 2) 13107)
+  let d := and32 (wAdd c (wShrN c 4)) 3855
+  and32 (wShrN (wMul d 257) 8) 31
+
+-- class code: Still 0, Osc 1, Chaos 2
+def classify (b : Int) : Int :=
+  let n1 := step b
+  if n1 == b then 0
+  else if step n1 == b then 1
+  else 2
+
+-- one soup: hash the soup index into a 16-bit board, run gens steps
+def sim (ix : Int) (g : Nat) : Int := run g (and32 (wMul ix 2654435761) 65535)
+
+/-- The source's Census: pop, still, osc, mix. -/
+structure Census where
+  pop : Int
+  still : Int
+  osc : Int
+  mix : Int
+
+-- leaf chunk: 64 soups folded into scalar accumulators
+def chunk : Nat → Int → Nat → Int → Int → Int → Int → Census
+  | 0, _, _, pa, sa, oa, mx => { pop := pa, still := sa, osc := oa, mix := mx }
+  | p + 1, i, g, pa, sa, oa, mx =>
+    let bd := sim (wAdd i p) g
+    let cd := classify bd
+    chunk p i g (wAdd pa (popcount bd)) (wAdd sa (b2u (cd == 0))) (wAdd oa (b2u (cd == 1)))
+      (xor32 (wMul mx 2654435761) bd)
+
+def czip (a b : Census) : Census :=
+  { pop := wAdd a.pop b.pop, still := wAdd a.still b.still, osc := wAdd a.osc b.osc,
+    mix := wAdd (wMul a.mix 2654435761) b.mix }
+
+def batch : Nat → Int → Nat → Census
+  | 0, i, g => chunk 64 i g 0 0 0 0
+  | p + 1, i, g => czip (batch p i g) (batch p (wAdd i (wShlN 64 p)) g)
+
+-- final checksum: mix the census fields
+def cfin (c : Census) : Int :=
+  wAdd (wMul (wAdd (wMul (wAdd (wMul c.pop 2654435761) c.still) 2654435761) c.osc) 2654435761) c.mix
+
+/-- Root: `gameoflifeMain size gens` is cfin(batch(size, 0, gens)); the
+source's documented small size (1, 2) expects 2601177279, its main()
+runs (18, 32). -/
+def gameoflifeMain (size gens : Int) : Int := cfin (batch size.toNat 0 gens.toNat)

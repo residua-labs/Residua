@@ -1,0 +1,95 @@
+namespace Lib.Rsd.EngineCollectorRows
+open Lib.Rsd.EngineCollector
+abbrev Observation := Lib.Rsd.CommandReceipt.Observation
+abbrev Cell := Lib.Rsd.FrontCollector.Cell
+
+def replaceHead {α : Type} (f : α -> α) : List α -> List α
+  | [] => [] | x :: xs => f x :: xs
+def replaceCell (s : State) (label : String) (change : Observation -> Observation) : State :=
+  { s with cells := s.cells.map fun c => if c.label != label then c else
+      let o := change c.state.observation
+      let b := { c.state.observed with stdoutQ := hash o.stdout, stderrQ := hash o.stderr }
+      { c with state := { c.state with observed := b, observation := o } } }
+def rebind (r : Request) (s : State) : Request :=
+  { r with plans := r.plans.map fun p =>
+      match s.cells.find? (fun c => c.label == p.label) with
+      | none => p | some c => { p with request := { p.request with expected := c.state.observed } } }
+def replaceFile (s : Lib.Rsd.EngineAssembly.State) (name : String) (bytes : String) : Lib.Rsd.EngineAssembly.State :=
+  { s with files := s.files.map fun (n,b) => (n, if n == name then bytes else b) }
+
+def check (r : Request) (s : State) (expected : Option String) : Bool :=
+  (residue? r s).map residueName == expected
+
+def basicRows (r : Request) (s : State) : List (String × Bool) := [
+  ("exact",check r s none),
+  ("canonical",sigma (sigma s) == sigma s),
+  ("noise-key",q r { s with replayNoise := 99 } == q r s),
+  ("source-before",check r { s with beforeSourceQ := "foreign" } (some "nf_engine_collector_source")),
+  ("source-after",check r { s with afterSourceQ := "foreign" } (some "nf_engine_collector_source")),
+  ("source-request",check { r with cold := { r.cold with subject := "foreign" } } s (some "nf_engine_collector_source")),
+  ("front",check r { s with front := { s.front with cells := [] } } (some "nf_engine_collector_front")),
+  ("plan-inventory",check { r with plans := r.plans.drop 1 } s (some "nf_engine_collector_inventory")),
+  ("cell-inventory",check r { s with cells := s.cells.drop 1 } (some "nf_engine_collector_inventory"))]
+
+def commandRows (r : Request) (s : State) : List (String × Bool) :=
+  let badExit := replaceCell s "build-Residua.SCMEmission" (fun o => { o with exit := some 1 })
+  let badBinding := { s with cells := replaceHead (fun (c : Cell) =>
+    { c with state := { c.state with observation := { c.state.observation with stdout := "forged" } } }) s.cells }
+  [("command-exit",check (rebind r badExit) badExit (some "nf_engine_collector_command")),
+   ("command-stream",check r badBinding (some "nf_engine_collector_command"))]
+
+def assemblyRows (r : Request) (s : State) : List (String × Bool) := [
+  ("assembly-inventory",check r { s with unpinned := { s.unpinned with files := [] } } (some "nf_engine_collector_assembly")),
+  ("assembly-bytes",check r { s with unpinned := replaceFile s.unpinned "body.scm" "foreign" } (some "nf_engine_collector_assembly")),
+  ("program-pin",check r { s with pinned := replaceFile s.pinned "programs.json" "[]" } (some "nf_engine_collector_programs"))]
+
+def axiomRows (r : Request) (s : State) : List (String × Bool) :=
+  [("missing", ""), ("forbidden", String.join (compositionLaws.map (fun name => "'" ++ name ++ "' depends on axioms: [Classical.choice]\n"))),
+    ("duplicate", (axiomObservation s).stdout ++ (axiomObservation s).stdout)].map fun (name, text) =>
+    let changed := replaceCell s "composition-axioms" (fun o => { o with stdout := text })
+    ("axioms-" ++ name,check (rebind r changed) changed (some "nf_engine_collector_axioms"))
+
+def replayRows (r : Request) (s : State) : List (String × Bool) :=
+  let badSamples := replaceHead (fun (sample : Lib.Rsd.EngineReplay.Sample) =>
+    { sample with compiled := { sample.compiled with stdout := "{}" } }) s.samples
+  [("runtime-output",check r { s with samples := badSamples } (some "nf_engine_collector_replay")),
+   ("runtime-inventory",check r { s with samples := s.samples.drop 1 } (some "nf_engine_collector_replay")),
+   ("control-inventory",check r { s with controls := [] } (some "nf_engine_collector_controls")),
+   ("wall",check r { s with wall := { exit := some 0 } } (some "nf_engine_collector_wall")),
+   ("wall-request",check { r with wallMs := 0 } s (some "nf_engine_collector_wall")),
+   ("binding",check r { s with cold := { s.cold with inputQ := "foreign" } } (some "nf_engine_collector_binding"))]
+
+def manifestRows (r : Request) (s : State) : List (String × Bool) :=
+  ["q","path","params"].map fun name =>
+    let changed := { s with pinned := replaceFile s.pinned "modules.json" (file s.pinned "modules.json" ++ name) }
+    ("manifest-" ++ name,!(admissible r changed))
+
+def summaryRows (r : Request) (s : State) : List (String × Bool) :=
+  match (replayRequest s).toOption with
+  | none => [("summary-request",false)]
+  | some rr =>
+      let qs := (identities rr).toOption.getD []
+      let manifest := (parse (file s.pinned "modules.json")).toOption.getD .null
+      let totals := collectionState r s rr qs manifest
+      [("rows-63",totals.actualRows == 63 && totals.passedRows == 63),
+       ("mutants-23",totals.actualMutants == 23 && totals.caughtMutants == 23),
+       ("manifest-checks",(manifestChecks rr qs manifest).length == 3 && (manifestChecks rr qs manifest).all id),
+       ("depth-cap",depthOK), ("binding-count",(bindingChecks r s).length == 7 && (bindingChecks r s).all id)]
+
+def keyRows (r : Request) (s : State) : List (String × Bool) :=
+  let key := q r s
+  [("key-request",q { r with wallMs := 2 } s != key),
+   ("key-wall",q r { s with wall := { s.wall with stderr := "foreign" } } != key),
+   ("key-raw-source",q r { s with beforeSourceQ := "foreign" } != key),
+   ("key-output",q r { s with pinned := replaceFile s.pinned "root.json" "foreign" } != key),
+   ("key-binding",q r { s with cold := { s.cold with stderrQ := "foreign" } } != key),
+   ("key-plans",q { r with plans := [] } s != key),
+   ("key-commands",q r { s with cells := [] } != key),
+   ("key-front",q r { s with front := { s.front with cells := [] } } != key),
+   ("key-controls",q r { s with controls := [] } != key),
+   ("key-samples",q r { s with samples := [] } != key)]
+
+def rows (r : Request) (s : State) : List (String × Bool) :=
+  basicRows r s ++ commandRows r s ++ assemblyRows r s ++ axiomRows r s ++
+  replayRows r s ++ manifestRows r s ++ summaryRows r s ++ keyRows r s
+end Lib.Rsd.EngineCollectorRows

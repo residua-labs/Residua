@@ -1,0 +1,134 @@
+-- File artifacts over BuildSession, with no second scheduler or cache.
+-- Actual blob bytes are observations supplied by the execution/oracle layer.
+-- Descriptor identity excludes paths. closure_claim = 0.
+namespace Lib.Rsd.FileBuildSession
+
+structure Descriptor where
+  format : String
+  size : Nat
+  contentQ : List Int
+  deriving BEq
+
+structure Blob where
+  contentQ : List Int
+  bytes : List Int
+  deriving BEq
+
+structure Request where
+  build : Lib.Rsd.BuildSession.Request
+  blobs : List Blob
+  maxBlobBytes : Nat := 4194304
+  maxTotalBytes : Nat := 33554432
+  maxBlobs : Nat := 256
+
+inductive Residue where
+  | capacity | blob | descriptor
+  | buildManifest | buildCapacity | buildGraph | buildKey | buildCommand
+  | buildExit | buildOutput | buildStore | buildExtraObservation
+
+def residueName : Residue -> String
+  | Residue.capacity => "nf_rsd_file_capacity"
+  | Residue.blob => "nf_rsd_file_blob"
+  | Residue.descriptor => "nf_rsd_file_descriptor"
+  | Residue.buildManifest => "nf_rsd_build_manifest"
+  | Residue.buildCapacity => "nf_rsd_build_capacity"
+  | Residue.buildGraph => "nf_rsd_build_graph"
+  | Residue.buildKey => "nf_rsd_build_key"
+  | Residue.buildCommand => "nf_rsd_build_command"
+  | Residue.buildExit => "nf_rsd_build_exit"
+  | Residue.buildOutput => "nf_rsd_build_output"
+  | Residue.buildStore => "nf_rsd_build_store"
+  | Residue.buildExtraObservation => "nf_rsd_build_extra_observation"
+
+def liftBuild : Lib.Rsd.BuildSession.Residue -> Residue
+  | .manifest => .buildManifest
+  | .capacity => .buildCapacity
+  | .graph => .buildGraph
+  | .key => .buildKey
+  | .command => .buildCommand
+  | .exit => .buildExit
+  | .output => .buildOutput
+  | .store => .buildStore
+  | .extraObservation => .buildExtraObservation
+
+def descriptorTy : Lib.Rsd.Codec.Ty := .record [("recipe", .str), ("format", .str), ("size", .i64), ("q", .bytes)]
+
+def encode (d : Descriptor) : List Int :=
+  (Lib.Rsd.Codec.encodeRVal { ty := descriptorTy, val := .record [
+    ("recipe", .str "rsd.file-artifact/1"), ("format", .str d.format),
+    ("size", .int d.size), ("q", .bytes d.contentQ)] } Lib.Rsd.Codec.defaultBounds).bytes
+
+def descriptorOk (d : Descriptor) : Bool :=
+  (d.format == "wasm" || d.format == "rscm") && d.size > 0 && d.size <= 4194304 &&
+  Lib.Rsd.Keys.qOk d.contentQ
+
+def decode (raw : List Int) : Option Descriptor := do
+  let decoded := Lib.Rsd.Codec.decodeRVal raw Lib.Rsd.Codec.defaultBounds
+  if !decoded.ok || decoded.rval.ty != descriptorTy then none else
+    match decoded.rval.val with
+    | .record [("recipe", .str "rsd.file-artifact/1"), ("format", .str format),
+        ("size", .int size), ("q", .bytes contentQ)] =>
+      let d : Descriptor := { format, size := size.toNat, contentQ }
+      if size < 0 || !descriptorOk d || encode d != raw then none else some d
+    | _ => none
+
+def magicOk (format : String) (bs : List Int) : Bool :=
+  if format == "wasm" then bs.take 8 == [0,97,115,109,1,0,0,0] && bs.length > 8
+  else if format == "rscm" then bs.take 5 == [82,83,67,77,1] && bs.length > 5
+  else false
+
+def capacityOk (r : Request) : Bool :=
+  r.maxBlobBytes > 0 && r.maxBlobBytes <= 4194304 &&
+  r.maxTotalBytes > 0 && r.maxTotalBytes <= 33554432 &&
+  r.maxBlobs > 0 && r.maxBlobs <= 256 && r.blobs.length <= r.maxBlobs &&
+  r.blobs.all (fun b => b.bytes.length <= r.maxBlobBytes) &&
+  (r.blobs.foldl (fun n b => n + b.bytes.length) 0) <= r.maxTotalBytes
+
+def blobOk (b : Blob) : Bool :=
+  Lib.Rsd.Keys.qOk b.contentQ && Lib.Rsd.Store.readQForm "blob" b.contentQ b.bytes != "mismatch"
+
+def available (blobs : List Blob) (raw : List Int) : Bool :=
+  match decode raw with
+  | none => false
+  | some d => blobs.any fun b => b.contentQ == d.contentQ &&
+      b.bytes.length == d.size && magicOk d.format b.bytes
+
+structure Result where
+  state : Lib.Rsd.BuildSession.State := {}
+  residue : Option Residue := none
+
+def failed (e : Residue) : Result := { residue := some e }
+
+def decision (r : Request) : Result :=
+  if !capacityOk r then failed .capacity
+  else if !Lib.Rsd.BuildSession.capacityOk r.build then failed .buildCapacity
+  else if !r.blobs.all blobOk ||
+      (r.blobs.map (fun b => b.contentQ)).eraseDups.length != r.blobs.length then failed .blob
+  else
+    -- Missing or damaged external data never authorizes a descriptor cache hit.
+    let objects := r.build.objects.filter fun o => available r.blobs o.bytes
+    let result := Lib.Rsd.BuildSession.decision { r.build with objects }
+    match result.residue with
+    | some cause => failed (liftBuild cause)
+    | none =>
+      let good := result.state.established.all fun e =>
+        let i := Lib.Rsd.Store.get result.state.store e.interfaceQ
+        let o := Lib.Rsd.Store.get result.state.store e.objectQ
+        i.ok && o.ok && available r.blobs i.bytes && available r.blobs o.bytes
+      if !good then failed .descriptor else { state := result.state }
+
+
+
+def residue? (r : Request) (_s : Lib.Rsd.BuildSession.State) := (decision r).residue
+def admissible (r : Request) (s : Lib.Rsd.BuildSession.State) := (residue? r (id s)).isNone
+def runNF (r : Request) (_s : Lib.Rsd.BuildSession.State) := decision r
+
+-- NF-CORRECT-0 r2: the checked decision; runNF retains the original
+-- transition and its failure-state observations for existing callers.
+def decide (r : Request) (_s : Lib.Rsd.BuildSession.State) : Except Residue Lib.Rsd.BuildSession.State :=
+  let answer := runNF r _s
+  match answer.residue with
+  | some residue => .error residue
+  | none => .ok answer.state
+
+end Lib.Rsd.FileBuildSession

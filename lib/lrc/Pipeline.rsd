@@ -19,6 +19,7 @@
 -- fuel guards an earlier test already decided are removed (lib/lrc/GuardElim.rsd).
 -- After expandResetReuse, drop specialization (lib/lrc/DropSpec.rsd), which Lean 4.14 does not have.
 -- A declaration without a body goes through every pass as it is.
+import Lib.Lrc.Closures
 import Lib.Lrc.Inline
 import Lib.Lrc.Cse
 import Lib.Lrc.GuardElim
@@ -39,6 +40,7 @@ import Lib.Lrc.SinkInc
 import Lib.Lrc.Closed
 import Lib.Lrc.Range
 import Lib.Lrc.JoinOnce
+import Lib.Lrc.FromWire
 
 namespace Lrc
 
@@ -66,9 +68,18 @@ def plDropSpec : List Decl → List Decl
   | [] => []
   | d :: ds => declDropSpec d :: plDropSpec ds
 
+def plInsertResetReuseFields : List Decl → List Decl
+  | [] => []
+  | d :: ds => (if d.ext then d else declInsertResetReuseFields d) :: plInsertResetReuseFields ds
+
 def plExpandResetReuse : List Decl → List Decl
   | [] => []
   | d :: ds => (if d.ext then d else declExpandResetReuse d) :: plExpandResetReuse ds
+
+-- the same with the limit from which the code after a reset is written once (lib/lrc/ExpandResetReuse.rsd)
+def plExpandResetReuseWith (lim : Nat) : List Decl → List Decl
+  | [] => []
+  | d :: ds => (if d.ext then d else declExpandResetReuseWith lim d) :: plExpandResetReuseWith lim ds
 
 mutual
 -- The one result of a call that nothing reads is released after the call. Lean's counting pass
@@ -110,9 +121,25 @@ def plDeadResults : List Decl → List Decl
 -- 128: the count-ups are not sunk (lib/lrc/SinkInc.rsd). 256 and 512: the form of tail recursion
 -- modulo cons is the plain one for every function, or the one with the root for every function
 -- (lib/lrc/Trmc.rsd `trmc`, modes 1 and 2). 1024: no range facts (lib/lrc/Range.rsd).
+-- 4096: no second form for a function that counts a number down (lib/lrc/JoinOnce.rsd `unboxCounters`).
+-- 8192: a chain of cases on one variable is not merged (lib/lrc/SimpCase.rsd `mergeCases`).
+-- 16384 and 32768: the code after a reset is written twice everywhere, as Lean's pass does, or once
+-- everywhere (lib/lrc/ExpandResetReuse.rsd "One copy of the code after a reset"); else by its size.
+-- 65536: a field of an object that a constructor stores may give that constructor its cell, as in Lean's
+-- pass (lib/lrc/ResetReuse.rsd "A field of an object that the constructor stores").
 -- `nImg` is the number of the image's functions.
 def pipelineWith (opts : Nat) (nImg : Nat) (decls : List Decl) : List Decl :=
   let inl := opts % 4
+  -- the six r2 forms become r1 forms before anything reads them (lib/lrc/Closures.rsd); an r1 program is unchanged.
+  -- Option 2048: the module's object fields are four bytes (rsc's layer `narrow`), which is another box for a
+  -- scalar of 32 bits here; no other pass reads the option.
+  let decls := lowerR2N (opts / 2048 % 2 == 1) decls
+  -- the stage's own append in its recursive form where tail recursion modulo cons runs below and makes it a loop
+  -- (lib/lrc/FromWire.rsd `declAppRec`); without that pass it stays the two reversals
+  let decls := if opts / 8 % 2 == 0 && inl == 2 then appendsRec nImg decls else decls
+  -- a match on a type of several constructors arrives as a chain of cases; Lean's passes are written for the one
+  -- case, and ResetReuse resets a variable in one case only (lib/lrc/SimpCase.rsd `mergeCases`)
+  let decls := if opts / 8192 % 2 == 0 then mergeCases decls else decls
   let decls := if opts / 16 % 2 == 0 then packScalars decls else decls
   -- range facts (lib/lrc/Range.rsd) on the declarations as translated: every scalar still goes
   -- into a fresh `ctor`; before the constant cells, whose scalars no store shows
@@ -136,7 +163,7 @@ def pipelineWith (opts : Nat) (nImg : Nat) (decls : List Decl) : List Decl :=
   -- such pairs and five loads on the path that rebuilds nothing; a profile of the native route
   -- has 39 percent of rbtree's time in that function).
   let ds := sinkProj ds
-  let ds := plInsertResetReuse ds
+  let ds := if opts / 65536 % 2 == 0 then plInsertResetReuseFields ds else plInsertResetReuse ds
   let ds := plElimDead ds
   let ds := plSimpCase ds
   -- Once more after simpCase, which Lean does not do. simpCase replaces a case whose alternatives
@@ -152,15 +179,33 @@ def pipelineWith (opts : Nat) (nImg : Nat) (decls : List Decl) : List Decl :=
   -- a count-up goes down to the reset it pairs with (lib/lrc/SinkInc.rsd), so that the expansion
   -- below erases the pair on the unique path
   let ds := if opts / 128 % 2 == 0 then sinkInc ds else ds
-  let ds := plExpandResetReuse ds
+  let ds := plExpandResetReuseWith
+    (if opts / 16384 % 2 == 1 then 0 else if opts / 32768 % 2 == 1 then 1 else erShareLimit) ds
   let ds := plDropSpec ds
   -- Lean's second pushProj, going on past literals and operators (lib/lrc/SinkProj.rsd)
   let ds := sinkProj ds
-  -- after the inlining the reads go down once more: into the code that followed an inlined call
-  let ds := if inl == 2 then sinkProj (guardElim nImg (joinOnce (inlineDecls nImg ds))) else ds
+  -- after the inlining the reads go down once more: into the code that followed an inlined call. Before that
+  -- a small join point goes to each of its jumps and what a jump knows is folded (lib/lrc/JoinOnce.rsd
+  -- `joinSmall`, `foldKnown`): the short form of an integer operation jumps with a box.
+  -- The three run twice: `a && b && c` is a join point inside a join point, and the outer one is small
+  -- enough for its jumps only when the inner one has gone to its own (nqueens-kk's `safe`: the jump that
+  -- carries `false` then returns at once, and the other jump is the last, so the test it carries is read
+  -- by a case directly below it).
+  -- First of all, once the short forms are in their callers: a function that counts a natural number down gets a
+  -- second form that takes the number itself (lib/lrc/JoinOnce.rsd `unboxCounters`). Option 4096 leaves that out.
+  let ds := if inl == 2 && opts / 4096 % 2 == 0 then unboxCounters nImg (inlineDecls nImg ds)
+            else if inl == 2 then inlineDecls nImg ds else ds
+  let ds := if inl == 2 then
+      sinkProj (guardElim nImg (joinOnce (foldKnown (joinSmall (joinOnce (foldKnown (joinSmall ds)))))))
+    else ds
   let ds := if opts / 8 % 2 == 0 then trmc nImg (opts / 256 % 4) ds else ds
-  -- last: where the fuel is known to be above 1, a self tail call need not test it
-  fuelKnown nImg ds
+  -- last: where the fuel is known to be above 1, a self tail call need not test it; and a test stands
+  -- directly before the case that reads it (lib/lrc/JoinOnce.rsd `condDown`)
+  let ds := condDown (fuelKnown nImg ds)
+  -- last of all, when nothing is inlined any more: in a function that calls itself, a large part that makes no
+  -- such call is a function of its own, so that a frame of the recursion holds what the recursion needs
+  -- (lib/lrc/Inline.rsd "Splitting"). Option 131072 leaves it out.
+  if inl == 2 && opts / 131072 % 2 == 0 then split ds else ds
 
 -- The options the stage runs with unless a layer bit says otherwise: inlining after the passes.
 -- Measured on one VM (job fable-bo-native2, the native route): rbtree 2973 ms without it, 2651

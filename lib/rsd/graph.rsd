@@ -1,0 +1,550 @@
+-- Module graph from imports. dependencyClosure and nextReady are
+-- Lib.Hyper.fixpoint. A ready premise is not an established one, so one
+-- run yields a single frontier. The SCC partition is Lib.Hyper.sccIter
+-- (checked against Lean.SCC.scc in lib/rsd/SccCheckRun.rsd).
+-- The walk is iterative, so a long import spine does not overflow the stack.
+-- parallelBound is how many of that frontier a build may run at once.
+-- closure_claim = 0.
+import Hyper
+
+namespace Lib.Rsd.Graph
+
+def parallelBound : Nat := 4
+
+structure Imp where
+  name : String
+  kind : String
+
+structure Mod where
+  name : String
+  imps : List Imp
+
+structure Parsed where
+  ok : Bool
+  residue : String
+  text : String
+
+structure Answer where
+  ok : Bool
+  residue : String
+  names : List String
+  groups : List (List String)
+
+inductive Mark where
+  | zero
+  | ready
+  | done
+  deriving BEq
+
+def bad (r : String) : Answer :=
+  { ok := false, residue := r, names := [], groups := [] }
+
+def good (names : List String) (groups : List (List String)) : Answer :=
+  { ok := true, residue := "", names := names, groups := groups }
+
+/-- Same order as insertion into a sorted list. The walk is tail recursive so a
+    cone of hundreds of names does not grow a frame per name. -/
+def insertS (x : String) (xs : List String) : List String :=
+  let rec go (acc : List String) : List String → List String
+    | [] => List.reverse (x :: acc)
+    | y :: ys =>
+      if x == y then List.reverse acc ++ (y :: ys)
+      else if x < y then List.reverse acc ++ (x :: y :: ys)
+      else go (y :: acc) ys
+  go [] xs
+
+def sortS (xs : List String) : List String :=
+  xs.foldl (fun acc x => insertS x acc) []
+
+def groupKey (g : List String) : String :=
+  String.intercalate "," g
+
+def insertG (g : List String) : List (List String) → List (List String)
+  | [] => [g]
+  | y :: ys =>
+    if groupKey g == groupKey y then y :: ys
+    else if groupKey g < groupKey y then g :: y :: ys
+    else y :: insertG g ys
+
+def sortG (gs : List (List String)) : List (List String) :=
+  gs.foldl (fun acc g => insertG g acc) []
+
+def hasNul (s : String) : Bool :=
+  s.toList.any fun c => c == '\u0000'
+
+def isStart (c : Char) : Bool :=
+  c == '«' || c.isAlpha || c == '_'
+
+def isRest (c : Char) : Bool :=
+  c.isAlphanum || c == '_' || c == '\'' || c == '!' || c == '?'
+
+def plainPart (p : String) : Bool :=
+  match p.toList with
+  | [] => false
+  | c :: cs => c != '«' && (c.isAlpha || c == '_') && cs.all isRest
+
+def showPart (p : String) : String :=
+  if plainPart p then p else "«" ++ p ++ "»"
+
+def showName (ps : List String) : String :=
+  String.intercalate "." (ps.map showPart)
+
+def showImps (xs : List Imp) : String :=
+  String.intercalate "," (xs.map fun i => i.name ++ ":" ++ i.kind)
+
+inductive Kw where
+  | hit (cs : List Char)
+  | miss
+  | bad (msg : String)
+
+inductive Read where
+  | go (cs : List Char) (imps : List Imp)
+  | stop
+  | bad (msg : String)
+
+def matchKw : List Char → List Char → Option (List Char)
+  | [], cs => some cs
+  | _, [] => none
+  | c :: kt, d :: rest => if c == d then matchKw kt rest else none
+
+def dropNl : Nat → List Char → Except String (List Char)
+  | 0, _ => .error "budget_exhausted"
+  | _, [] => .ok []
+  | _ + 1, '\n' :: rest => .ok rest
+  | fuel + 1, _ :: rest => dropNl fuel rest
+
+def block : Nat → Nat → List Char → Except String (List Char)
+  | 0, _, _ => .error "budget_exhausted"
+  | _, _, [] => .error "unterminated comment"
+  | fuel + 1, nest, '-' :: rest =>
+    match rest with
+    | [] => .error "unterminated comment"
+    | '/' :: rest2 =>
+      if nest == 1 then .ok rest2 else block fuel (nest - 1) rest2
+    | _ :: rest2 => block fuel nest rest2
+  | fuel + 1, nest, '/' :: rest =>
+    match rest with
+    | [] => .error "unterminated comment"
+    | '-' :: rest2 => block fuel (nest + 1) rest2
+    | _ => block fuel nest rest
+  | fuel + 1, nest, _ :: rest => block fuel nest rest
+
+def ws : Nat → List Char → Except String (List Char)
+  | 0, _ => .error "budget_exhausted"
+  | _, [] => .ok []
+  | _, '\t' :: _ => .error "tab"
+  | fuel + 1, c :: rest =>
+    if c.isWhitespace then ws fuel rest
+    else if c == '-' then
+      match rest with
+      | '-' :: rest2 =>
+        match dropNl (rest2.length + 2) rest2 with
+        | .error e => .error e
+        | .ok rest3 => ws fuel rest3
+      | _ => .ok (c :: rest)
+    else if c == '/' then
+      match rest with
+      | '-' :: rest2 =>
+        match rest2 with
+        | '-' :: _ => .ok (c :: rest)
+        | '!' :: _ => .ok (c :: rest)
+        | [] => .error "unterminated comment"
+        | _ :: body =>
+          match block (body.length + 2) 1 body with
+          | .error e => .error e
+          | .ok rest3 => ws fuel rest3
+      | _ => .ok (c :: rest)
+    else .ok (c :: rest)
+
+def kw (k : String) (cs : List Char) : Kw :=
+  match matchKw k.toList cs with
+  | none => .miss
+  | some rest =>
+    match ws (rest.length * 2 + 4) rest with
+    | .error e => .bad e
+    | .ok rest2 => .hit rest2
+
+def takeClose : List Char → Option (String × List Char)
+  | [] => none
+  | '»' :: rest => some ("", rest)
+  | c :: rest =>
+    match takeClose rest with
+    | none => none
+    | some (body, rest2) => some (String.mk [c] ++ body, rest2)
+
+def takeRest : List Char → String × List Char
+  | [] => ("", [])
+  | c :: rest =>
+    if isRest c then
+      let (tok, rest2) := takeRest rest
+      (String.mk [c] ++ tok, rest2)
+    else ("", c :: rest)
+
+def takePart : List Char → Except String (String × List Char)
+  | [] => .error "expected identifier"
+  | '«' :: rest =>
+    match takeClose rest with
+    | none => .error "unterminated identifier escape"
+    | some pair => .ok pair
+  | c :: rest =>
+    if isStart c && c != '«' then .ok (takeRest (c :: rest))
+    else .error "expected identifier"
+
+def ident (runtime : Bool) (cs : List Char) (imps : List Imp) : Read :=
+  let finish (acc : List String) (cs : List Char) : Read :=
+    match ws (cs.length * 2 + 4) cs with
+    | .error e => .bad e
+    | .ok cs2 =>
+      let kind := if runtime then "runtime" else "import"
+      .go cs2 (imps ++ [{ name := showName acc, kind := kind }])
+  let rec parts (fuel : Nat) (acc : List String) (cs : List Char) : Read :=
+    match fuel with
+    | 0 => .bad "budget_exhausted"
+    | fuel + 1 =>
+      match takePart cs with
+      | .error e => .bad e
+      | .ok (part, cs2) =>
+        let acc := acc ++ [part]
+        match cs2 with
+        | '.' :: d :: rest =>
+          if isStart d then parts fuel acc (d :: rest)
+          else finish acc cs2
+        | _ => finish acc cs2
+  parts (cs.length + 2) [] cs
+
+def one (cs : List Char) (imps : List Imp) : Read :=
+  match kw "import" cs with
+  | .miss => .stop
+  | .bad e => .bad e
+  | .hit cs1 =>
+    match kw "runtime" cs1 with
+    | .bad e => .bad e
+    | .hit cs2 => ident true cs2 imps
+    | .miss => ident false cs1 imps
+
+def many : Nat → List Char → List Imp → Read
+  | 0, _, _ => .bad "budget_exhausted"
+  | fuel + 1, cs, imps =>
+    match one cs imps with
+    | .stop => .go cs imps
+    | .bad _ => .go cs imps
+    | .go cs2 imps2 =>
+      if cs2.length >= cs.length then .go cs2 imps2
+      else many fuel cs2 imps2
+
+def prelude (cs : List Char) (imps : List Imp) : Read :=
+  match kw "prelude" cs with
+  | .bad e => .bad e
+  | .hit cs2 => .go cs2 imps
+  | .miss => .go cs (imps ++ [{ name := "Init", kind := "import" }])
+
+def headerImports (source : String) : Parsed :=
+  let cs := source.toList
+  match ws (cs.length * 2 + 4) cs with
+  | .error _ => { ok := false, residue := "input_invalid", text := "" }
+  | .ok cs =>
+    match prelude cs [] with
+    | .bad _ => { ok := false, residue := "input_invalid", text := "" }
+    | .stop => { ok := false, residue := "input_invalid", text := "" }
+    | .go cs imps =>
+      match many (cs.length + 2) cs imps with
+      | .bad _ => { ok := false, residue := "input_invalid", text := "" }
+      | .stop => { ok := false, residue := "input_invalid", text := "" }
+      | .go _ imps => { ok := true, residue := "", text := showImps imps }
+
+def headerText (source : String) : String :=
+  let p := headerImports source
+  if p.ok then p.text else "ERR:" ++ p.residue
+
+def findMod : List Mod → String → Option Mod
+  | [], _ => none
+  | m :: ms, n => if m.name == n then some m else findMod ms n
+
+def checkMods : List Mod → List String → Option String
+  | [], _ => none
+  | m :: ms, seen =>
+    if m.name == "" || hasNul m.name then some "input_invalid"
+    else if seen.any fun s => s == m.name then some "input_invalid"
+    else if m.imps.any fun i => i.name == "" || hasNul i.name then some "input_invalid"
+    else checkMods ms (m.name :: seen)
+
+def selected (m : Mod) (kinds nodes : List String) : List String :=
+  sortS (m.imps.foldl (fun acc i =>
+    if kinds.any (· == i.kind) && nodes.any (· == i.name) then i.name :: acc else acc) [])
+
+def succOf (mods : List Mod) (kinds nodes : List String) (n : String) : List String :=
+  match findMod mods n with
+  | none => []
+  | some m => selected m kinds nodes
+
+def nq (kind q : String) : Lib.Hyper.NQ :=
+  { kind := kind, q := q }
+
+def cell {α : Type} (kind q : String) (w : α) : Lib.OrderedMap.KV (Lib.Hyper.Cell α) :=
+  let n := nq kind q
+  { k := Lib.Hyper.nqKey n, v := { nq := n, w := w } }
+
+def edge {α : Type} (kind head : String) (prems : List String) (w : α) : Lib.Hyper.Edge α :=
+  { head := nq kind head, prem := prems.map (nq kind), w := w }
+
+def reachRing : Lib.Hyper.Semiring Bool :=
+  { zero := false, one := true, plus := fun a b => a || b, times := fun a b => a && b }
+
+def markRing : Lib.Hyper.Semiring Mark :=
+  { zero := .zero, one := .done
+  , plus := fun a b =>
+      match a, b with
+      | .done, _ => .done
+      | _, .done => .done
+      | .ready, _ => .ready
+      | _, .ready => .ready
+      | .zero, .zero => .zero
+  , times := fun a b =>
+      match a, b with
+      | .done, .done => .done
+      | .done, .ready => .ready
+      | .ready, .done => .ready
+      | _, _ => .zero }
+
+def trues (m : List (Lib.OrderedMap.KV (Lib.Hyper.Cell Bool))) : List String :=
+  sortS (m.foldl (fun acc kv => if kv.v.w then kv.v.nq.q :: acc else acc) [])
+
+def demandEdges (mods : List Mod) (kinds nodes : List String) : List (Lib.Hyper.Edge Bool) :=
+  mods.foldl (fun acc m =>
+    if nodes.any (· == m.name) then
+      (selected m kinds nodes).foldl (fun acc2 d => edge "module" d [m.name] true :: acc2) acc
+    else acc) []
+
+def dependencyClosure (mods : List Mod) (roots kinds : List String) (fuel : Int) : Answer :=
+  match checkMods mods [] with
+  | some r => bad r
+  | none =>
+    let nodes := sortS (mods.map fun m => m.name)
+    if roots.any fun r => !(nodes.any (· == r)) then bad "input_invalid"
+    else
+      let roots := sortS roots
+      let edges := demandEdges mods kinds nodes
+      let base := roots.map fun r => cell "module" r true
+      let start := Lib.Hyper.Start.roots (roots.map (nq "module"))
+      let mem := Lib.Hyper.memOf (Lib.Hyper.build edges)
+      match Lib.Hyper.fixpoint (fun a b => a == b) reachRing true mem base start fuel with
+      | .refuse r _ => bad r
+      | .ok p => good (trues p.value) []
+
+def compId (c : List String) : String :=
+  match sortS c with
+  | [] => ""
+  | h :: _ => h
+
+def normalize (cs : List (List String)) : List (List String) :=
+  sortG ((cs.map sortS).filter fun g => g != [])
+
+def idTable (comps : List (List String)) : List (String × String) :=
+  comps.foldl (fun acc c =>
+    let id := compId c
+    c.foldl (fun acc2 m => (m, id) :: acc2) acc) []
+
+def lookupId : List (String × String) → String → String
+  | [], _ => ""
+  | (a, b) :: rest, n => if a == n then b else lookupId rest n
+
+def external (table : List (String × String)) (c : List String)
+    (succ : String → List String) : List String :=
+  let id := compId c
+  sortS (c.foldl (fun acc m =>
+    (succ m).foldl (fun acc2 d =>
+      let di := lookupId table d
+      if di == "" || di == id then acc2 else insertS di acc2) acc) [])
+
+def cyclic (succ : String → List String) (c : List String) : Bool :=
+  c.any fun m => (succ m).any fun d => c.any (· == d)
+
+/-- The iterative Tarjan SCC lives in Lib.Hyper (the unstable guard's own
+    layer); the name stays here so callers and docs keep their spelling. -/
+def sccIter (nodes : List String) (succ : String → List String) : List (List String) :=
+  Lib.Hyper.sccIter nodes succ
+
+def stableScc (mods : List Mod) (kinds : List String) : Answer :=
+  match checkMods mods [] with
+  | some r => bad r
+  | none =>
+    let nodes := sortS (mods.map fun m => m.name)
+    let succ := succOf mods kinds nodes
+    let comps := normalize (sccIter nodes succ)
+    let names := sortS (comps.foldl (fun acc c => if cyclic succ c then acc ++ c else acc) [])
+    good names comps
+
+def allEst (members established : List String) : Bool :=
+  members.all fun m => established.any (· == m)
+
+def readyIds (m : List (Lib.OrderedMap.KV (Lib.Hyper.Cell Mark))) : List String :=
+  sortS (m.foldl (fun acc kv => if kv.v.w == .ready then kv.v.nq.q :: acc else acc) [])
+
+def membersOf (id : String) : List (List String) → List String
+  | [] => []
+  | c :: cs => if compId c == id then sortS c else membersOf id cs
+
+def takeN : Nat → List String → List String
+  | 0, _ => []
+  | _, [] => []
+  | n + 1, x :: xs => x :: takeN n xs
+
+/-- The closure and its components stay fixed. Only `established` changes per wave. -/
+def oneWave (comps : List (List String)) (succ : String → List String)
+    (mem : Lib.Hyper.Mem Mark) (established : List String) (bound : Nat) (fuel : Int) : Answer :=
+  let done := comps.filter fun c => allEst c established
+  let base := done.map fun c => cell "scc" (compId c) Mark.done
+  let start := Lib.Hyper.Start.roots (done.map fun c => nq "scc" (compId c))
+  match Lib.Hyper.fixpoint (fun a b => a == b) markRing true mem base start fuel with
+  | .refuse r _ => bad r
+  | .ok p =>
+    let ids := readyIds p.value
+    let cyc := ids.filter fun id => cyclic succ (membersOf id comps)
+    if cyc != [] then
+      { ok := false, residue := "import_cycle"
+      , names := sortS (cyc.foldl (fun acc id => acc ++ membersOf id comps) [])
+      , groups := cyc.map fun id => membersOf id comps }
+    else
+      let wave := takeN bound ids
+      good (wave.foldl (fun acc id => acc ++ membersOf id comps) []) []
+
+def components (mods : List Mod) (roots kinds : List String) (fuel : Int) :
+    Sum Answer (List String × List (List String) × (String → List String) × Lib.Hyper.Mem Mark) :=
+  let clo := dependencyClosure mods roots kinds fuel
+  if !clo.ok then Sum.inl clo
+  else
+    let nodes := clo.names
+    let succ := succOf mods kinds nodes
+    let comps := normalize (sccIter nodes succ)
+    let table := idTable comps
+    let edges := comps.map fun c => edge "scc" (compId c) (external table c succ) Mark.ready
+    let mem := Lib.Hyper.memOf (Lib.Hyper.build edges)
+    Sum.inr (nodes, comps, succ, mem)
+
+def nextReady (mods : List Mod) (roots established kinds : List String)
+    (bound : Nat) (fuel : Int) : Answer :=
+  if bound == 0 then bad "bad_argument"
+  else
+    match components mods roots kinds fuel with
+    | Sum.inl clo => clo
+    | Sum.inr (_nodes, comps, succ, mem) => oneWave comps succ mem established bound fuel
+
+def m (n : String) (is : List String) : Mod :=
+  { name := n, imps := is.map fun i => { name := i, kind := "import" } }
+
+def chain : List Mod :=
+  [m "A" [], m "B" ["A"], m "C" ["A", "B"], m "D" ["C"], m "E" ["B"]]
+
+def diamond : List Mod :=
+  [m "A" [], m "B" ["A"], m "C" ["A"], m "D" ["B", "C"]]
+
+def cyc : List Mod := [m "P" ["Q"], m "Q" ["P"]]
+
+def loop : List Mod := [m "S" ["S"]]
+
+def rtGraph : List Mod :=
+  [m "A" [], { name := "R", imps := [{ name := "A", kind := "runtime" }] }]
+
+def both : List String := ["import", "runtime"]
+
+def just : List String := ["import"]
+
+def showAns (a : Answer) : String :=
+  if a.ok then "ok:" ++ String.intercalate "," a.names
+  else "no:" ++ a.residue ++ ":" ++ String.intercalate "," a.names
+
+def showGroups (gs : List (List String)) : String :=
+  String.intercalate ";" (gs.map fun g => String.intercalate "," g)
+
+/-- Successive frontiers. groups is one wave per entry, each at most bound. -/
+def waves (mods : List Mod) (roots kinds : List String) (bound : Nat) (fuel : Int) : Answer :=
+  if bound == 0 then bad "bad_argument"
+  else
+    match components mods roots kinds fuel with
+    | Sum.inl clo => clo
+    | Sum.inr (_nodes, comps, succ, mem) =>
+      let rec go (left : Nat) (est : List String) (acc : List (List String)) : Answer :=
+        match left with
+        | 0 => bad "budget_exhausted"
+        | left + 1 =>
+          let w := oneWave comps succ mem est bound fuel
+          if !w.ok then { w with groups := acc }
+          else if w.names == [] then good [] acc
+          else go left (est ++ w.names) (acc ++ [w.names])
+      go (mods.length + 2) [] []
+
+def lastPart (n : String) : String :=
+  match n.splitOn "." with
+  | [] => ""
+  | parts =>
+    match parts.getLast? with
+    | none => ""
+    | some p => p
+
+/-- Exact module name, otherwise every module whose last component is the target. -/
+def targetRoots (target : String) (names : List String) : List String :=
+  let exact := sortS (names.filter (· == target))
+  if exact != [] then exact
+  else sortS (names.filter fun n => lastPart n == target && target != "")
+
+end Lib.Rsd.Graph
+
+#guard Lib.Rsd.Graph.headerText "import A\nimport B.C\n" == "Init:import,A:import,B.C:import"
+#guard Lib.Rsd.Graph.headerText "prelude\nimport A\n" == "A:import"
+#guard Lib.Rsd.Graph.headerText "import runtime A\n" == "Init:import,A:runtime"
+#guard Lib.Rsd.Graph.headerText "-- c\nimport A\n" == "Init:import,A:import"
+#guard Lib.Rsd.Graph.headerText "/- x -/\nimport A\n" == "Init:import,A:import"
+#guard Lib.Rsd.Graph.headerText "/-- d -/\nimport A\n" == "Init:import"
+#guard Lib.Rsd.Graph.headerText "import runtimeA\n" == "Init:import,A:runtime"
+#guard Lib.Rsd.Graph.headerText "import A B\n" == "Init:import,A:import"
+#guard Lib.Rsd.Graph.headerText "import  A.B\n" == "Init:import,A.B:import"
+#guard Lib.Rsd.Graph.headerText "import\tA\n" == "Init:import"
+#guard Lib.Rsd.Graph.headerText "/- a /- b -/ c -/\nimport A\n" == "Init:import,A:import"
+#guard Lib.Rsd.Graph.headerText "import A\n/-- d -/\nimport B\n" == "Init:import,A:import"
+#guard Lib.Rsd.Graph.headerText "import runtime\n" == "Init:import"
+#guard Lib.Rsd.Graph.headerText "preludeX\nimport A\n" == ""
+#guard Lib.Rsd.Graph.headerText "import A\nimport A\n" == "Init:import,A:import,A:import"
+#guard Lib.Rsd.Graph.headerText "/-! doc -/\nimport A\n" == "Init:import"
+#guard Lib.Rsd.Graph.headerText "def f := 1\nimport A\n" == "Init:import"
+#guard Lib.Rsd.Graph.headerText "import A\r\nimport B\n" == "Init:import,A:import,B:import"
+#guard Lib.Rsd.Graph.headerText "import «A.B»\n" == "Init:import,«A.B»:import"
+#guard Lib.Rsd.Graph.headerText "import A_B'\n" == "Init:import,A_B':import"
+#guard Lib.Rsd.Graph.headerText "import «Foo».Bar\n" == "Init:import,Foo.Bar:import"
+#guard Lib.Rsd.Graph.headerText "import «A.B».C\n" == "Init:import,«A.B».C:import"
+#guard Lib.Rsd.Graph.headerText "prelude\n" == ""
+#guard Lib.Rsd.Graph.headerText "\n  import A.B.C\n" == "Init:import,A.B.C:import"
+#guard Lib.Rsd.Graph.headerText "import\n" == "Init:import"
+#guard Lib.Rsd.Graph.headerText "/-x-/\nimport A\n" == "Init:import,A:import"
+#guard Lib.Rsd.Graph.headerText "import «»\n" == "Init:import,«»:import"
+#guard Lib.Rsd.Graph.headerText "/- no" == "ERR:input_invalid"
+#guard Lib.Rsd.Graph.headerText "import rcic.RcicLeanImportNativeCore\nimport rcic.RcicF3StepWDApex\n" == "Init:import,rcic.RcicLeanImportNativeCore:import,rcic.RcicF3StepWDApex:import"
+#guard Lib.Rsd.Graph.showAns (Lib.Rsd.Graph.dependencyClosure Lib.Rsd.Graph.chain ["D"] Lib.Rsd.Graph.both 32) == "ok:A,B,C,D"
+#guard Lib.Rsd.Graph.showAns (Lib.Rsd.Graph.dependencyClosure Lib.Rsd.Graph.chain ["E"] Lib.Rsd.Graph.both 32) == "ok:A,B,E"
+#guard Lib.Rsd.Graph.showAns (Lib.Rsd.Graph.dependencyClosure Lib.Rsd.Graph.rtGraph ["R"] Lib.Rsd.Graph.just 32) == "ok:R"
+#guard Lib.Rsd.Graph.showAns (Lib.Rsd.Graph.dependencyClosure Lib.Rsd.Graph.rtGraph ["R"] Lib.Rsd.Graph.both 32) == "ok:A,R"
+#guard Lib.Rsd.Graph.showAns (Lib.Rsd.Graph.dependencyClosure Lib.Rsd.Graph.cyc ["P"] Lib.Rsd.Graph.both 32) == "ok:P,Q"
+#guard Lib.Rsd.Graph.showAns (Lib.Rsd.Graph.dependencyClosure Lib.Rsd.Graph.chain ["Z"] Lib.Rsd.Graph.both 32) == "no:input_invalid:"
+#guard Lib.Rsd.Graph.showAns (Lib.Rsd.Graph.dependencyClosure Lib.Rsd.Graph.chain ["D"] Lib.Rsd.Graph.both 0) == "no:[hyper_fuel_exhausted]:"
+#guard Lib.Rsd.Graph.showAns (Lib.Rsd.Graph.nextReady Lib.Rsd.Graph.chain ["D"] [] Lib.Rsd.Graph.both 4 32) == "ok:A"
+#guard Lib.Rsd.Graph.showAns (Lib.Rsd.Graph.nextReady Lib.Rsd.Graph.chain ["D"] ["A"] Lib.Rsd.Graph.both 4 32) == "ok:B"
+#guard Lib.Rsd.Graph.showAns (Lib.Rsd.Graph.nextReady Lib.Rsd.Graph.chain ["D"] ["A", "B"] Lib.Rsd.Graph.both 4 32) == "ok:C"
+#guard Lib.Rsd.Graph.showAns (Lib.Rsd.Graph.nextReady Lib.Rsd.Graph.chain ["D"] ["A", "B", "C"] Lib.Rsd.Graph.both 4 32) == "ok:D"
+#guard Lib.Rsd.Graph.showAns (Lib.Rsd.Graph.nextReady Lib.Rsd.Graph.chain ["D"] ["A", "B", "C", "D"] Lib.Rsd.Graph.both 4 32) == "ok:"
+#guard Lib.Rsd.Graph.showAns (Lib.Rsd.Graph.nextReady Lib.Rsd.Graph.diamond ["D"] ["A"] Lib.Rsd.Graph.both 4 32) == "ok:B,C"
+#guard Lib.Rsd.Graph.showAns (Lib.Rsd.Graph.nextReady Lib.Rsd.Graph.diamond ["D"] ["A"] Lib.Rsd.Graph.both 1 32) == "ok:B"
+#guard Lib.Rsd.Graph.showAns (Lib.Rsd.Graph.nextReady Lib.Rsd.Graph.diamond ["D"] ["A", "B"] Lib.Rsd.Graph.both 4 32) == "ok:C"
+#guard Lib.Rsd.Graph.showAns (Lib.Rsd.Graph.nextReady Lib.Rsd.Graph.cyc ["P"] [] Lib.Rsd.Graph.both 4 32) == "no:import_cycle:P,Q"
+#guard Lib.Rsd.Graph.showAns (Lib.Rsd.Graph.nextReady Lib.Rsd.Graph.loop ["S"] [] Lib.Rsd.Graph.both 4 32) == "no:import_cycle:S"
+#guard Lib.Rsd.Graph.showAns (Lib.Rsd.Graph.nextReady Lib.Rsd.Graph.chain ["D"] [] Lib.Rsd.Graph.both 0 32) == "no:bad_argument:"
+#guard Lib.Rsd.Graph.showGroups (Lib.Rsd.Graph.stableScc Lib.Rsd.Graph.cyc Lib.Rsd.Graph.both).groups == "P,Q"
+#guard Lib.Rsd.Graph.showGroups (Lib.Rsd.Graph.stableScc Lib.Rsd.Graph.loop Lib.Rsd.Graph.both).groups == "S"
+#guard Lib.Rsd.Graph.showAns (Lib.Rsd.Graph.stableScc Lib.Rsd.Graph.diamond Lib.Rsd.Graph.both) == "ok:"
+#guard Lib.Rsd.Graph.showGroups (Lib.Rsd.Graph.stableScc Lib.Rsd.Graph.diamond Lib.Rsd.Graph.both).groups == "A;B;C;D"
+#guard Lib.Rsd.Graph.showGroups (Lib.Rsd.Graph.waves Lib.Rsd.Graph.chain ["D"] Lib.Rsd.Graph.just 4 32).groups == "A;B;C;D"
+#guard Lib.Rsd.Graph.showGroups (Lib.Rsd.Graph.waves Lib.Rsd.Graph.diamond ["D"] Lib.Rsd.Graph.just 4 32).groups == "A;B,C;D"
+#guard Lib.Rsd.Graph.showGroups (Lib.Rsd.Graph.waves Lib.Rsd.Graph.diamond ["D"] Lib.Rsd.Graph.just 1 32).groups == "A;B;C;D"
+#guard (Lib.Rsd.Graph.waves Lib.Rsd.Graph.cyc ["P"] Lib.Rsd.Graph.just 4 32).residue == "import_cycle"
+#guard (Lib.Rsd.Graph.waves Lib.Rsd.Graph.diamond ["D"] Lib.Rsd.Graph.just 0 32).residue == "bad_argument"
+#guard Lib.Rsd.Graph.targetRoots "D" ["A", "D"] == ["D"]
+#guard Lib.Rsd.Graph.targetRoots "RcicLeanImportNative" ["rcic.RcicLeanImportNative", "rcic.RcicLeanImportNativeCore"] == ["rcic.RcicLeanImportNative"]
+#guard Lib.Rsd.Graph.parallelBound == 4

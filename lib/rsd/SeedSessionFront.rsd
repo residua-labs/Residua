@@ -1,0 +1,294 @@
+-- Deterministic Mealy input/output controller for the existing seed-session
+-- front end. Reference: G. H. Mealy, A Method for Synthesizing Sequential
+-- Circuits (1955), sections 2.1-2.2, DOI 10.1002/j.1538-7305.1955.tb03788.x.
+-- This uses the input/state/output model, not circuit minimization.
+-- Raw admission keeps Store.decStore's existing stream semantics. Fixed-order
+-- first-content-q dedup uses the list scan of CLRS, Introduction to Algorithms,
+-- 3rd ed., section 10.2, over at most three artifacts. Capacity is checked on
+-- every present artifact before dedup. No canonical re-encoding is required.
+-- Cost: O(H+M+P+Q+B)+T_Store(raw)+T_File(r), with host/mode lengths H/M,
+-- pending-name length P, observed q length Q and raw artifact/store bytes B.
+-- Completion adds one CommandDevice replay, one rebound Store decode and one
+-- FileBuildSession replay; their existing costs are delegated. For n fixed-size
+-- observations the controller is O(n).
+-- Device paths and process effects belong to the adapter, not this decision.
+namespace Lib.Rsd.SeedSessionFront
+
+structure ArtifactObservation where
+  emittedRscm : Option Lib.Rsd.FileBuildSession.Blob := none
+  rsdcWasm : Option Lib.Rsd.FileBuildSession.Blob := none
+  rscWasm : Option Lib.Rsd.FileBuildSession.Blob := none
+
+structure FileObservation where
+  build : Lib.Rsd.BuildSession.Request
+  storeRaw : Option (List Int) := none
+  artifacts : ArtifactObservation := {}
+
+structure CompletionObservation where
+  executableAfter : List Int
+  rebound : FileObservation
+  events : List Lib.Rsd.CommandDevice.Event
+
+structure Request where
+  host : String
+  mode : String
+  file : Option FileObservation := none
+  executableObservation : Option (List Int) := none
+  completion : Option CompletionObservation := none
+
+inductive Target where
+  | emitter
+  | lowerer
+  deriving BEq
+
+inductive Output where
+  | emittedRscm
+  | rsdcWasm
+  | rscWasm
+  deriving BEq
+
+structure Job where
+  name : String
+  plan : Lib.Rsd.CommandDevice.Plan
+  target : Target
+  output : Output
+  format : String
+  deriving BEq
+
+inductive Action where
+  | observeInputs
+  | verifySeedOutputs
+  | observeExecutable (job : Job)
+  | launch (job : Job)
+  | publishStore
+  deriving BEq
+
+inductive Residue where
+  | arguments
+  | fileCapacity
+  | fileBlob
+  | fileDescriptor
+  | fileBuildManifest
+  | fileBuildCapacity
+  | fileBuildGraph
+  | fileBuildKey
+  | fileBuildCommand
+  | fileBuildExit
+  | fileBuildOutput
+  | fileBuildStore
+  | fileBuildExtraObservation
+  | warmMiss
+  | missingPlan
+  | executableBinding
+  | storeCapacity
+  | storeEncoding
+  | artifactCapacity
+  | executableChanged
+  | inputChanged
+  | commandIncomplete
+  | runCount
+
+def residueName : Residue -> String
+  | Residue.arguments => "nf_session_arguments"
+  | Residue.fileCapacity => "nf_rsd_file_capacity"
+  | Residue.fileBlob => "nf_rsd_file_blob"
+  | Residue.fileDescriptor => "nf_rsd_file_descriptor"
+  | Residue.fileBuildManifest => "nf_rsd_build_manifest"
+  | Residue.fileBuildCapacity => "nf_rsd_build_capacity"
+  | Residue.fileBuildGraph => "nf_rsd_build_graph"
+  | Residue.fileBuildKey => "nf_rsd_build_key"
+  | Residue.fileBuildCommand => "nf_rsd_build_command"
+  | Residue.fileBuildExit => "nf_rsd_build_exit"
+  | Residue.fileBuildOutput => "nf_rsd_build_output"
+  | Residue.fileBuildStore => "nf_rsd_build_store"
+  | Residue.fileBuildExtraObservation => "nf_rsd_build_extra_observation"
+  | Residue.warmMiss => "nf_session_warm_miss"
+  | Residue.missingPlan => "nf_session_missing_plan"
+  | Residue.executableBinding => "nf_session_executable_binding"
+  | Residue.storeCapacity => "nf_session_store_capacity"
+  | Residue.storeEncoding => "nf_session_store_encoding"
+  | Residue.artifactCapacity => "nf_session_artifact_capacity"
+  | Residue.executableChanged => "nf_session_executable_changed"
+  | Residue.inputChanged => "nf_session_input_changed"
+  | Residue.commandIncomplete => "nf_session_command_incomplete"
+  | Residue.runCount => "nf_session_run_count"
+
+def liftFile : Lib.Rsd.FileBuildSession.Residue -> Residue
+  | .capacity => Residue.fileCapacity
+  | .blob => Residue.fileBlob
+  | .descriptor => Residue.fileDescriptor
+  | .buildManifest => Residue.fileBuildManifest
+  | .buildCapacity => Residue.fileBuildCapacity
+  | .buildGraph => Residue.fileBuildGraph
+  | .buildKey => Residue.fileBuildKey
+  | .buildCommand => Residue.fileBuildCommand
+  | .buildExit => Residue.fileBuildExit
+  | .buildOutput => Residue.fileBuildOutput
+  | .buildStore => Residue.fileBuildStore
+  | .buildExtraObservation => Residue.fileBuildExtraObservation
+
+structure Decision where
+  before : Option Lib.Rsd.BuildSession.State := none
+  after : Option Lib.Rsd.BuildSession.State := none
+  action : Option Action := none
+  cause : Option Residue := none
+
+structure State where
+  request : Request
+  decision : Option Decision := none
+
+structure Result where
+  state : State
+  residue : Option Residue
+
+def validArguments (r : Request) : Bool :=
+  ["lean", "ocaml"].contains r.host && ["cold", "warm", "edit"].contains r.mode
+
+def route (name : String) (plan : Lib.Rsd.CommandDevice.Plan) : Option Job :=
+  if name == "emit-rsdc" then
+    some { name := name, plan := plan, target := Target.emitter, output := Output.emittedRscm, format := "rscm" }
+  else if name == "lower-rsdc" then
+    some { name := name, plan := plan, target := Target.lowerer, output := Output.rsdcWasm, format := "wasm" }
+  else if name == "lower-rsc" then
+    some { name := name, plan := plan, target := Target.lowerer, output := Output.rscWasm, format := "wasm" }
+  else none
+
+def admitStore (raw : Option (List Int)) : Except Residue Lib.Rsd.Store.Store :=
+  match raw with
+  | none => .ok (Lib.Rsd.Store.declare "rval" "rval")
+  | some bytes =>
+    if bytes.length > 1048576 then .error .storeCapacity
+    else match Lib.Rsd.Store.decStoreK "rval" "rval" bytes with
+    | none => .error .storeEncoding
+    | some store => .ok store
+
+def admitArtifacts (raw : ArtifactObservation) : Except Residue (List Lib.Rsd.FileBuildSession.Blob) :=
+  let present := [raw.emittedRscm, raw.rsdcWasm, raw.rscWasm].filterMap id
+  if present.any (fun b => b.bytes.length > 4194304) then .error .artifactCapacity
+  else .ok (present.foldl (fun admitted b =>
+    if admitted.any (fun old => old.contentQ == b.contentQ) then admitted else admitted ++ [b]) [])
+
+def normalizeFile (raw : FileObservation) : Except Residue Lib.Rsd.FileBuildSession.Request := do
+  let store <- admitStore raw.storeRaw
+  let blobs <- admitArtifacts raw.artifacts
+  return { build := { raw.build with objects := store.objects, actions := store.actions }, blobs }
+
+-- Completion cannot select a new plan/cache authority. Rebound observations
+-- supply post-command bytes. CommandDevice checks the actual stdout/status
+-- transcript; file-producing compilers need not print a descriptor RVAL.
+-- Publish the observed file through BuildSession's existing cache operation,
+-- then replay its original graph to check file availability and the next job.
+-- The prefix check prevents a lost pre-command artifact becoming a cache miss
+-- that silently changes the completed frontier. No CMD reply is synthesized
+-- from a file descriptor. The existing publish/replay costs are delegated.
+def complete (file : Lib.Rsd.FileBuildSession.Request) (before : Lib.Rsd.BuildSession.State)
+    (job : Job) (observed : CompletionObservation) : Decision :=
+  if job.plan.executableQ != observed.executableAfter then
+    { before := some before, cause := some .executableChanged }
+  else
+    let command := Lib.Rsd.CommandDevice.decision { plan := job.plan, events := observed.events }
+    if command.residue.isSome then { before := some before, cause := some .fileBuildCommand }
+    else if !command.state.done then { before := some before, cause := some .commandIncomplete }
+    else if command.state.exit != some 0 || !command.state.signal.isNone then
+      { before := some before, cause := some .fileBuildExit }
+    else match normalizeFile observed.rebound with
+    | .error e => { before := some before, cause := some e }
+    | .ok rebound =>
+      if rebound.build.modules != file.build.modules then
+        { before := some before, cause := some .inputChanged }
+      else if !Lib.Rsd.FileBuildSession.capacityOk rebound then
+        { before := some before, cause := some .fileCapacity }
+      else if !rebound.blobs.all Lib.Rsd.FileBuildSession.blobOk then
+        { before := some before, cause := some .fileBlob }
+      else
+        let output := match job.output with
+          | .emittedRscm => observed.rebound.artifacts.emittedRscm
+          | .rsdcWasm => observed.rebound.artifacts.rsdcWasm
+          | .rscWasm => observed.rebound.artifacts.rscWasm
+        match output with
+        | none => { before := some before, cause := some .fileDescriptor }
+        | some blob =>
+          if !Lib.Rsd.FileBuildSession.blobOk blob then
+            { before := some before, cause := some .fileBlob }
+          else if !Lib.Rsd.FileBuildSession.magicOk job.format blob.bytes then
+            { before := some before, cause := some .fileDescriptor }
+          else
+            let descriptor : Lib.Rsd.FileBuildSession.Descriptor :=
+              { format := job.format, size := blob.bytes.length, contentQ := blob.contentQ }
+            let raw := Lib.Rsd.FileBuildSession.encode descriptor
+            let publication := do
+              let m <- Lib.Rsd.BuildSession.findModule file.build job.name
+              let j <- Lib.Rsd.BuildSession.job file.build m before.established
+              if j.plan != job.plan then none else
+                Lib.Rsd.BuildSession.publish before j (Lib.Rsd.BuildSession.outputBytes raw raw)
+            match publication with
+            | none => { before := some before, cause := some .fileBuildStore }
+            | some (published, established) =>
+              let replay := Lib.Rsd.FileBuildSession.runNF
+                { file with blobs := rebound.blobs, build := { file.build with
+                  objects := published.store.objects, actions := published.store.actions, observations := [] } } {}
+              match replay.residue with
+              | some e => { before := some before, cause := some (liftFile e) }
+              | none =>
+                if replay.state.established.take before.established.length != before.established then
+                  { before := some before, cause := some .inputChanged }
+                else if replay.state.established[before.established.length]? != some established then
+                  { before := some before, cause := some .fileDescriptor }
+                else
+                  let ran := before.ran ++ [job.name]
+                  let after := { replay.state with ran, cached := replay.state.cached.filter (fun n => !ran.contains n) }
+                  { before := some before, after := some after, action := some .publishStore }
+
+def decision (r : Request) : Decision :=
+  if !validArguments r then { cause := some Residue.arguments }
+  else match r.file with
+  | none => { action := some Action.observeInputs }
+  | some raw =>
+    match normalizeFile raw with
+    | .error e => { cause := some e }
+    | .ok file =>
+      let checked := Lib.Rsd.FileBuildSession.runNF file {}
+      match checked.residue with
+      | some e => { cause := some (liftFile e) }
+      | none =>
+        let before := checked.state
+        if before.done then { before := some before, action := some Action.verifySeedOutputs }
+        else if r.mode == "warm" then { before := some before, cause := some Residue.warmMiss }
+        else match before.pendingPlan with
+        | none => { before := some before, cause := some Residue.missingPlan }
+        | some plan =>
+          match route before.pendingName plan with
+          | none => { before := some before, cause := some Residue.executableBinding }
+          | some job =>
+            match r.executableObservation with
+            | none => { before := some before, action := some (Action.observeExecutable job) }
+            | some observed =>
+              if plan.executableQ == observed then
+                match r.completion with
+                | none => { before := some before, action := some (Action.launch job) }
+                | some completed => complete file before job completed
+              else { before := some before, cause := some Residue.executableBinding }
+
+def sigma (s : State) : State := { request := s.request, decision := some (decision s.request) }
+def q (s : State) : Request := s.request
+def residue? (s : State) : Option Residue := (decision s.request).cause
+def admissible (s : State) : Bool := (residue? s).isNone
+def runNF (s : State) : Result := { state := sigma s, residue := residue? s }
+
+-- NF-CORRECT-0 r2: the checked decision; runNF retains the original
+-- transition and its failure-state observations for existing callers.
+def admit (observation : Request) : Except Residue State :=
+  let answer := (runNF {request := observation})
+  match answer.residue with
+  | some residue => .error residue
+  | none => .ok answer.state
+
+def decide (s : State) : Except Residue State :=
+  let answer := runNF s
+  match answer.residue with
+  | some residue => .error residue
+  | none => .ok answer.state
+
+theorem quotient_factorization (s : State) : decide s = admit (q s) := rfl
+
+end Lib.Rsd.SeedSessionFront

@@ -59,7 +59,7 @@ def clPut : List Int → Nat → List Int → List Int
 
 -- the scalar area from its fields: triples offset, type, value
 def clImage (img : List Int) : List Int → List Int
-  | off :: ty :: v :: rest => clImage (clPut img off.toNat (clBytes (if ty == tyU8 then 1 else 8) v)) rest
+  | off :: ty :: v :: rest => clImage (clPut img off.toNat (clBytes (tyWidth ty) v)) rest
   | _ => img
 
 -- the `sset`s on x that follow directly: ok when each stores a literal

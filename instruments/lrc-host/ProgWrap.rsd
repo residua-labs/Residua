@@ -1,0 +1,24 @@
+-- micro program for a counting function that keeps a sum (lib/lrc/JoinOnce.rsd "A counter that is a small number",
+-- `ubWrapCall`): the second form takes the counter and the sum as numbers, and its call of the function hands on a
+-- sum whose form is not known where the addition went the long way. The entry's test stands at that call: a small sum
+-- goes round in the second form, a sum of limbs goes to the function. The sums here stay small, start small and
+-- leave the small numbers on the way (2^56 is the first that is none), and start as numbers of limbs.
+def sumDown : Nat → Nat → Nat
+  | 0, acc => acc
+  | n + 1, acc => sumDown n (acc + n * 3 + 1)
+
+-- the same with a second counter that goes up, so three words are numbers in the second form
+def sumBoth : Nat → Nat → Nat → Nat
+  | 0, _, acc => acc
+  | n + 1, k, acc => sumBoth n (k + 2) (acc + k * n + 1)
+
+-- the sum in the middle and a step after it: three words again, the last of them small where the sum is not
+def sumMid : Nat → Nat → Nat → Nat
+  | 0, acc, _ => acc
+  | n + 1, acc, d => sumMid n (acc + d * 5 + n) d
+
+def wrapMain : List Nat :=
+  [sumDown 10 0, sumDown 6 72057594037927930, sumDown 5 72057594037927935, sumDown 9 72057594037927800,
+   sumDown 4 100000000000000000000, sumDown 0 5, sumDown 3 72057594037927936,
+   sumBoth 7 1 0, sumBoth 5 3 72057594037927931, sumBoth 4 72057594037927934 72057594037927934, sumBoth 0 1 9,
+   sumMid 6 72057594037927920 3, sumMid 5 100000000000000000000 2, sumMid 7 1 2, sumMid 0 4 1]

@@ -1,0 +1,68 @@
+namespace Lib.Rsd.Schedule
+
+theorem sigma_idempotent (s : Lookup) : id (id s) = id s := rfl
+theorem q_sigma (r : Request) (s : Lookup) : (fun value (_state : Lib.Rsd.Schedule.Lookup) => value) r (id s) = (fun value (_state : Lib.Rsd.Schedule.Lookup) => value) r s := rfl
+theorem residue_sigma (r : Request) (s : Lookup) : residue? r (id s) = residue? r s := rfl
+
+theorem admit_iff (r : Request) (s : Lookup) :
+    admissible r s = true <-> residue? r s = none := by
+  unfold admissible
+  rw [residue_sigma]
+  cases residue? r s <;> simp
+
+theorem soundness (r : Request) (s : Lookup) (h : admissible r s = true) :
+    residue? r s = none := (admit_iff r s).mp h
+
+theorem completeness (r : Request) (s : Lookup) (h : residue? r s = none) :
+    admissible r s = true := (admit_iff r s).mpr h
+
+theorem step_residue (r : Request) (s : Lookup) :
+    (runNF r s).residue = residue? r s := rfl
+
+theorem exactness (r : Request) (s : Lookup) :
+    (runNF r s).residue = none <-> admissible r s = true := by
+  rw [step_residue]
+  exact (admit_iff r s).symm
+
+theorem refusal_exact (r : Request) (s : Lookup) (e : Residue) :
+    (runNF r s).residue = some e <-> residue? r s = some e := by
+  rw [step_residue]
+
+theorem result_canonical (r : Request) (s : Lookup) :
+    id (runNF r s).state = (runNF r s).state := rfl
+
+theorem residue_named (e : Residue) : residueName e != "" := by
+  cases e <;> decide
+
+theorem admitted_whole_outcome (r : Request) (s : Lookup) (h : admissible r s = true) :
+    (runNF r s).state = { hit := true, outcome := r.stored } := by
+  have hn := soundness r s h
+  unfold residue? decision at hn
+  unfold runNF decision
+  split <;> simp_all [refused]
+  split <;> simp_all [refused]
+  split <;> simp_all [refused]
+  split <;> simp_all [refused]
+
+theorem open_ledger_refused (r : Request) (s : Lookup) (h : r.ledgerClosed = false) :
+    (runNF r s).residue = some Residue.readLedgerOpen := by
+  rw [step_residue]
+  simp [residue?, decision, refused, h]
+
+theorem discovery_reads (k : MemoKey) (o : Outcome) (body control : List Int)
+    (fuel : Int) (d : Discovered) (closed : Bool) :
+    (discoveryRequest k o body control fuel d closed).request.inputQs = d.reads := rfl
+
+theorem discovery_body (k : MemoKey) (o : Outcome) (body control : List Int)
+    (fuel : Int) (d : Discovered) (closed : Bool) :
+    (discoveryRequest k o body control fuel d closed).request.bodyQ = body := rfl
+
+theorem discovery_fuel (k : MemoKey) (o : Outcome) (body control : List Int)
+    (fuel : Int) (d : Discovered) (closed : Bool) :
+    (discoveryRequest k o body control fuel d closed).request.fuel = fuel := rfl
+
+theorem discovery_control (k : MemoKey) (o : Outcome) (body control : List Int)
+    (fuel : Int) (d : Discovered) (closed : Bool) :
+    (discoveryRequest k o body control fuel d closed).discoveredControlQ = d.controlQ := rfl
+
+end Lib.Rsd.Schedule

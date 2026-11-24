@@ -212,7 +212,18 @@ structure Layers where
   static : Bool := false
   alloc : Bool := false
   ctor : Bool := false
+  -- object fields of four bytes in a module of the stage with its own heap (docs/OBJECT-ABI.md "Narrow fields")
+  narrow : Bool := false
+  -- i64 linear-memory addresses in modules of the stage.
+  addr64 : Bool := false
   deriving BEq
+
+def lrcOn (lay : Layers) : Bool := lay.ctor && lay.rc && lay.reuse && !lay.arr
+
+def layerConflict (lay : Layers) : String :=
+  if lay.addr64 && lay.narrow then "addr64+narrow"
+  else if lay.addr64 && !lrcOn lay then "addr64_requires_stage"
+  else ""
 
 def layersOff : Layers := { arr := false, reg := false, tail := false, qbe := false, cte := false, fuse := false, facts := false }
 
@@ -232,27 +243,34 @@ def layersOn : Layers := { arr := true, reg := true, tail := true, qbe := true, 
 -- bit 5 selects fusion, bit 6 certified type facts, bit 7 RC,
 -- bit 8 borrow inference, bit 9 drop specialization, bit 10 reset/reuse,
 -- bit 11 persistent ground objects, bit 12 the batched allocator fast path,
--- bit 13 constructor-object access (BACKEND-OPT-0 T2; opt-in).
+-- bit 13 constructor-object access (BACKEND-OPT-0 T2; opt-in),
+-- bit 14 narrow object fields (docs/OBJECT-ABI.md "Narrow fields"; opt-in),
+-- bit 15 i64 linear-memory addresses (docs/OBJECT-ABI.md "Address width"; opt-in).
 -- The allocator bit is opt-in until its whole-program gates pass. Existing
 -- configuration words, including the default and `all`, keep their meaning.
 -- Reject unknown bits
 -- before reading input. The environment stays in the native wrapper only.
 def layersFromBits (bits : Int) : Option Layers :=
-  if bits < 0 || bits >= 16384 then none
-  else some { arr := bits % 2 == 1
-            , reg := (bits / 2) % 2 == 1
-            , tail := (bits / 4) % 2 == 1
-            , qbe := (bits / 8) % 2 == 1
-            , cte := (bits / 16) % 2 == 1
-            , fuse := (bits / 32) % 2 == 1
-            , facts := (bits / 64) % 2 == 1
-            , rc := (bits / 128) % 2 == 1
-            , borrow := (bits / 256) % 2 == 1
-            , dropSpec := (bits / 512) % 2 == 1
-            , reuse := (bits / 1024) % 2 == 1
-            , static := (bits / 2048) % 2 == 1
-            , alloc := (bits / 4096) % 2 == 1
-            , ctor := (bits / 8192) % 2 == 1 }
+  if bits < 0 || bits >= 65536 then none
+  else
+    let lay : Layers := {
+      arr := bits % 2 == 1
+      reg := (bits / 2) % 2 == 1
+      tail := (bits / 4) % 2 == 1
+      qbe := (bits / 8) % 2 == 1
+      cte := (bits / 16) % 2 == 1
+      fuse := (bits / 32) % 2 == 1
+      facts := (bits / 64) % 2 == 1
+      rc := (bits / 128) % 2 == 1
+      borrow := (bits / 256) % 2 == 1
+      dropSpec := (bits / 512) % 2 == 1
+      reuse := (bits / 1024) % 2 == 1
+      static := (bits / 2048) % 2 == 1
+      alloc := (bits / 4096) % 2 == 1
+      ctor := (bits / 8192) % 2 == 1
+      narrow := (bits / 16384) % 2 == 1
+      addr64 := (bits / 32768) % 2 == 1 }
+    if (layerConflict lay).isEmpty then some lay else none
 
 def addLayer (lay : Layers) (n : String) : Option Layers :=
   if n == "" then some lay
@@ -270,6 +288,8 @@ def addLayer (lay : Layers) (n : String) : Option Layers :=
   else if n == "static" then some { lay with static := true }
   else if n == "alloc" then some { lay with alloc := true }
   else if n == "ctor" then some { lay with ctor := true }
+  else if n == "narrow" then some { lay with narrow := true }
+  else if n == "addr64" then some { lay with addr64 := true }
   else if n == "all" then some layersOn
   else if n == "off" then some layersOff
   else none
@@ -285,15 +305,19 @@ def layerNames (s : String) : List String :=
   s.split (fun c => c == ',' || c == ' ' || c == '+')
 
 def parseLayers (s : String) : Option Layers :=
-  parseGo layersDefault (layerNames s)
+  match parseGo layersDefault (layerNames s) with
+  | none => none
+  | some lay => if (layerConflict lay).isEmpty then some lay else none
 
-
-def badLayer : List String → String
-  | [] => ""
+def badLayerGo (lay : Layers) : List String → String
+  | [] => layerConflict lay
   | n :: ns =>
-    match addLayer layersOff n with
+    match addLayer lay n with
     | none => n
-    | some _ => badLayer ns
+    | some next => badLayerGo next ns
+
+def badLayer (ns : List String) : String :=
+  badLayerGo layersDefault ns
 
 
 
@@ -425,6 +449,11 @@ structure WMod where
   -- bytes that stand from `profile.memoAt` on when the module starts: persistent objects of a
   -- module that has no memo tables and no ground pool (lib/lrc/Emit.rsd "String literals")
   lowData : List Int := []
+  addr64 : Bool := false
+  -- functions that the module holds in a table (one table of funcref, as large as the list, filled by an active
+  -- element segment at 0): functions that stay functions of their own (lib/lrc/Emit.rsd `keptFns`). No code of
+  -- the module reads the table. []: neither section, the bytes as before.
+  kept : List Nat := []
 
 def typeOf (f : WFn) : List Int :=
   96 :: lebU f.params.length ++ f.params ++ lebU f.results.length ++ f.results
@@ -484,24 +513,32 @@ def wsec (id : Nat) (payload : List Int) : List Int :=
 def magic : List Int :=
   [0, 97, 115, 109, 1, 0, 0, 0]
 
--- One memory, no maximum, one page to start. Allocation grows it.
--- No global section: the block whose base is local 0 holds the bump and the limit.
+-- One memory. On memory64 use the V8 limit of 16 GiB; memory32
+-- keeps its declaration without a maximum.
+def addr64PageCap : Nat := 262144
+
+def encodeMemoryAt (pages : Nat) (addr64 : Bool) : List Int :=
+  if addr64 then wsec 5 ([1, 5] ++ lebU pages ++ lebU addr64PageCap)
+  else wsec 5 ([1, 0] ++ lebU pages)
+
 def encodeMemory : List Int :=
-  wsec 5 ([1, 0] ++ lebU profile.initPages)
+  encodeMemoryAt profile.initPages false
 
 -- Static rc-0 empty String and Array. Data lies beyond block results,
 -- RC free lists and counters, before memoAt; no runtime initialization.
 def objectEmptyArray : Int := 832
 
-def objectInitialPayload : List Int :=
+def objectInitialPayload (addr64 : Bool) : List Int :=
   let str := [0, 0, 0, 0, 0, 0, 0, 249] ++ [1, 0, 0, 0, 0, 0, 0, 0]
     ++ [1, 0, 0, 0, 0, 0, 0, 0] ++ List.replicate 16 0
   let arr := [0, 0, 0, 0, 0, 0, 0, 246] ++ List.replicate 16 0
-  [0] ++ i32Const profile.emptyStr ++ [11] ++ lebU str.length ++ str
-    ++ [0] ++ i32Const objectEmptyArray ++ [11] ++ lebU arr.length ++ arr
+  let pos := if addr64 then i64Const profile.emptyStr else i32Const profile.emptyStr
+  let arrPos := if addr64 then i64Const objectEmptyArray else i32Const objectEmptyArray
+  [0] ++ pos ++ [11] ++ lebU str.length ++ str
+    ++ [0] ++ arrPos ++ [11] ++ lebU arr.length ++ arr
 
-def objectInitialData : List Int :=
-  wsec 11 ([2] ++ objectInitialPayload)
+def objectInitialData (addr64 : Bool) : List Int :=
+  wsec 11 ([2] ++ objectInitialPayload addr64)
 
 def groundDataBytes : List (List Int) → List Int → List Int
   | [], acc => acc
@@ -514,43 +551,58 @@ def groundHeapName : List Int := [95, 95, 104, 101, 97, 112, 95, 98, 97, 115, 10
 def groundI32 (n : Int) : List Int :=
   i32Const (if n >= 2147483648 then n - 4294967296 else n)
 
-def groundGlobals (p : GroundPool) : List Int :=
-  if p.chunks.isEmpty then [] else wsec 6 ([1, 127, 0] ++ groundI32 p.next ++ [11])
+def addrConst (addr64 : Bool) (n : Int) : List Int :=
+  if addr64 then i64Const n else groundI32 n
 
-def groundMemory (p : GroundPool) : List Int :=
-  if p.chunks.isEmpty then encodeMemory
-  else wsec 5 ([1, 0] ++ lebU ((p.next.toNat + 65535) / 65536))
+def groundGlobals (p : GroundPool) (addr64 : Bool) : List Int :=
+  if p.chunks.isEmpty then []
+  else wsec 6 ([1, if addr64 then vtI64 else vtI32, 0] ++ addrConst addr64 p.next ++ [11])
+
+def groundMemory (p : GroundPool) (addr64 : Bool) : List Int :=
+  if p.chunks.isEmpty && !addr64 then encodeMemory
+  else encodeMemoryAt (if p.chunks.isEmpty then profile.initPages else (p.next.toNat + 65535) / 65536) addr64
 
 def groundExports (p : GroundPool) (es : List WEx) : List Int :=
   if p.chunks.isEmpty then encodeExports es
   else lebU (es.length + 2) ++ exportsOf es ++ exportMem
     ++ lebU groundHeapName.length ++ groundHeapName ++ [3, 0]
 
-def groundData (p : GroundPool) : List Int :=
-  if p.chunks.isEmpty then objectInitialData
+def groundData (p : GroundPool) (addr64 : Bool) : List Int :=
+  if p.chunks.isEmpty then objectInitialData addr64
   else
     let data := groundDataBytes p.chunks []
-    wsec 11 ([3] ++ objectInitialPayload ++ [0] ++ groundI32 profile.heapAt
+    wsec 11 ([3] ++ objectInitialPayload addr64 ++ [0] ++ addrConst addr64 profile.heapAt
       ++ [11] ++ lebU data.length ++ data)
 
 def tagEntries (ty : Nat) : Nat → List Int
   | 0 => []
   | k + 1 => 0 :: lebU ty ++ tagEntries ty k
 
+def lebUs : List Nat → List Int
+  | [] => []
+  | n :: ns => lebU n ++ lebUs ns
+
 def encode (m : WMod) : List Int :=
   let p := groundPoolOf m.ground
   let types := if m.tags == 0 then encodeTypes m.fns else lebU (m.fns.length + 1) ++ typesOf m.fns ++ [96, 0, 0]
   let tagSec := if m.tags == 0 then [] else wsec 13 (lebU m.tags ++ tagEntries m.fns.length m.tags)
-  finish (puts (puts (puts (puts (puts (puts (puts (puts (puts [] magic)
+  -- the table section (id 4): one table, funcref (112), limits with a minimum only; the element section (id 9):
+  -- one active segment of table 0 at `i32.const 0`, the functions by number
+  let tableSec := if m.kept.isEmpty then [] else wsec 4 ([1, 112, 0] ++ lebU m.kept.length)
+  let elemSec := if m.kept.isEmpty then [] else wsec 9 ([1, 0, 65, 0, 11] ++ lebU m.kept.length ++ lebUs m.kept)
+  finish (puts (puts (puts (puts (puts (puts (puts (puts (puts (puts (puts [] magic)
     (wsec 1 types))
     (wsec 3 (encodeFuncs m.fns)))
-    (groundMemory p))
+    tableSec)
+    (groundMemory p m.addr64))
     tagSec)
-    (groundGlobals p))
+    (groundGlobals p m.addr64))
     (wsec 7 (groundExports p m.exps)))
+    elemSec)
     (wsec 10 (encodeCodes m.fns)))
-    (if m.lowData.isEmpty then groundData p
-     else wsec 11 ([3] ++ objectInitialPayload ++ [0] ++ groundI32 profile.memoAt ++ [11] ++ lebU m.lowData.length ++ m.lowData)))
+    (if m.lowData.isEmpty then groundData p m.addr64
+     else wsec 11 ([3] ++ objectInitialPayload m.addr64 ++ [0] ++ addrConst m.addr64 profile.memoAt
+       ++ [11] ++ lebU m.lowData.length ++ m.lowData)))
 
 -- "main"
 def nameMain : List Int := [109, 97, 105, 110]
@@ -847,6 +899,13 @@ def readTyIter (g : Dg) (fuel : Nat) (work : List TyWork) (acc : List Int)
               readTyIter g k ws (pushBytes (54 :: lebU id.toNat) acc)
                 (span + 1 + (lebSpan bs).n) (if nd > need then nd else need) r.rest
             | _ => tyFail profile.cRefKind r.rest
+        | 11 :: _ :: bs =>
+          let nd := if w.depth > need then w.depth else need
+          readTyIter g k ws (0 :: acc) (span + 2) nd bs
+        | 10 :: _ :: _ :: bs =>
+          let nd := if w.depth > need then w.depth else need
+          readTyIter g k ({ kind := 0, n := 0, depth := w.depth + 1 } :: ws)
+            (4 :: acc) (span + 3) nd bs
         | t :: bs =>
           let nd := if w.depth > need then w.depth else need
           if t == 0 || t == 1 || t == 2 || t == 3 then
@@ -965,6 +1024,10 @@ def tyNeedGo (fuel : Nat) (kind : Nat) (n : Nat) (rest : List Int) : Rd :=
     else
       match rest with
       | [] => rdFail profile.cTrunc []
+      | 11 :: _ :: bs => rdOk 1 bs
+      | 10 :: _ :: _ :: bs =>
+        let a := tyNeedGo k 0 0 bs
+        if a.ok != profile.cOk then a else rdOk (1 + a.n) a.rest
       | t :: bs =>
         if t == 0 || t == 1 || t == 2 || t == 3 then rdOk 1 bs
         else if t == 4 || t == 8 || t == 9 then
@@ -1032,6 +1095,10 @@ def tpRun (g : Dg) (named : Bool) : Nat → List Int → List Int → Tn
 def tyNode (g : Dg) (rest : List Int) : Tn :=
   match rest with
   | [] => tnFail profile.cTrunc []
+  | 11 :: _ :: bs => { ok := profile.cOk, need := 1, acc := [0], rest := bs }
+  | 10 :: _ :: _ :: bs =>
+    let a := tpOne g [4] bs
+    if a.ok != profile.cOk then a else { a with need := 1 + a.need }
   | t :: bs =>
     if t == 0 || t == 1 || t == 2 || t == 3 then { ok := profile.cOk, need := 1, acc := [t], rest := bs }
     else if t == 4 || t == 8 || t == 9 then
@@ -1166,6 +1233,11 @@ def typeDigest (g : Dg) (fuel kind n : Nat) (h : Int) (rest : List Int) : Rd :=
         match dgAt g r.n.toNat with
         | 0 :: _ :: _ :: hash :: _ => rdOk hash r.rest
         | _ => rdFail profile.cRef r.rest
+      | 11 :: _ :: bs => rdOk (typeHash [0] 0) bs
+      | 10 :: _ :: _ :: bs =>
+        let h := typeHash [4] 0
+        let a := typeDigest g k 0 0 0 bs
+        if a.ok != profile.cOk then a else rdOk (typeHash [a.n] h) a.rest
       | t :: bs =>
         let h := typeHash [t] 0
         if t <= 3 then rdOk h bs
@@ -1343,6 +1415,8 @@ def sizeGoWithLayers (tg : Dg) (lay : Layers) (fuel : Nat) (arr : List (List Int
     else
       match rest with
       | [] => szFail profile.cTrunc []
+      | 11 :: _ :: bs => ((sizeGoWithLayers tg) lay) k arr mode eqt 0 0 acc map (0 :: bs)
+      | 10 :: _ :: _ :: bs => ((sizeGoWithLayers tg) lay) k arr mode eqt 0 0 acc map (4 :: bs)
       | t :: bs =>
         if t == 0 || t == 1 then { ok := profile.cOk, n := acc + 1, map := map ++ [0], rest := bs }
         else if t == 2 then { ok := profile.cOk, n := acc + 1, map := map ++ [if mode == 2 || mode == 3 then 0 else 1], rest := bs }
@@ -1439,6 +1513,8 @@ def listTysGo (tg : Dg) (fuel : Nat) (kind : Nat) (n : Nat) (seen : Map) (acc : 
     else
       match rest with
       | [] => ltFail profile.cTrunc []
+      | 11 :: _ :: bs => (listTysGo tg) k 0 0 seen acc (0 :: bs)
+      | 10 :: _ :: _ :: bs => (listTysGo tg) k 0 0 seen acc (4 :: bs)
       | t :: bs =>
         if t == 0 || t == 1 || t == 2 then { ok := profile.cOk, acc := acc, rest := bs, seen := seen }
         else if t == 3 then { ok := profile.cOk, acc := (addT tg) acc [4, 0], rest := bs, seen := seen }
@@ -1593,6 +1669,30 @@ def sigOf : List (List Int) → Nat → List Int
   | s :: _, 0 => s
   | _ :: ss, k + 1 => sigOf ss k
 
+-- The declared width in bits of the fixed-width scalar type that a type's stream begins with (tag 11 and its width
+-- byte: contracts/tasks/WIRE-SEQ-0.md revision 2), 0 for any other type. `readTyD` gives such a type as the word it
+-- means, so whoever wants the width reads it here, beside it.
+def tyRawWidth : List Int → Int
+  | 11 :: w :: _ => w
+  | _ => 0
+
+-- the widths of k types in a row
+def readTyWs (g : Dg) : Nat → List Int → List Int
+  | 0, _ => []
+  | k + 1, rest => tyRawWidth rest :: readTyWs g k (readTyD g rest).rest
+
+-- For each function its signature's declared widths, the parameters' and then the result's: the stream `readSigs`
+-- reads, read beside it (lib/lrc/FromWire.rsd lays a node's fields out by them). Where a signature does not read,
+-- the lists end (`readSigs` names the cause).
+def readSigWs (g : Dg) : Nat → List Int → List (List Int)
+  | 0, _ => []
+  | k + 1, rest =>
+    let r := readLeb rest
+    if r.ok != profile.cOk || r.n < 0 || r.n > (profile.arityMax : Int) then []
+    else
+      let t := readTys g (r.n.toNat + 1) [] r.rest
+      if t.ok != profile.cOk then [] else readTyWs g (r.n.toNat + 1) r.rest :: readSigWs g k t.rest
+
 -- The i-th type of a run of types.
 def nthTy (tg : Dg) : Nat → List Int → List Int
   | 0, rest => ((readTyD tg) rest).acc
@@ -1726,11 +1826,19 @@ def i64LoadAt (off : Int) : List Int :=
 def i64StoreAt (off : Int) : List Int :=
   [55, 3] ++ lebS off
 
-def blkGet (off : Int) : List Int :=
-  lg 0 ++ [167] ++ i64LoadAt off
+-- The source word is already an address for memory64.
+def wasmAddr (addr64 : Bool) : List Int :=
+  if addr64 then [] else [167]
 
-def blkSet (off : Int) (v : List Int) : List Int :=
-  lg 0 ++ [167] ++ v ++ i64StoreAt off
+def blkGetAt (addr64 : Bool) (off : Int) : List Int :=
+  lg 0 ++ wasmAddr addr64 ++ i64LoadAt off
+
+def blkSetAt (addr64 : Bool) (off : Int) (v : List Int) : List Int :=
+  lg 0 ++ wasmAddr addr64 ++ v ++ i64StoreAt off
+
+def blkGet (off : Int) : List Int := blkGetAt false off
+
+def blkSet (off : Int) (v : List Int) : List Int := blkSetAt false off v
 
 -- R010 stopgap layout: low 32 bits = count, high 32 bits = version, the
 -- byte distance of the block from memory's end. Every retained block moves
@@ -1969,7 +2077,13 @@ def rdUp (r : Rd) : Rd := if r.ok != profile.cOk then r else rdOk (1 + r.n) r.re
 
 def rdLeaf (r : Rd) : Rd := if r.ok != profile.cOk then r else rdOk 1 r.rest
 
-def skipEGo (g : Dg) (fuel : Nat) (kind : Nat) (n : Nat) (rest : List Int) : Rd :=
+-- UINT64-0, docs/EMITTER.md W row. Type 11 64 canonicalizes to the word 0.
+-- Literal 64 has eight payload bytes, 75 has one child, and these tags have two.
+def wBinary (tag : Int) : Bool :=
+  (tag >= 65 && tag <= 74) || tag == 76 || tag == 77
+
+-- Present lowering uses the same walk with the W row disabled, including in code it skips.
+def skipEWith (g : Dg) (word64 : Bool) (fuel : Nat) (kind : Nat) (n : Nat) (rest : List Int) : Rd :=
   match fuel with
   | 0 => rdFail (rscFuelFailure (skipFuelRequest kind n rest)) rest
   | k + 1 =>
@@ -1977,19 +2091,19 @@ def skipEGo (g : Dg) (fuel : Nat) (kind : Nat) (n : Nat) (rest : List Int) : Rd 
       match n with
       | 0 => rdOk 1 rest
       | m + 1 =>
-        let a := skipEGo g k 0 0 rest
+        let a := skipEWith g word64 k 0 0 rest
         if a.ok != profile.cOk then a
         else
-          let b := skipEGo g k 2 m a.rest
+          let b := skipEWith g word64 k 2 m a.rest
           if b.ok != profile.cOk then b else rdOk (1 + maxZ a.n b.n) b.rest
     else if kind == 1 then
       match rest with
       | 0 :: bs => rdOk 1 bs
       | 1 :: bs =>
-        let a := skipEGo g k 0 0 bs
+        let a := skipEWith g word64 k 0 0 bs
         if a.ok != profile.cOk then a
         else
-          let b := skipEGo g k 1 0 a.rest
+          let b := skipEWith g word64 k 1 0 a.rest
           if b.ok != profile.cOk then b else rdOk (1 + maxZ a.n b.n) b.rest
       | _ => rdFail profile.cBody rest
     else
@@ -2009,36 +2123,42 @@ def skipEGo (g : Dg) (fuel : Nat) (kind : Nat) (n : Nat) (rest : List Int) : Rd 
         else if tag == 1 then rdLeaf (skipBytes 1 bs)
         else if tag == 2 then rdLeaf (skipName bs)
         else if tag == 3 then rdLeaf (readLeb bs)
-        else if tag == 4 then let t := skipTyD g bs; if t.ok != profile.cOk then t else rdUp (skipEGo g k 2 2 t.rest)
-        else if tag == 5 || tag == 20 || tag == 48 then rdUp (skipEGo g k 2 3 bs)
+        else if tag == 4 then let t := skipTyD g bs; if t.ok != profile.cOk then t else rdUp (skipEWith g word64 k 2 2 t.rest)
+        else if tag == 5 || tag == 20 || tag == 48 then rdUp (skipEWith g word64 k 2 3 bs)
         else if tag == 6 || tag == 7 || tag == 8 || tag == 10 || tag == 11 || tag == 12 || tag == 13 || tag == 15 || tag == 16
-            || tag == 19 || tag == 26 || tag == 27 || tag == 28 || tag == 47 then rdUp (skipEGo g k 2 2 bs)
+            || tag == 19 || tag == 26 || tag == 27 || tag == 28 || tag == 47 then rdUp (skipEWith g word64 k 2 2 bs)
         else if tag == 9 || tag == 17 || tag == 18 || tag == 21 || tag == 23 || tag == 25 || tag == 36 || tag == 39 || tag == 40
-            || tag == 44 || tag == 45 || tag == 46 || tag == 49 then rdUp (skipEGo g k 2 1 bs)
+            || tag == 44 || tag == 45 || tag == 46 || tag == 49 then rdUp (skipEWith g word64 k 2 1 bs)
         else if tag == 14 || tag == 24 || tag == 29 || tag == 30 || tag == 38 || tag == 42 || tag == 43 then
           let t := skipTyD g bs
-          if t.ok != profile.cOk then t else rdUp (skipEGo g k 2 (if tag == 14 then 2 else 1) t.rest)
+          if t.ok != profile.cOk then t else rdUp (skipEWith g word64 k 2 (if tag == 14 then 2 else 1) t.rest)
         else if tag == 22 || tag == 33 || tag == 37 then rdOk 1 bs
         else if tag == 41 then rdLeaf (skipBytes 9 bs)
-        else if tag == 31 then let r := readLeb bs; if r.ok != profile.cOk then r else rdUp (skipEGo g k 2 1 r.rest)
+        else if tag == 31 then let r := readLeb bs; if r.ok != profile.cOk then r else rdUp (skipEWith g word64 k 2 1 r.rest)
         else if tag == 32 then
           let t := skipTyD g bs
           if t.ok != profile.cOk then t
           else
-            let a := skipEGo g k 0 0 t.rest
+            let a := skipEWith g word64 k 0 0 t.rest
             if a.ok != profile.cOk then a
             else
-              let b := skipEGo g k 1 0 a.rest
+              let b := skipEWith g word64 k 1 0 a.rest
               if b.ok != profile.cOk then b else rdOk (1 + maxZ a.n b.n) b.rest
-        else if tag == 34 then let nm := skipName bs; if nm.ok != profile.cOk then nm else rdUp (skipEGo g k 2 2 nm.rest)
+        else if tag == 34 then let nm := skipName bs; if nm.ok != profile.cOk then nm else rdUp (skipEWith g word64 k 2 2 nm.rest)
         else if tag == 35 then
           let t := skipTyD g bs
           if t.ok != profile.cOk then t
-          else let r := readLeb t.rest; if r.ok != profile.cOk then r else rdUp (skipEGo g k 2 1 r.rest)
-        else if tag == 50 then let t := skipTyD g bs; if t.ok != profile.cOk then t else rdUp (skipEGo g k 2 3 t.rest)
-        else if tag == 51 then let t := skipTyD g bs; if t.ok != profile.cOk then t else rdUp (skipEGo g k 2 4 t.rest)
-        else if tag == 52 then let r := readLeb bs; if r.ok != profile.cOk then r else rdUp (skipEGo g k 1 0 r.rest)
+          else let r := readLeb t.rest; if r.ok != profile.cOk then r else rdUp (skipEWith g word64 k 2 1 r.rest)
+        else if tag == 50 then let t := skipTyD g bs; if t.ok != profile.cOk then t else rdUp (skipEWith g word64 k 2 3 t.rest)
+        else if tag == 51 then let t := skipTyD g bs; if t.ok != profile.cOk then t else rdUp (skipEWith g word64 k 2 4 t.rest)
+        else if tag == 52 then let r := readLeb bs; if r.ok != profile.cOk then r else rdUp (skipEWith g word64 k 1 0 r.rest)
+        else if word64 && tag == 64 then rdLeaf (skipBytes 8 bs)
+        else if word64 && tag == 75 then rdUp (skipEWith g word64 k 2 1 bs)
+        else if word64 && wBinary tag then rdUp (skipEWith g word64 k 2 2 bs)
         else rdFail (profile.cUnsup + tag) bs
+
+def skipEGo (g : Dg) (fuel kind n : Nat) (rest : List Int) : Rd :=
+  skipEWith g true fuel kind n rest
 
 -- Skip one expression on the wire (the untaken branch of a compile-time if).
 -- kind 0: one expression; 1: an argument or branch list; 2: n children.

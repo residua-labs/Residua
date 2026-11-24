@@ -12,7 +12,10 @@
 --   * a `mod` by a divisor known to be a power of two becomes a mask (`primMask`): the wire's
 --     modulus takes the sign of the divisor, and for 2^k that is the low k bits of any dividend;
 --   * a comparison whose operands' ranges decide it becomes its value, and a `case` on a word
---     whose range is one value becomes that alternative.
+--     whose range is one value becomes that alternative;
+--   * a `mod` of a word that is not negative and below its divisor is that word. The frontend's
+--     scalar form of a fixed-width operation (since main 62438f27a: `((a % m) op (b % m)) % m`)
+--     reduces its operands again, and a parameter or a literal of the type is below the bound already.
 --
 -- The facts are intervals of i64 (Cousot and Cousot, POPL 1977; the interprocedural form with
 -- function clones is the usual one for a closed call graph, LLVM's IPSCCP and GCC's IPA-CP):
@@ -91,16 +94,27 @@ def ivPow2Go : Nat → Int → Int → Bool
 -- is m one of 2, 4, .., 2^62
 def ivPow2 (m : Int) : Bool := m >= 2 && ivPow2Go 62 2 m
 
+-- The unsigned order is the signed order within a half, with the nonnegative half first.
+def ivWCompare (le : Bool) (a b : Iv) : Iv :=
+  if a.lo >= 0 && b.hi < 0 then ivConst 1
+  else if a.hi < 0 && b.lo >= 0 then ivConst 0
+  else if (a.lo >= 0 && b.lo >= 0) || (a.hi < 0 && b.hi < 0) then
+    if a.hi < b.lo || (le && a.hi == b.lo) then ivConst 1
+    else if a.lo > b.hi || (!le && a.lo == b.hi) then ivConst 0
+    else ivBool
+  else ivBool
+
 -- the result of operator p on operands in a and b, when it returns at all
 def ivPrim (p : Nat) (a b : Iv) : Iv :=
   let two := p == primAdd || p == primSub || p == primMul || p == primDiv || p == primMod || p == primLt || p == primGt
     || p == primEq || p == primAnd || p == primOr || p == primStrEq || p == primAddW || p == primSubW || p == primMulW
-  let one := p == primNeg || p == primNot || p == primTagOf || p == primMask
+    || (p >= primWAdd && p <= primWShr && p != primWNot)
+  let one := p == primNeg || p == primNot || p == primTagOf || p == primMask || p == primWNot
   if !two && !one then ivTop
   else if ivIsBot a || (two && ivIsBot b) then ivBot
-  else if p == primAdd || p == primAddW then (if ivAddSafe a b then { lo := a.lo + b.lo, hi := a.hi + b.hi } else ivTop)
-  else if p == primSub || p == primSubW then (if ivSubSafe a b then { lo := a.lo - b.hi, hi := a.hi - b.lo } else ivTop)
-  else if p == primMul || p == primMulW then
+  else if p == primAdd || p == primAddW || p == primWAdd then (if ivAddSafe a b then { lo := a.lo + b.lo, hi := a.hi + b.hi } else ivTop)
+  else if p == primSub || p == primSubW || p == primWSub then (if ivSubSafe a b then { lo := a.lo - b.hi, hi := a.hi - b.lo } else ivTop)
+  else if p == primMul || p == primMulW || p == primWMul then
     (if ivMulSafe a b then { lo := a.lo * b.lo, hi := a.hi * b.hi } else ivTop)
   else if p == primNeg then (if a.lo > ivMin then { lo := 0 - a.hi, hi := 0 - a.lo } else ivTop)
   else if p == primMod then
@@ -108,6 +122,9 @@ def ivPrim (p : Nat) (a b : Iv) : Iv :=
     (if b.lo > 0 then { lo := 0, hi := (if a.lo >= 0 && a.hi < b.hi - 1 then a.hi else b.hi - 1) }
      else if b.hi < 0 then { lo := b.lo + 1, hi := 0 } else ivTop)
   else if p == primDiv then (if a.lo >= 0 && b.lo > 0 then { lo := 0, hi := a.hi } else ivTop)
+  else if p == primWDiv || p == primWMod then
+    (if a.lo >= 0 then { lo := 0, hi := a.hi } else ivTop)
+  else if p == primWLt || p == primWLe then ivWCompare (p == primWLe) a b
   else if p == primLt then (if a.hi < b.lo then ivConst 1 else if a.lo >= b.hi then ivConst 0 else ivBool)
   else if p == primGt then (if a.lo > b.hi then ivConst 1 else if a.hi <= b.lo then ivConst 0 else ivBool)
   else if p == primEq then
@@ -232,8 +249,20 @@ structure RgEnv where
 
 def rgIv (env : RgEnv) (y : Int) : Iv := if y < 0 then ivTop else ivmFind env.iv y ivTop
 
--- what a type says by itself
-def rgOfType (ty : Int) (a : Iv) : Iv := if ty == tyU8 then ivMeet a { lo := 0, hi := 255 } else a
+-- the numbers of w bytes
+def rgOfWidth (w : Nat) : Iv :=
+  if w == 1 then { lo := 0, hi := 255 } else if w == 2 then { lo := 0, hi := 65535 }
+  else if w == 4 then { lo := 0, hi := 4294967295 } else ivTop
+-- What a type says by itself: uint8, the type of `isShared`'s result and of a parameter that the wire types Bool or
+-- declares with 8 bits. The wider declared widths (uint16 and uint32 on a parameter, lib/lrc/FromWire.rsd
+-- `tysOfWidth`) say nothing here. An image function is entered from outside with any words (above), and a clone
+-- has its parameters' facts from the calls inside the program. Read here, the width would clear the body that
+-- assumes nothing, so that no clone is made; that was measured and is not taken
+-- (reports/backend-opt-fable/LAND-PACKW.md, "Not taken").
+def rgOfType (ty : Int) (a : Iv) : Iv := if ty == tyU8 then ivMeet a (rgOfWidth 1) else a
+-- what a store of type `ty` leaves in its field: a number of the bytes it writes (lib/lrc/Pack.rsd gives the
+-- `sset` of a narrow field the type uint8, uint16 or uint32)
+def rgOfStore (ty : Int) (a : Iv) : Iv := if tyWidth ty < 8 then ivMeet a (rgOfWidth (tyWidth ty)) else a
 
 def rgBindIv (env : RgEnv) (x : Nat) (ty : Int) (a : Iv) : RgEnv :=
   if tyIsScalar ty then { env with iv := ivmSet env.iv (x : Int) (rgOfType ty a) } else env
@@ -279,7 +308,7 @@ def rgExpr (env : RgEnv) (s : RgS) (e : N) : Iv :=
     ivPrim (primOp e) (rgIv env (intAt 0 e.ys)) (rgIv env (intAt 1 e.ys))
   else if e.op == opSProj then
     let x := (sprojVar e : Int)
-    let of := if sprojByte e then { lo := 0, hi := 255 } else ivTop
+    let of := rgOfWidth (sprojWidth e)
     if s.poison || !ivmHas env.ck x then of
     else
       let c := ivmFind env.ck x ivTop
@@ -302,6 +331,14 @@ def rgRewrite (env : RgEnv) (e : N) (r : Iv) : N :=
     else if p == primMod && ivIsConst b && ivPow2 b.lo then
       { e with a := (primMask : Int), b := b.lo - 1, ys := [intAt 0 e.ys] }
     else e
+
+-- is e a modulus that gives back its dividend: a word that is not negative and below every divisor it
+-- can meet (the wire's modulus has the divisor's sign, lib/lrc/Emit.rsd `emMod`)
+def rgSame (env : RgEnv) (e : N) : Bool :=
+  e.op == opPrim && primOp e == primMod && intAt 0 e.ys >= 0 &&
+    (let a := rgIv env (intAt 0 e.ys)
+     let b := rgIv env (intAt 1 e.ys)
+     !ivIsBot a && !ivIsBot b && a.lo >= 0 && b.lo > a.hi)
 
 -- the alternative a word of value v selects: its body, or the default's
 def rgPick (v : Int) : List N → Option N
@@ -347,6 +384,11 @@ partial def rgGo (cx : RgCx) (env : RgEnv) (s : RgS) (n : N) : RgR :=
           { e with a := ((cx.base + (imFind cx.clonedAt f).toNat : Nat) : Int) }
         else e
       { s := r.s, node := { n with kids := [e1, r.node] } }
+    else if cx.rw && rgSame env e then
+      -- the binding goes, and what named it names the operand (NormIds.rsd `replaceVar`). It counts two:
+      -- the body that knows nothing about the operand turns the same modulus into a mask and counts one,
+      -- and a function whose parameters' facts take the masks away is worth its clone (`rgGains`)
+      rgGo cx env { s with used := s.used + 2 } (replaceVar x (intAt 0 e.ys).toNat (bodyOf n))
     else
       let v := rgExpr env s e
       let env1 := if e.op == opCtor || e.op == opReuse then
@@ -362,7 +404,7 @@ partial def rgGo (cx : RgCx) (env : RgEnv) (s : RgS) (n : N) : RgR :=
       else
         let c := ivmFind env.ck x ivTop
         let p := ivmJoin s.fs (rgKey { cidx := c.hi.toNat, size := 0, ssize := 0, tid := c.lo.toNat } (ssetN n) (ssetOff n))
-          (rgOfType n.d (rgIv env (ssetArg n : Int))) cx.wide
+          (rgOfStore n.d (rgIv env (ssetArg n : Int))) cx.wide
         { s with fs := p.t, changed := s.changed || p.changed }
     let r := rgGo cx env s1 (bodyOf n)
     { s := r.s, node := setBody n r.node }

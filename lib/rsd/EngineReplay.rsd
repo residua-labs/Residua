@@ -1,0 +1,284 @@
+-- Runtime-stimulus and observation checker ported from the frozen Rsd
+-- engine collector. This is a pure observed-value boundary, not a process
+-- attestation or the engine's build/effect orchestration.
+namespace Lib.Rsd.EngineReplay
+def encode := Lib.Rsd.QFloorJson.encode
+def parse := Lib.Rsd.QFloorJson.parse
+def get := Lib.Rsd.QFloorJson.get
+def str? := Lib.Rsd.QFloorJson.str?
+def int? := Lib.Rsd.QFloorJson.int?
+
+inductive Residue where
+  | programPin
+  | inventory
+  | input
+  | command
+  | json
+  | differential
+  | value
+  | trace
+  | necessary
+  | outcome
+  | cache
+  | key
+  | hit
+  | sparse
+
+def residueName : Residue -> String
+  | Residue.programPin => "nf_engine_replay_program_pin"
+  | Residue.inventory => "nf_engine_replay_inventory"
+  | Residue.input => "nf_engine_replay_input"
+  | Residue.command => "nf_engine_replay_command"
+  | Residue.json => "nf_engine_replay_json"
+  | Residue.differential => "nf_engine_replay_differential"
+  | Residue.value => "nf_engine_replay_value"
+  | Residue.trace => "nf_engine_replay_trace"
+  | Residue.necessary => "nf_engine_replay_necessary"
+  | Residue.outcome => "nf_engine_replay_outcome"
+  | Residue.cache => "nf_engine_replay_cache"
+  | Residue.key => "nf_engine_replay_key"
+  | Residue.hit => "nf_engine_replay_whole_hit"
+  | Residue.sparse => "nf_engine_replay_sparse"
+
+structure Request where
+  programs : Lib.Rsd.QFloorJson.Value
+  root : Lib.Rsd.QFloorJson.Value
+  deriving BEq, Repr
+structure Sample where
+  label : String
+  input : String
+  compiled : Lib.Rsd.CommandReceipt.Observation
+  stock : Lib.Rsd.CommandReceipt.Observation
+  deriving BEq, Repr
+structure State where
+  samples : List Sample
+  replayNoise : Nat := 0
+  deriving BEq, Repr
+structure Key where
+  request : Request
+  observations : State
+  deriving BEq, Repr
+structure Result where
+  state : State
+  residue : Option Residue
+
+def subject : String := "7a4b77382fc61c9822167d2f348420bf49234d72"
+def bodyQ : String := "66c146a73a7ee1cf1873c7cb89792d31071f06ad4ca55dcf9ab8b027b3eb3c7f"
+def programsQ : String := "864ebb87bb823dc703247a13ec18dd3724ff4e447c31f889d9d0cee0d8c73457"
+def rootQ : String := "eda07074c480baa3d91f6a4255239c0b55a538c3b6ff96dd0cf204761ed2653a"
+def labels : List String := ["cold", "warm", "body-identity", "raw-source", "environment",
+  "body-fuel-key", "whole-value", "whole-private", "whole-residue", "whole-fuel-used",
+  "verdict-cache", "observer-retraction", "unobserved-stale", "activate-stale",
+  "ordered-duplicate-reads", "read-order-a", "read-order-b", "body-fuel-zero",
+  "body-fuel-one", "no-observers", "cold-unobserved", "activate-missing"]
+
+def stringify (v : Lib.Rsd.QFloorJson.Value) : String := encode 513 v
+def pinsOK (r : Request) : Bool :=
+  Lib.Rsd.FrontCollector.hash (stringify r.programs ++ "\n") == programsQ &&
+  Lib.Rsd.FrontCollector.hash (stringify r.root ++ "\n") == rootQ
+
+-- JS deepStrictEqual ignores object-property order, while arrays (including
+-- the ordered SCM record kvs and dependency reads) retain their order.
+def equal : Nat -> Lib.Rsd.QFloorJson.Value -> Lib.Rsd.QFloorJson.Value -> Bool
+  | 0, _, _ => false
+  | f + 1, .arr a, .arr b => a.length == b.length && (a.zip b).all (fun (x,y) => equal f x y)
+  | f + 1, .obj a, .obj b => a.length == b.length && a.all (fun (k,v) =>
+      match b.find? (fun p => p.1 == k) with | none => false | some p => equal f v p.2)
+  | _ + 1, a, b => a == b
+
+-- The original JSON.parse oracle admitted only exact JS integers. Duplicate
+-- JSON object properties are rejected explicitly here, rather than assigning
+-- the qfloor parser's first-key meaning to JSON.parse's last-key meaning.
+def safe : Nat -> Lib.Rsd.QFloorJson.Value -> Bool
+  | 0, _ => false
+  | f + 1, .arr xs => xs.all (safe f)
+  | f + 1, .obj xs => (xs.map Prod.fst).eraseDups.length == xs.length && xs.all (fun p => safe f p.2)
+  | _ + 1, .int n => n >= -9007199254740991 && n <= 9007199254740991
+  | _ + 1, _ => true
+
+def parsed (s : String) : Except Residue Lib.Rsd.QFloorJson.Value :=
+  match parse s with
+  | .error _ => .error .json
+  | .ok v => if safe 513 v then .ok v else .error .json
+
+def arr? : Lib.Rsd.QFloorJson.Value -> Option (List Lib.Rsd.QFloorJson.Value)
+  | .arr xs => some xs | _ => none
+def field (v : Lib.Rsd.QFloorJson.Value) (name : String) : Option Lib.Rsd.QFloorJson.Value := do
+  if get v "tag" != some (.str "record") then none else pure ()
+  let kvs <- arr? (<- get v "kvs")
+  let pair <- kvs.find? (fun p => match p with | .arr [.str key, _] => key == name | _ => false)
+  match pair with | .arr [_, value] => some value | _ => none
+def elements (v : Lib.Rsd.QFloorJson.Value) : Option (List Lib.Rsd.QFloorJson.Value) := do arr? (<- get v "xs")
+def number (v : Lib.Rsd.QFloorJson.Value) : Option Int := do int? (<- get v "n")
+def cacheEntry (cache : List Lib.Rsd.QFloorJson.Value) (id : Int) : Option Lib.Rsd.QFloorJson.Value :=
+  cache.find? (fun v => ((field v "id").bind number) == some id)
+def setField (v : Lib.Rsd.QFloorJson.Value) (name : String) (value : Lib.Rsd.QFloorJson.Value) : Lib.Rsd.QFloorJson.Value :=
+  match v with
+  | .obj xs => .obj (xs.map fun (key, old) => (key, if key != "kvs" then old else
+      match old with
+      | .arr pairs => .arr (pairs.map fun p =>
+          match p with
+          | .arr [.str k, _] => if k == name then .arr [.str k, value] else p
+          | _ => p)
+      | _ => old))
+  | _ => v
+
+def rvInt (n : Int) : Lib.Rsd.QFloorJson.Value := .obj [("tag", .str "int"), ("n", .int n)]
+def rvStr (s : String) : Lib.Rsd.QFloorJson.Value := .obj [("tag", .str "str"), ("s", .str s)]
+def rvList (xs : List Lib.Rsd.QFloorJson.Value) : Lib.Rsd.QFloorJson.Value := .obj [("tag", .str "list"), ("xs", .arr xs)]
+def rvRecord (xs : List (Prod String Lib.Rsd.QFloorJson.Value)) : Lib.Rsd.QFloorJson.Value := .obj [("tag", .str "record"),
+  ("kvs", .arr (xs.map fun (k,v) => .arr [.str k, v]))]
+structure Extra where
+  valueQ : Option String := none
+  residue : String := ""
+  fuelUsed : Int := 1
+  privateValue : Option String := none
+
+def outcome (name : String) (extra : Extra := {}) : Lib.Rsd.QFloorJson.Value := rvRecord [
+  ("valueQ", rvStr (extra.valueQ.getD name)), ("residue", rvStr extra.residue),
+  ("fuelUsed", rvInt extra.fuelUsed), ("payload", rvRecord [
+    ("artifact", rvStr ("artifact:" ++ name)), ("verdict", rvStr ("verdict:" ++ name)),
+    ("private", rvStr (extra.privateValue.getD ("private:" ++ name)))])]
+def observedInput (value : Lib.Rsd.QFloorJson.Value) (source : String := "worker source")
+    (environment : String := "environment A") (role : String := "artifact") : Lib.Rsd.QFloorJson.Value := rvRecord [
+  ("outcome", value), ("actionWitness", rvRecord [
+    ("program", rvStr bodyQ), ("source", rvStr source),
+    ("environment", rvStr environment), ("role", rvStr role)])]
+def node (id : Int) (deps : List Int) (value : Lib.Rsd.QFloorJson.Value) : Lib.Rsd.QFloorJson.Value := rvRecord [
+  ("id", rvInt id), ("body_q", rvStr bodyQ), ("fuel", rvInt 1),
+  ("input", observedInput value), ("deps", rvList (deps.map rvInt))]
+def initialNodes : List Lib.Rsd.QFloorJson.Value := [node 1 [] (outcome "one"), node 2 [1] (outcome "two"), node 3 [2] (outcome "three")]
+def updateNode (nodes : List Lib.Rsd.QFloorJson.Value) (id : Int) (key : String) (value : Lib.Rsd.QFloorJson.Value) : List Lib.Rsd.QFloorJson.Value :=
+  nodes.map (fun n => if (field n "id").bind number == some id then setField n key value else n)
+
+structure Case where
+  nodes : List Lib.Rsd.QFloorJson.Value
+  prior : List Lib.Rsd.QFloorJson.Value
+  trace : List Int
+  necessary : List Int := [1,2,3]
+  expected : List (Prod Int Lib.Rsd.QFloorJson.Value) := []
+  observers : List Int := [3]
+
+def scenario (index : Nat) (nodes cache : List Lib.Rsd.QFloorJson.Value) : Case := Id.run do
+  let base : Case := { nodes, prior := cache, trace := [] }
+  let change := fun id key value => updateNode nodes id key value
+  match index with
+  | 0 => return { base with nodes := initialNodes, trace := [1,2,3], expected := [(1,outcome "one"),(2,outcome "two"),(3,outcome "three")] }
+  | 1 => return base
+  | 2 => return { base with nodes := change 1 "body_q" (rvStr "worker-body-revision"), trace := [1], expected := [(1,outcome "one")] }
+  | 3 => return { base with nodes := change 1 "input" (observedInput (outcome "one") "worker source revision"), trace := [1] }
+  | 4 => return { base with nodes := change 1 "input" (observedInput (outcome "one") "worker source revision" "environment B"), trace := [1] }
+  | 5 => return { base with nodes := change 1 "fuel" (rvInt 2), trace := [1] }
+  | 6 | 7 | 8 | 9 =>
+      let extra : Extra := match index with
+        | 6 => { valueQ := some "changed" } | 7 => { privateValue := some "changed" }
+        | 8 => { residue := "worker_refused" } | _ => { fuelUsed := 9 }
+      let v := outcome "one" extra
+      return { base with nodes := change 1 "input" (observedInput v), trace := [1,2], expected := [(1,v),(2,outcome "two")] }
+  | 10 =>
+      let v := outcome "two" { residue := "verdict_refused" }
+      return { base with nodes := change 2 "input" (observedInput v "worker source" "environment A" "verdict"), trace := [2,3], expected := [(2,v)] }
+  | 11 => return { base with necessary := [1], observers := [1] }
+  | 12 => return { base with nodes := change 3 "input" (observedInput (outcome "three" { privateValue := some "inactive edit" })), necessary := [1], observers := [1] }
+  | 13 => return { base with trace := [3], expected := [(3,outcome "three" { privateValue := some "inactive edit" })] }
+  | 14 => return { base with nodes := change 3 "deps" (rvList [rvInt 2,rvInt 2]), trace := [3] }
+  | 15 => return { base with nodes := change 3 "deps" (rvList [rvInt 1,rvInt 2]), trace := [3] }
+  | 16 => return { base with nodes := change 3 "deps" (rvList [rvInt 2,rvInt 1]), trace := [3] }
+  | 17 => return { base with nodes := change 1 "fuel" (rvInt 0), trace := [1,2,3], expected := [(1,rvRecord [("tag",rvInt 1),("value",rvStr "[incr_fuel_exhausted]")])] }
+  | 18 => return { base with nodes := change 1 "fuel" (rvInt 1), trace := [1,2,3] }
+  | 19 => return { base with necessary := [], observers := [] }
+  | 20 =>
+      let v := ((nodes.head?).bind fun n => (field n "input").bind fun x => field x "outcome").getD .null
+      return { base with prior := [], trace := [1], necessary := [1], observers := [1], expected := [(1,v)] }
+  | _ => return { base with trace := [2,3] }
+
+def stimulus (r : Request) (c : Case) (fuel : Int := 128) : Lib.Rsd.QFloorJson.Value := .obj [
+  ("expr", r.root), ("programs", r.programs), ("env", .arr [
+    .arr [.str "mode", rvInt 0], .arr [.str "nodes", rvList c.nodes],
+    .arr [.str "cache", rvList c.prior], .arr [.str "observers", rvList (c.observers.map rvInt)],
+    .arr [.str "binding", rvInt 0]]), ("fuel", .int fuel)]
+def input (r : Request) (c : Case) : String := stringify (stimulus r c) ++ "\n"
+def require (ok : Bool) (e : Residue) : Except Residue Unit := if ok then .ok () else .error e
+def required {Item : Type} (v : Option Item) (e : Residue) : Except Residue Item :=
+  match v with | none => .error e | some x => .ok x
+
+def checkValue (index : Nat) (c : Case) (value : Lib.Rsd.QFloorJson.Value) : Except Residue (List Lib.Rsd.QFloorJson.Value) := do
+  let next <- required ((field value "cache").bind elements) .cache
+  let trace <- required ((field value "recomputed").bind elements) .trace
+  let needed <- required ((field value "necessary").bind elements) .necessary
+  require (trace.map (fun v => number v) == c.trace.map some) .trace
+  require (needed.map (fun v => number v) == c.necessary.map some) .necessary
+  for (id,want) in c.expected do
+    let entry <- required (cacheEntry next id) .outcome
+    let observed <- required (field entry "outcome") .outcome
+    require (equal 513 observed want) .outcome
+  for n in c.nodes do
+    let id <- required ((field n "id").bind number) .cache
+    let entry <- required (cacheEntry next id) .cache
+    if c.trace.contains id then
+      let key <- required (field entry "key") .key
+      let deps <- required ((field n "deps").bind elements) .key
+      let mut args := [<- required (field n "input") .key]
+      for d in deps do
+        let id <- required (number d) .key
+        let dep <- required (cacheEntry next id) .key
+        args := args ++ [<- required (field dep "outcome") .key]
+      require (field key "body_q" == field n "body_q" && field key "fuel" == field n "fuel" &&
+        ((field key "input_witness").any fun v => equal 513 v (rvList args))) .key
+    else
+      match cacheEntry c.prior id with
+      | none => pure ()
+      | some old => require (equal 513 old entry) .hit
+  if index == 20 then
+    for id in [2,3] do
+      let e <- required (cacheEntry next id) .sparse
+      require (((field e "present").bind number) == some 0) .sparse
+  return next
+
+def compare (index : Nat) (c : Case) (sample : Sample) : Except Residue (List Lib.Rsd.QFloorJson.Value) := do
+  require (Lib.Rsd.CommandReceipt.good .engine sample.compiled &&
+    Lib.Rsd.CommandReceipt.good .engine sample.stock) .command
+  let a <- parsed sample.compiled.stdout
+  let b <- parsed sample.stock.stdout
+  require (equal 513 a b) .differential
+  require (get a "ok" == some (.bool true)) .value
+  let value <- required (get a "val") .value
+  require (value != .null) .value
+  checkValue index c value
+
+def replay : Nat -> Request -> List Sample -> List Lib.Rsd.QFloorJson.Value -> List Lib.Rsd.QFloorJson.Value -> Except Residue (Prod (List Lib.Rsd.QFloorJson.Value) (List Lib.Rsd.QFloorJson.Value))
+  | _, _, [], nodes, cache => .ok (nodes, cache)
+  | index, r, sample :: rest, nodes, cache => do
+    let c := scenario index nodes cache
+    require (labels[index]? == some sample.label) .inventory
+    require (sample.input == input r c) .input
+    let next <- compare index c sample
+    replay (index + 1) r rest c.nodes next
+
+def sigma (s : State) : State := { s with replayNoise := 0 }
+def q (r : Request) (s : State) : Key := { request := r, observations := sigma s }
+def residue? (r : Request) (s : State) : Option Residue :=
+  if !pinsOK r then some .programPin
+  else if s.samples.length != labels.length then some .inventory
+  else match replay 0 r s.samples initialNodes [] with | .ok _ => none | .error e => some e
+def admissible (r : Request) (s : State) : Bool := (residue? r (sigma s)).isNone
+def runNF (r : Request) (s : State) : Result := { state := sigma s, residue := residue? r (sigma s) }
+
+-- NF-CORRECT-0 r2: the checked decision; runNF retains the original
+-- transition and its failure-state observations for existing callers.
+def admit (observation : Key) : Except Residue State :=
+  let answer := (runNF observation.request observation.observations)
+  match answer.residue with
+  | some residue => .error residue
+  | none => .ok answer.state
+
+def decide (r : Request) (s : State) : Except Residue State :=
+  let answer := runNF r s
+  match answer.residue with
+  | some residue => .error residue
+  | none => .ok answer.state
+
+theorem quotient_factorization (r : Request) (s : State) : decide r s = admit (q r s) := rfl
+
+
+end Lib.Rsd.EngineReplay
