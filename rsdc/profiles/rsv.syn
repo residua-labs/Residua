@@ -557,6 +557,7 @@ grammar
   CExpr := 'syntax_409 '( C1 ') @tree=(409,$2,0,0) @template=syntax_409($2)
   CExpr := 'syntax_410 '( C1 ') @tree=(410,$2,0,0) @template=syntax_410($2)
   CExpr := 'syntax_411 '( C2 ') @tree=(411,$2,0,0) @template=syntax_411($2)
+  CExpr := 'syntax_411_proof '( C3 ') @tree=(411,$2,0,0) @template=syntax_411_proof($2)
   CExpr := 'syntax_412 '( C2 ') @tree=(412,$2,0,0) @template=syntax_412($2)
   CExpr := 'syntax_413 '( C1 ') @tree=(413,$2,0,0) @template=syntax_413($2)
   CExpr := 'syntax_414 '( C2 ') @tree=(414,$2,0,0) @template=syntax_414($2)

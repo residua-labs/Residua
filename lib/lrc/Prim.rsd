@@ -43,6 +43,31 @@ def primWNot : Nat := 75
 def primWShl : Nat := 76
 def primWShr : Nat := 77
 
+-- FLOAT64-0 (docs/EMITTER.md F row). A Float is a word; these mean the IEEE 754 binary64 operation on the operands'
+-- bits (lean.h `lean_float_*`; Lean 4.14 Init/Data/Float.lean). None refuses. A NaN's sign and payload are not a
+-- value: only `primFBits` shows a NaN's bits, always the one quiet NaN.
+def primFAdd : Nat := 78
+def primFSub : Nat := 79
+def primFMul : Nat := 80
+def primFDiv : Nat := 81
+-- comparisons, returning 0 or 1; false when an operand is a NaN. Equality is IEEE's, not the bits'.
+def primFLt : Nat := 82
+def primFLe : Nat := 83
+def primFEq : Nat := 84
+def primFNeg : Nat := 85
+def primFAbs : Nat := 86
+def primFSqrt : Nat := 87
+def primFFloor : Nat := 88
+def primFCeil : Nat := 89
+-- C's `round`: ties away from zero
+def primFRound : Nat := 90
+-- the nearest binary64 of an unsigned word (`UInt64.toFloat`) and of the wire's checked integer
+def primFOfW : Nat := 91
+def primFOfI : Nat := 92
+-- `Float.toUInt64`: a NaN and a value below zero give 0, a value of 2^64 or more gives 2^64 - 1
+def primFToW : Nat := 93
+def primFBits : Nat := 94
+
 -- A scalar store's layout annotation in N.s. Pack consumes it before later passes.
 def ssetWord64 : String := "w64"
 
@@ -139,6 +164,6 @@ def primTotal (p : Nat) : Bool :=
     || p == primAddW || p == primSubW || p == primMulW || p == primMask
     || p == primIsScalar || p == primBox || p == primUnbox || p == primShrW
     || p == primIsArr || p == primArrSize || p == primArrPush || p == primArrOfList || p == primArrToList || p == primArrSlice
-    || p == primBoxS || p == primUnboxS || (p >= primWAdd && p <= primWShr)
+    || p == primBoxS || p == primUnboxS || (p >= primWAdd && p <= primWShr) || (p >= primFAdd && p <= primFBits)
 
 end Lrc

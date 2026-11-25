@@ -51,7 +51,7 @@ construction — the header differs — not by luck.
     NUL      := 0x00
 
 The header is exactly the git object-header convention
-`<type> <len>\0` [1], with the type drawn from a registry rather than a
+`<type> <len>\0` [^1], with the type drawn from a registry rather than a
 fixed set. `len` makes the header self-terminating; neither byte of
 `kind` can be `SP` or `NUL`.
 
@@ -67,7 +67,7 @@ layout or serialization changed.
 |---|---|
 | printed text fields (manifest values, [receipt](GLOSSARY.md) bindings, tables, logs) | `sha256:` + 64 lowercase hex, for both digest and q |
 | path segments and file names | `sha256-` + 64 hex |
-| self-describing binary (a q stored with no schema around it) | multihash `0x12 0x20` + 32 bytes (34 bytes total) [2] |
+| self-describing binary (a q stored with no schema around it) | multihash `0x12 0x20` + 32 bytes (34 bytes total) [^2] |
 | inside a schema-typed record | 32 raw bytes; the schema carries algorithm and kind |
 
 A printed `sha256:<hex>` does not by itself say `digest` or `q:<kind>` —
@@ -175,19 +175,19 @@ and the expected output.
 
 ## References
 
-1. Git object format (`<type> <len>\0`): S. Chacon, B. Straub,
+[^1]: Git object format (`<type> <len>\0`): S. Chacon, B. Straub,
    *Pro Git*, 2nd ed., ch. 10.2; `gitrepository-layout(5)`.
-2. Multihash (algorithm and length prefix; sha2-256 = `0x12`, length
+[^2]: Multihash (algorithm and length prefix; sha2-256 = `0x12`, length
    `0x20`): multiformats/multihash specification.
-3. E. Dolstra. *The Purely Functional Software Deployment Model*.
+[^3]: E. Dolstra. *The Purely Functional Software Deployment Model*.
    PhD thesis, Utrecht University, 2006 — Nix store paths hash a typed
    fingerprint; `narHash` carries an algorithm prefix.
-4. P. Chiusano, R. Bjarnason et al. Unison: content-addressed
+[^4]: P. Chiusano, R. Bjarnason et al. Unison: content-addressed
    definitions with SCCs hashed as one unit — unisonweb/unison.
-5. Vercel Labs, zerolang (v0.3.4): kind-prefixed printed hashes and a
+[^5]: Vercel Labs, zerolang (v0.3.4): kind-prefixed printed hashes and a
    published hash-input exclusion list — peer design study.
-6. J.-C. Filliâtre, S. Conchon. Type-safe modular hash-consing.
+[^6]: J.-C. Filliâtre, S. Conchon. Type-safe modular hash-consing.
    *ACM SIGPLAN Workshop on ML*, 2006 — a hash is a lookup key; a hit
    is confirmed by structural equality before use.
-7. H. Barendregt, F. Wiedijk. The challenge of computer mathematics.
+[^7]: H. Barendregt, F. Wiedijk. The challenge of computer mathematics.
    *Phil. Trans. R. Soc. A* 363, 2005 (the de Bruijn criterion).

@@ -1,0 +1,293 @@
+-- provenance: ours (searched: lib/Proc9.rsd, glue/std/)
+-- glue/std/Files.rsd — files and directories for glue tools.
+-- Names are Bs (List Int UTF-8 bytes). Reads/writes go through the fs
+-- device (lib/Proc9.rsd's readFileP/createFileP, ported usage); directory
+-- listing goes through the cmd device (`ls`).
+
+import Lib.Proc
+import Lib.Proc9
+import Lib.ProcBytes
+import Glue.Std.Str
+import Glue.Std.Proc
+
+def fRead (name : Bs) : Proc := readFileP name
+
+def fWrite (name data : Bs) : Proc := createFileP name data
+
+-- a path's components: "/a/b/c" -> ["a","b","c"]; empty segments dropped
+def fSegs (path : Bs) : List Bs :=
+  sNonEmpty (sFields 47 path)
+
+def fIsAbsPath : List Int -> Bool
+  | [] => false
+  | b :: _ => b == 47
+
+partial def fInitSegs : List (List Int) -> List (List Int)
+  | [] => []
+  | x :: xs =>
+    match xs with
+    | [] => []
+    | _ :: _ => x :: fInitSegs xs
+
+partial def fLastSeg : List (List Int) -> List Int
+  | [] => []
+  | x :: xs =>
+    match xs with
+    | [] => x
+    | _ :: _ => fLastSeg xs
+
+def fNoSuchFileBytes (u : Nat) : List Int :=
+  [110, 111, 95, 115, 117, 99, 104, 95, 102, 105, 108, 101]
+
+def fEncodeAttachRoot (aname : List Int) : List Int :=
+  let p1 : List Int := nAppend (nPutU32LE 0) (nPutU32LE (nNOFID 0));
+  let p2 : List Int := nAppend p1 (nAppend (nPutName (pUname 0)) (nPutName aname));
+  pWrap 104 0 p2
+
+def fHelloFs (aname : List Int) : Proc := do {
+  let dev : List Int := devFs 0;
+  let v <- devReq dev (pEncodeVersion 0);
+  let ms <- chkVer v;
+  let a <- devReq dev (fEncodeAttachRoot aname);
+  let e <- chkAtt a;
+  ms
+}
+
+def fClunkErr (dev : List Int) (fid : Int) (ename : List Int) : Proc := do {
+  let cl <- devReq dev (pEncodeClunk fid);
+  let okc <- chkClunk cl;
+  let result : List Int := 1 :: ename;
+  result
+}
+
+def fDrop1 : List Int -> List Int
+  | [] => []
+  | _ :: xs => xs
+
+def fDrop2 : List Int -> List Int
+  | [] => []
+  | _ :: [] => []
+  | _ :: _ :: xs => xs
+
+structure FPackStep where
+  word : Int
+  rest : List Int
+
+def fPack7One : Nat -> List Int -> FPackStep
+  | 0, bs => { word := 1, rest := bs : FPackStep }
+  | k + 1, [] => { word := 1, rest := [] : FPackStep }
+  | k + 1, b :: bs =>
+    let s : FPackStep := fPack7One k bs;
+    { word := b + s.word * 256, rest := s.rest : FPackStep }
+
+partial def fPack7ChunkGo : List Int -> List Int -> List Int
+  | [], accRev => nRev accRev []
+  | bs, accRev =>
+    let s : FPackStep := fPack7One 7 bs;
+    fPack7ChunkGo s.rest (s.word :: accRev)
+
+partial def fUnpackWordRev (w : Int) (accRev : List Int) : List Int :=
+  if w <= 1 then accRev
+  else fUnpackWordRev (w / 256) (nMod w 256 :: accRev)
+
+partial def fUnpack7All : List Int -> List Int -> List Int
+  | [], accRev => nRev accRev []
+  | w :: ws, accRev => fUnpack7All ws (fUnpackWordRev w accRev)
+
+partial def fSpanChunks (d : Int) : Int :=
+  if d <= 0 then 1
+  else 2 * fSpanChunks (d - 1)
+
+def fReadLeafDone (chunkSz : Int) (r : List Int) : Proc :=
+  let d : DecR := decStep 0 116 chunkSz r;
+  if d.code != 0 then refuseP (nInboundResidue d.code)
+  else if d.isErr then pure ((0 - 1) :: d.ename)
+  else pure (0 :: nLen d.data 0 :: fPack7ChunkGo d.data [])
+
+def fMergeSpanRight (gotL : Int) (wordsL right : List Int) : List Int :=
+  if nGet right 0 < 0 then right
+  else 0 :: (gotL + nGet right 1) :: nAppend wordsL (fDrop2 right)
+
+partial def fReadSpanP (depth : Int) (dev : List Int) (fid off chunkSz : Int) : Proc := do {
+  let rLeaf <- if depth <= 0 then devReq dev (pEncodeRead fid off chunkSz) else pure [];
+  let leafOut <- if depth <= 0 then fReadLeafDone chunkSz rLeaf else pure [];
+  let subDepth : Int := depth - 1;
+  let halfBytes : Int := fSpanChunks subDepth * chunkSz;
+  let left <- if depth <= 0 then pure leafOut else fReadSpanP subDepth dev fid off chunkSz;
+  let gotL : Int := nGet left 1;
+  let wordsL : List Int := fDrop2 left;
+  let right <- if depth <= 0 || nGet left 0 < 0 || gotL < halfBytes then pure [0, 0]
+               else fReadSpanP subDepth dev fid (off + halfBytes) chunkSz;
+  let result : List Int :=
+    if depth <= 0 || nGet left 0 < 0 || gotL < halfBytes then left
+    else fMergeSpanRight gotL wordsL right;
+  result
+}
+
+partial def fReadDoubleP (depth : Int) (dev : List Int) (fid off chunkSz : Int) (accWords : List Int) : Proc := do {
+  let spanBytes : Int := fSpanChunks depth * chunkSz;
+  let span <- fReadSpanP depth dev fid off chunkSz;
+  let nextDepth : Int := if depth < 8 then depth + 1 else 8;
+  let got : Int := nGet span 1;
+  let merged : List Int := nAppend accWords (fDrop2 span);
+  let out <- if nGet span 0 < 0 then pure span
+             else if got < spanBytes then pure (0 :: merged)
+             else fReadDoubleP nextDepth dev fid (off + got) chunkSz merged;
+  out
+}
+
+def fReadDataAndClunk (dev : List Int) (fid chunkSz : Int) : Proc := do {
+  let raw <- fReadDoubleP 0 dev fid 0 chunkSz [];
+  let cl <- devReq dev (pEncodeClunk fid);
+  let okc <- chkClunk cl;
+  let result : List Int :=
+    if nGet raw 0 < 0 then 1 :: fDrop1 raw
+    else 0 :: fUnpack7All (fDrop1 raw) [];
+  result
+}
+
+def fReadAfterOpen (dev : List Int) (chunkSz : Int) (opened : List Int) : Proc :=
+  let doR : DecR := decStep 0 112 0 opened;
+  if doR.code != 0 then refuseP (nInboundResidue doR.code)
+  else if doR.isErr then fClunkErr dev 1 doR.ename
+  else fReadDataAndClunk dev 1 chunkSz
+
+def fOpenAndRead (dev : List Int) (chunkSz : Int) : Proc := do {
+  let opened <- devReq dev (pEncodeOpen 1 0);
+  let out <- fReadAfterOpen dev chunkSz opened;
+  out
+}
+
+def fReadAfterWalk (dev : List Int) (nw chunkSz : Int) (walk : List Int) : Proc :=
+  let dw : DecR := decStep 0 110 nw walk;
+  if dw.code != 0 then refuseP (nInboundResidue dw.code)
+  else if dw.isErr then pure (1 :: dw.ename)
+  else if dw.nwqid != nw then pure (1 :: fNoSuchFileBytes 0)
+  else fOpenAndRead dev chunkSz
+
+def fReadWalkReq (name : List Int) : List Int :=
+  pEncodeWalk (fSegs name) 0 1
+
+def fReadSegCount (name : List Int) : Int :=
+  pCountNames (fSegs name) 0
+
+def fReadWalkAndOpen (dev name : List Int) (nw chunkSz : Int) : Proc := do {
+  let walk <- devReq dev (fReadWalkReq name);
+  let out <- fReadAfterWalk dev nw chunkSz walk;
+  out
+}
+
+-- Read a file from the fs device in (msize - 24)-byte chunks.
+-- Returns `0 :: bytes` on success or `1 :: ename` on a 9P Rerror.
+def fReadTry (name : List Int) : Proc := do {
+  let dev : List Int := devFs 0;
+  let aname : List Int := if fIsAbsPath name then [47] else [];
+  let ms <- fHelloFs aname;
+  let chunkSz : Int := nGet ms 0 - nIOHDRSZ 0;
+  let nw : Int := fReadSegCount name;
+  let out <- if nw <= 0 then pure (1 :: fNoSuchFileBytes 0)
+             else fReadWalkAndOpen dev name nw chunkSz;
+  out
+}
+
+def fWriteFid (dev : List Int) (fid chunkSz : Int) (data : List Int) : Proc := do {
+  let written <- wrAllP dev fid 0 chunkSz data;
+  let cl <- devReq dev (pEncodeClunk fid);
+  let okc <- chkClunk cl;
+  let result : List Int := [0];
+  result
+}
+
+def fWriteAfterOpen2 (dev : List Int) (chunkSz : Int) (data opened : List Int) : Proc :=
+  let doR : DecR := decStep 0 112 0 opened;
+  if doR.code != 0 then refuseP (nInboundResidue doR.code)
+  else if doR.isErr then fClunkErr dev 2 doR.ename
+  else fWriteFid dev 2 chunkSz data
+
+def fOpen2AndWrite (dev : List Int) (chunkSz : Int) (data : List Int) : Proc := do {
+  let opened <- devReq dev (pEncodeOpen 2 17);
+  let out <- fWriteAfterOpen2 dev chunkSz data opened;
+  out
+}
+
+def fWriteAfterWalk2 (dev origErr data : List Int) (nw chunkSz : Int) (walk : List Int) : Proc :=
+  let dw : DecR := decStep 0 110 nw walk;
+  if dw.code != 0 then refuseP (nInboundResidue dw.code)
+  else if dw.isErr then pure (1 :: origErr)
+  else if dw.nwqid != nw then pure (1 :: origErr)
+  else fOpen2AndWrite dev chunkSz data
+
+def fWriteExisting (dev name origErr data : List Int) (nw chunkSz : Int) : Proc := do {
+  let walk <- devReq dev (fReadWalkReq name);
+  let out <- fWriteAfterWalk2 dev origErr data nw chunkSz walk;
+  out
+}
+
+def fClunk1AndWriteExisting (dev name origErr data : List Int) (nw chunkSz : Int) : Proc := do {
+  let cl1 <- devReq dev (pEncodeClunk 1);
+  let ok1 <- chkClunk cl1;
+  let out <- fWriteExisting dev name origErr data nw chunkSz;
+  out
+}
+
+def fWriteAfterCreate (dev name data : List Int) (nw chunkSz : Int) (created : List Int) : Proc :=
+  let dcr : DecR := decStep 0 114 0 created;
+  if dcr.code != 0 then refuseP (nInboundResidue dcr.code)
+  else if dcr.isErr then fClunk1AndWriteExisting dev name dcr.ename data nw chunkSz
+  else fWriteFid dev 1 chunkSz data
+
+def fWriteDirWalkReq (name : List Int) : List Int :=
+  pEncodeWalk (fInitSegs (fSegs name)) 0 1
+
+def fWriteDirSegCount (name : List Int) : Int :=
+  pCountNames (fInitSegs (fSegs name)) 0
+
+def fWriteBaseName (name : List Int) : List Int :=
+  fLastSeg (fSegs name)
+
+def fCreateAndWrite (dev name data : List Int) (nw chunkSz : Int) : Proc := do {
+  let created <- devReq dev (pEncodeCreate 1 (fWriteBaseName name) 420 1);
+  let out <- fWriteAfterCreate dev name data nw chunkSz created;
+  out
+}
+
+def fWriteAfterDirWalk (dev name data : List Int) (nwDir nw chunkSz : Int) (walked : List Int) : Proc :=
+  let dc : DecR := decStep 0 110 nwDir walked;
+  if dc.code != 0 then refuseP (nInboundResidue dc.code)
+  else if dc.isErr then pure (1 :: dc.ename)
+  else if dc.nwqid != nwDir then pure (1 :: fNoSuchFileBytes 0)
+  else fCreateAndWrite dev name data nw chunkSz
+
+def fWriteDirAndCreate (dev name data : List Int) (nwDir nw chunkSz : Int) : Proc := do {
+  let walked <- devReq dev (fWriteDirWalkReq name);
+  let out <- fWriteAfterDirWalk dev name data nwDir nw chunkSz walked;
+  out
+}
+
+-- Create or truncate a file on the fs device and write `data` in (msize - 24)-byte chunks.
+-- Returns `[0]` on success or `1 :: ename` on a 9P Rerror.
+def fWriteTry (name data : List Int) : Proc := do {
+  let dev : List Int := devFs 0;
+  let aname : List Int := if fIsAbsPath name then [47] else [];
+  let ms <- fHelloFs aname;
+  let chunkSz : Int := nGet ms 0 - nIOHDRSZ 0;
+  let nw : Int := fReadSegCount name;
+  let nwDir : Int := fWriteDirSegCount name;
+  let out <- if nw <= 0 then pure (1 :: fNoSuchFileBytes 0)
+             else fWriteDirAndCreate dev name data nwDir nw chunkSz;
+  out
+}
+
+-- directory listing of a path inside the fs mount, via `ls -1 <path>` on
+-- the shell; returns ls's raw stdout — the caller splits names with sLines
+-- (Proc res is flat `List Int`, `List Bs` cannot cross a bind).
+def fList (path : List Int) : Proc := do {
+  let out <- shP ([108, 115, 32, 45, 49, 32] ++ path ++ [32, 50, 62, 47, 100, 101, 118, 47, 110, 117, 108, 108]);
+  out
+}
+
+-- read a file that lives outside the fs namespace, via `cat` on the shell.
+def fReadHost (path : List Int) : Proc := do {
+  let out <- shP ([99, 97, 116, 32] ++ path);
+  out
+}

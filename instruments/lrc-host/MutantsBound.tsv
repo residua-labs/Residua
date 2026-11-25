@@ -1,0 +1,15 @@
+# FILE	FROM	TO  (FROM occurs exactly once in FILE; every row must make the differential report a mismatch)
+# The boundary's way in for a list whose elements are boxes (lib/lrc/FromWire.rsd `unboundNeeds`, `unboundItems`, `pubTwin`).
+# The rows show in the image check's chain rows of instruments/lrc-host/ProgBound.rsd (bound*: one entry's result handed to
+# another, values from stock Lean): a list never built again (the fault this was written for), the twin left out where the
+# parameter alone needs it, the element read in the stage's layout, the cell built in the boundary's, the element not
+# turned, and a record's later fields not looked at.
+# Not rows: the two cell shapes exchanged (`shape`, `shapeB` in `consTail`, `consInfo`, `hRev`): an element that is turned is a
+# box on both sides, so the two are one shape. The integer's exemption left out (`magField g elem < 0`): a list of integers is
+# then built again from each box's sign and limbs, which is the same value.
+lib/lrc/FromWire.rsd	    | 4 :: elem => !isHeapNode g elem && magField g elem < 0 && unboundNeeds g elem	    | 4 :: elem => !isHeapNode g elem && magField g elem < 0 && false
+lib/lrc/FromWire.rsd	 && sg.params == sgB.params && !unboundAny cx.g sgB.ptys) then	 && sg.params == sgB.params) then
+lib/lrc/FromWire.rsd	      let h := headItems cx.narrow etB.ts px (next + 3)	      let h := headItems cx.narrow et.ts px (next + 3)
+lib/lrc/FromWire.rsd	      let c := consItems cx.narrow e.ws et.ts (pacc : Int) (tl + 1)	      let c := consItems cx.narrow e.ws etB.ts (pacc : Int) (tl + 1)
+lib/lrc/FromWire.rsd	      let e := unboundItems cx elem h.ws h.next loops	      let e : BoundR := { ok := true, next := h.next, items := [], ws := h.ws, loops := loops }
+lib/lrc/FromWire.rsd	        rh.ok && (unboundNeeds g rh.head || unboundNeeds g rh.tail)	        rh.ok && unboundNeeds g rh.head

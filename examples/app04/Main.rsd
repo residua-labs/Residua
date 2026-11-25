@@ -1,0 +1,106 @@
+-- provenance: ours (searched: examples/, lib/, glue/)
+-- examples/app04/Main.rsd — CLI entry reading numbers, computing Float stats, and writing a String table.
+
+import Lib.Proc
+import Lib.Proc9
+import Glue.Std.Str
+import Glue.Std.Args
+import Glue.Std.Files
+import Stats
+import Table
+
+structure CliArgs where
+  argc : Nat
+  inPath : List Int
+  outPath : List Int
+  deriving Inhabited
+
+partial def appStrToBytesRev : List Char -> List Int -> List Int
+  | [], acc => acc
+  | c :: cs, acc => appStrToBytesRev cs (Int.ofNat c.toNat :: acc)
+
+partial def appRevInts : List Int -> List Int -> List Int
+  | [], acc => acc
+  | x :: xs, acc => appRevInts xs (x :: acc)
+
+def appStrToBytes (s : String) : List Int :=
+  appRevInts (appStrToBytesRev s.toList []) []
+
+def appBytesToStr (bs : List Int) : String :=
+  String.mk (statsBytesToChars bs)
+
+def appDrop1 : List Int -> List Int
+  | [] => []
+  | _ :: xs => xs
+
+def appHead : List Int -> Int
+  | [] => 0
+  | x :: _ => x
+
+partial def appSplitArgsGo : List Int -> List Int -> List (List Int) -> List (List Int)
+  | [], [], acc => sRevL acc
+  | [], cur, acc => sRevL (appRevInts cur [] :: acc)
+  | b :: bs, cur, acc =>
+    if b == 0 then appSplitArgsGo bs [] (appRevInts cur [] :: acc)
+    else appSplitArgsGo bs (b :: cur) acc
+
+def appParseArgs (raw : List Int) : CliArgs :=
+  let xs : List (List Int) := appSplitArgsGo raw [] [];
+  match xs with
+  | [] => { argc := 0, inPath := [], outPath := [] : CliArgs }
+  | a :: rest1 =>
+    match rest1 with
+    | [] => { argc := 1, inPath := a, outPath := [] : CliArgs }
+    | b :: rest2 =>
+      match rest2 with
+      | [] => { argc := 2, inPath := a, outPath := b : CliArgs }
+      | _ :: _ => { argc := 3, inPath := a, outPath := b : CliArgs }
+
+-- Returns `0 :: tableBytes` when valid, or `1 :: errMsgBytes` on a malformed input line.
+def appEvaluatePayload (payload : List Int) : List Int :=
+  let sum : Summary := summarizeBytes payload;
+  if !sum.ok then
+    1 :: appStrToBytes (renderParseError sum.errLine sum.errText)
+  else
+    0 :: appStrToBytes (renderTable sum)
+
+def appAfterWrite (outPath wr : List Int) : List Int :=
+  if appHead wr != 0 then
+    procResult 4 (appStrToBytes (renderIoError "write" (appBytesToStr outPath) (appBytesToStr (appDrop1 wr))))
+  else
+    procResult 0 []
+
+def appDoWrite (outPath tableBytes : List Int) : Proc := do {
+  let wr <- fWriteTry outPath tableBytes;
+  let result : List Int := appAfterWrite outPath wr;
+  result
+}
+
+def appAfterRead (inPath outPath rd : List Int) : Proc :=
+  if appHead rd != 0 then
+    pure (procResult 3 (appStrToBytes (renderIoError "read" (appBytesToStr inPath) (appBytesToStr (appDrop1 rd)))))
+  else
+    let plan : List Int := appEvaluatePayload (appDrop1 rd);
+    if appHead plan != 0 then
+      pure (procResult 1 (appDrop1 plan))
+    else
+      appDoWrite outPath (appDrop1 plan)
+
+def appRunWithPaths (inPath outPath : List Int) : Proc := do {
+  let rd <- fReadTry inPath;
+  let out <- appAfterRead inPath outPath rd;
+  out
+}
+
+def appDispatchArgs (rawArgs : List Int) : Proc :=
+  let cli : CliArgs := appParseArgs rawArgs;
+  if cli.argc != 2 then
+    pure (procResult 2 (appStrToBytes (renderUsageError 0)))
+  else
+    appRunWithPaths cli.inPath cli.outPath
+
+def main : Proc := do {
+  let rawArgs <- argvP 0;
+  let out <- appDispatchArgs rawArgs;
+  out
+}

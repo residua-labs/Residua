@@ -1,0 +1,157 @@
+-- micro program for the lists of an image that builds arrays (lib/lrc/Classes.rsd "Which lists may be arrays"):
+-- an array arrives where a list is taken apart, by each way a value flows (a parameter, a result, a field of a
+-- record, a field of a recursive type, an element of a list, an element of an array made a list, a join point).
+-- Each way has a function of its own that takes the list apart, so the mark of an array reaches that function by
+-- that way alone. Beside them: the stage's own list functions on an array's list, arrays that no push makes (the
+-- array of a list, a part of one), and lists of the same image that are never arrays. A place that is not asked
+-- for cells while an array can arrive there reads an array's object as a cell: the rows' values are stock Lean's.
+def pushTo : Nat → Array Nat → Array Nat
+  | 0, a => a
+  | k + 1, a => pushTo k (a.push (k * 3 + 1))
+
+-- by a parameter
+def sumPar : List Nat → Nat
+  | [] => 0
+  | x :: xs => x + sumPar xs
+
+def viaParam (n : Nat) : Nat := sumPar (pushTo n (Array.mkEmpty 0)).toList
+
+-- by a result
+def idL (xs : List Nat) : List Nat := xs
+
+def sumRes : List Nat → Nat
+  | [] => 1
+  | x :: xs => x + sumRes xs
+
+def viaResult (n : Nat) : Nat := sumRes (idL (pushTo n (Array.mkEmpty 0)).toList)
+
+-- by a field of a record
+structure Rec where
+  tag : Nat
+  xs : List Nat
+
+def sumRec : List Nat → Nat
+  | [] => 2
+  | x :: xs => x + sumRec xs
+
+def viaRecord (n : Nat) : Nat :=
+  let b : Rec := { tag := n, xs := (pushTo n (Array.mkEmpty 0)).toList : Rec }
+  sumRec b.xs + b.tag
+
+-- by a field of a recursive type
+structure T where
+  xs : List Nat
+  kids : List T
+
+def mkT : Nat → T
+  | 0 => { xs := (pushTo 3 (Array.mkEmpty 0)).toList, kids := [] : T }
+  | d + 1 => { xs := (pushTo (d + 2) (Array.mkEmpty 0)).toList, kids := [mkT d, mkT d] : T }
+
+def sumNode : List Nat → Nat
+  | [] => 3
+  | x :: xs => x + sumNode xs
+
+def sumT : Nat → T → Nat
+  | 0, t => sumNode t.xs
+  | f + 1, t =>
+    match t.kids with
+    | [] => sumNode t.xs
+    | a :: rest =>
+      match rest with
+      | [] => sumNode t.xs + sumT f a
+      | b :: _ => sumNode t.xs + sumT f a + sumT f b * 2
+
+-- by an element of a list: the outer list is cells, each element an array
+def rows : Nat → List (List Nat)
+  | 0 => []
+  | k + 1 => (pushTo k (Array.mkEmpty 0)).toList :: rows k
+
+def sumElem : List Nat → Nat
+  | [] => 4
+  | x :: xs => x + sumElem xs
+
+def sumRows : List (List Nat) → Nat
+  | [] => 0
+  | r :: rs => sumElem r + sumRows rs
+
+-- by an element of an array made a list: the cells asked of the outer one hold the inner ones
+def pushRows : Nat → Array (List Nat) → Array (List Nat)
+  | 0, r => r
+  | k + 1, r => pushRows k (r.push (pushTo (k % 4 + 1) (Array.mkEmpty 0)).toList)
+
+def sumIn : List Nat → Nat
+  | [] => 5
+  | x :: xs => x + sumIn xs
+
+def sumNest : List (List Nat) → Nat
+  | [] => 0
+  | r :: rs => sumIn r + sumNest rs
+
+def viaNest (n : Nat) : Nat := sumNest (pushRows n (Array.mkEmpty 0)).toList
+
+-- the same, and the cells are not handed on: only what they hold says what the first of them is
+def sumHead : List Nat → Nat
+  | [] => 6
+  | x :: xs => x + sumHead xs
+
+def firstOf : List (List Nat) → List Nat
+  | [] => []
+  | r :: _ => r
+
+def viaFirst (n : Nat) : Nat := sumHead (firstOf (pushRows n (Array.mkEmpty 0)).toList)
+
+-- by a join point: one branch gives an array's list, the other cells
+def sumJoin : List Nat → Nat
+  | [] => 7
+  | x :: xs => x + sumJoin xs
+
+def viaJoin (n : Nat) : Nat :=
+  let xs : List Nat := if n % 2 == 0 then (pushTo n (Array.mkEmpty 0)).toList else [n, n + 1]
+  sumJoin xs
+
+-- the stage's own list functions on an array's list: what they give is cells
+def sumOps : List Nat → Nat
+  | [] => 0
+  | x :: xs => x * 2 + sumOps xs
+
+def viaOps (n : Nat) : Nat :=
+  let a : List Nat := (pushTo n (Array.mkEmpty 0)).toList
+  sumOps (a.drop 2) + sumOps (a ++ [7]) + a.length + sumOps a.reverse + sumOps ([1] ++ a)
+
+-- an array that no push makes: the array of a list of cells
+def cellsUp : Nat → List Nat
+  | 0 => []
+  | k + 1 => (k * 2 + 5) :: cellsUp k
+
+def sumOf : List Nat → Nat → Nat
+  | [], acc => acc
+  | x :: xs, acc => sumOf xs (acc + x * 3)
+
+def viaOfList (n : Nat) : Nat := sumOf (cellsUp n).toArray.toList 1
+
+-- and a part of an array: `take` at a list makes the array of the list and cuts it
+def cellsDown : Nat → List Nat
+  | 0 => []
+  | k + 1 => (k + 11) :: cellsDown k
+
+def sumCut : List Nat → Nat → Nat
+  | [], acc => acc
+  | x :: xs, acc => sumCut xs (acc * 2 + x)
+
+def viaTake (n : Nat) : Nat := sumCut ((cellsDown n).take 3) 1
+
+-- lists that are never arrays, and a function that only they reach
+def upTo : Nat → List Nat
+  | 0 => []
+  | k + 1 => k :: upTo k
+
+def sumP : List Nat → Nat → Nat
+  | [], acc => acc
+  | x :: xs, acc => sumP xs (acc + x * 2)
+
+def plain (n : Nat) : Nat := sumP (upTo n) 0
+
+-- the entry of the row: no argument
+def arrFlowAt : List Nat :=
+  [viaParam 9, viaResult 7, viaRecord 6, sumT 3 (mkT 3), sumRows (rows 6), viaNest 7, viaFirst 5, viaJoin 8, viaJoin 5,
+   viaOps 9, viaOfList 6, viaTake 8, plain 12]

@@ -69,7 +69,7 @@ partial def joAlts : List N → List N
   | alt :: alts => altSetBody alt (joGo (altBody alt)) :: joAlts alts
 end
 
-def declJoinOnce (d : Decl) : Decl := if d.ext then d else { d with body := joGo d.body }
+def declJoinOnce (d : Decl) : Decl := if d.ext || declIsClosed d then d else { d with body := joGo d.body }
 
 def joinOnce : List Decl → List Decl
   | [] => []
@@ -106,16 +106,26 @@ places until the chain is built by modules.) -/
 def jsLimit : Nat := 16
 def jsTiny : Nat := 4
 
+-- `jsSizeCap n cap` is `jsSize` stopped at `cap`: it counts like the size would, but a subtree whose
+-- count has already filled the cap is not walked further. The join-size tests only compare the count
+-- against limits below the cap, so they decide identically.
 mutual
-partial def jsSize (n : N) : Nat :=
-  if n.op == opVDecl then 1 + jsSize (bodyOf n)
-  else if n.op == opJDecl then 1 + jsSize (jdeclBody n) + jsSize (bodyOf n)
-  else if n.op == opCase then 1 + jsSizeAlts (caseAlts n)
+partial def jsSizeCap (n : N) (cap : Nat) : Nat :=
+  if cap == 0 then 0
+  else if n.op == opVDecl then 1 + jsSizeCap (bodyOf n) (cap - 1)
+  else if n.op == opJDecl then
+    let a := jsSizeCap (jdeclBody n) (cap - 1)
+    1 + a + jsSizeCap (bodyOf n) (cap - 1 - a)
+  else if n.op == opCase then 1 + jsSizeAltsCap (caseAlts n) (cap - 1)
   else if isTerminal n then 1
-  else 1 + jsSize (bodyOf n)
-partial def jsSizeAlts : List N → Nat
-  | [] => 0
-  | alt :: alts => jsSize (altBody alt) + jsSizeAlts alts
+  else 1 + jsSizeCap (bodyOf n) (cap - 1)
+partial def jsSizeAltsCap : List N → Nat → Nat
+  | [], _ => 0
+  | alt :: alts, cap =>
+    if cap == 0 then 0
+    else
+      let a := jsSizeCap (altBody alt) cap
+      a + jsSizeAltsCap alts (cap - a)
 end
 
 structure JsAlts where
@@ -124,22 +134,22 @@ structure JsAlts where
   deriving Inhabited
 
 -- is one of the arguments a variable bound to a literal or to a box on the way to the jump
-def jsAnyKnown (known : List Int) : List Int → Bool
+def jsAnyKnown (known : VSet) : List Int → Bool
   | [] => false
-  | y :: ys => (y >= 0 && known.contains y) || jsAnyKnown known ys
+  | y :: ys => (y >= 0 && vsContainsI known y) || jsAnyKnown known ys
 
 mutual
 -- Every jump to j that carries something known (a variable bound to a literal or to a box on the way to it:
 -- `known`), or every jump with `all`, is replaced by a copy of v under the jump's arguments, its bindings
 -- renamed from `next` on. Without `all` a jump that knows nothing of its arguments stays a jump: its copy
 -- would fold to what the join point already is.
-partial def jsPut (all : Bool) (j : Nat) (ps : List Param) (v : N) (known : List Int) (n : N) (next : Nat) : NormR :=
+partial def jsPut (all : Bool) (j : Nat) (ps : List Param) (v : N) (known : VSet) (n : N) (next : Nat) : NormR :=
   if n.op == opJmp then
     if jmpId n == j && (all || jsAnyKnown known (jmpArgs n)) then normGo v (joBind ps (jmpArgs n) imEmpty) next else { next := next, node := n }
   else if n.op == opVDecl then
     let e := vdeclExpr n
     let box := e.op == opPrim && (primOp e == primBox || primOp e == primBoxS)
-    let r := jsPut all j ps v (if e.op == opLit || box then (vdeclVar n : Int) :: known else known) (bodyOf n) next
+    let r := jsPut all j ps v (if e.op == opLit || box then vsInsertI known (vdeclVar n : Int) else known) (bodyOf n) next
     { next := r.next, node := { n with kids := [e, r.node] } }
   else if n.op == opJDecl then
     let a := jsPut all j ps v known (jdeclBody n) next
@@ -152,7 +162,7 @@ partial def jsPut (all : Bool) (j : Nat) (ps : List Param) (v : N) (known : List
   else
     let r := jsPut all j ps v known (bodyOf n) next
     { next := r.next, node := setBody n r.node }
-partial def jsPutAlts (all : Bool) (j : Nat) (ps : List Param) (v : N) (known : List Int) : List N → Nat → JsAlts
+partial def jsPutAlts (all : Bool) (j : Nat) (ps : List Param) (v : N) (known : VSet) : List N → Nat → JsAlts
   | [], next => { next := next, alts := [] }
   | alt :: alts, next =>
     let a := jsPut all j ps v known (altBody alt) next
@@ -165,9 +175,10 @@ partial def jsGo (n : N) (next : Nat) : NormR :=
   if n.op == opJDecl then
     let v := jsGo (jdeclBody n) next
     let b := jsGo (bodyOf n) v.next
-    if joCount (jdeclId n) b.node >= 2 && jsSize v.node <= jsLimit then
+    let sz := jsSizeCap v.node (jsLimit + 1)
+    if joCount (jdeclId n) b.node >= 2 && sz <= jsLimit then
       -- the join point stays for the jumps that know nothing; with no jump left it is gone
-      let r := jsPut (jsSize v.node <= jsTiny) (jdeclId n) (jdeclParams n) v.node [] b.node b.next
+      let r := jsPut (sz <= jsTiny) (jdeclId n) (jdeclParams n) v.node vsEmpty b.node b.next
       if joCount (jdeclId n) r.node == 0 then r else { next := r.next, node := { n with kids := [v.node, r.node] } }
     else { next := b.next, node := { n with kids := [v.node, b.node] } }
   else if n.op == opVDecl then
@@ -188,7 +199,7 @@ partial def jsAlts : List N → Nat → JsAlts
     { next := r.next, alts := altSetBody alt a.node :: r.alts }
 end
 
-def declJoinSmall (d : Decl) : Decl := if d.ext then d else { d with body := (jsGo d.body (declMaxIndex d + 1)).node }
+def declJoinSmall (d : Decl) : Decl := if d.ext || declIsClosed d then d else { d with body := (jsGo d.body (declMaxIndex d + 1)).node }
 
 def joinSmall : List Decl → List Decl
   | [] => []
@@ -208,6 +219,11 @@ def knPay (x : Int) : List Int → Int
 
 def knIsBox (x : Int) (env : List Int) : Bool := knKind x env == 2 || knKind x env == 3
 def knIsLit (x : Int) (v : Int) (env : List Int) : Bool := knKind x env == 1 && knPay x env == v
+
+-- the comparisons of two words, and their value on two literals far inside the machine's range
+def knCmp (p : Nat) : Bool := p == primLt || p == primGt || p == primEq
+def knSmall (v : Int) : Bool := v > -4611686018427387904 && v < 4611686018427387904
+def knCmpVal (p : Nat) (a b : Int) : Bool := if p == primLt then a < b else if p == primGt then a > b else a == b
 
 -- the alternative of a test on the literal v, when the test has one for it
 def knAlt (v : Int) : List N → Option N
@@ -232,6 +248,10 @@ partial def knGo (env : List Int) (n : N) : N :=
     else if primOp e == primAnd && (knIsLit a 0 env || knIsLit b 0 env) then { n with kids := [mkLit 0, knGo (x :: 1 :: 0 :: env) rest] }
     else if primOp e == primAnd && knIsLit a 1 env && b >= 0 then knGo env (replaceVar x.toNat b.toNat rest)
     else if primOp e == primAnd && knIsLit b 1 env && a >= 0 then knGo env (replaceVar x.toNat a.toNat rest)
+    else if knCmp (primOp e) && knKind a env == 1 && knKind b env == 1 && knSmall (knPay a env) && knSmall (knPay b env) then
+      -- a comparison of two literals is its value (the machine's signed comparison, lib/lrc/Emit.rsd `emPrim`)
+      let r : Int := if knCmpVal (primOp e) (knPay a env) (knPay b env) then 1 else 0
+      { n with kids := [mkLit r, knGo (x :: 1 :: r :: env) rest] }
     else { n with kids := [e, knGo env rest] }
   else if n.op == opVDecl then { n with kids := [vdeclExpr n, knGo env (bodyOf n)] }
   else if n.op == opJDecl then { n with kids := [knGo env (jdeclBody n), knGo env (bodyOf n)] }
@@ -249,7 +269,7 @@ partial def knAlts (env : List Int) : List N → List N
   | alt :: alts => altSetBody alt (knGo env (altBody alt)) :: knAlts env alts
 end
 
-def declFoldKnown (d : Decl) : Decl := if d.ext then d else { d with body := knGo [] d.body }
+def declFoldKnown (d : Decl) : Decl := if d.ext || declIsClosed d then d else { d with body := knGo [] d.body }
 
 def foldKnown : List Decl → List Decl
   | [] => []
@@ -357,7 +377,7 @@ end
 -- three rounds: the exchange leaves a case on a word whose own binding is above the join point
 def condDown : List Decl → List Decl
   | [] => []
-  | d :: ds => (if d.ext then d else { d with body := cdGo (cdGo (cdGo d.body)) }) :: condDown ds
+  | d :: ds => (if d.ext || declIsClosed d then d else { d with body := cdGo (cdGo (cdGo d.body)) }) :: condDown ds
 
 /-! ## A counter that is a small number
 
@@ -579,11 +599,11 @@ partial def ubCallsAlts (f : Nat) : List N → Bool
 end
 
 mutual
--- every call of the body marked cold
+-- every ordinary call of the body marked cold (a closed constant keeps `fapClosed`, `d = 3`)
 partial def ubCold (n : N) : N :=
   if n.op == opVDecl then
     let e := vdeclExpr n
-    { n with kids := [(if e.op == opFap then { e with d := 1 } else e), ubCold (bodyOf n)] }
+    { n with kids := [(if e.op == opFap && e.d == 0 then { e with d := 1 } else e), ubCold (bodyOf n)] }
   else if n.op == opJDecl then { n with kids := [ubCold (jdeclBody n), ubCold (bodyOf n)] }
   else if n.op == opCase then { n with kids := ubColdAlts (caseAlts n) }
   else if isTerminal n then n
@@ -698,7 +718,7 @@ def ubWrap (w : UbW) (np : Nat) (d : Decl) : Decl :=
 
 -- a function that takes fuel, has one result that is a word or an object, and calls itself
 def ubApplies (nImg : Nat) (d : Decl) : Bool :=
-  !d.ext && !isOwnFn nImg d.f && d.rets.length == 1 && !tyIsIrr (intAt 0 d.rets) && ubCalls d.f d.body
+  !d.ext && !declIsClosed d && !isOwnFn nImg d.f && d.rets.length == 1 && !tyIsIrr (intAt 0 d.rets) && ubCalls d.f d.body
 
 -- the second form of d as function g, folded
 def ubSecond (d : Decl) (g : Nat) (ps : List Nat) : Decl :=
@@ -731,5 +751,238 @@ def ubDecls (nImg : Nat) : Nat → List Decl → UbR
 def unboxCounters (nImg : Nat) (decls : List Decl) : List Decl :=
   let r := ubDecls nImg decls.length decls
   r.decls ++ r.added
+
+/-! ## A call that names a literal
+
+A function of a natural number is often written with an equation for 0 and one that hands on, and called with
+the literal: the library's map (lib/AvlMap.rsd) has `size 0 m`, `kid 0 xs`, `box 0 m`, `delta 0`, `map0 0`,
+where the number only makes the definition total. Such a function tests on every call what its caller wrote
+down, and no call of it goes where it is called, because the other equation calls the function again
+(lib/lrc/Inline.rsd: a function of a cycle is never inlined). A C compiler reads the same program with the
+test decided and the body in place.
+
+So a call that names a literal gets a form of the function for it. This is call-pattern specialisation for the
+pattern "the argument is this literal" (Peyton Jones, Call-pattern specialisation for Haskell programs, ICFP
+2007; the cloning of interprocedural constant propagation, Callahan, Cooper, Kennedy and Torczon, SIGPLAN 1986):
+
+  * the form of f for the literal c at place i is f's body under `p := c` (or the box of c), folded
+    (`foldKnown`: the test of a box, the number taken out of it, a comparison of two literals, the case a
+    literal decides);
+  * it is kept only when it no longer calls f: the literal chose an equation that does not hand on. A function
+    that counts down from the literal keeps its call, and its test;
+  * every call of f with that literal at that place is a call of the form. It takes the function's arguments,
+    the literal among them, and is entered as the function is.
+
+A small form then goes where it is called (lib/lrc/Pipeline.rsd: `inlineDecls` once more, before the second
+forms for counters are made). A larger one stays a function: what the literal leaves of f, without the test
+and without a call of itself, so that it is no loop and a compiler behind the module may write it into its
+callers (the map's `mk` and `bal` are of this kind).
+
+Only a function that calls itself gets one (another is small and inlined, or large and stays a call), and only
+one of at most `lcWide` times `limit` instructions (`limit`: the inliner's bound for a small function): the work
+is a folding of the function for each literal it is called with, and a form that is not small is a second copy
+of most of its function (GHC bounds the function its pass specialises in the same way,
+`-fspec-constr-threshold`). The form is for the first place of a call that holds a literal, and a function has
+at most `lcPerFn` of them.
+
+Fuel. A form is a function after the stage's own and takes fuel as the function does; the call of it stands
+where the call of f stood, at the same depth; its guards and calls are f's. Folding removes only what a literal
+decides, so the form has f's outcome at every budget for the calls that are rewritten.
+Counting. A box is no heap object: where the parameter was counted, nothing is (`foldKnown`). The other
+parameters keep their ownership. -/
+
+-- what a call's argument is: 1 a literal, 2 the box of one, 3 the box with the sign rule of one; 0 anything else
+def lcKind (env : List Int) (y : Int) : Int :=
+  if y < 0 then 0
+  else if knKind y env == 1 then 1
+  else if (knKind y env == 2 || knKind y env == 3) && knKind (knPay y env) env == 1 then knKind y env
+  else 0
+
+def lcVal (env : List Int) (y : Int) : Int :=
+  if knKind y env == 1 then knPay y env else knPay (knPay y env) env
+
+-- the first place of a call's arguments that holds a literal: place, kind, value; no place: kind 0
+structure LcAt where
+  i : Nat
+  kind : Int
+  c : Int
+  deriving Inhabited
+
+def lcFirst (env : List Int) : Nat → List Int → LcAt
+  | _, [] => { i := 0, kind := 0, c := 0 }
+  | i, y :: ys => if lcKind env y != 0 then { i := i, kind := lcKind env y, c := lcVal env y } else lcFirst env (i + 1) ys
+
+-- what a binding says, as `knGo` enters it
+def lcBind (n : N) (env : List Int) : List Int :=
+  let e := vdeclExpr n
+  let x : Int := (vdeclVar n : Int)
+  if !n.ys.isEmpty then env
+  else if e.op == opLit then x :: 1 :: e.a :: env
+  else if e.op == opPrim && primOp e == primBox && intAt 0 e.ys >= 0 then x :: 2 :: intAt 0 e.ys :: env
+  else if e.op == opPrim && primOp e == primBoxS && intAt 0 e.ys >= 0 then x :: 3 :: intAt 0 e.ys :: env
+  else env
+
+-- the key of a call with a literal: function, place, kind, value; a form's entry has its function after them
+def lcKeyOf (w : List Int) : List Int := [intAt 0 w, intAt 1 w, intAt 2 w, intAt 3 w]
+
+def lcHas (key : List Int) : List (List Int) → Bool
+  | [] => false
+  | k :: ks => k == key || lcHas key ks
+
+-- a function of more than this many times the bound of a small one gets no form (the map's `bal` has 327
+-- instructions where it is read)
+def lcWide : Nat := 16
+
+-- The functions that may get a form: not the stage's own (they take no fuel), calling itself, of at most
+-- `lcWide` times `limit` instructions.
+def lcCands (nImg limit : Nat) : List Decl → VSet → VSet
+  | [], s => s
+  | d :: ds, s =>
+    lcCands nImg limit ds (if !d.ext && !declIsClosed d && !isOwnFn nImg d.f && jsSizeCap d.body (lcWide * limit + 1) <= lcWide * limit && ubCalls d.f d.body then vsInsert s d.f else s)
+
+structure LcSitesAcc where
+  seen : LTree
+  list : List (List Int)
+  deriving Inhabited
+
+def lcSiteHash (f i kind c : Int) : Int :=
+  f * 65537 + i * 257 + kind * 17 + (c % 65521)
+
+def lcBucketHas (f i kind c : Int) : List Int → Bool
+  | a :: b :: k :: v :: rest => (a == f && b == i && k == kind && v == c) || lcBucketHas f i kind c rest
+  | _ => false
+
+mutual
+-- the calls of such functions with a literal: for each, the function, the place, the kind and the value
+partial def lcSitesGo (cands : VSet) (env : List Int) (n : N) (a : LcSitesAcc) : LcSitesAcc :=
+  if n.op == opVDecl then
+    let e := vdeclExpr n
+    if e.op == opFap && vsContains cands (fapFn e) then
+      let la := lcFirst env 0 e.ys
+      if la.kind == 0 then lcSitesGo cands env (bodyOf n) a
+      else
+        let f : Int := (fapFn e : Int)
+        let i : Int := (la.i : Int)
+        let h := lcSiteHash f i la.kind la.c
+        let b := ltFind a.seen h
+        if lcBucketHas f i la.kind la.c b then lcSitesGo cands env (bodyOf n) a
+        else lcSitesGo cands env (bodyOf n) { seen := ltPut a.seen h (f :: i :: la.kind :: la.c :: b), list := [f, i, la.kind, la.c] :: a.list }
+    else lcSitesGo cands (lcBind n env) (bodyOf n) a
+  else if n.op == opJDecl then lcSitesGo cands env (bodyOf n) (lcSitesGo cands env (jdeclBody n) a)
+  else if n.op == opCase then lcSitesAltsGo cands env (caseAlts n) a
+  else if isTerminal n then a
+  else lcSitesGo cands env (bodyOf n) a
+partial def lcSitesAltsGo (cands : VSet) (env : List Int) : List N → LcSitesAcc → LcSitesAcc
+  | [], a => a
+  | alt :: alts, a => lcSitesAltsGo cands env alts (lcSitesGo cands env (altBody alt) a)
+end
+
+def lcSitesDeclsGo (cands : VSet) : List Decl → LcSitesAcc → LcSitesAcc
+  | [], a => a
+  | d :: ds, a => lcSitesDeclsGo cands ds (if d.ext || declIsClosed d then a else lcSitesGo cands [] d.body a)
+
+def lcParam : Nat → List Param → Option Param
+  | _, [] => none
+  | 0, p :: _ => some p
+  | i + 1, _ :: ps => lcParam i ps
+
+-- at most this many forms of one function
+def lcPerFn : Nat := 2
+
+-- The form of d as function g for the literal c at place i: d's body with the parameter bound to the literal (or
+-- its box), folded. None when the parameter is not of the literal's kind (a literal stands for a scalar of a
+-- word or of a field's width, a box for an object that may be one), or the form still calls d.
+def lcForm (d : Decl) (g i : Nat) (kind c : Int) : Option Decl :=
+  match lcParam i d.xs with
+  | none => none
+  | some p =>
+    if kind == 1 && p.ty != tyI64 && (p.ty < 10 || p.ty > 12) then none
+    else if kind != 1 && p.ty != tyTObj then none
+    else
+      let m := declMaxIndex d
+      let y := if kind == 1 then m + 1 else m + 2
+      let body := replaceVar p.x y d.body
+      let boxed := mkVDecl (m + 2) tyTObj (mkPrim (if kind == 2 then primBox else primBoxS) 0 0 [((m + 1 : Nat) : Int)]) body
+      let d1 : Decl := { d with f := g, body := mkVDecl (m + 1) (if kind == 1 then p.ty else tyI64) (mkLit c) (if kind == 1 then body else boxed) }
+      let d2 := declJoinOnce (declFoldKnown (declJoinOnce (declFoldKnown d1)))
+      if ubCalls d.f d2.body then none else some (declNormalizeIds d2)
+
+structure LcR where
+  ws : List (List Int)
+  -- for each function `f`: flat entries `i :: kind :: c :: g :: ...` (at most `lcPerFn` forms)
+  byFn : LTree := lt0
+  -- the functions that have one
+  has : VSet
+  added : List Decl
+  deriving Inhabited
+
+def lcFnCount : List Int → Nat
+  | _ :: _ :: _ :: _ :: rest => 1 + lcFnCount rest
+  | _ => 0
+
+def lcFnFind (i kind c : Int) : List Int → Int
+  | i0 :: k0 :: c0 :: g :: rest => if i0 == i && k0 == kind && c0 == c then g else lcFnFind i kind c rest
+  | _ => -1
+
+-- the forms of the sites, numbered from `next` on
+def lcForms (ds : DeclTab) : Nat → List (List Int) → LcR → LcR
+  | _, [], r => r
+  | next, key :: keys, r =>
+    let fi := intAt 0 key
+    let f := fi.toNat
+    match dtFind ds f with
+    | some d =>
+      let cur := ltFind r.byFn fi
+      if lcFnCount cur >= lcPerFn then lcForms ds next keys r
+      else
+        let i := intAt 1 key
+        let kind := intAt 2 key
+        let c := intAt 3 key
+        match lcForm d next i.toNat kind c with
+        | some g =>
+          lcForms ds (next + 1) keys
+            { ws := [],
+              byFn := ltPut r.byFn fi (i :: kind :: c :: (next : Int) :: cur),
+              has := vsInsert r.has f,
+              added := g :: r.added }
+        | none => lcForms ds next keys r
+    | none => lcForms ds next keys r
+
+-- the form for a call's key, or -1
+def lcFind : List Int → LTree → Int
+  | [f, i, kind, c], ws => lcFnFind i kind c (ltFind ws f)
+  | _, _ => -1
+
+mutual
+-- every call with a literal that has a form calls the form
+partial def lcPut (has : VSet) (ws : LTree) (env : List Int) (n : N) : N :=
+  if n.op == opVDecl then
+    let e := vdeclExpr n
+    if e.op == opFap && vsContains has (fapFn e) then
+      let la := lcFirst env 0 e.ys
+      let g := if la.kind != 0 then lcFind [(fapFn e : Int), (la.i : Int), la.kind, la.c] ws else -1
+      { n with kids := [(if g >= 0 then { e with a := g } else e), lcPut has ws env (bodyOf n)] }
+    else { n with kids := [e, lcPut has ws (lcBind n env) (bodyOf n)] }
+  else if n.op == opJDecl then { n with kids := [lcPut has ws env (jdeclBody n), lcPut has ws env (bodyOf n)] }
+  else if n.op == opCase then { n with kids := lcPutAlts has ws env (caseAlts n) }
+  else if isTerminal n then n
+  else setBody n (lcPut has ws env (bodyOf n))
+partial def lcPutAlts (has : VSet) (ws : LTree) (env : List Int) : List N → List N
+  | [] => []
+  | alt :: alts => altSetBody alt (lcPut has ws env (altBody alt)) :: lcPutAlts has ws env alts
+end
+
+def lcPutDecls (has : VSet) (ws : LTree) : List Decl → List Decl
+  | [] => []
+  | d :: ds => (if d.ext || declIsClosed d then d else { d with body := lcPut has ws [] d.body }) :: lcPutDecls has ws ds
+
+-- The declarations are numbered 0, 1, ... in their order; the forms follow them. `limit`: the inliner's bound for
+-- a small function. The list is returned as it is when no call gets a form.
+def literalCalls (nImg limit : Nat) (decls : List Decl) : List Decl :=
+  if !declsDense 0 decls then decls
+  else
+    let keys := (lcSitesDeclsGo (lcCands nImg limit decls vsEmpty) decls { seen := lt0, list := [] }).list
+    let r := lcForms (dtOfList decls) decls.length keys.reverse { ws := [], has := vsEmpty, added := [] }
+    if r.added.isEmpty then decls else lcPutDecls r.has r.byFn (decls ++ r.added.reverse)
 
 end Lrc

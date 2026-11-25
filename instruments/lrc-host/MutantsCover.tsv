@@ -44,7 +44,7 @@ lib/lrc/FromWire.rsd	alts := (if t >= 0 then mkAltCtor (layInfo (layAt lx (layRo
 lib/lrc/FromWire.rsd	else if p == primNodeScalar then (if layConst l || off < 0 then mkLit 0 else mkSProj (layInfo l t).size off.toNat h)	else if p == primNodeScalar then (if true then mkLit 0 else mkSProj (layInfo l t).size off.toNat h)
 lib/lrc/FromWire.rsd	let kidW : List Int := if built then cells.ws else if l.list then kids else kids ++ padWords (l.kids - kids.length) (n2 : Int)	let kidW : List Int := if built then cells.ws else kids
 lib/lrc/FromWire.rsd	mapPut m (layKey root t) (if k > kids0 then k else kids0) (bitsOr 15 (if has then hit.sa else 0) flags)	mapPut m (layKey root t) k (bitsOr 15 (if has then hit.sa else 0) flags)
-lib/lrc/FromWire.rsd	let cs := mkCase x tyTObj [mkAltCtor padInfo (mkVDecl next tyI64 (mkPrim primFail 0 0 [argIrr]) mkUnreachable), mkAltDefault k.node]	let cs := mkCase x tyTObj [mkAltCtor padInfo k.node, mkAltDefault (mkVDecl next tyI64 (mkPrim primFail 0 0 [argIrr]) mkUnreachable)]
+lib/lrc/FromWire.rsd	let cs := mkCase (next + 4) tyI64 [mkAltCtor (boolInfo padTag) (mkVDecl next tyI64 (mkPrim primFail 0 0 [argIrr]) mkUnreachable), mkAltDefault k.node]	let cs := mkCase (next + 4) tyI64 [mkAltCtor (boolInfo padTag) k.node, mkAltDefault (mkVDecl next tyI64 (mkPrim primFail 0 0 [argIrr]) mkUnreachable)]
 # A list of children (row mapat*: lib/AvlMap.rsd's `left : List Map`): the list given to an allocation is its class's list of children,
 # a literal list of children in such a class is built as a list, its numbered children are the list's elements, the read of the
 # children is the list's field, and the scalar fields an allocation sets are the layout's.
@@ -75,9 +75,12 @@ lib/lrc/JoinOnce.rsd	  | p :: ps, y :: ys, m => joBind ps ys (imInsert m p.x (if
 # The modules the audit found without a row. DropSpec: the two branches of the unique test swapped. Cse: two expressions the same whatever their arguments.
 # Pack: a constructor's index taken for any type. SinkProj: a read moved into a join point's body although the code after the join point reads it.
 # Prim: checked division counted as total (Multi.rsd dead-division).
-# lib/lrc/Closed.rsd has no row. No word selects the pass (option 32 of lib/lrc/Pipeline.rsd, which rsc/rsc.rsd `lrcCompile` never sets), so the real
-# compiler never runs it; the replay's `quick` runs the default options only; and the bytes it writes for a constant cell are read by the emitter
-# alone. The full check runs every image with it (option 34: value and counts). A row is due on the day a word selects the pass.
+# Closed constructor terms (lib/lrc/Closed.rsd, ASSIGN-opt-5 item 1): scalar image zeroed in the content key (caught on row `closed`
+# `twoWords`), boxed signed integer argument value dropped in `clWalk` (caught on row `closed` `trees`), and later writes to a cell
+# ignored so an updated cell becomes persistent (`rc = 0`, caught on `Multi.rsd` `closed-late-write` by `Interp.rsd`'s write check).
+lib/lrc/Closed.rsd	let img := clImage (List.replicate info.ssize 0) sr.fields	let img := List.replicate info.ssize 0
+lib/lrc/Closed.rsd	      let env2 := if ok then ltPut env n.a [4, v] else env	      let env2 := if ok then ltPut env n.a [4, 0] else env
+lib/lrc/Closed.rsd	      else if clTotalWrites writes n.a != sr.cnt then	      else if false then
 lib/lrc/DropSpec.rsd	mkVDecl c tyU8 (mkIsShared y) (mkIf c slow fast.body)	mkVDecl c tyU8 (mkIsShared y) (mkIf c fast.body slow)
 lib/lrc/Cse.rsd	e1.d == e2.d && e1.s == e2.s && e1.ys == e2.ys	e1.d == e2.d && e1.s == e2.s
 lib/lrc/Pack.rsd	if x == y then (if tid == 1 then c else -1) else pkCidx x rest	if x == y then c else pkCidx x rest

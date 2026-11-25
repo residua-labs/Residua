@@ -55,8 +55,8 @@ mechanically (`bridgeExpr`/`bridgeArgs`/`bridgeBranches`/`bridgePrograms` in
 
 Result correspondence (`valToSCM` in `SemAlign.rsd`): scm-side `Val` is
 normalized into the chain's `SCMVal` encoding before comparison —
-`.pair a b → .list [a,b]`, `.inj i v → .record [("tag",.int i),("val",v)]`,
-`.bytes bs → .list` of byte ints — exactly `evalSCM`'s own encodings
+`.pair a b` → `.list [a,b]`, `.inj i v` → `.record [("tag",.int i),("val",v)]`,
+`.bytes bs` → `.list` of byte ints — exactly `evalSCM`'s own encodings
 (SCM.lean `pairE`/`inj`/`packBytes` arms, `bytesToSCM`). Equality is the
 chain's own `scmValEq`; `none = none` counts equal (shared fuel rule:
 nonzero checked at every node, decremented only at `call`, N6c).

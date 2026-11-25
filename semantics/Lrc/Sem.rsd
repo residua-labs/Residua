@@ -41,7 +41,7 @@
 -- the typed lean.h functions per IRType; `uproj`/`uset` sit beside `sproj`/`sset` over a usize
 -- lane between the object fields and the byte scalars (Basic:170-172, lean.h:572/:602). A ctor's
 -- usize count arrives by `Lrc.mkUCtor` (`Lrc.ctorUsize`). `listSet` is tail-recursive now — the
--- r1 recursion exceeded the stack on swe-irsem's eqat7 and rr-append rows
+-- r1 recursion exceeded the stack on irsem's eqat7 and rr-append rows
 -- (reports/irsem-swe/STATUS.md); `listSet_eq` states it keeps `List.set`. A program of the r1 IR
 -- (`r1Node`) has the same outcome as under the frozen r1 file (`conservativeStatement`): the
 -- only shared code path this revision rewrote for it is `listSet`, and the r2 arms sit behind op
@@ -54,6 +54,19 @@
 -- Against the host oracle: reports/lrcsem/HostAgree.rsd (its header has the command; r1 forms only).
 -- The r2 datatype section (the six forms, `Lrc.cloTag`, `mkUCtor`) moved to lib/lrc/Ir.rsd (LRC-REV2-IMPL-0 revision 2:
 -- the IR owns its syntax, as Basic.lean does). Recipes still concatenate Ir.rsd then Sem.rsd.
+--
+-- Revision 3 (irsem, LRC-SEM-R3, WAIST-0): the UINT64-0 primitives 65-77 as lib/lrc/Prim.rsd
+-- writes them (operands and results carry the bits of a word, the store its i64 representative),
+-- and the scalar-field widths LAND-PACKW needs: `Obj.widths` remembers the bytes each scalar was
+-- written with, an `sset` of a declared width refuses a value outside it, and an `sproj` of other
+-- bytes than the slot was written with is an error — all as instruments/lrc-host/Interp.rsd does.
+-- The r1/r2 arms and outcomes are unchanged; r3 refuses what r2 silently read.
+-- Same revision, FLOAT64-0 batch (cc 2026-11-23, docs/EMITTER.md AGREED): the IEEE
+-- 754 binary64 operators of tags 78 to 94 on a `w64`'s bits, lib/Float.rsd's software binary64
+-- as the executable meaning and the card's NaN rule (every NaN a hand can read is the one quiet
+-- NaN). The arms sit after the unsigned rows so `prim`'s code order stays the proof's rewrite
+-- order; `F64` (semantics/F64.rsd, assembled before this file) holds the operations lib/Float.rsd does not carry (floor, ceil, C
+-- round, a correctly-rounded Nat.sqrt square root, the saturating fToW and the conversions).
 
 namespace Lrc.Sem
 
@@ -94,7 +107,7 @@ abbrev M := StateT St (Except String)
 def refuse (what : String) : M α := throw s!"refusal:{what}"
 
 /-- Tail-recursive worker for `listSet`: the r1 definition recursed per element and exceeded the
-stack on swe-irsem's eqat7 and rr-append rows (reports/irsem-swe/STATUS.md "deep recursion
+stack on irsem's eqat7 and rr-append rows (reports/irsem-swe/STATUS.md "deep recursion
 detected in Lrc.Sem.listSet._rarg"). -/
 def listSetAux : List α → Nat → α → List α → List α
   | [], _, _, acc => acc.reverse
@@ -232,6 +245,26 @@ def i64Max : Int := 9223372036854775807
 def checked (n : Int) : M V :=
   if n < i64Min || n > i64Max then refuse "stuck:checkedArithmetic" else pure (.int n)
 
+-- UINT64-0 (lib/lrc/Prim.rsd "UINT64-0"): operands and results carry the bits of a word. The
+-- reference computes with unbounded integers; `wordNat` reads the word, `wordInt` stores the
+-- representative of the i64 bits (as instruments/lrc-host/Interp.rsd `wordInt`, `wordNat`).
+def wModulus : Int := 18446744073709551616
+
+def wordInt (n : Int) : V :=
+  let r := n % wModulus
+  .int (if r > i64Max then r - wModulus else r)
+
+def wordNat (n : Int) : Nat := (n % wModulus).toNat
+
+/-! ### FLOAT64-0 (docs/EMITTER.md)
+
+Expression tags 78 to 94 are the IEEE 754 binary64 operations on a word's bits: a Float is a
+`w64`, and lib/Float.rsd's software binary64 is the executable meaning. Every result a NaN
+can be read from is the one quiet NaN: `Lib.Float`'s operations already produce `qNan`, the
+conversions produce no NaN, and `fBits` shows every NaN as `qNan` (the card's observation
+rule). The operations are semantics/F64.rsd (namespace `F64`, shared with wasm0 r3). -/
+
+
 -- lib/lrc/Prim.rsd: the wire's operators (docs/GRAMMAR.md 1.3); as instruments/lrc-host/Interp.rsd `prim`
 def prim (op : Nat) (args : List V) : M V := do
   match op, args with
@@ -256,6 +289,29 @@ def prim (op : Nat) (args : List V) : M V := do
   | 15, [a, b] => return .int (if (← asInt a) != 0 && (← asInt b) != 0 then 1 else 0)
   | 16, [a, b] => return .int (if (← asInt a) != 0 || (← asInt b) != 0 then 1 else 0)
   | 17, [a] => return .int (if (← asInt a) == 0 then 1 else 0)
+  -- UINT64-0 (lib/lrc/Prim.rsd 65-77; instruments/lrc-host/Interp.rsd `prim`):
+  -- the word's add, sub and mul, each result reduced modulo 2^64
+  | 65, [a, b] => return wordInt ((← asInt a) + (← asInt b))
+  | 66, [a, b] => return wordInt ((← asInt a) - (← asInt b))
+  | 67, [a, b] => return wordInt ((← asInt a) * (← asInt b))
+  -- unsigned quotient and remainder, with x / 0 = 0 and x % 0 = x
+  | 68, [a, b] => do
+    let y ← asInt b
+    if wordNat y == 0 then return .int 0 else return wordInt (wordNat (← asInt a) / wordNat y : Nat)
+  | 69, [a, b] => do
+    let y ← asInt b
+    if wordNat y == 0 then return a else return wordInt (wordNat (← asInt a) % wordNat y : Nat)
+  -- unsigned less-than and less-or-equal, returning 0 or 1 (equality is 14's)
+  | 70, [a, b] => return .int (if wordNat (← asInt a) < wordNat (← asInt b) then 1 else 0)
+  | 71, [a, b] => return .int (if wordNat (← asInt a) <= wordNat (← asInt b) then 1 else 0)
+  -- bitwise and, or, xor and complement on all 64 bits
+  | 72, [a, b] => return wordInt (wordNat (← asInt a) &&& wordNat (← asInt b))
+  | 73, [a, b] => return wordInt (wordNat (← asInt a) ||| wordNat (← asInt b))
+  | 74, [a, b] => return wordInt (wordNat (← asInt a) ^^^ wordNat (← asInt b))
+  | 75, [a] => return wordInt (wModulus - 1 - (← asInt a))
+  -- left shift dropping bits above 63, and logical right shift; the count is modulo 64
+  | 76, [a, b] => return wordInt (wordNat (← asInt a) <<< (wordNat (← asInt b) % 64))
+  | 77, [a, b] => return wordInt (wordNat (← asInt a) >>> (wordNat (← asInt b) % 64))
   | 101, _ => refuse "stuck:typeMismatch"
   | 102, [.str a, .str b] => return .int (if a == b then 1 else 0)
   | 100, [.box t] => return .int t
@@ -276,6 +332,30 @@ def prim (op : Nat) (args : List V) : M V := do
   | 118, [a, b] => do
     let d ← asInt b
     if d == 0 then throw "an unsigned remainder by zero" else return .int ((← asInt a).toNat % d.toNat)
+  -- FLOAT64-0 (docs/EMITTER.md): binary64 on a word's bits; lib/Float.rsd is
+  -- the executable meaning. Binary: 78 to 84. Unary: 85 to 94. None refuses.
+  | 78, [a, b] => return wordInt (F64.toBits (Lib.Float.sum (F64.ofBits (← asInt a)) (F64.ofBits (← asInt b))))
+  | 79, [a, b] => return wordInt (F64.toBits (Lib.Float.Float.sub (F64.ofBits (← asInt a)) (F64.ofBits (← asInt b))))
+  | 80, [a, b] => return wordInt (F64.toBits (Lib.Float.Float.mul (F64.ofBits (← asInt a)) (F64.ofBits (← asInt b))))
+  | 81, [a, b] => return wordInt (F64.toBits (Lib.Float.Float.div (F64.ofBits (← asInt a)) (F64.ofBits (← asInt b))))
+  | 82, [a, b] => return .int (if Lib.Float.Float.decLt (F64.ofBits (← asInt a)) (F64.ofBits (← asInt b)) then 1 else 0)
+  | 83, [a, b] => return .int (if Lib.Float.Float.decLe (F64.ofBits (← asInt a)) (F64.ofBits (← asInt b)) then 1 else 0)
+  | 84, [a, b] => return .int (if Lib.Float.Float.beq (F64.ofBits (← asInt a)) (F64.ofBits (← asInt b)) then 1 else 0)
+  | 85, [a] => return wordInt (F64.toBits (Lib.Float.Float.neg (F64.ofBits (← asInt a))))
+  | 86, [a] => return wordInt (F64.toBits (F64.abs (F64.ofBits (← asInt a))))
+  | 87, [a] => return wordInt (F64.toBits (F64.sqrt (F64.ofBits (← asInt a))))
+  | 88, [a] => return wordInt (F64.toBits (F64.floor (F64.ofBits (← asInt a))))
+  | 89, [a] => return wordInt (F64.toBits (F64.ceil (F64.ofBits (← asInt a))))
+  | 90, [a] => return wordInt (F64.toBits (F64.round (F64.ofBits (← asInt a))))
+  | 91, [a] => return wordInt (F64.toBits (F64.ofNatF 0 (wordNat (← asInt a))))
+  | 92, [a] => do
+    let i ← asInt a
+    return wordInt (F64.toBits (F64.ofNatF (if i < 0 then 1 else 0) i.natAbs))
+  | 93, [a] => return wordInt (F64.toW (F64.ofBits (← asInt a)))
+  | 94, [a] => return wordInt (F64.toBits (F64.bits (F64.ofBits (← asInt a))))
+  -- ARRAY-0 (docs/EMITTER.md revision 1): `wToN` is the word's number (55 `aUSize`
+  -- reads an array: `primArr` has it)
+  | 56, [a] => return .int (wordNat (← asInt a))
   | _, _ => throw s!"primitive {op} on {args.length} arguments has no meaning"
 
 def proved (n : Int) : M V :=
@@ -456,18 +536,235 @@ def arrSlice (mode : Mode) (shape : Int) (a : V) (lo hi : Int) : M V := do
     alloc (arrTag shape) part
   | _ => throw "a slice of a value that is no array"
 
+/-! ### ARRAY-0 (docs/EMITTER.md, AGREED)
+
+The seq operators 55, 57 to 63 and 95 to 98 (56 is a word: `prim` has it). Each operator's
+immediate is the sequence's element type as lib/lrc/Ir.rsd codes types: an object element gives
+tag 246, a scalar element tag 248. Each operator's meaning is the named list function on the
+array's element list; a `seq` value is always one array object (the empty `[]` too), and a `get`
+or `set` past the size refuses as a checked operator outside its range. -/
+
+-- the element type code's array shape: an object element (tyObj, tyTObj) or a scalar one
+def aShape (imm : Int) : Int := if Lrc.tyIsObj imm then 1 else 0
+
+-- an element word kept to the bytes its type declares (OBJECT-ABI's `other` on tag 248)
+def aElem (imm : Int) (v : V) : V :=
+  if Lrc.tyIsObj imm then v
+  else match v with
+    | .int n => wordInt (wordNat n % Lib.Limb.pow2 (8 * Lrc.tyWidth imm))
+    | _ => v
+
+-- the elements of a seq value: the array object's fields, none of a `[]`
+def arrElems (v : V) : M (List V) := do
+  match v with
+  | .box 0 => pure []
+  | .ptr p => do
+    let o ← objAt p
+    if isArrTag o.tag then pure o.objs else throw s!"the elements of object {p}, which is no array"
+  | _ => throw "the elements of a value that is no array"
+
+-- `aEmpty`: the empty array (the capacity asked for is no part of the value)
+def aEmpty (shape : Int) (c : V) : M V := do
+  let _ ← asInt c
+  alloc (arrTag shape) []
+
+-- `aMk`: `mkArray`: the element is consumed once into `cnt` owned slots
+def arrMk (mode : Mode) (k : Nat) (shape : Int) (imm : Int) (n v : V) : M V := do
+  let cnt := wordNat (← asInt n)
+  let el := aElem imm v
+  if cnt == 0 then decV mode k el
+  else (List.range (cnt - 1)).forM (fun _ => incV mode el 1)
+  alloc (arrTag shape) (List.replicate cnt el)
+
+-- `aOfList`: the array of a list's elements (a seq's `[]` is an array object, not a cell)
+def arrOfListA (mode : Mode) (k : Nat) (shape : Int) (imm : Int) (v : V) : M V := do
+  match v with
+  | .box 0 => alloc (arrTag shape) []
+  | .ptr a =>
+    let o ← objAt a
+    if isArrTag o.tag then return v
+    let es ← listElems mode k shape v true []
+    alloc (arrTag shape) (es.map (aElem imm))
+  | _ => throw "the array of a value that is no list"
+
+-- `aSize`: the element count
+def aSize (a : V) : M V := do
+  match a with
+  | .box 0 => return .int 0
+  | .ptr p => do
+    let o ← objAt p
+    if isArrTag o.tag then return .int o.objs.length else throw s!"the size of object {p}, which is no array"
+  | _ => throw "the size of a value that is no array"
+
+-- `aUSize` (55): the length as a word, `Array.usize` (the argument is borrowed)
+def aUSize (a : V) : M V := do
+  match a with
+  | .box 0 => return .int 0
+  | .ptr p => do
+    let o ← objAt p
+    if isArrTag o.tag then return wordInt o.objs.length else throw s!"the usize of object {p}, which is no array"
+  | _ => throw "the usize of a value that is no array"
+
+-- `aGet`: element i, counted once more; an index past the size refuses
+def aGetOp (mode : Mode) (a : V) (i : Int) : M V := do
+  match a with
+  | .box 0 => refuse "stuck:arrayBounds"
+  | .ptr p => do
+    let o ← objAt p
+    if !isArrTag o.tag then throw s!"a read at an index of object {p}, which is no array"
+    if i < 0 || i >= o.objs.length then refuse "stuck:arrayBounds"
+    let el := o.objs.getD i.toNat default
+    incV mode el 1
+    return el
+  | _ => throw "a read at an index of a value that is no array"
+
+-- `aSet`: the array with element i replaced (the array is owned); an index past the size refuses
+def aSetOp (mode : Mode) (k : Nat) (imm : Int) (a : V) (i : Int) (v : V) : M V := do
+  match a with
+  | .box 0 => refuse "stuck:arrayBounds"
+  | .ptr p => do
+    let o ← objAt p
+    if !isArrTag o.tag then throw s!"a write at an index of object {p}, which is no array"
+    if i < 0 || i >= o.objs.length then refuse "stuck:arrayBounds"
+    let el := aElem imm v
+    if inPlace mode o then
+      decV mode k (o.objs.getD i.toNat default)
+      let o' ← objAt p
+      setObj p { o' with objs := listSet o'.objs i.toNat el }
+      return a
+    else
+      if mode == .counted then
+        (List.range o.objs.length).forM (fun j => if j != i.toNat then incV mode (o.objs.getD j default) 1 else pure ())
+      let r ← alloc o.tag (listSet o.objs i.toNat el)
+      if mode == .counted then decV mode k a
+      return r
+  | _ => throw "a write at an index of a value that is no array"
+
+-- `aPush`: the array with one more element at its end (the array is owned)
+def arrPushA (mode : Mode) (k : Nat) (shape : Int) (imm : Int) (a v : V) : M V := do
+  match a with
+  | .box 0 => alloc (arrTag shape) [aElem imm v]
+  | .ptr p => do
+    let o ← objAt p
+    if !isArrTag o.tag then throw s!"push on object {p}, which is no array"
+    let el := aElem imm v
+    if inPlace mode o then
+      setObj p { o with objs := o.objs ++ [el] }
+      return a
+    else
+      if mode == .counted then o.objs.forM (fun e => incV mode e 1)
+      let r ← alloc o.tag (o.objs ++ [el])
+      if mode == .counted then decV mode k a
+      return r
+  | _ => throw "push on a value that is no array"
+
+-- `aPop`: the array without its last element (the array is owned); `[]` stays `[]`
+def arrPop (mode : Mode) (k : Nat) (a : V) : M V := do
+  match a with
+  | .box 0 => return a
+  | .ptr p => do
+    let o ← objAt p
+    if !isArrTag o.tag then throw s!"a pop of object {p}, which is no array"
+    if o.objs == [] then return a
+    if inPlace mode o then
+      decV mode k (o.objs.getD (o.objs.length - 1) default)
+      let o' ← objAt p
+      setObj p { o' with objs := o'.objs.take (o'.objs.length - 1) }
+      return a
+    else
+      let part := o.objs.take (o.objs.length - 1)
+      part.forM (fun e => incV mode e 1)
+      let r ← alloc o.tag part
+      if mode == .counted then decV mode k a
+      return r
+  | _ => throw "a pop of a value that is no array"
+
+-- `aSlice`: the elements at `i <= k < min j size`, in a fresh array (the argument is borrowed)
+def aSliceOp (mode : Mode) (shape : Int) (a : V) (lo hi : Int) : M V := do
+  match a with
+  | .box 0 => alloc (arrTag shape) []
+  | .ptr p => do
+    let o ← objAt p
+    if !isArrTag o.tag then throw s!"a slice of object {p}, which is no array"
+    let l := if lo < 0 then 0 else lo.toNat
+    let h := min (if hi < 0 then 0 else hi.toNat) o.objs.length
+    let part := (o.objs.drop l).take (h - l)
+    part.forM (fun y => incV mode y 1)
+    alloc (arrTag shape) part
+  | _ => throw "a slice of a value that is no array"
+
+-- `aAppend`: the elements of `a` then those of `b`, in a fresh array (both are consumed)
+def arrAppend (mode : Mode) (k : Nat) (shape : Int) (a b : V) : M V := do
+  let ea ← arrElems a
+  let eb ← arrElems b
+  (ea ++ eb).forM (fun e => incV mode e 1)
+  let r ← alloc (arrTag shape) (ea ++ eb)
+  decV mode k a
+  decV mode k b
+  return r
+
 -- the primitives of this section
-def isArrOp (op : Nat) : Bool := op >= 121 && op <= 126
+def isArrOp (op : Nat) : Bool :=
+  (op >= 121 && op <= 126) || (op >= 57 && op <= 63) || (op >= 95 && op <= 98) || op == 55
 
 def primArr (mode : Mode) (k : Nat) (op : Nat) (imm : Int) (args : List V) : M V := do
-  match op, args with
-  | 121, [v, i] => arrGet mode v i
-  | 122, [a, v] => arrPush mode k imm a v
-  | 123, [a, i, v] => arrSet mode k imm a (← asInt i) v
-  | 124, [xs] => arrOfList mode k imm xs
-  | 125, [a] => arrToList mode k a
-  | 126, [a, lo, hi] => arrSlice mode imm a (← asInt lo) (← asInt hi)
-  | _, _ => throw s!"primitive {op} on {args.length} arguments has no meaning"
+  if op = 121 then match args with
+    | [v, i] => arrGet mode v i
+    | _ => throw s!"primitive {op} on {args.length} arguments has no meaning"
+  else if op = 122 then match args with
+    | [a, v] => arrPush mode k imm a v
+    | _ => throw s!"primitive {op} on {args.length} arguments has no meaning"
+  else if op = 123 then match args with
+    | [a, i, v] => arrSet mode k imm a (← asInt i) v
+    | _ => throw s!"primitive {op} on {args.length} arguments has no meaning"
+  else if op = 124 then match args with
+    | [xs] => arrOfList mode k imm xs
+    | _ => throw s!"primitive {op} on {args.length} arguments has no meaning"
+  else if op = 125 then match args with
+    | [a] => arrToList mode k a
+    | _ => throw s!"primitive {op} on {args.length} arguments has no meaning"
+  else if op = 126 then match args with
+    | [a, lo, hi] => arrSlice mode imm a (← asInt lo) (← asInt hi)
+    | _ => throw s!"primitive {op} on {args.length} arguments has no meaning"
+  -- ARRAY-0: the seq operators of tags 57-63 and 95-98, each its named list function;
+  -- `imm` is the seq's element type as the IR codes types
+  else if op = 57 then match args with
+    | [c] => aEmpty (aShape imm) c
+    | _ => throw s!"primitive {op} on {args.length} arguments has no meaning"
+  else if op = 58 then match args with
+    | [n, v] => arrMk mode k (aShape imm) imm n v
+    | _ => throw s!"primitive {op} on {args.length} arguments has no meaning"
+  else if op = 59 then match args with
+    | [xs] => arrOfListA mode k (aShape imm) imm xs
+    | _ => throw s!"primitive {op} on {args.length} arguments has no meaning"
+  else if op = 60 then match args with
+    | [a] => arrToList mode k a
+    | _ => throw s!"primitive {op} on {args.length} arguments has no meaning"
+  else if op = 61 then match args with
+    | [a] => aSize a
+    | _ => throw s!"primitive {op} on {args.length} arguments has no meaning"
+  else if op = 62 then match args with
+    | [a, i] => aGetOp mode a (← asInt i)
+    | _ => throw s!"primitive {op} on {args.length} arguments has no meaning"
+  else if op = 63 then match args with
+    | [a, i, v] => aSetOp mode k imm a (← asInt i) v
+    | _ => throw s!"primitive {op} on {args.length} arguments has no meaning"
+  else if op = 95 then match args with
+    | [a, v] => arrPushA mode k (aShape imm) imm a v
+    | _ => throw s!"primitive {op} on {args.length} arguments has no meaning"
+  else if op = 96 then match args with
+    | [a] => arrPop mode k a
+    | _ => throw s!"primitive {op} on {args.length} arguments has no meaning"
+  else if op = 97 then match args with
+    | [a, lo, hi] => aSliceOp mode (aShape imm) a (← asInt lo) (← asInt hi)
+    | _ => throw s!"primitive {op} on {args.length} arguments has no meaning"
+  else if op = 98 then match args with
+    | [a, b] => arrAppend mode k (aShape imm) a b
+    | _ => throw s!"primitive {op} on {args.length} arguments has no meaning"
+  else if op = 55 then match args with
+    | [a] => aUSize a
+    | _ => throw s!"primitive {op} on {args.length} arguments has no meaning"
+  else throw s!"primitive {op} on {args.length} arguments has no meaning"
 
 def tagOfV (v : V) : M Nat :=
   match v with
@@ -880,7 +1177,9 @@ one. The `Task.ap` task's inc/dec bookkeeping is likewise value-silent. -/
 
 /-- the primitives that consume an argument (lib/lrc/Prim.rsd `primConsumes`; reports/lrcsem/HostAgree.rsd
 checks that the two agree on every code below 512) -/
-def consumes (op : Nat) : Bool := op == 122 || op == 123 || op == 124 || op == 125
+def consumes (op : Nat) : Bool :=
+  op == 122 || op == 123 || op == 124 || op == 125
+    || op == 58 || op == 59 || op == 60 || op == 63 || op == 95 || op == 96 || op == 98
 
 /-- `rcObsFreeDepth d n`: no `reset`, `reuse`, `isShared` node and no consuming primitive within depth `d` of `n`. -/
 def rcObsFreeDepth : Nat → Lrc.N → Bool
@@ -1142,6 +1441,41 @@ def pShrW : N := mkVDecl 1 tyI64 (mkPrim 116 2 0 [0]) (mkRet [1])
 def pDivRemU : N := mkVDecl 2 tyI64 (mkPrim 117 0 0 [0, 1]) (mkVDecl 3 tyI64 (mkPrim 118 0 0 [0, 1]) (mkRet [2, 3]))
 def pRemU : N := mkVDecl 3 tyI64 (mkPrim 118 0 0 [0, 1]) (mkRet [3])
 def pDivU : N := mkVDecl 2 tyI64 (mkPrim 117 0 0 [0, 1]) (mkRet [2])
+-- UINT64-0 (lib/lrc/Prim.rsd 65-77): the operands' words, the result the i64 representative of
+-- the answer's bits; the pinned texts below are the oracle's (instruments/lrc-host/Interp.rsd).
+def pWAdd : N := mkVDecl 2 tyI64 (mkPrim 65 0 0 [0, 1]) (mkRet [2])
+def pWSub : N := mkVDecl 2 tyI64 (mkPrim 66 0 0 [0, 1]) (mkRet [2])
+def pWMul : N := mkVDecl 2 tyI64 (mkPrim 67 0 0 [0, 1]) (mkRet [2])
+def pWDivRem : N := mkVDecl 2 tyI64 (mkPrim 68 0 0 [0, 1]) (mkVDecl 3 tyI64 (mkPrim 69 0 0 [0, 1]) (mkRet [2, 3]))
+def pWDiv : N := mkVDecl 2 tyI64 (mkPrim 68 0 0 [0, 1]) (mkRet [2])
+def pWRem : N := mkVDecl 3 tyI64 (mkPrim 69 0 0 [0, 1]) (mkRet [3])
+def pWLt : N := mkVDecl 2 tyI64 (mkPrim 70 0 0 [0, 1]) (mkRet [2])
+def pWLe : N := mkVDecl 2 tyI64 (mkPrim 71 0 0 [0, 1]) (mkRet [2])
+def pWAnd : N := mkVDecl 2 tyI64 (mkPrim 72 0 0 [0, 1]) (mkRet [2])
+def pWOr : N := mkVDecl 2 tyI64 (mkPrim 73 0 0 [0, 1]) (mkRet [2])
+def pWXor : N := mkVDecl 2 tyI64 (mkPrim 74 0 0 [0, 1]) (mkRet [2])
+def pWNot : N := mkVDecl 1 tyI64 (mkPrim 75 0 0 [0]) (mkRet [1])
+def pWShl : N := mkVDecl 2 tyI64 (mkPrim 76 0 0 [0, 1]) (mkRet [2])
+def pWShr : N := mkVDecl 2 tyI64 (mkPrim 77 0 0 [0, 1]) (mkRet [2])
+-- FLOAT64-0 (docs/EMITTER.md 78-94): the operands' words are the bits, the
+-- expected texts the i64 representatives of the results' bits.
+def pFAdd : N := mkVDecl 2 tyI64 (mkPrim 78 0 0 [0, 1]) (mkRet [2])
+def pFSub : N := mkVDecl 2 tyI64 (mkPrim 79 0 0 [0, 1]) (mkRet [2])
+def pFMul : N := mkVDecl 2 tyI64 (mkPrim 80 0 0 [0, 1]) (mkRet [2])
+def pFDiv : N := mkVDecl 2 tyI64 (mkPrim 81 0 0 [0, 1]) (mkRet [2])
+def pFLt : N := mkVDecl 2 tyI64 (mkPrim 82 0 0 [0, 1]) (mkRet [2])
+def pFLe : N := mkVDecl 2 tyI64 (mkPrim 83 0 0 [0, 1]) (mkRet [2])
+def pFEq : N := mkVDecl 2 tyI64 (mkPrim 84 0 0 [0, 1]) (mkRet [2])
+def pFNeg : N := mkVDecl 1 tyI64 (mkPrim 85 0 0 [0]) (mkRet [1])
+def pFAbs : N := mkVDecl 1 tyI64 (mkPrim 86 0 0 [0]) (mkRet [1])
+def pFSqrt : N := mkVDecl 1 tyI64 (mkPrim 87 0 0 [0]) (mkRet [1])
+def pFFloor : N := mkVDecl 1 tyI64 (mkPrim 88 0 0 [0]) (mkRet [1])
+def pFCeil : N := mkVDecl 1 tyI64 (mkPrim 89 0 0 [0]) (mkRet [1])
+def pFRound : N := mkVDecl 1 tyI64 (mkPrim 90 0 0 [0]) (mkRet [1])
+def pFOfW : N := mkVDecl 1 tyI64 (mkPrim 91 0 0 [0]) (mkRet [1])
+def pFOfI : N := mkVDecl 1 tyI64 (mkPrim 92 0 0 [0]) (mkRet [1])
+def pFToW : N := mkVDecl 1 tyI64 (mkPrim 93 0 0 [0]) (mkRet [1])
+def pFBits : N := mkVDecl 1 tyI64 (mkPrim 94 0 0 [0]) (mkRet [1])
 -- 119 isArr, 120 size and 126 slice of the empty array, and 119 of a cell: 0 0 [] 0
 def pArrEmpty : N :=
   mkVDecl 1 tyObj (mkCtor cNil []) (mkVDecl 2 tyI64 (mkPrim 119 0 0 [1]) (mkVDecl 3 tyI64 (mkPrim 120 0 0 [1])
@@ -1213,6 +1547,67 @@ def pProjArr : N := withArr (mkVDecl 5 tyI64 (mkProj 0 4) (mkRet [5]))
 def pGetOut : N := withArr (mkVDecl 5 tyI64 (mkLit 2) (mkVDecl 6 tyI64 (mkPrim 121 0 0 [4, 5]) (mkRet [6])))
 def pSetOut : N := withArr (mkVDecl 5 tyI64 (mkLit 2) (mkVDecl 6 tyObj (mkPrim 123 0 0 [4, 5, 5]) (mkRet [6])))
 
+/-! #### ARRAY-0: the thirteen seq operators (tags 55-63 and 95-98)
+
+The immediate is the element's type code (0 i64, 10 u8, 2 an object). x0 is the entry's number. -/
+-- x3: the scalar array #[x0, 3] built by aEmpty and two aPush (the second in place when counted)
+def withArrA (k : N) : N :=
+  mkVDecl 1 tyI64 (mkLit 4) (mkVDecl 2 tyObj (mkPrim 57 0 0 [1])
+    (mkVDecl 3 tyObj (mkPrim 95 0 0 [2, 0]) (mkVDecl 4 tyI64 (mkLit 3) (mkVDecl 5 tyObj (mkPrim 95 0 0 [3, 4]) k))))
+-- x4: the object array #[{x0 x0}] by aEmpty and aPush (imm 2 an object element)
+def withObjArrA (k : N) : N :=
+  mkVDecl 1 tyI64 (mkLit 4) (mkVDecl 2 tyObj (mkPrim 57 2 0 [1])
+    (mkVDecl 3 tyObj (mkCtor cBox [0, 0]) (mkVDecl 4 tyObj (mkPrim 95 2 0 [2, 3]) k)))
+-- x4: a u8 array #[x0] (imm 10: the element's byte is kept)
+def withU8ArrA (k : N) : N :=
+  mkVDecl 1 tyI64 (mkLit 4) (mkVDecl 2 tyObj (mkPrim 57 10 0 [1])
+    (mkVDecl 3 tyObj (mkPrim 95 10 0 [2, 0]) (mkVDecl 4 tyObj (mkPrim 95 10 0 [3, 0]) k)))
+
+-- 55 aUSize: the length as a word; 56 wToN reads the word's number
+def pAUSize : N := withArrA (mkVDecl 6 tyI64 (mkPrim 55 0 0 [5]) (mkRet [6, 5]))
+def pAUSizeFree : N :=
+  mkVDecl 1 tyI64 (mkLit 4) (mkVDecl 2 tyObj (mkPrim 57 0 0 [1]) (mkVDecl 3 tyI64 (mkPrim 55 0 0 [2]) (mkRet [3])))
+def pWToN : N := mkVDecl 1 tyI64 (mkPrim 56 0 0 [0]) (mkRet [1])
+-- 57 aEmpty gives an array object: "#[]"; aSize of it 0
+def pAEmpty : N :=
+  mkVDecl 1 tyI64 (mkLit 8) (mkVDecl 2 tyObj (mkPrim 57 0 0 [1])
+    (mkVDecl 3 tyI64 (mkPrim 61 0 0 [2]) (mkRet [3, 2])))
+-- 58 aMk of 3 copies of a word, and a u8 one that keeps a byte of its element
+def pAMk : N :=
+  mkVDecl 1 tyI64 (mkLit 3) (mkVDecl 2 tyI64 (mkLit 7) (mkVDecl 3 tyObj (mkPrim 58 0 0 [1, 2]) (mkRet [3])))
+def pAMkU8 : N :=
+  mkVDecl 1 tyI64 (mkLit 1) (mkVDecl 2 tyI64 (mkLit 300) (mkVDecl 3 tyObj (mkPrim 58 10 0 [1, 2]) (mkRet [3])))
+-- 59 aOfList of the scalar list [x0, 3]; 60 aToList back
+def pAOfList : N := withList (mkVDecl 5 tyObj (mkPrim 59 0 0 [4]) (mkRet [5]))
+def pAToList : N := withArrA (mkVDecl 6 tyObj (mkPrim 60 0 0 [5]) (mkRet [6]))
+-- 61 aSize of #[x0, 3]; 62 aGet of element 1; an index past the size refuses
+def pASize : N := withArrA (mkVDecl 6 tyI64 (mkPrim 61 0 0 [5]) (mkRet [6, 5]))
+def pAGet : N := withArrA (mkVDecl 6 tyI64 (mkLit 1) (mkVDecl 7 tyI64 (mkPrim 62 0 0 [5, 6]) (mkRet [7])))
+def pAGetOut : N := withArrA (mkVDecl 6 tyI64 (mkLit 2) (mkVDecl 7 tyI64 (mkPrim 62 0 0 [5, 6]) (mkRet [7])))
+-- 63 aSet of element 0 to 9, and on a shared array a fresh copy (x5 keeps #[x0 3])
+def pASet : N := withArrA (mkVDecl 6 tyI64 (mkLit 0) (mkVDecl 7 tyI64 (mkLit 9) (mkVDecl 8 tyObj (mkPrim 63 0 0 [5, 6, 7]) (mkRet [8]))))
+def pASetShared : N := withArrA (mkInc 5 1 false false
+  (mkVDecl 6 tyI64 (mkLit 0) (mkVDecl 7 tyI64 (mkLit 9) (mkVDecl 8 tyObj (mkPrim 63 0 0 [5, 6, 7]) (mkRet [5, 8])))))
+-- 63 aSet into a u8 array keeps a byte of the written word
+def pASetU8 : N := withU8ArrA (mkVDecl 5 tyI64 (mkLit 0) (mkVDecl 6 tyI64 (mkLit 300) (mkVDecl 7 tyObj (mkPrim 63 10 0 [4, 5, 6]) (mkRet [7]))))
+-- 95 aPush, 96 aPop and its empty case, 97 aSlice clamped at the size, 98 aAppend
+def pAPush : N := withArrA (mkVDecl 6 tyI64 (mkLit 7) (mkVDecl 7 tyObj (mkPrim 95 0 0 [5, 6]) (mkRet [7])))
+def pAPop : N := withArrA (mkVDecl 6 tyObj (mkPrim 96 0 0 [5]) (mkRet [6]))
+def pAPopEmpty : N :=
+  mkVDecl 1 tyI64 (mkLit 4) (mkVDecl 2 tyObj (mkPrim 57 0 0 [1]) (mkVDecl 3 tyObj (mkPrim 96 0 0 [2]) (mkRet [3])))
+def pASlice : N := withArrA (mkVDecl 6 tyI64 (mkLit 0) (mkVDecl 7 tyI64 (mkLit 1) (mkVDecl 8 tyObj (mkPrim 97 0 0 [5, 6, 7]) (mkRet [5, 8]))))
+def pASlicePast : N := withArrA (mkVDecl 6 tyI64 (mkLit 1) (mkVDecl 7 tyI64 (mkLit 99) (mkVDecl 8 tyObj (mkPrim 97 0 0 [5, 6, 7]) (mkRet [8]))))
+def pAAppend : N := withArrA (mkVDecl 6 tyI64 (mkLit 1) (mkVDecl 7 tyI64 (mkLit 7)
+  (mkVDecl 8 tyObj (mkPrim 58 0 0 [6, 7]) (mkVDecl 9 tyObj (mkPrim 98 0 0 [5, 8]) (mkRet [9])))))
+def pAAppendEmpty : N := withArrA (mkVDecl 6 tyI64 (mkLit 4) (mkVDecl 7 tyObj (mkPrim 57 0 0 [6])
+  (mkVDecl 8 tyObj (mkPrim 98 0 0 [5, 7]) (mkRet [8]))))
+-- the non-consuming seq operators on an empty array: aGet refuses at runtime, but
+-- `rcObsFreeDepth` is the syntactic depth check, so the programs are inside the fragment
+def pAGetFree : N :=
+  mkVDecl 1 tyI64 (mkLit 4) (mkVDecl 2 tyObj (mkPrim 57 0 0 [1]) (mkVDecl 3 tyI64 (mkPrim 62 0 0 [2, 1]) (mkRet [3])))
+def pASliceFree : N :=
+  mkVDecl 1 tyI64 (mkLit 4) (mkVDecl 2 tyObj (mkPrim 57 0 0 [1]) (mkVDecl 3 tyObj (mkPrim 97 0 0 [2, 1, 1]) (mkRet [3])))
+
 #guard bothValue (progOf pIsScalar) [5] "1 0"
 #guard bothValue (progOf pBox) [5] "#5 5"
 #guard bothValue (progOf pBox) [0] "[] 0"
@@ -1228,6 +1623,79 @@ def pSetOut : N := withArr (mkVDecl 5 tyI64 (mkLit 2) (mkVDecl 6 tyObj (mkPrim 1
 #guard bothStop (progOf2 pDivU) [21, 0]
 #guard bothValue (progOf2 pDivU) [21, 1] "21"
 #guard bothValue (progOf2 pRemU) [21, 1] "0"
+-- UINT64-0: wraparound arithmetic; x / 0 = 0 and x % 0 = x; unsigned order; the bit
+-- operations; shifts whose counts are modulo 64 (the oracle's pinned texts)
+#guard bothValue (progOf2 pWAdd) [21, 4] "25"
+#guard bothValue (progOf2 pWAdd) [-1, 2] "1"
+#guard bothValue (progOf2 pWSub) [7, 3] "4"
+#guard bothValue (progOf2 pWSub) [0, 1] "-1"
+#guard bothValue (progOf2 pWMul) [-1, 2] "-2"
+#guard bothValue (progOf2 pWMul) [4611686018427387904, 4] "0"
+#guard bothValue (progOf2 pWDivRem) [21, 4] "5 1"
+#guard bothValue (progOf2 pWDiv) [21, 0] "0"
+#guard bothValue (progOf2 pWRem) [21, 0] "21"
+#guard bothValue (progOf2 pWDiv) [-1, 2] "9223372036854775807"
+#guard bothValue (progOf2 pWRem) [-1, 3] "0"
+#guard bothValue (progOf2 pWLt) [0, -1] "1"
+#guard bothValue (progOf2 pWLt) [-1, 0] "0"
+#guard bothValue (progOf2 pWLe) [-1, -1] "1"
+#guard bothValue (progOf2 pWLe) [-1, 0] "0"
+#guard bothValue (progOf2 pWAnd) [12, 10] "8"
+#guard bothValue (progOf2 pWAnd) [-1, 6] "6"
+#guard bothValue (progOf2 pWOr) [12, 10] "14"
+#guard bothValue (progOf2 pWOr) [0, -1] "-1"
+#guard bothValue (progOf2 pWXor) [12, 10] "6"
+#guard bothValue (progOf2 pWXor) [-1, -1] "0"
+#guard bothValue (progOf pWNot) [0] "-1"
+#guard bothValue (progOf pWNot) [-1] "0"
+#guard bothValue (progOf pWNot) [5] "-6"
+#guard bothValue (progOf2 pWShl) [3, 1] "6"
+#guard bothValue (progOf2 pWShl) [1, 63] "-9223372036854775808"
+#guard bothValue (progOf2 pWShl) [1, 64] "1"
+#guard bothValue (progOf2 pWShr) [-1, 60] "15"
+#guard bothValue (progOf2 pWShr) [-9223372036854775808, 63] "1"
+#guard bothValue (progOf2 pWShr) [8, 66] "2"
+-- FLOAT64-0: 1.5 + 2.25 = 3.75; 1.5 - 2.25 = -0.75; 1.5 * 4 = 6; 3 / 4 = 0.75; 1 / 0 = +inf
+#guard bothValue (progOf2 pFAdd) [4609434218613702656, 4612248968380809216] "4615626668101337088"
+#guard bothValue (progOf2 pFSub) [4609434218613702656, 4612248968380809216] "-4618441417868443648"
+#guard bothValue (progOf2 pFMul) [4609434218613702656, 4616189618054758400] "4618441417868443648"
+#guard bothValue (progOf2 pFDiv) [4613937818241073152, 4616189618054758400] "4604930618986332160"
+#guard bothValue (progOf2 pFDiv) [4607182418800017408, 0] "9218868437227405312"
+-- NaN < 1 is false; 1 ≤ 1; +0 = -0; a NaN equals nothing, itself included
+#guard bothValue (progOf2 pFLt) [4607182418800017408, 4611686018427387904] "1"
+#guard bothValue (progOf2 pFLt) [9221120237041090560, 4607182418800017408] "0"
+#guard bothValue (progOf2 pFLe) [4607182418800017408, 4607182418800017408] "1"
+#guard bothValue (progOf2 pFEq) [0, -9223372036854775808] "1"
+#guard bothValue (progOf2 pFEq) [9221120237041090560, 9221120237041090560] "0"
+#guard bothValue (progOf pFNeg) [4607182418800017408] "-4616189618054758400"
+#guard bothValue (progOf pFAbs) [-4616189618054758400] "4607182418800017408"
+-- sqrt 4 = 2, sqrt 2.25 = 1.5, sqrt of a negative is the quiet NaN
+#guard bothValue (progOf pFSqrt) [4616189618054758400] "4611686018427387904"
+#guard bothValue (progOf pFSqrt) [4612248968380809216] "4609434218613702656"
+#guard bothValue (progOf pFSqrt) [-4616189618054758400] "9221120237041090560"
+-- sqrt 5260294500220744 = s/2^27 + a tail near 2^-82, s odd (s^2 + 15 = m * 2^54, s = 1 mod 4): the 34 bits
+-- below the result end 1 0...0, so only the remainder of `isqrt` rounds it up (hardware: ...813)
+#guard bothValue (progOf pFSqrt) [4842126294296133448] "4724639673638920813"
+#guard bothValue (progOf pFFloor) [4609434218613702656] "4607182418800017408"
+#guard bothValue (progOf pFFloor) [-4613937818241073152] "-4611686018427387904"
+#guard bothValue (progOf pFCeil) [4609434218613702656] "4611686018427387904"
+#guard bothValue (progOf pFCeil) [-4620693217682128896] "-9223372036854775808"
+-- ties away from zero: round 2.5 = 3, round -2.5 = -3, round 0.4 = 0
+#guard bothValue (progOf pFRound) [4612811918334230528] "4613937818241073152"
+#guard bothValue (progOf pFRound) [-4610560118520545280] "-4609434218613702656"
+#guard bothValue (progOf pFRound) [4600877379321698714] "0"
+-- 5 to 5.0, the largest word to 2^64, -3 to -3.0
+#guard bothValue (progOf pFOfW) [5] "4617315517961601024"
+#guard bothValue (progOf pFOfW) [-1] "4895412794951729152"
+#guard bothValue (progOf pFOfI) [-3] "-4609434218613702656"
+-- 5.7 truncates to 5, a NaN and every value below 0 give 0, 2^70 saturates to the word
+#guard bothValue (progOf pFToW) [4618103647896390861] "5"
+#guard bothValue (progOf pFToW) [9221120237041090560] "0"
+#guard bothValue (progOf pFToW) [-4620693217682128896] "0"
+#guard bothValue (progOf pFToW) [4922434392715952128] "-1"
+-- a signaling NaN's bits are the quiet NaN's; a non-NaN's bits are its own
+#guard bothValue (progOf pFBits) [9218868437227405313] "9221120237041090560"
+#guard bothValue (progOf pFBits) [-4616189618054758400] "-4616189618054758400"
 #guard bothValue (progOf pArrEmpty) [5] "0 0 [] 0"
 #guard bothStop (progOf pGetEmpty) [5]
 #guard bothValue (progOf pRead) [5] "1 2 3"
@@ -1255,11 +1723,50 @@ def pSetOut : N := withArr (mkVDecl 5 tyI64 (mkLit 2) (mkVDecl 6 tyObj (mkPrim 1
 #guard heapLen (progOf pPushShared) .counted [5] == some 2
 
 -- the non-consuming new primitives are inside the fragment; every consuming one is outside
-#guard [pIsScalar, pBox, pUnbox, pBoxS, pShrW, pDivRemU, pRemU, pDivU, pArrEmpty, pGetEmpty].all (Sem.rcObsFreeDepth 64)
+#guard [pIsScalar, pBox, pUnbox, pBoxS, pShrW, pDivRemU, pRemU, pDivU, pArrEmpty, pGetEmpty,
+        pWAdd, pWSub, pWMul, pWDivRem, pWDiv, pWRem, pWLt, pWLe, pWAnd, pWOr, pWXor, pWNot,
+        pWShl, pWShr, pFAdd, pFSub, pFMul, pFDiv, pFLt, pFLe, pFEq, pFNeg, pFAbs, pFSqrt,
+        pFFloor, pFCeil, pFRound, pFOfW, pFOfI, pFToW, pFBits].all (Sem.rcObsFreeDepth 64)
 #guard [pRead, pPush, pPushShared, pPushList, pSet, pSetShared, pSetList, pSetObj, pGetObj, pOfList, pOfListShared,
         pToList, pToListShared, pSlice, pSliceEmpty].all (fun b => !Sem.rcObsFreeDepth 64 b)
-#guard [121, 126, 119, 120, 107, 108, 109, 116, 117, 118, 127, 128].all (fun p => !Sem.consumes p)
-#guard [122, 123, 124, 125].all Sem.consumes
+#guard [121, 126, 119, 120, 107, 108, 109, 116, 117, 118, 127, 128,
+        65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77,
+        78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94,
+        55, 56, 57, 61, 62, 97].all (fun p => !Sem.consumes p)
+#guard [122, 123, 124, 125, 58, 59, 60, 63, 95, 96, 98].all Sem.consumes
+
+-- ARRAY-0: the two index words
+#guard bothValue (progOf pAUSize) [5] "2 #[5 3]"
+#guard bothValue (progOf pAUSizeFree) [5] "0"
+#guard bothValue (progOf pWToN) [5] "5"
+#guard bothValue (progOf pWToN) [-1] "18446744073709551615"
+-- aEmpty is an array object; aMk repeats its element; a u8 element keeps a byte
+#guard bothValue (progOf pAEmpty) [5] "0 #[]"
+#guard bothValue (progOf pAMk) [5] "#[7 7 7]"
+#guard bothValue (progOf pAMkU8) [5] "#[44]"
+-- the two crossings
+#guard bothValue (progOf pAOfList) [5] "#[5 3]"
+#guard bothValue (progOf pAToList) [5] "[5 3]"
+-- size, get, and the refusal past the size
+#guard bothValue (progOf pASize) [5] "2 #[5 3]"
+#guard bothValue (progOf pAGet) [5] "3"
+#guard bothStop (progOf pAGetOut) [5]
+-- set unique (in place when counted), set shared (a copy), and a byte set
+#guard bothValue (progOf pASet) [5] "#[9 3]"
+#guard bothValue (progOf pASetShared) [5] "#[5 3] #[9 3]"
+#guard bothValue (progOf pASetU8) [5] "#[44 5]"
+-- push, pop, its empty case, a clamped slice, append with an empty half
+#guard bothValue (progOf pAPush) [5] "#[5 3 7]"
+#guard bothValue (progOf pAPop) [5] "#[5]"
+#guard bothValue (progOf pAPopEmpty) [5] "#[]"
+#guard bothValue (progOf pASlice) [5] "#[5 3] #[5]"
+#guard bothValue (progOf pASlicePast) [5] "#[3]"
+#guard bothValue (progOf pAAppend) [5] "#[5 3 7]"
+#guard bothValue (progOf pAAppendEmpty) [5] "#[5 3]"
+-- the non-consuming seq operators are inside the fragment; every consuming one is outside
+#guard [pAUSizeFree, pWToN, pAEmpty, pAGetFree, pASliceFree].all (Sem.rcObsFreeDepth 64)
+#guard [pASize, pAUSize, pAGet, pAGetOut, pASlice, pASlicePast, pAMk, pAMkU8, pAOfList, pAToList, pASet, pASetShared,
+        pASetU8, pAPush, pAPop, pAPopEmpty, pAAppend, pAAppendEmpty].all (fun b => !Sem.rcObsFreeDepth 64 b)
 
 /-! ### Garbage freedom of the array primitives: every program releases what it made and returns x0.
 A count the semantics forgot (an element a copy shares, a cell or an array not released) leaves a
@@ -1464,7 +1971,7 @@ def uprojOut : N := mkVDecl 1 tyObj (mkUCtor infoU 1 [0]) (mkVDecl 2 tyI64 (mkUP
 #guard !(Sem.r1NodeDepth 64 apUnder) && !(Sem.r1NodeDepth 64 usizeRw) && !(Sem.r1NodeDepth 64 (boxTrip 10))
 
 -- listSet is `List.set`, and tail-recursive now (the r1 recursion overflowed the stack on
--- swe-irsem's eqat7 and rr-append): a write past a hundred thousand cells returns the element
+-- irsem's eqat7 and rr-append): a write past a hundred thousand cells returns the element
 #guard Sem.listSet ['a', 'b', 'c'] 1 'z' == ['a', 'z', 'c']
 #guard (Sem.listSet (List.replicate 100000 (7 : Int)) 99999 (-1)).get? 99999 == some (-1)
 

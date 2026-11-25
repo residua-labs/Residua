@@ -47,10 +47,30 @@ def row (a b : UInt64) : Bool :=
         | [], _ => none
       tagOk && (again == some bytes) && R2.SCM.scmOutEq value (.int (refVal a b).toNat)
 
+def fProg : R2.SCM.SCMPrograms oldSig oldSig :=
+  .cons (.fToW (.fBits (.fAdd (.fSqrt (.fOfW (.litW 9))) (.fRound (.litW 0x4004000000000000))))) .nil
+
+def aProg : R2.SCM.SCMPrograms oldSig oldSig :=
+  .cons (.aGet (.aSlice (.aAppend (.aPush (.aEmpty (.litW 0)) (.litW 10)) (.aMk (.wToN (.litW 2) : R2.SCM.SCMExpr oldSig [] R2.SCM.natMagTy) (.litW 25))) (.litW 0) (.litW 3)) (.litW 1)) .nil
+
+def roundTripI (p : R2.SCM.SCMPrograms oldSig oldSig) (expected : Int) : Bool :=
+  match R2.SCMSourceWire.encode p with
+  | none => false
+  | some bytes =>
+    match Residua.EvalLean.R2.rscmD bytes.toArray with
+    | .error _ => false
+    | .ok ⟨S, p'⟩ =>
+      let again := R2.SCMSourceWire.encode p'
+      let value : Option R2.SCM.SCMVal :=
+        match S, p' with
+        | _ :: _, p' => R2.SCM.evalSCM p' 2 [] (R2.SCM.getSCMProgram p' ⟨0, Nat.zero_lt_succ _⟩)
+        | [], _ => none
+      (again == some bytes) && R2.SCM.scmOutEq value (.int expected)
+
 def main : IO UInt32 := do
   let sameOld := SCMSourceWire.encode oldProg == R2.SCMSourceWire.encode oldProgR2
   IO.println s!"old image byte-identical: {sameOld}"
-  let rs := cases.map fun (a, b) => row a b
+  let rs := (cases.map fun (a, b) => row a b) ++ [roundTripI fProg 6, roundTripI aProg 25]
   let ok := (rs.filter id).length + (if sameOld then 1 else 0)
   let tot := rs.length + 1
   IO.println s!"w64wire ok={ok}/{tot}"

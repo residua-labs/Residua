@@ -103,7 +103,7 @@ partial def ilGo (cands : VSet) (ds : DeclTab) (nImg : Nat) (n : N) (next : Nat)
   if n.op == opVDecl then
     let e := vdeclExpr n
     let k := bodyOf n
-    if e.op == opFap && vsContains cands (fapFn e) then
+    if e.op == opFap && !fapClosed e && vsContains cands (fapFn e) then
       match dtFind ds (fapFn e) with
       | some g =>
         let c := normGo g.body (ilBind g.xs e.ys imEmpty) next
@@ -187,7 +187,7 @@ def ilRun (recs : VSet) (nImg : Nat) (limit : Nat) (calls : IMap) (scalar : Bool
   | f :: order, ds, cands =>
     match dtFind ds f.toNat with
     | some d =>
-      if d.ext then ilRun recs nImg limit calls scalar order ds cands
+      if d.ext || declIsClosed d then ilRun recs nImg limit calls scalar order ds cands
       else
         let body := (ilGo cands ds nImg d.body (declMaxIndex d + 1)).node
         let d2 := { d with body := body }
@@ -272,6 +272,9 @@ def spCap : Nat := 3
 -- is the expression a call of a function of `own`
 def spOwnCall (own : VSet) (e : N) : Bool := e.op == opFap && vsContains own (fapFn e)
 
+def spOwnCallQ (self comp : Int) (compOf : ITree) (e : N) : Bool :=
+  e.op == opFap && sccSameCompI self comp compOf (fapFn e : Int)
+
 mutual
 -- Does the body of function f call a function of `own`, the functions that call each other with f (f itself
 -- among them), so that frames pile up: any such call but a call of f itself as the body's last step (a call
@@ -286,6 +289,21 @@ partial def spRecurses (f : Nat) (own : VSet) (n : N) : Bool :=
 partial def spRecursesAlts (f : Nat) (own : VSet) : List N → Bool
   | [] => false
   | alt :: alts => spRecurses f own (altBody alt) || spRecursesAlts f own alts
+end
+
+mutual
+partial def spRecursesQ (self comp : Int) (compOf : ITree) (n : N) : Bool :=
+  if n.op == opVDecl then
+    let e := vdeclExpr n
+    (spOwnCallQ self comp compOf e && !((fapFn e : Int) == self && (bodyOf n).op == opRet))
+      || spRecursesQ self comp compOf (bodyOf n)
+  else if n.op == opJDecl then spRecursesQ self comp compOf (jdeclBody n) || spRecursesQ self comp compOf (bodyOf n)
+  else if n.op == opCase then spRecursesAltsQ self comp compOf (caseAlts n)
+  else if isTerminal n then false
+  else spRecursesQ self comp compOf (bodyOf n)
+partial def spRecursesAltsQ (self comp : Int) (compOf : ITree) : List N → Bool
+  | [] => false
+  | alt :: alts => spRecursesQ self comp compOf (altBody alt) || spRecursesAltsQ self comp compOf alts
 end
 
 /-! ## The types of a function's variables -/
@@ -369,10 +387,13 @@ def spAllLive : List Int → Bool
 
 /-! ## The split -/
 
--- own: the function and those that call each other with it; rets: its result types; tys: its variables' types;
--- lim: `spLimit`; cap: `spCap`
+-- self / comp / compOf: the function and its component number in `CallScc`; rets: its result types;
+-- tys: its variables' types; lim: `spLimit`; cap: `spCap`
 structure SpCx where
-  own : VSet
+  own : VSet := vsEmpty
+  self : Int := -1
+  comp : Int := -1
+  compOf : ITree := it0
   rets : List Int
   tys : IMap
   lim : Nat
@@ -436,7 +457,7 @@ partial def spGo (cx : SpCx) (n : N) (st : SpSt) : SpR :=
   if n.op == opVDecl then
     let e := vdeclExpr n
     let r := spGo cx (bodyOf n) st
-    if spOwnCall cx.own e then
+    if (if cx.self >= 0 then spOwnCallQ cx.self cx.comp cx.compOf e else spOwnCall cx.own e) then
       let k := spKid cx r
       { node := { n with kids := [e, k.node] }, calls := true, st := k.st }
     else { node := { n with kids := [e, r.node] }, calls := r.calls, st := r.st }
@@ -472,19 +493,25 @@ structure SpDs where
   st : SpSt
   deriving Inhabited
 
-def spDecls (scc : CallScc) (lim cap : Nat) : List Decl → SpSt → SpDs
-  | [], st => { decls := [], st := st }
-  | d :: ds, st =>
-    let own := vsInsertArgs vsEmpty (sccOf scc (d.f : Int))
-    if d.ext || d.rets.isEmpty || !spAllLive d.rets || !vsContains scc.recs d.f || !spRecurses d.f own d.body then
-      let r := spDecls scc lim cap ds st
-      { decls := d :: r.decls, st := r.st }
+def spDeclsGo (scc : CallScc) (lim cap : Nat) : List Decl → SpSt → List Decl → SpDs
+  | [], st, acc => { decls := acc.reverse, st := st }
+  | d :: ds, st, acc =>
+    let df : Int := (d.f : Int)
+    if d.ext || declIsClosed d || d.rets.isEmpty || !spAllLive d.rets || !vsContainsI scc.recs df then
+      spDeclsGo scc lim cap ds st (d :: acc)
     else
-      let cx : SpCx := { own := own, rets := d.rets, tys := spTys d.body (spParamTys d.xs imEmpty), lim := lim, cap := cap }
-      let b := spGo cx d.body { st with fresh := declMaxIndex d + 1 }
-      let d2 := if b.st.next == st.next then d else declNormalizeIds { d with body := b.node }
-      let r := spDecls scc lim cap ds b.st
-      { decls := d2 :: r.decls, st := r.st }
+      let comp := sccCompNum scc df
+      if !spRecursesQ df comp scc.compOf d.body then
+        spDeclsGo scc lim cap ds st (d :: acc)
+      else
+        let cx : SpCx := { self := df, comp := comp, compOf := scc.compOf, rets := d.rets,
+                           tys := spTys d.body (spParamTys d.xs imEmpty), lim := lim, cap := cap }
+        let b := spGo cx d.body { st with fresh := declMaxIndex d + 1 }
+        let d2 := if b.st.next == st.next then d else declNormalizeIds { d with body := b.node }
+        spDeclsGo scc lim cap ds b.st (d2 :: acc)
+
+def spDecls (scc : CallScc) (lim cap : Nat) (ds : List Decl) (st : SpSt) : SpDs :=
+  spDeclsGo scc lim cap ds st []
 
 -- The declarations are numbered 0, 1, ... in their order (lib/lrc/Trmc.rsd `trmc`; any other list is returned as
 -- it is); the new functions follow them.

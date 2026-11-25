@@ -31,7 +31,8 @@ serves files and sessions, stated against the execution-layer ABI interface:
 - Source revision: `3ed96aec8109cf10f0a2b3433eb5693e7c9ac1ff` (on the
   development `main` branch); statement set revision 3, Lean 4.14.
 - Independent audit: an independent audit passed at that sha; transcript
-  `reports/release-02/evidence/AUDIT-EFFECT-CLOSE.r1.md` (repository-side, not in this archive). All audit
+  `AUDIT-EFFECT-CLOSE.r1.md` (repository-side on the 0.3
+  line, not in this archive). All audit
   checks ran on clean worktrees of the subject sha.
 - E3 conformance: 40/40 seeds, 258/258 obligations (boundary 103,
   format 7, grammar 27, mutant 6, precedence 17, prewire 33, receipt

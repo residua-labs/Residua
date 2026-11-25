@@ -5,24 +5,35 @@
 # built on every use; these numbers do: lib/lrc/Pack.rsd packs nothing in any program when one read of a scalar is from an object it
 # cannot name (row pack holds more bytes), and a literal's cell that is no closed term is built wherever it stands (row closed allocates
 # more cells). The rows: a node with fields of every width; the two trees; the two programs with a string literal used twice; closed
-# terms; a list of UInt32 (nqueens in int32); numbers that are limb lists; arrays of scalars; and the rows of
-# instruments/lrc-host/ProgHead.rsd.
+# terms; a list of UInt32 (nqueens in int32); numbers that are limb lists; arrays of scalars; the rows of
+# instruments/lrc-host/ProgHead.rsd; and numtail, a list of numbers read from its node as a function's whole body: read as the wire's
+# list there, every read of the node's class builds the list again (3,783 cells where the image is laid out as one class);
+# and arrflow, where arrays arrive in list code and most lists are no arrays (lib/lrc/Classes.rsd "Which lists may be arrays").
+# kbox: the nodes that hold a list of children and nothing else are no objects (lib/lrc/FromWire.rsd `Lay.kbox`): 182 cells
+# where each such node is an object of its own (280).
 # A landing that means to move one of these numbers writes the new number here and says so in its report.
-pack	4544	2358
+# pad: a match inside the arm for "any other constructor" of a match on the same value (lib/lrc/FromWire.rsd "A case that the
+# path decides"): when the alternatives that do not run there are kept, two types of the row are one class laid out as one, and
+# it allocates 325 cells and holds 1,264 bytes.
+pack	4544	1898
 rbtree	3200	100
 rbtreeck	17776	576
-deriv	1696	158
-cfold	3040	197
-closed	232	30
+deriv	1456	143
+cfold	2800	182
+closed	232	13
 nqueenskk	2848	305
-magnat	8160	9717
-narrowint	16032	6267
-convnats	1520	270
-arrof	416	37
+magnat	8160	8847
+narrowint	15968	5765
+convnats	1216	190
+arrof	416	32
 headlist	192	12
 headback	360	20
-head	3120	4364
-fold	3040	473
+head	3120	3660
+fold	3040	460
 foldkept	2752	196
 wordCastOnly	24	1
 wordCastLet	24	1
+numtail	2488	338
+arrflow	592	266
+kbox	1160	140
+pad	576	127

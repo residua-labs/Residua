@@ -1,81 +1,61 @@
-# INSTALL — the 0.3 minimal bootstrap, from the source archive
+# INSTALL — host requirements and 0.4 minimal bootstrap
 
-This document covers reproducing release 0.3 — the committed wasm [seed](GLOSSARY.md),
-the `rsdc`/`rsc` source closure, the runtime and these documents —
-with no Lean, elan, lake, Node or OCaml anywhere on PATH. Every claim
-names its source path. The steps will change in later versions.
+This document covers reproducing release 0.4 — rebuilding `rsdc` and
+`rsc` byte-for-byte from the committed WebAssembly [seed](GLOSSARY.md)
+and compiling and running `Proc` programs through `glue/host/procwt.c`
+— with no Lean, elan, Lake, Node, OCaml or Rust on `PATH`.
 
-## What the release gives you
+## What the archive provides
 
-- `rsd-src.tar` — the 0.3 source archive: `bootstrap/seed/stage-14274/`
-  (the committed seed pair, its whole-module sources, the recipe and
-  its digest manifests), the 54 compiler
-  source members, `bootstrap/seed/stage-14274/seed-host.c` (the C host
-  bridge) and `docs/`, `LICENSE`,
-  `NOTICE`, `lean-toolchain`. Its path inventory is
-  `release/BUILD-INPUTS.tsv` (shipped); its sha256 is the
-  `release-source-archive` pin published with the release.
-- `bootstrap/seed/stage-14274/` — the 0.3 committed seed:
-  `rsdc.wasm` (sha256 `1aeacfb6b097…dbc6be75`), `rsc.wasm` (sha256
-  `b7db967608fe…0b2e90`), the two whole-module `sources/*.rsd`, the
-  digest manifests and `README.md` (`stage-14274/SHA256SUMS`).
+- `bootstrap/seed/stage-14274/` — the 0.4 committed seed pair:
+  `rsdc.wasm` (`845b99ef…`, entry `f896`) and `rsc.wasm` (`b52b07d1…`,
+  entry `f2615` at construction word `14274`), the whole-module sources
+  `sources/{rsdc,rsc}.rsd`, the C11 seed host `seed-host.c`
+  (`ea7a4e2e…`), the SHA-256 sum files, and `README.md`.
+- The 54 compiler source members pinned in
+  `bootstrap/seed/stage-14274/SOURCE-MEMBERS-SHA256SUMS`.
+- `glue/host/{procwt.c,proc9core.h,proc9.c}` — the C11 `Proc` execution
+  hosts (`procwt.c` links against the same pinned `wasmtime` v50.0.1 C
+  API as `seed-host.c` and includes an in-process POSIX responder for
+  `env`, `fs` and `clock`).
+- `lib/Proc{,Bytes,9}.rsd`, `glue/std/*.rsd`, and
+  `examples/app04/{Stats,Table,Main}.rsd` — the `Proc` runtime, standard
+  library modules and three-module `Float` + `String` CLI example.
 
 ## Host requirements
 
-- Linux x86-64 with GCC, GNU binutils and coreutils, or macOS arm64
-  with clang — plus Bash, curl and tar (the recipe's host table in
-  `stage-14274/README.md`).
-- Network access for the two pinned fetches, unless their payloads
-  are cached and checked against the same sums:
-  - **wasmtime v50.0.1 C API** — `wasmtime-v50.0.1-{x86_64-linux,
-    aarch64-macos}-c-api.tar.xz`, sha256 pinned in
-    `stage-14274/WASMTIME-SHA256SUMS`, licence Apache-2.0 WITH
-    LLVM-exception (`github.com/bytecodealliance/wasmtime`).
-  - **binaryen version_133** — `binaryen-version_133-{x86_64-linux,
-    arm64-macos}.tar.gz`, sha256 pinned in
-    `stage-14274/BINARYEN-SHA256SUMS`, licence Apache-2.0
-    (`github.com/WebAssembly/binaryen`). `wasm-opt` recodes the seed's
-    legacy exception-handling instructions to the `exnref` encoding
-    wasmtime implements.
-  Neither tool is shipped; the recipe downloads and verifies them.
-- Nothing else: the recipe refuses if `lean`, `elan`, `lake`, `node`
-  or `ocaml` resolves on PATH (`stage-14274/README.md`, the
-  `command -v` guard). That refusal is the point — 0.3 is a seed,
-  not a toolchain install.
+- **Linux x86-64** with GCC, GNU binutils and coreutils, or **macOS
+  arm64** with Apple clang — plus `sh`/`bash`, `curl`, `tar`, `awk`,
+  `grep`, `cmp`, and `sha256sum` (`shasum -a 256` on macOS), and about
+  8 GiB of available RAM (peak RSS during the 0.4 acceptance rebuild was
+  `5.70 GiB` on Linux x86-64 and `5.78 GiB` on macOS arm64).
+- Network access (or pre-fetched tarballs verified against the same
+  sums) for the two pinned user downloads:
+  - **wasmtime v50.0.1 C API** — `wasmtime-v50.0.1-{x86_64-linux,aarch64-macos}-c-api.tar.xz`,
+    pinned in `bootstrap/seed/stage-14274/WASMTIME-SHA256SUMS`
+    (Apache-2.0 WITH LLVM-exception).
+  - **binaryen version_133** — `binaryen-version_133-{x86_64-linux,arm64-macos}.tar.gz`,
+    pinned in `bootstrap/seed/stage-14274/BINARYEN-SHA256SUMS`
+    (Apache-2.0). `wasm-opt --translate-to-exnref` recodes legacy Wasm
+    `try`/`catch` instructions to `exnref`.
+- Clean `PATH`: the recipe refuses if `lean`, `elan`, `lake`, `node` or
+  `ocaml` resolves on `PATH`.
 
 ## Steps
 
 ```sh
-# verify the released archive against the digest file published beside it
-sha256sum -c rsd-src.tar.sha256    # expect: rsd-src.tar: OK
-# (macOS: shasum -a 256 -c rsd-src.tar.sha256)
-
-# the archive's members sit at the top level — extract into a fresh
-# directory, then work at the extraction root
+sha256sum -c rsd-src.tar.sha256    # macOS: shasum -a 256 -c rsd-src.tar.sha256
 mkdir rsd-src && tar -xf rsd-src.tar -C rsd-src && cd rsd-src
-
 env -i PATH=/usr/bin:/bin bash --noprofile --norc
-# then run the commands of bootstrap/seed/stage-14274/README.md
+# run the recipe in bootstrap/seed/stage-14274/README.md (seed rebuild only)
+# or the Quick start in README.md (seed rebuild + procwt + examples/app04)
 ```
 
-Expected: exit 0, two zero-status emissions, two zero-status
-lowerings, four rebuilt hashes matching `REBUILT-SHA256SUMS`, and the
-two seed byte comparisons — the altered-Wasm control must compare
-nonzero (`stage-14274/README.md`). The recipe's wall and peak are
-recorded per version in `docs/PERF-RECORD.tsv`.
+Measured 0.4 clean-archive timings: compiler rebuild `105 s` (`193 s`
+end-to-end with `examples/app04` and 16 test cases) on Linux x86-64;
+`191 s` (`337 s` end-to-end) on macOS arm64.
 
-## After the rebuild
+## Open limits in 0.4
 
-`$out/run` is the runtime host: `run rsdc <entry> <module.wasm>
-<source.rsd> <out.rscm> 0 cons` compiles, `run rsc <entry>
-<module.wasm> <file.rscm> <out.wasm> 14274 cons` lowers — with the
-entries and translated modules of `stage-14274/README.md`
-(`rebuild_root`; the wasmtime host is `stage-14274/seed-host.c`). The
-grammar the front end accepts is `docs/LANGUAGE.md`.
-
-## Not in 0.3
-
-compiled dispatcher binaries (the `rsd` tool ships as sources — see
-`docs/BUILD.md` for its scope), modules (`import` refuses err=1), the
-9P device servers, theorem checking and the application suites — see
-`docs/OVERVIEW.md` and `release/GAPS.tsv`.
+See `docs/BUILD.md`, `docs/OVERVIEW.md` and `release/GAPS.tsv` for what
+remains repository-side or slated for later releases.

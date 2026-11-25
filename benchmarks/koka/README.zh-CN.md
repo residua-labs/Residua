@@ -29,7 +29,7 @@ GCP t2d-standard-4 VM 上，含 CPU 秒数（与 wall 并列）、峰值 RSS、
 # 1. 映像+模块步（分钟级；唯一构建 residua 产物的一步）：
 #    今天的映像由 twin 构建，模块由 import 闭包在 --store 下构建的
 #    编译器编译
-lean --run benchmarks/koka/KokaBase.rsd images [14274] \
+lean --run benchmarks/koka/KokaBase.rsd images 14274 \
   [out/kbstore/build/rsc-native compile]
 #    环境变量：KB_VARIANT_cfold / KB_VARIANT_deriv —— 为被拒程序提供
 #    另一变体源（行标为 `variant, not the source`）

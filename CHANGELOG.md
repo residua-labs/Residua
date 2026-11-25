@@ -10,6 +10,95 @@ test suites; the inputs of the bootstrap recipe unchanged) is numbered
 0.x.y. A published tag is never moved. Each release lists the SHA-256 of its
 source archive; the repository tree at the tag equals the archive.
 
+## [0.4] — 2026-11-25
+
+### Added
+
+- `examples/app04/` (`examples/app04/Stats.rsd`, `examples/app04/Table.rsd`,
+  `examples/app04/Main.rsd`): multi-module CLI program reading a
+  line-delimited file of floating-point numbers, computing `count`, `min`,
+  `max`, `mean` and population `variance` with `Float` (`binary64`),
+  formatting an aligned ASCII table with `String`, writing an output file,
+  and exiting nonzero with diagnostics on malformed lines or I/O errors.
+- `glue/host/` (`glue/host/procwt.c`, `glue/host/proc9core.h`,
+  `glue/host/proc9.c`): C11 `Proc` execution hosts for WebAssembly
+  (Wasmtime C API v50.0.1, reading exported `__heap_base` and probing
+  `driveS` automatically) and wasm2c, backed by an in-process 9P2000
+  responder serving `/env/args`, `/dev/time`, `/dev/mono` and host file
+  reads/writes.
+- `glue/std/` (`glue/std/Args.rsd`, `glue/std/Files.rsd`,
+  `glue/std/Graph.rsd`, `glue/std/Json.rsd`, `glue/std/Map.rsd`,
+  `glue/std/Proc.rsd`, `glue/std/Str.rsd`) and `lib/ProcBytes.rsd`,
+  `lib/Proc9.rsd`: standard `Proc` modules for CLI arguments, chunked file
+  I/O, strings, JSON, maps, graphs, byte slices and 9P2000 frames.
+- `glue/rsd/` (`glue/rsd/main.rsd`, `glue/rsd/build.rsd`): `rsd run`
+  front-door entry and build script connecting `import`-using `Proc`
+  programs to `procwt` and `wasm-opt --translate-to-exnref`.
+- `lean/nf-compose/NfCompose/HopCompose.lean`,
+  `lean/nf-compose/NfCompose/Rec.lean` and
+  `lean/nf-compose/NfRec/CheckedStatus.lean`: multi-hop compiler
+  composition and bounded/well-founded recursion composition theorems over
+  the pinned `ExecModel`.
+- `instruments/lrc-host/CheckFloat64.rsd`,
+  `instruments/lrc-host/Float64Oracle.rsd`,
+  `instruments/lrc-host/Wasm2CHost.c`,
+  `instruments/lrc-host/MutantsBound.tsv`,
+  `instruments/lrc-host/MutantsExcl.tsv`,
+  `instruments/lrc-host/MutantsF64.tsv`,
+  `instruments/lrc-host/MutantsFlow.tsv`,
+  `instruments/lrc-host/MutantsKBox.tsv`,
+  `instruments/lrc-host/MutantsLit.tsv`,
+  `instruments/lrc-host/MutantsLoops.tsv`,
+  `instruments/lrc-host/ProgArrFlow.rsd`,
+  `instruments/lrc-host/ProgBound.rsd`,
+  `instruments/lrc-host/ProgKBox.rsd`,
+  `instruments/lrc-host/ProgLitCall.rsd`,
+  `instruments/lrc-host/ProgLitWord.rsd`,
+  `instruments/lrc-host/ProgNumTail.rsd` and
+  `instruments/lrc-host/ProgPad.rsd`: IEEE-754 `Float` (`binary64`)
+  differential oracle, wasm2c host and compiler mutation/regression inputs.
+
+### Changed
+
+- Recut seed under `bootstrap/seed/stage-14274/` and updated
+  `bootstrap/README.md`: `rsdc.wasm` (`12,519,278` B, `845b99ef…`, entry
+  `f896`, `__heap_base` `765288`) and `rsc.wasm` (`14,275,644` B,
+  `b52b07d1…`, entry `f2615`, word `14274`, `__heap_base` `603704`) replace
+  the 0.3 seed blobs (`19.9 MB` / `20.5 MB`); `seed-host.c` reads the
+  loaded module's exported `__heap_base` global and supports the
+  `\0RSDC-ENTRIES\n` query header; clean-environment rebuild runs in
+  `105 s` on Linux x86-64 and `191 s` on macOS arm64.
+- `rsdc/`, `rsc/`, `lib/`, `lib/lrc/`, `docs/EMITTER.md`, `semantics/`,
+  `lean/rsd-cert/Residua/Bootstrap/R2/` and `instruments/lrc-host/`: added
+  IEEE-754 `Float` (`binary64`), multi-module `import` support, `Proc`
+  `do`-notation, `\0RSDC-ENTRIES\n` entry inspection, and updated array,
+  constructor-layout and reference-counting passes.
+- `lib/AvlMap.rsd`: replaced the 0.3 OCaml `stdlib/map.ml` port with an
+  Apache-2.0 port of Lean `v4.36.0`'s weight-balanced tree
+  (`Std/Data/DTreeMap/Internal/Def.lean` and `Balancing.lean`).
+- `rsd/`, `lib/rsd/` and `benchmarks/MANIFEST.tsv`: updated build-tool
+  modules and benchmark manifest metadata for the 0.4 tree.
+- `lean/nf-compose/NfCompose/Hop.lean` and
+  `lean/nf-compose/lakefile.lean`: a hop is admitted only if the translated
+  program is itself admissible on the target side; the package builds the
+  new modules.
+- `gates/semalign/METHOD.md`, `reports/nf-compose/REPORT.md`,
+  `benchmarks/koka/README.md` and `benchmarks/koka/README.zh-CN.md`:
+  corrections of code spans and of one command line; no change of meaning.
+- `README.md`, `README.zh-CN.md`, `CHANGELOG.md`, `CHANGELOG.zh-CN.md`,
+  `docs/`, `NOTICE` and `release/`:
+  updated quick start (`examples/app04` built and run from the seed),
+  `docs/BUILD.md` + `.zh-CN.md`, `docs/VERIFY-RELEASE.md`, `docs/SPECS.md`,
+  `docs/LANGUAGE.md`, `docs/STDLIB.md`, `docs/OVERVIEW.md` + `.zh-CN.md`,
+  `docs/RELEASE-NOTES.md` + `.zh-CN.md`, `release/GAPS.tsv`,
+  `release/SHIP-RULES.tsv`, `release/PROVENANCE.tsv`, `release/NOTICES.md`,
+  `release/BUILD-INPUTS.tsv`, `release/MANIFEST.md` and
+  `release/PRIOR-SHIP-SETS.tsv`.
+
+### Removed
+
+- None (every path shipped in 0.3 remains in 0.4).
+
 ## [0.3] — 2026-11-24
 
 ### Added
@@ -100,56 +189,56 @@ source archive; the repository tree at the tag equals the archive.
   the new wasm-runtime recipe runs on Linux x86-64 and macOS arm64 and
   needs no WABT toolchain.
 - The generated and binary files leave the source archive (the
-  release ships the stage-14274 seed pair only; everything else
+  release ships the recut seed pair only; everything else
   is built or generated by the user). Each path below was shipped
   by the named earlier release:
-  - `benchmarks/bfs.rscm` (0.1.2) — emitted module (generated); the .rsd source ships.
+  - `benchmarks/bfs.rscm` (0.1.2) — emitted module (generated); the `.rsd` source ships.
   - `benchmarks/bfs.rscm.meta` (0.1.2) — generated sidecar of an emitted module.
-  - `benchmarks/binarytrees.rscm` (0.1.2) — emitted module (generated); the .rsd source ships.
+  - `benchmarks/binarytrees.rscm` (0.1.2) — emitted module (generated); the `.rsd` source ships.
   - `benchmarks/binarytrees.rscm.meta` (0.1.2) — generated sidecar of an emitted module.
-  - `benchmarks/cfold.rscm` (0.1.2) — emitted module (generated); the .rsd source ships.
+  - `benchmarks/cfold.rscm` (0.1.2) — emitted module (generated); the `.rsd` source ships.
   - `benchmarks/cfold.rscm.meta` (0.1.2) — generated sidecar of an emitted module.
-  - `benchmarks/deriv.rscm` (0.1.2) — emitted module (generated); the .rsd source ships.
+  - `benchmarks/deriv.rscm` (0.1.2) — emitted module (generated); the `.rsd` source ships.
   - `benchmarks/deriv.rscm.meta` (0.1.2) — generated sidecar of an emitted module.
-  - `benchmarks/editdist.rscm` (0.1.2) — emitted module (generated); the .rsd source ships.
+  - `benchmarks/editdist.rscm` (0.1.2) — emitted module (generated); the `.rsd` source ships.
   - `benchmarks/editdist.rscm.meta` (0.1.2) — generated sidecar of an emitted module.
-  - `benchmarks/fannkuch.rscm` (0.1.2) — emitted module (generated); the .rsd source ships.
+  - `benchmarks/fannkuch.rscm` (0.1.2) — emitted module (generated); the `.rsd` source ships.
   - `benchmarks/fannkuch.rscm.meta` (0.1.2) — generated sidecar of an emitted module.
-  - `benchmarks/gameoflife.rscm` (0.1.2) — emitted module (generated); the .rsd source ships.
+  - `benchmarks/gameoflife.rscm` (0.1.2) — emitted module (generated); the `.rsd` source ships.
   - `benchmarks/gameoflife.rscm.meta` (0.1.2) — generated sidecar of an emitted module.
-  - `benchmarks/hashmap.rscm` (0.1.2) — emitted module (generated); the .rsd source ships.
+  - `benchmarks/hashmap.rscm` (0.1.2) — emitted module (generated); the `.rsd` source ships.
   - `benchmarks/hashmap.rscm.meta` (0.1.2) — generated sidecar of an emitted module.
-  - `benchmarks/histogram.rscm` (0.1.2) — emitted module (generated); the .rsd source ships.
+  - `benchmarks/histogram.rscm` (0.1.2) — emitted module (generated); the `.rsd` source ships.
   - `benchmarks/histogram.rscm.meta` (0.1.2) — generated sidecar of an emitted module.
-  - `benchmarks/lexer.rscm` (0.1.2) — emitted module (generated); the .rsd source ships.
+  - `benchmarks/lexer.rscm` (0.1.2) — emitted module (generated); the `.rsd` source ships.
   - `benchmarks/lexer.rscm.meta` (0.1.2) — generated sidecar of an emitted module.
-  - `benchmarks/merkle.rscm` (0.1.2) — emitted module (generated); the .rsd source ships.
+  - `benchmarks/merkle.rscm` (0.1.2) — emitted module (generated); the `.rsd` source ships.
   - `benchmarks/merkle.rscm.meta` (0.1.2) — generated sidecar of an emitted module.
-  - `benchmarks/nqueens.rscm` (0.1.2) — emitted module (generated); the .rsd source ships.
+  - `benchmarks/nqueens.rscm` (0.1.2) — emitted module (generated); the `.rsd` source ships.
   - `benchmarks/nqueens.rscm.meta` (0.1.2) — generated sidecar of an emitted module.
-  - `benchmarks/pidigits.rscm` (0.1.2) — emitted module (generated); the .rsd source ships.
+  - `benchmarks/pidigits.rscm` (0.1.2) — emitted module (generated); the `.rsd` source ships.
   - `benchmarks/pidigits.rscm.meta` (0.1.2) — generated sidecar of an emitted module.
-  - `benchmarks/queens.rscm` (0.1.2) — emitted module (generated); the .rsd source ships.
+  - `benchmarks/queens.rscm` (0.1.2) — emitted module (generated); the `.rsd` source ships.
   - `benchmarks/queens.rscm.meta` (0.1.2) — generated sidecar of an emitted module.
-  - `benchmarks/rbtree.rscm` (0.1.2) — emitted module (generated); the .rsd source ships.
+  - `benchmarks/rbtree.rscm` (0.1.2) — emitted module (generated); the `.rsd` source ships.
   - `benchmarks/rbtree.rscm.meta` (0.1.2) — generated sidecar of an emitted module.
-  - `benchmarks/rbtreeck.rscm` (0.1.2) — emitted module (generated); the .rsd source ships.
+  - `benchmarks/rbtreeck.rscm` (0.1.2) — emitted module (generated); the `.rsd` source ships.
   - `benchmarks/rbtreeck.rscm.meta` (0.1.2) — generated sidecar of an emitted module.
-  - `benchmarks/symreg.rscm` (0.1.2) — emitted module (generated); the .rsd source ships.
+  - `benchmarks/symreg.rscm` (0.1.2) — emitted module (generated); the `.rsd` source ships.
   - `benchmarks/symreg.rscm.meta` (0.1.2) — generated sidecar of an emitted module.
-  - `benchmarks/terrain.rscm` (0.1.2) — emitted module (generated); the .rsd source ships.
+  - `benchmarks/terrain.rscm` (0.1.2) — emitted module (generated); the `.rsd` source ships.
   - `benchmarks/terrain.rscm.meta` (0.1.2) — generated sidecar of an emitted module.
-  - `benchmarks/treebitonic.rscm` (0.1.2) — emitted module (generated); the .rsd source ships.
+  - `benchmarks/treebitonic.rscm` (0.1.2) — emitted module (generated); the `.rsd` source ships.
   - `benchmarks/treebitonic.rscm.meta` (0.1.2) — generated sidecar of an emitted module.
-  - `benchmarks/treematmul.rscm` (0.1.2) — emitted module (generated); the .rsd source ships.
+  - `benchmarks/treematmul.rscm` (0.1.2) — emitted module (generated); the `.rsd` source ships.
   - `benchmarks/treematmul.rscm.meta` (0.1.2) — generated sidecar of an emitted module.
-  - `benchmarks/treeradix.rscm` (0.1.2) — emitted module (generated); the .rsd source ships.
+  - `benchmarks/treeradix.rscm` (0.1.2) — emitted module (generated); the `.rsd` source ships.
   - `benchmarks/treeradix.rscm.meta` (0.1.2) — generated sidecar of an emitted module.
   - `bootstrap/ProcWasm2CHost.c` (0.1/0.1.1/0.1.2/0.2) — wasm2c C host; the seed runs on pinned wasmtime via stage-14274/seed-host.c.
   - `bootstrap/seed/manifest.json` (0.1/0.1.1/0.1.2/0.2) — superseded seed manifest; stage-14274/CUT.tsv is the cut record.
-  - `bootstrap/seed/rsc.rscm` (0.1/0.1.1/0.1.2/0.2) — emitted module (generated); the .rsd source ships.
-  - `bootstrap/seed/rsc.wasm` (0.1/0.1.1/0.1.2/0.2) — superseded pinned seed blob; the stage-14274 pair is the one seed.
-  - `bootstrap/seed/rsdc.wasm` (0.1/0.1.1/0.1.2/0.2) — superseded pinned seed blob; the stage-14274 pair is the one seed.
+  - `bootstrap/seed/rsc.rscm` (0.1/0.1.1/0.1.2/0.2) — emitted module (generated); the `.rsd` source ships.
+  - `bootstrap/seed/rsc.wasm` (0.1/0.1.1/0.1.2/0.2) — superseded pinned seed blob; the recut pair is the one seed.
+  - `bootstrap/seed/rsdc.wasm` (0.1/0.1.1/0.1.2/0.2) — superseded pinned seed blob; the recut pair is the one seed.
   - `bootstrap/seed/stage-14274/EXECUTOR-SHA256SUMS` (0.1/0.1.1/0.1.2/0.2) — wasm2c-route pin; kept repository-side for the internal check tool.
   - `bootstrap/seed/stage-14274/WABT-RUNTIME-SHA256SUMS` (0.1/0.1.1/0.1.2/0.2) — wasm2c-route pin; kept repository-side for the internal check tool.
   - `bootstrap/seed/stage-14274/WABT-SHA256SUMS` (0.1/0.1.1/0.1.2/0.2) — wasm2c-route pin; kept repository-side for the internal check tool.
@@ -321,6 +410,7 @@ the four Tier-1 laws proved, or recorded as a gap.
   `59d0956e3bbaed0ddf176b9bc3ffa0e9fdb401acb1e021400f0e8b99ce110ef1`,
   201 files.
 
+[0.4]: https://github.com/residua-labs/Residua/releases/tag/rsd-0.4
 [0.3]: https://github.com/residua-labs/Residua/releases/tag/rsd-0.3
 [0.2]: https://github.com/residua-labs/Residua/releases/tag/rsd-0.2
 [0.1.2]: https://github.com/residua-labs/Residua/releases/tag/rsd-0.1.2

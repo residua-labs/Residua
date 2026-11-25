@@ -26,7 +26,7 @@
 - 源码修订：`3ed96aec8109cf10f0a2b3433eb5693e7c9ac1ff`（在开发
   `main` 分支上）；陈述集第 3 修订，Lean 4.14。
 - 独立审核：在该 sha 上判定 an independent audit passed；记录
-  `reports/release-02/evidence/AUDIT-EFFECT-CLOSE.r1.md`（仓库侧保存，不在本归档）。审核的全部检查在对象 sha 的干净工作树上
+  `AUDIT-EFFECT-CLOSE.r1.md`（仓库侧保存于 0.3 线，不在本归档）。审核的全部检查在对象 sha 的干净工作树上
   运行。
 - E3 一致性：40/40 种子、258/258 义务（boundary 103、format 7、
   grammar 27、mutant 6、precedence 17、prewire 33、receipt 21、

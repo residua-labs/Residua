@@ -74,11 +74,18 @@ partial def geAlts (nImg : Nat) (known : Nat) : List N → List N
 end
 
 def declGuardElim (nImg : Nat) (d : Decl) : Decl :=
-  if d.ext then d else { d with body := geGo nImg 0 (geFloat d.body) }
+  if d.ext || declIsClosed d then d else { d with body := geGo nImg 0 (geFloat d.body) }
 
-def guardElim (nImg : Nat) : List Decl → List Decl
-  | [] => []
-  | d :: ds => declGuardElim nImg d :: guardElim nImg ds
+def revGeDecls : List Decl → List Decl → List Decl
+  | [], acc => acc
+  | d :: ds, acc => revGeDecls ds (d :: acc)
+
+def guardElimGo (nImg : Nat) : List Decl → List Decl → List Decl
+  | [], acc => revGeDecls acc []
+  | d :: ds, acc => guardElimGo nImg ds (declGuardElim nImg d :: acc)
+
+def guardElim (nImg : Nat) (decls : List Decl) : List Decl :=
+  guardElimGo nImg decls []
 
 /-! ## The fuel a self tail call needs, known
 
@@ -106,41 +113,58 @@ def fkAnyLeadingGuard : List N → Bool
   | [] => false
   | alt :: alts => geIsGuard (fkAfterTotal (altBody alt)) || fkAnyLeadingGuard alts
 
-def fkSinkAlts (g : N) : List N → List N
+def fkMergeFloated (g b : N) : N :=
+  if geIsGuard b then { b with b := if g.b > b.b then g.b else b.b }
+  else { g with kids := [b] }
+
+def fkSinkAltsF (floated : Bool) (g : N) : List N → List N
   | [] => []
-  | alt :: alts => altSetBody alt (geFloat { g with kids := [altBody alt] }) :: fkSinkAlts g alts
+  | alt :: alts =>
+    let b1 := if floated then fkMergeFloated g (altBody alt) else geFloat { g with kids := [altBody alt] }
+    altSetBody alt b1 :: fkSinkAltsF floated g alts
+
+def fkSinkAlts (g : N) (alts : List N) : List N := fkSinkAltsF false g alts
 
 -- the guard g in front of every alternative of the case that ends n's leading bindings
-partial def fkSink (g : N) (n : N) : N :=
-  if geTotal n then { n with kids := [vdeclExpr n, fkSink g (bodyOf n)] }
-  else { n with kids := fkSinkAlts g (caseAlts n) }
+partial def fkSinkF (floated : Bool) (g : N) (n : N) : N :=
+  if geTotal n then { n with kids := [vdeclExpr n, fkSinkF floated g (bodyOf n)] }
+  else { n with kids := fkSinkAltsF floated g (caseAlts n) }
+
+partial def fkSink (g : N) (n : N) : N := fkSinkF false g n
 
 mutual
-partial def fkGo (nImg self known : Nat) (n : N) : N :=
+partial def fkGoF (floated : Bool) (nImg self known : Nat) (n : N) : N :=
   if n.op == opMData && n.a == 1 then
     let t := fkAfterTotal (bodyOf n)
-    if n.b.toNat <= known then fkGo nImg self known (bodyOf n)
-    else if t.op == opCase && fkAnyLeadingGuard (caseAlts t) then fkGo nImg self known (fkSink n (bodyOf n))
-    else { n with kids := [fkGo nImg self n.b.toNat (bodyOf n)] }
+    if n.b.toNat <= known then fkGoF floated nImg self known (bodyOf n)
+    else if t.op == opCase && fkAnyLeadingGuard (caseAlts t) then fkGoF true nImg self known (fkSinkF floated n (bodyOf n))
+    else { n with kids := [fkGoF floated nImg self n.b.toNat (bodyOf n)] }
   else if n.op == opVDecl then
     let e := vdeclExpr n
     let e2 := if e.op == opFap && !fapSame e && fapFn e == self && fapDepth e == 0 && known >= 1 then { e with c := 1 } else e
     let after := if e.op == opFap && !fapSame e && fkTakesFuel nImg (fapFn e) && fapDepth e + 1 > known then fapDepth e + 1 else known
-    { n with kids := [e2, fkGo nImg self after (bodyOf n)] }
-  else if n.op == opJDecl then { n with kids := [fkGo nImg self known (jdeclBody n), fkGo nImg self known (bodyOf n)] }
-  else if n.op == opCase then { n with kids := fkAlts nImg self known (caseAlts n) }
+    { n with kids := [e2, fkGoF floated nImg self after (bodyOf n)] }
+  else if n.op == opJDecl then { n with kids := [fkGoF floated nImg self known (jdeclBody n), fkGoF floated nImg self known (bodyOf n)] }
+  else if n.op == opCase then { n with kids := fkAltsF floated nImg self known (caseAlts n) }
   else if isTerminal n then n
-  else setBody n (fkGo nImg self known (bodyOf n))
-partial def fkAlts (nImg self known : Nat) : List N → List N
+  else setBody n (fkGoF floated nImg self known (bodyOf n))
+partial def fkAltsF (floated : Bool) (nImg self known : Nat) : List N → List N
   | [] => []
-  | alt :: alts => altSetBody alt (fkGo nImg self known (altBody alt)) :: fkAlts nImg self known alts
+  | alt :: alts => altSetBody alt (fkGoF floated nImg self known (altBody alt)) :: fkAltsF floated nImg self known alts
 end
+
+def fkGo (nImg self known : Nat) (n : N) : N := fkGoF false nImg self known n
 
 -- is the fuel of this self call known to be above 1
 def fapFuelKnown (e : N) : Bool := e.c == 1
 
-def fuelKnown (nImg : Nat) : List Decl → List Decl
-  | [] => []
-  | d :: ds => (if d.ext then d else { d with body := fkGo nImg d.f 0 d.body }) :: fuelKnown nImg ds
+def fuelKnownGo (nImg : Nat) : List Decl → List Decl → List Decl
+  | [], acc => revGeDecls acc []
+  | d :: ds, acc =>
+    let d1 := if d.ext || declIsClosed d then d else { d with body := fkGo nImg d.f 0 d.body }
+    fuelKnownGo nImg ds (d1 :: acc)
+
+def fuelKnown (nImg : Nat) (decls : List Decl) : List Decl :=
+  fuelKnownGo nImg decls []
 
 end Lrc

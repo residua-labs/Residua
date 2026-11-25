@@ -391,7 +391,18 @@ static int run_one(wasm_engine_t *engine, const char *cwasm_in, const char *cwas
   mark("h_instantiate");
 
   refresh_mem();
-  wr64(BLOCK + 0, HEAP);
+  int64_t heap_base = HEAP;
+  wasmtime_extern_t hb_item;
+  if (wasmtime_instance_export_get(CTX, &inst, "__heap_base", 11, &hb_item) &&
+      hb_item.kind == WASMTIME_EXTERN_GLOBAL) {
+    wasmtime_val_t hb_val;
+    wasmtime_global_get(CTX, &hb_item.of.global, &hb_val);
+    if (hb_val.kind == WASMTIME_I32)
+      heap_base = (int64_t)(uint32_t)hb_val.of.i32;
+    else if (hb_val.kind == WASMTIME_I64)
+      heap_base = hb_val.of.i64;
+  }
+  wr64(BLOCK + 0, heap_base);
   wr64(BLOCK + 8, (int64_t)mem_size);
   wr64(BLOCK + 16, 0);
   wr64(BLOCK + 24, 0);

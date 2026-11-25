@@ -375,3 +375,72 @@ NFMain); `lib/RscmV2.rsd` `v2Ex` (type-node code 9; no v2 writer emits tags 10 o
 The readers that accept them: `lib/RscBase.rsd` (readTyIter, tyNeedGo, tyNode, typeDigest, sizeGoWithLayers,
 listTysGo), `rsc/fuse.rsd` (readTyGo), the Lean decoders `lean/rsd-cert/Residua/EvalLean/RscmDecode.lean` and
 `RscmDecodeArr.lean` (bootTyD), and through them `lib/lrc/FromWire.rsd` and `rsc/rsc.rsd`.
+
+## RSCM revision FLOAT64-0 (F row): Lean's Float is the machine's binary64
+
+(IEEE 754 binary64 machine-word operators; the rows of this section are the whole revision.)
+
+Lean's `Float` is IEEE 754 binary64 with primitive operations (`lean_float_*`, Init/Data/Float.lean). A front end without
+it computes binary64 in software on natural numbers, thousands of times the cost of the machine's instruction.
+
+**Type.** A Float is a `w64` (type row `11 64`, UINT64-0): the 64 bits of the binary64. No type row is added. Everything a
+`w64` has, a Float has: a full word in both layouts, eight scalar bytes in a field, flat in an array of words, one word at a
+public entry. A front end knows which `w64` is a Float; the image does not say.
+
+**Literal.** A Float literal is `litW` (tag 64) of its bits. The bits are Lean 4.14's `Float.ofScientific m s e`
+(Init/Data/OfScientific.lean: `ofBinaryScientific`, `UInt64.toFloat`, `scaleB`), computed by the front end.
+
+**Operators.** Expression tags 78 to 94. Operands and results are `w64` unless written otherwise. Each means the IEEE 754
+binary64 operation on its operands' bits, roundTiesToEven, nothing fused. None refuses.
+
+| tag | name | operands | result | Lean 4.14 |
+|---|---|---|---|---|
+| 78 | `fAdd` | a b | w64 | `Float.add` |
+| 79 | `fSub` | a b | w64 | `Float.sub` |
+| 80 | `fMul` | a b | w64 | `Float.mul` |
+| 81 | `fDiv` | a b | w64 | `Float.div` |
+| 82 | `fLt` | a b | Bool | `decide (a < b)` (false when either is a NaN) |
+| 83 | `fLe` | a b | Bool | `decide (a <= b)` |
+| 84 | `fEq` | a b | Bool | `Float.beq` (IEEE equality: a NaN equals nothing, +0 equals -0) |
+| 85 | `fNeg` | a | w64 | `Float.neg` (the sign bit flipped) |
+| 86 | `fAbs` | a | w64 | `Float.abs` (the sign bit cleared) |
+| 87 | `fSqrt` | a | w64 | `Float.sqrt` |
+| 88 | `fFloor` | a | w64 | `Float.floor` |
+| 89 | `fCeil` | a | w64 | `Float.ceil` |
+| 90 | `fRound` | a | w64 | `Float.round` (C's `round`: ties away from zero) |
+| 91 | `fOfW` | a : w64 | w64 | `UInt64.toFloat` (the nearest binary64 of the unsigned word) |
+| 92 | `fOfI` | a : the wire's checked integer | w64 | the nearest binary64 of the integer (`Float.ofInt` on that range) |
+| 93 | `fToW` | a | w64 | `Float.toUInt64` (a NaN and every value below 0 give 0, a value of 2^64 or more gives 2^64 - 1, else the integer part) |
+| 94 | `fBits` | a | w64 | the bits, with every NaN as 0x7FF8000000000000 |
+
+Binary: 78 to 84. Unary: 85 to 94. `>` and `>=` are `fLt` and `fLe` with the operands swapped; `!=` is the negation of `fEq`.
+
+**A NaN's bits are not a value.** IEEE 754 leaves the sign and payload of a NaN result to the machine (x86 and AArch64
+differ in the sign of the default NaN). No operator's result depends on them except `fBits`, which shows every NaN as the
+one quiet NaN; `fLt`, `fLe`, `fEq` and `fToW` treat every NaN alike. A front end never applies a bit operator (tags 14, 65
+to 77) to a Float, and it applies `fBits`
+(a) to a Float it stores into an object: a constructor's field, an array's element, a captured value;
+(b) to a Float that a public entry returns;
+(c) wherever a program takes a Float's bits: a hash, bytes, text.
+So a NaN in memory and at the module's boundary is always the one quiet NaN, and no result and no digest depends on the
+machine; between two operators a Float is one word with no instruction added.
+
+**Emission** (lib/lrc/Emit.rsd "Floats"; a `w64` local is an i64): `f64.reinterpret_i64` of each operand, the WebAssembly
+1.0 instruction, `i64.reinterpret_f64` of a w64 result or the extension of a comparison's i32. `fRound` is `f64.trunc` and a
+step of `copysign(1, a)` when the fraction left is 1/2 or more; `fOfW` and `fOfI` are `f64.convert_i64_u` and
+`f64.convert_i64_s`; `fToW` is `i64.trunc_sat_f64_u`; `fBits` selects the quiet NaN on `f64.ne a a`.
+
+**The reference.** instruments/lrc-host/Interp.rsd "Floats" computes each operator by exact arithmetic on natural numbers
+with one rounding (IEEE 754-2019, 4.3.1 and 5.4.1); instruments/lrc-host/CheckFloat64.rsd compares it with stock Lean's
+Float on the boundary set and on generated words at every run of the host check. The rows of the images
+instruments/lrc-host/img/float64.rscm and float64all.rscm (Images.tsv) hold what stock Lean gives; Sides.rsd runs them on
+the real compiler's modules.
+
+**Not in this revision.** Lean's Float functions that are C library calls (sin, cos, exp, log, pow and the others of
+Init/Data/Float.lean but sqrt, ceil, floor, round, fabs): a front end refuses them by name; they are a later row (a port of
+a published libm). `Float.toString`, `frExp`, `scaleB`, `isNaN`, `isInf`, `isFinite`, `toUInt8/16/32` and `Float.ofNat` of
+a number of 2^64 or more are library functions in rsd over the operators above. A type row for Float is not taken: where
+the stage wants an f64 local in place of an i64 one, it can read that from the operators that define and use the value.
+
+**Readers.** An image with no expression tag 78 to 94 compiles to the same bytes as before under each layer set. The
+present lowering refuses an image at the first of these tags by name (RscBase `skipEWith`: `rdFail (cUnsup + tag)`).

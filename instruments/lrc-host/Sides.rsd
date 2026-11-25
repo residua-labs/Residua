@@ -191,12 +191,15 @@ def readRows : IO (List Row) := do
     if line.startsWith "#" || line.trim.isEmpty then continue
     match line.splitOn "\t" with
     | name :: source :: kinds :: entry :: args :: value :: extra =>
+      -- a row whose ENTRY is `a>b` hands one entry's results to another: the host check runs it, this driver does not
+      if (entry.splitOn ">").length > 1 then continue
       let tag ← match extra with
         | [] => pure none
         | [field] =>
           match field.toNat? with
           | some n =>
-            if 64 ≤ n && n ≤ 77 && !value.startsWith "!" then pure (some n)
+            -- the W row's tags and the F row's (docs/EMITTER.md UINT64-0, FLOAT64-0)
+            if 64 ≤ n && n ≤ 94 && !value.startsWith "!" then pure (some n)
             else throw (IO.userError s!"lrc_sides_present_tag: {line}")
           | none => throw (IO.userError s!"lrc_sides_present_tag: {line}")
         | _ => throw (IO.userError s!"lrc_sides_row: {line}")

@@ -1,0 +1,21 @@
+# FILE	FROM	TO  (FROM occurs exactly once in FILE; every row must make the differential report a mismatch)
+# A case that the path decides (lib/lrc/FromWire.rsd, `dcGo`): under the alternative of one constructor of a value, a case
+# on the same value is written as its alternative for that constructor. The program that meets the rows is
+# instruments/lrc-host/ProgPad.rsd (row pad of Images.tsv, with its cells in Peaks.tsv): nodes (`names`, `sTwice`) and a
+# sum (`tNested`).
+# The rows: an alternative says the next constructor of its variable (the alternative of another constructor is then the
+# one taken); the pass is not run (`names`: the arm that does not run hands an `S` on as an `E`, the two types are one
+# class laid out as one, and the row allocates other cells than Peaks.tsv has).
+# Not rows, and why. The comparison of `dcLive` with another in its place: a case whose variable has no known constructor
+# is then decided too, in every function of every image, the table's programs do not end, and the check is stopped at its
+# memory limit before it reports (29 GB bound). Nothing decided inside the alternative that is taken: a
+# case there on the same value stays whole, no value changes, and the row has no case three deep whose arms join two
+# types.
+# The cell that fills the place of a child an allocation does not have (`padCell`) had two rows (MutantsPad.tsv: the tag
+# counted for a child that is no object too; the tag counted for a scalar only). What met them was a class laid out as
+# one whose children are bare numbers, 245 among them, and `names` was the only program with one: its class was made by
+# the arm that is now not kept. No image of the front end has such a class now (a read without a single tag needs two
+# types in one class, and a typed program gives the classes none), and the host check's one-class run of every image
+# keeps a number's node an object. The rows come back with the first image that has two types in one class.
+lib/lrc/FromWire.rsd	    let known1 := if alt.op == opAltCtor then x :: ((infoOf alt).cidx : Int) :: known else known	    let known1 := if alt.op == opAltCtor then x :: (((infoOf alt).cidx : Int) + 1) :: known else known
+lib/lrc/FromWire.rsd	    let im := if im.ok then { im with decls := dcDecls im.decls } else im	    let im := if false then { im with decls := dcDecls im.decls } else im

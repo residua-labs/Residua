@@ -9,7 +9,7 @@ third-party projects. Full licence texts and usage classes are in
 release/NOTICES.md; origins and upstream pins are in
 release/PROVENANCE.tsv.
 
-https://github.com/leanprover/lean4 @ 410fab7284703f41660ca2454218dcca9b2ec896
+https://github.com/leanprover/lean4 @ 410fab7284703f41660ca2454218dcca9b2ec896, v4.36.0
 licence: Apache-2.0
 Copyright (c) 2018 Microsoft Corporation. All rights reserved.
 Copyright (c) 2020 Microsoft Corporation. All rights reserved.
@@ -38,4 +38,8 @@ Ported programs: bench/runtime/*.bend sources.
 https://github.com/EthicalSource/contributor_covenant @ 2.1
 licence: CC-BY-4.0
 Copyright the upstream authors.
+
+https://github.com/CosmWasm/cw-plus @ cb3c89201527aba339d77b81e3044f773e715275
+licence: Apache-2.0
+Copyright (C) 2020 Confio OÜ
 

@@ -3,18 +3,18 @@
 # front end's twin. The files under instruments/lrc-host/img are pinned: an image is what one front end wrote, and the front end changes (since
 # f9592679b it writes an integer as limbs, so the same program has another image, other arguments and another form of its value).
 # rbtree, treebitonic, treematmul, nqueens, rbtreeck, binarytrees, binarytreeskk, nqueenskk (benchmarks/<name>.rsd, -kk for the two ports),
-# progloops (instruments/lrc-host/ProgLoops.rsd) and progkinds (instruments/lrc-host/ProgKinds.rsd) were emitted by the twin of fable/backend-opt
+# progloops (instruments/lrc-host/ProgLoops.rsd) and progkinds (instruments/lrc-host/ProgKinds.rsd) were emitted by the backend-opt twin at
 # 178af9a97 (instruments/rsdc-ml/rsdc.ml sha256 662790a8c44dac27); progeq (instruments/lrc-host/ProgEq.rsd) and progmap
 # (instruments/lrc-host/ProgMap.rsd) by the twin of main be6719f72 (sha256 e8b21e3542956874). ARGS may be empty. KINDS gives the reserved functions as f:k (3 alloc, 4 read, 5 kid), as
 # rsc/rsc.rsd `intrinsicKinds` finds them under a word that holds the ctor bit. ENTRY, ARGS (comma separated) and VALUE are one row
 # of the bench programs: VALUE is what the present lowering returns at the default word (rsc compile, then the row host), for rbtree 100
-# as in reports/backend-opt-fable/evidence/regen5.table.tsv, for treebitonic 4 run on fable/backend-opt 8bda362c3 (8 gives 971629740 there
+# as in the backend-opt regen5 table, for treebitonic 4 run at 8bda362c3 (8 gives 971629740 there
 # and in that table; 4 keeps the interpreted run short). nqueens 6 and rbtreeck (5, 200): the present lowering at word 1920, run on
-# fable/backend-opt after 06c3f6353 (stock-rsc compile, then the row host). KINDS is - for an image without reserved functions.
+# backend-opt after 06c3f6353 (stock-rsc compile, then the row host). KINDS is - for an image without reserved functions.
 # VALUE is text as instruments/lrc-host/Interp.rsd `showV` prints a result: a list as [e e ...], a record element as {its words}. binarytrees 6:
 # the four fields of each line, read from the present lowering's result with the row host's `lw=8,16,OFFSET` at offsets 8, 16, 24, 32.
 # SOURCE `git:REV:PATH` names an image file of another commit: this branch's twin refuses cfold.rsd, and its image is the typed emitter's
-# (origin/fable/bench-regen). cfold 6: the two result words of the present lowering at word 1920 (block + 96 and block + 104).
+# (bench-regen branch). cfold 6: the two result words of the present lowering at word 1920 (block + 96 and block + 104).
 rbtree	file:instruments/lrc-host/img/rbtree.rscm	0:3,3:4,2:5	12	100	10
 treebitonic	file:instruments/lrc-host/img/treebitonic.rscm	0:3,3:4,2:5	28	4	3124287222
 nqueens	file:instruments/lrc-host/img/nqueens.rscm	-	4	6	4
@@ -87,7 +87,7 @@ recatb	file:instruments/lrc-host/img/progmap2.rscm	0:3,3:4,2:5	11		0 [8]
 litlong	file:instruments/lrc-host/img/litlong.rscm	-	1	0	!lrc_literal_too_long class=2011 function=1
 # numeral: `#eval numAt3` = 101026 of instruments/lrc-host/ProgNumeral.rsd under stock Lean 4.14: operations whose left operand is a numeral and
 # whose right operand is an operation on an Int with a numeral of its own, under no expected type. The image is the one the front end
-# writes since reports/backend-opt-fable/LAND-NUMERAL.md (instruments/rsdc-ml/rsdc.ml sha256 1ee31299fdd2c045; image sha256 0c7f1544fbfd4afb);
+# writes since the LAND-NUMERAL revision (instruments/rsdc-ml/rsdc.ml sha256 1ee31299fdd2c045; image sha256 0c7f1544fbfd4afb);
 # the image of the front end before it holds a Nat beside an Int and both lowerings refuse it.
 numeral	file:instruments/lrc-host/img/prognumeral.rscm	-	7		0 [162 138 1]
 # magnat, magint, magsum: `#eval magNat`, `#eval magInt` and `#eval magSum 300` of instruments/lrc-host/ProgMag.rsd under stock Lean 4.14
@@ -135,6 +135,47 @@ numedgen	file:instruments/lrc-host/img/prognum.rscm	0:3,3:4,2:5	21		[[] [5 0 0 0
 numedgei	file:instruments/lrc-host/img/prognum.rscm	0:3,3:4,2:5	20		[{[] 0} {[5 0 0 0 0 0 0 0 0 0 1] 1} {[255 255 255 255 255 255 255] 1} {[0 0 0 0 0 0 0 1] 0} {[4 0 0 0 0 0 0 2 0 0 1] 0} {[15 0 0 0 0 0 0 12 0 0 4] 0} {[8 0 0 0 0 0 0 4 0 0 2] 0} {[] 0} {[5 0 0 0 0 0 0 0 0 0 1] 0} {[5 0 0 0 0 0 0 0 0 0 1] 1} {[255 255 255 255 255 255 255] 0} {[255 255 255 255 255 255 255] 1} {[0 0 0 0 0 0 0 1] 0} {[0 0 0 0 0 0 0 1] 1} {[] 0} {[5 0 0 0 0 0 0 0 0 0 1] 0} {[5 0 0 0 0 0 0 0 0 0 1] 1} {[255 255 255 255 255 255 255] 0} {[255 255 255 255 255 255 255] 1} {[0 0 0 0 0 0 0 1] 0} {[0 0 0 0 0 0 0 1] 1} {[8 0 0 0 0 0 0 4 0 0 2] 0}]
 numnames	file:instruments/lrc-host/img/prognum.rscm	0:3,3:4,2:5	18		[[175 17] [44 1] [4]]
 numchain	file:instruments/lrc-host/img/prognumind.rscm	0:3,3:4,2:5	7		[{[99 0 0 0 0 0 0 0 0 0 2] 0} {[95 0 0 0 0 0 0 0 0 0 2] 0} {[95 255 255 255 255 255 255 255 255 255 1] 0}]
+# arrflow: `#eval arrFlowAt` of instruments/lrc-host/ProgArrFlow.rsd under stock Lean 4.14: an array arrives where a list is taken
+# apart, by each way a value flows (a parameter, a result, a field of a record, a field of a recursive type, an element of a
+# list, an element of an array made a list, a join point), and each way has a function of its own that takes the list apart;
+# beside them the stage's own list functions on an array's list, the array of a list, a part of an array, and lists of the image
+# that are never arrays (lib/lrc/Classes.rsd "Which lists may be arrays": a list that cannot be an array is not asked for its
+# cells). The image is the twin's (instruments/rsdc-ml/rsdc.ml sha256 11c841aa09b3e143; image sha256 c4e2e7c9ff12aac4).
+arrflow	file:instruments/lrc-host/img/progarrflow.rscm	0:3,3:4,2:5	6		[[117] [71] [59] [35 2] [99] [93] [7] [99] [18] [99 3] [181] [130] [132]]
+# kbox: `#eval kboxAt` of instruments/lrc-host/ProgKBox.rsd under stock Lean 4.14: the node that holds nothing but a list of
+# children is that list (lib/lrc/FromWire.rsd "Layout", `Lay.kbox`): a recursive type with a list of its own values and a
+# string, built from a literal list, from the empty one and from a list that is no literal; a type with two such lists; a
+# node under two parents. The image is the twin's (instruments/rsdc-ml/rsdc.ml sha256 11c841aa09b3e143; image sha256
+# f699165207feb0f5).
+kbox	file:instruments/lrc-host/img/progkbox.rscm	0:3,3:4,2:5	9		[[149] [245 1] [14] [195] [7] [241 3] [2] [14 38] [35 3]]
+# pad: `#eval padAt` of instruments/lrc-host/ProgPad.rsd under stock Lean 4.14: a match on a value inside the arm for "any
+# other constructor" of a match on the same value, in the shape of the SQL engine's two functions, with bare integers 254,
+# 255, 256, 245, -255 and 0 as children; the inner arm for the rest where it is the one that runs; a child that reaches its
+# reader in an inner alternative alone (lib/lrc/FromWire.rsd "A case that the path decides", `padCell`). On main before
+# LAND-PAD the runs of the stage refused at 255 (`stuck:typeMismatch`); before LAND-EXCL two of its types were one class,
+# laid out as one.
+# instruments/lrc-host/Peaks.tsv has the row's cells with the classes apart.
+# The image is the twin's (instruments/rsdc-ml/rsdc.ml sha256 7d7b1e9d2cd71ff7; image sha256 ee8c32fff71e4b19).
+pad	file:instruments/lrc-host/img/progpad.rscm	0:3,3:4,2:5	12		[[172 54 80] [151 58 80] [130 62 80] [105 19 80] [109 108 72] [130 83 76] [74 75 76] [87 163 76] [11 134 90]]
+# litcall: `#eval litCallAt` of instruments/lrc-host/ProgLitCall.rsd under stock Lean 4.14: a function that calls itself is
+# called with a literal that chooses an equation which does not hand on (lib/lrc/JoinOnce.rsd "A call that names a literal"):
+# the number that only makes a definition total; two literals of one function beside one that leaves the call a call and an
+# argument that is no literal; the literal at the second place; an integer zero and one below zero; a literal whose equation
+# hands on (the call stays) and one whose form is not small (the form is called); a comparison of two literals that decides;
+# a literal for a byte and a truth value; a function with a form for each of two places.
+# litword: `#eval litWordAt` of instruments/lrc-host/ProgLitWord.rsd: the literal for a parameter that is a word of 64 bits,
+# at the first place and, two of them, at the second; the entry gives one number of its seven results (75304754). The present
+# lowering takes no such word (wire tag 64, `unsupported_64`).
+# The images are the twin's (instruments/rsdc-ml/rsdc.ml sha256 067b88ba6a8edc2b; image sha256 60b38c7b5e2f2690 and
+# 726e972148b86b4c).
+litcall	file:instruments/lrc-host/img/proglitcall.rscm	-	7		[[4] [2] [6] [10] [16] [22] [8] [14] [20] [60] [6] [7] [4] [6] [28 2] [141 1] [28 2] [237 1] [4] [100] [5] [7] [4] [5] [4] [5] [4] [50] [50] [7] [4] [60] [6] [4] [7]]
+litword	file:instruments/lrc-host/img/proglitword.rscm	-	0		[50 15 125 4]	64
+# numtail: `#eval tailAt4` of instruments/lrc-host/ProgNumTail.rsd under stock Lean 4.14: functions whose whole body is the read of a
+# list of numbers from its node (`jsOf`, `nsOf`), beside reads of the same lists where they stand. The read in tail position is one
+# of the four places too (lib/lrc/FromWire.rsd `trTail`); read as the wire's list there, it made every read of the node's class a
+# call of the image's `unpack`. The value is any translation's; the cells allocated under the narrow bounds are the direct form's
+# (instruments/lrc-host/Peaks.tsv). The image is the twin's (image sha256 e4f9677c9bbe3c59).
+numtail	file:instruments/lrc-host/img/prognumtail.rscm	0:3,3:4,2:5	10		[{[18] 1} {[46] 0} {[70] 1} {[21] 0}]
 # numxlen, numxnum: two images that are not the front end's. Each is the twin's image of a program with one byte changed, the number
 # of the child that one read takes (`cmp -l` against the twin's image). numxlen: instruments/lrc-host/ProgNumX.rsd (image sha256
 # 1336dd5e4226df6f), byte 4111, 1 to 0: `rawLen` reads the node of the Nat as the String's list of code points. numxnum:
@@ -310,7 +351,7 @@ wordNode1	file:instruments/lrc-host/img/word64-node.rscm	0:3,3:4,2:5	16	3,305419
 wordArray0	file:instruments/lrc-host/img/word64-array.rscm	-	0	-9223372036854775805,-1	9223372036854775804	64
 wordArray1	file:instruments/lrc-host/img/word64-array.rscm	-	0	0,1	1	64
 # A widened byte stored in a declared UInt64 field, directly and through a typed let. Both images use type 11 64 without tags 64–77.
-# Stock Lean 4.14 gives 173 for both `probeRun 173 17` calls. Sources and image receipts: reports/codex4-uint64/REPORT.md.
+# Stock Lean 4.14 gives 173 for both `probeRun 173 17` calls. Sources and image receipts: repository-side uint64 report.
 wordCastOnly	file:instruments/lrc-host/img/word64-cast-only.rscm	0:3,3:4,2:5	6	173,17	173
 wordCastLet	file:instruments/lrc-host/img/word64-cast-let.rscm	0:3,3:4,2:5	6	173,17	173
 # splitwalk, splitshape, splitbig: instruments/lrc-host/ProgSplit.rsd, `#eval splitWalk`, `#eval splitShape` and `#eval splitBig` under
@@ -337,3 +378,95 @@ appfuel	file:instruments/lrc-host/img/progapp.rscm	-	0		[[22] [2] [23] [2]]
 # way (2^56 is the first that is none) and start as numbers of limbs; one function has two such words, and one has a small
 # word after the sum.
 wrap	file:instruments/lrc-host/img/progwrap.rscm	-	3		[[145] [45 0 0 0 0 0 0 1] [34 0 0 0 0 0 0 1] [237 255 255 255 255 255 255] [22 0 16 99 45 94 199 107 5] [5] [12 0 0 0 0 0 0 1] [98] [50 0 0 0 0 0 0 1] [254 255 255 255 255 255 255 6] [9] [89 0 0 0 0 0 0 1] [60 0 16 99 45 94 199 107 5] [92] [4]]
+# bound*: instruments/lrc-host/ProgBound.rsd (emitted by the twin of main e985819424), values from stock Lean 4.14: the boundary's
+# way in for a list whose elements are boxes (lib/lrc/FromWire.rsd `unboundItems`). ENTRY `a>b` hands the results of entry a (a value without an
+# argument), as a host reads them, to entry b as its arguments; the VALUE is b's. A row of this kind is the host check's (Sides.rsd
+# leaves it out). boundints: a list of integers comes in as it is. boundbool: the second entry's result has the boundary's form,
+# so its twin is there for the parameter alone.
+boundrows	file:instruments/lrc-host/img/progbound.rscm	-	7>12		0 [181 255 199 61 204 39 1 101 24]
+boundnone	file:instruments/lrc-host/img/progbound.rscm	-	8>12		0 []
+boundtab	file:instruments/lrc-host/img/progbound.rscm	-	9>13		0 [200 255 15 99 45 94 199 107 5]
+boundnest	file:instruments/lrc-host/img/progbound.rscm	-	4>11		1 [58 0 32 198 90 188 142 215 10]
+boundints	file:instruments/lrc-host/img/progbound.rscm	-	1>10		0 [202 255 95 82 16 53 172 134 32]
+boundbool	file:instruments/lrc-host/img/progbound.rscm	-	7>0		1
+
+# FLOAT64-0 (docs/EMITTER.md F row). The two images are assembled by instruments/lrc-host/Float64Oracle.rsd (no front end writes the F
+# tags yet) and VALUE is stock Lean 4.14's Float on the same words (`leanOp` there); `lean --run instruments/lrc-host/Diff.rsd float`
+# checks that the image files and these rows are the ones that file gives. float64.rscm: a function of its operands for each
+# operator. A row passes words: a Float is its bits, floatOfI takes the wire's integer. A result that is a Float is read through
+# fBits, so every NaN is 9221120237041090560. floatHyp: sqrt (a*a + b*b), four operators with no word between them. floatMin: a
+# conditional on fLt that returns a word as it came. floatMulAdd0: (1 + 2^-27)^2 - (1 + 2^-26) is 0 with the product rounded before
+# the sum, and 2^-54 on a route that contracts the two into one fused instruction (a C compiler on the native route needs
+# -ffp-contract=off). float64all.rscm: the `All` rows take no argument; each function holds its operator on the whole boundary set
+# as literals, every case's result entering one word (the sum of the results, each times its own power of 0x9E3779B97F4A7C15; a
+# comparison's case is a conditional that gives 1 or 0).
+floatAdd0	file:instruments/lrc-host/img/float64.rscm	-	0	4591870180066957722,4596373779694328218	4599075939470750516	94
+floatAdd1	file:instruments/lrc-host/img/float64.rscm	-	0	9218868437227405312,-4503599627370496	9221120237041090560	94
+floatSub0	file:instruments/lrc-host/img/float64.rscm	-	1	4607182418800017408,4607182418800017409	-4850376798678024192	94
+floatSub1	file:instruments/lrc-host/img/float64.rscm	-	1	-9223372036854775808,0	-9223372036854775808	94
+floatMul0	file:instruments/lrc-host/img/float64.rscm	-	2	3,4602678819172646912	2	94
+floatMul1	file:instruments/lrc-host/img/float64.rscm	-	2	9218868437227405311,4611686018427387904	9218868437227405312	94
+floatDiv0	file:instruments/lrc-host/img/float64.rscm	-	3	4607182418800017408,4613937818241073152	4599676419421066581	94
+floatDiv1	file:instruments/lrc-host/img/float64.rscm	-	3	-4616189618054758400,0	-4503599627370496	94
+floatLt0	file:instruments/lrc-host/img/float64.rscm	-	4	-9223372036854775808,0	0	94
+floatLt1	file:instruments/lrc-host/img/float64.rscm	-	4	-4616189618054758400,4607182418800017408	1	94
+floatLt2	file:instruments/lrc-host/img/float64.rscm	-	4	9221120237041090560,4607182418800017408	0	94
+floatLe0	file:instruments/lrc-host/img/float64.rscm	-	5	0,-9223372036854775808	1	94
+floatLe1	file:instruments/lrc-host/img/float64.rscm	-	5	4607182418800017409,4607182418800017408	0	94
+floatLe2	file:instruments/lrc-host/img/float64.rscm	-	5	4607182418800017408,9221120237041090560	0	94
+floatEq0	file:instruments/lrc-host/img/float64.rscm	-	6	0,-9223372036854775808	1	94
+floatEq1	file:instruments/lrc-host/img/float64.rscm	-	6	9221120237041090560,9221120237041090560	0	94
+floatEq2	file:instruments/lrc-host/img/float64.rscm	-	6	4607182418800017408,4607182418800017408	1	94
+floatNeg0	file:instruments/lrc-host/img/float64.rscm	-	7	0	-9223372036854775808	94
+floatNeg1	file:instruments/lrc-host/img/float64.rscm	-	7	9221120237041090560	9221120237041090560	94
+floatAbs0	file:instruments/lrc-host/img/float64.rscm	-	8	-4613937818241073152	4609434218613702656	94
+floatAbs1	file:instruments/lrc-host/img/float64.rscm	-	8	-4503599627370496	9218868437227405312	94
+floatSqrt0	file:instruments/lrc-host/img/float64.rscm	-	9	4611686018427387904	4609047870845172685	94
+floatSqrt1	file:instruments/lrc-host/img/float64.rscm	-	9	-4616189618054758400	9221120237041090560	94
+floatSqrt2	file:instruments/lrc-host/img/float64.rscm	-	9	1	2188749418902061056	94
+floatFloor0	file:instruments/lrc-host/img/float64.rscm	-	10	-4620693217682128896	-4616189618054758400	94
+floatFloor1	file:instruments/lrc-host/img/float64.rscm	-	10	4602678819172646911	0	94
+floatCeil0	file:instruments/lrc-host/img/float64.rscm	-	11	-4620693217682128896	-9223372036854775808	94
+floatCeil1	file:instruments/lrc-host/img/float64.rscm	-	11	1	4607182418800017408	94
+floatRound0	file:instruments/lrc-host/img/float64.rscm	-	12	4602678819172646912	4607182418800017408	94
+floatRound1	file:instruments/lrc-host/img/float64.rscm	-	12	4602678819172646911	0	94
+floatRound2	file:instruments/lrc-host/img/float64.rscm	-	12	-4610560118520545280	-4609434218613702656	94
+floatRound3	file:instruments/lrc-host/img/float64.rscm	-	12	4836865999795912705	4836865999795912706	94
+floatOfW0	file:instruments/lrc-host/img/float64.rscm	-	13	9007199254740993	4845873199050653696	94
+floatOfW1	file:instruments/lrc-host/img/float64.rscm	-	13	-1	4895412794951729152	94
+floatOfI0	file:instruments/lrc-host/img/float64.rscm	-	14	-1	-4616189618054758400	94
+floatOfI1	file:instruments/lrc-host/img/float64.rscm	-	14	-9223372036854775808	-4332462841530417152	94
+floatOfI2	file:instruments/lrc-host/img/float64.rscm	-	14	9007199254740993	4845873199050653696	94
+floatToW0	file:instruments/lrc-host/img/float64.rscm	-	15	4891288408196988160	-8446744073709551616	94
+floatToW1	file:instruments/lrc-host/img/float64.rscm	-	15	-4617090337980232499	0	94
+floatToW2	file:instruments/lrc-host/img/float64.rscm	-	15	4895412794951729152	-1	94
+floatToW3	file:instruments/lrc-host/img/float64.rscm	-	15	9221120237041090560	0	94
+floatBits0	file:instruments/lrc-host/img/float64.rscm	-	16	-2251799813684957	9221120237041090560	94
+floatBits1	file:instruments/lrc-host/img/float64.rscm	-	16	-9223372036854775808	-9223372036854775808	94
+floatHyp0	file:instruments/lrc-host/img/float64.rscm	-	17	4613937818241073152,4616189618054758400	4617315517961601024	94
+floatHyp1	file:instruments/lrc-host/img/float64.rscm	-	17	7598952565167317594,7598952565167317594	9218868437227405312	94
+floatHyp2	file:instruments/lrc-host/img/float64.rscm	-	17	1,9221120237041090560	9221120237041090560	94
+floatMin0	file:instruments/lrc-host/img/float64.rscm	-	18	4607182418800017408,4611686018427387904	4607182418800017408	94
+floatMin1	file:instruments/lrc-host/img/float64.rscm	-	18	4611686018427387904,-4616189618054758400	-4616189618054758400	94
+floatMin2	file:instruments/lrc-host/img/float64.rscm	-	18	9221120237041090560,4607182418800017408	4607182418800017408	94
+floatMin3	file:instruments/lrc-host/img/float64.rscm	-	18	0,-9223372036854775808	-9223372036854775808	94
+floatLit	file:instruments/lrc-host/img/float64.rscm	-	19		4610560118520545280	94
+floatMulAdd0	file:instruments/lrc-host/img/float64.rscm	-	20	4607182418833571840,4607182418833571840,-4616189617987649536	0	94
+floatMulAdd1	file:instruments/lrc-host/img/float64.rscm	-	20	4591870180066957722,4613937818241073152,-4624296097384025293	4363988038922010624	94
+floatAddAll	file:instruments/lrc-host/img/float64all.rscm	-	0		-1010702860950185098	65
+floatSubAll	file:instruments/lrc-host/img/float64all.rscm	-	1		-2478255292984440014	65
+floatMulAll	file:instruments/lrc-host/img/float64all.rscm	-	2		6406947519907234282	65
+floatDivAll	file:instruments/lrc-host/img/float64all.rscm	-	3		8419402108814208804	65
+floatLtAll	file:instruments/lrc-host/img/float64all.rscm	-	4		-4565812315546622768	65
+floatLeAll	file:instruments/lrc-host/img/float64all.rscm	-	5		-8652761773385950223	65
+floatEqAll	file:instruments/lrc-host/img/float64all.rscm	-	6		-4086949457839327455	65
+floatNegAll	file:instruments/lrc-host/img/float64all.rscm	-	7		6874242631240454348	65
+floatAbsAll	file:instruments/lrc-host/img/float64all.rscm	-	8		-2349129405614321460	65
+floatSqrtAll	file:instruments/lrc-host/img/float64all.rscm	-	9		6892324401836124672	65
+floatFloorAll	file:instruments/lrc-host/img/float64all.rscm	-	10		6984065362347757793	65
+floatCeilAll	file:instruments/lrc-host/img/float64all.rscm	-	11		-716820748084207645	65
+floatRoundAll	file:instruments/lrc-host/img/float64all.rscm	-	12		2199350687871070789	65
+floatOfWAll	file:instruments/lrc-host/img/float64all.rscm	-	13		4391522898520982326	65
+floatOfIAll	file:instruments/lrc-host/img/float64all.rscm	-	14		-6608965292979221570	65
+floatToWAll	file:instruments/lrc-host/img/float64all.rscm	-	15		-4593219176120530930	65
+floatBitsAll	file:instruments/lrc-host/img/float64all.rscm	-	16		-2349129405614321460	65

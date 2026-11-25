@@ -36,7 +36,7 @@ static wasmtime_context_t *CTX;
 static wasmtime_memory_t MEM;
 static uint8_t *mem_data;
 static size_t mem_size;
-static uint64_t cursor = 65536;
+static uint64_t cursor;
 static const uint64_t nil = 1;
 
 _Noreturn static void fail(const char *reason) {
@@ -232,8 +232,21 @@ static void *run(void *unused) {
   wasmtime_func_t fn = item.of.func;
 
   refresh_mem();
+  /* Allocate input beyond the module's immutable ground objects. */
+  uint64_t heap_base = 65536;
+  if (wasmtime_instance_export_get(CTX, &inst, "__heap_base", 11, &item)) {
+    if (item.kind != WASMTIME_EXTERN_GLOBAL) fail("seed_export_heap_base");
+    wasmtime_val_t base;
+    wasmtime_global_get(CTX, &item.of.global, &base);
+    if (base.kind == WASMTIME_I32) heap_base = (uint32_t)base.of.i32;
+    else if (base.kind == WASMTIME_I64) heap_base = (uint64_t)base.of.i64;
+    else fail("seed_export_heap_base");
+    if (heap_base < 65536 || heap_base > mem_size || (heap_base & 7))
+      fail("seed_export_heap_base");
+  }
+  cursor = heap_base;
   /* Reuse256 borrowed constants: O(input bytes) storage, not 96B/byte. */
-  uint64_t capacity = 65536 + 32 * ((uint64_t)length + 520);
+  uint64_t capacity = heap_base + 32 * ((uint64_t)length + 520);
   uint64_t pages = (capacity + 65535) / 65536;
   uint64_t have = wasmtime_memory_size(CTX, &MEM);
   if (pages > have) {
@@ -260,8 +273,8 @@ static void *run(void *unused) {
   free(bytes);
   write64(24, cursor);
   write64(32, mem_size);
-  write64(632, cursor - 65536);
-  write64(640, cursor - 65536);
+  write64(632, cursor - heap_base);
+  write64(640, cursor - heap_base);
   uint64_t started = now();
   wasmtime_val_t avals[6], rvals[1];
   for (int i = 0; i < 6; ++i) avals[i].kind = WASMTIME_I64;

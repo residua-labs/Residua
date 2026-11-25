@@ -11,8 +11,10 @@ any difference; the planted mutants (reports/uint64/MUTANTS.tsv) must make it ex
 
 namespace Residua.Bootstrap.R2.SCM
 
-def ev (e : SCMExpr [] [] .i64) : Option SCMVal := evalSCM (.nil : SCMPrograms [] []) 1 [] e
-def evB (e : SCMExpr [] [] .bool) : Option SCMVal := evalSCM (.nil : SCMPrograms [] []) 1 [] e
+def ev (e : SCMExpr [] [] .i64) : Option SCMVal := evalSCM (.nil : SCMPrograms [] []) 2 [] e
+def evB (e : SCMExpr [] [] .bool) : Option SCMVal := evalSCM (.nil : SCMPrograms [] []) 2 [] e
+def evL (e : SCMExpr [] [] (.list .i64)) : Option SCMVal := evalSCM (.nil : SCMPrograms [] []) 2 [] e
+def evN (e : SCMExpr [] [] natMagTy) : Option SCMVal := evalSCM (.nil : SCMPrograms [] []) 2 [] e
 
 def wvals : List UInt64 :=
   [0, 1, 2, 0xFFFFFFFF, 0x100000000, 0x7FFFFFFFFFFFFFFF, 0x8000000000000000, 0x8000000000000001,
@@ -55,7 +57,77 @@ def rowsNested : List Bool :=
           (.wAdd (.var ⟨0, by decide⟩) (.litW 0xFFFFFFFFFFFFFFFF))))
           ((0x8000000000000001 * 2 : UInt64) + 0xFFFFFFFFFFFFFFFF) ]
 
-def allRows : List Bool := rowsBin ++ rowsNot ++ rowsShift ++ rowsDomain ++ rowsNested
+/-- FLOAT64-0 rows (17 operators, tags 78..94). -/
+def rowsF64 : List Bool :=
+  [ scmOutEq (ev (.fAdd (.litW 0x3FF8000000000000) (.litW 0x4004000000000000))) (.int 0x4010000000000000),
+    scmOutEq (ev (.fSub (.litW 0x400C000000000000) (.litW 0x3FF8000000000000))) (.int 0x4000000000000000),
+    scmOutEq (ev (.fMul (.litW 0x3FF8000000000000) (.litW 0x4000000000000000))) (.int 0x4008000000000000),
+    scmOutEq (ev (.fDiv (.litW 0x4008000000000000) (.litW 0x4000000000000000))) (.int 0x3FF8000000000000),
+    scmOutEq (ev (.fDiv (.litW 0x3FF0000000000000) (.litW 0x0000000000000000))) (.int 0x7FF0000000000000),
+    scmOutEq (evB (.fLt (.litW 0x3FF8000000000000) (.litW 0x4000000000000000))) (.bool true),
+    scmOutEq (evB (.fLt (.litW 0x7FF8000000000000) (.litW 0x3FF0000000000000))) (.bool false),
+    scmOutEq (evB (.fLe (.litW 0x4000000000000000) (.litW 0x4000000000000000))) (.bool true),
+    scmOutEq (evB (.fLe (.litW 0x7FF8000000000000) (.litW 0x4000000000000000))) (.bool false),
+    scmOutEq (evB (.fEq (.litW 0x0000000000000000) (.litW 0x8000000000000000))) (.bool true),
+    scmOutEq (evB (.fEq (.litW 0x7FF8000000000000) (.litW 0x7FF8000000000000))) (.bool false),
+    scmOutEq (ev (.fNeg (.litW 0x3FF8000000000000))) (.int 0xBFF8000000000000),
+    scmOutEq (ev (.fNeg (.litW 0x0000000000000000))) (.int 0x8000000000000000),
+    scmOutEq (ev (.fAbs (.litW 0xBFF8000000000000))) (.int 0x3FF8000000000000),
+    scmOutEq (ev (.fAbs (.litW 0x8000000000000000))) (.int 0x0000000000000000),
+    scmOutEq (ev (.fSqrt (.litW 0x4010000000000000))) (.int 0x4000000000000000),
+    scmOutEq (ev (.fSqrt (.litW 0xBFF8000000000000))) (.int 0x7FF8000000000000),
+    scmOutEq (ev (.fSqrt (.litW 4842126294296133448))) (.int 4724639673638920813),
+    scmOutEq (ev (.fFloor (.litW 0x3FF8000000000000))) (.int 0x3FF0000000000000),
+    scmOutEq (ev (.fFloor (.litW 0xBFF8000000000000))) (.int 0xC000000000000000),
+    scmOutEq (ev (.fCeil (.litW 0x3FF8000000000000))) (.int 0x4000000000000000),
+    scmOutEq (ev (.fCeil (.litW 0xBFF8000000000000))) (.int 0xBFF0000000000000),
+    scmOutEq (ev (.fRound (.litW 0x4004000000000000))) (.int 0x4008000000000000),
+    scmOutEq (ev (.fRound (.litW 0xC004000000000000))) (.int 0xC008000000000000),
+    scmOutEq (ev (.fRound (.litW 0x3FD999999999999A))) (.int 0x0000000000000000),
+    scmOutEq (ev (.fOfW (.litW 3))) (.int 0x4008000000000000),
+    scmOutEq (ev (.fOfW (.litW 0xFFFFFFFFFFFFFFFF))) (.int 0x43F0000000000000),
+    scmOutEq (ev (.fOfI (.litI (-3)))) (.int 0xC008000000000000),
+    scmOutEq (ev (.fOfI (.litI 0))) (.int 0x0000000000000000),
+    scmOutEq (ev (.fToW (.litW 0x400C000000000000))) (.int 3),
+    scmOutEq (ev (.fToW (.litW 0xBFF8000000000000))) (.int 0),
+    scmOutEq (ev (.fToW (.litW 0x7FF8000000000000))) (.int 0),
+    scmOutEq (ev (.fToW (.litW 0x7FF0000000000000))) (.int 18446744073709551615),
+    scmOutEq (ev (.fBits (.litW 0x7FF0000000000001))) (.int 0x7FF8000000000000),
+    scmOutEq (ev (.fBits (.litW 0xFFF8000000000042))) (.int 0x7FF8000000000000),
+    scmOutEq (ev (.fBits (.litW 0x8000000000000000))) (.int 0x8000000000000000),
+    scmOutEq (ev (.fBits (.litW 0x3FF8000000000000))) (.int 0x3FF8000000000000) ]
+
+/-- ARRAY-0 rows (13 operators, tags 55..63, 95..98). -/
+def rowsArr : List Bool :=
+  [ scmOutEq (evL (.aEmpty (.litW 16))) (.list []),
+    scmOutEq (evL (.aEmpty (.wToN (.litW 16) : SCMExpr [] [] natMagTy))) (.list []),
+    scmOutEq (evL (.aMk (.litW 3) (.litW 7))) (.list [.int 7, .int 7, .int 7]),
+    scmOutEq (evL (.aMk (.wToN (.litW 2) : SCMExpr [] [] natMagTy) (.litW 9))) (.list [.int 9, .int 9]),
+    scmOutEq (evL (.aOfList (.listAppend (.listSingleton (.litW 10)) (.listSingleton (.litW 20))))) (.list [.int 10, .int 20]),
+    scmOutEq (evL (.aToList (.aMk (.litW 2) (.litW 5)))) (.list [.int 5, .int 5]),
+    scmOutEq (ev (.aUSize (.aMk (.litW 4) (.litW 9)))) (.int 4),
+    scmOutEq (evN (.wToN (.litW 0))) (.record [(natMagKey, .list [])]),
+    scmOutEq (evN (.wToN (.litW 258))) (.record [(natMagKey, .list [.int 2, .int 1])]),
+    scmOutEq (ev (.wToN (.litW 258))) (.int 258),
+    scmOutEq (evN (.aSize (.aMk (.litW 3) (.litW 7)))) (.record [(natMagKey, .list [.int 3])]),
+    scmOutEq (ev (.aSize (.aMk (.litW 3) (.litW 7)))) (.int 3),
+    scmOutEq (evL (.aPush (.aPush (.aEmpty (.litW 0)) (.litW 11)) (.litW 22))) (.list [.int 11, .int 22]),
+    scmOutEq (evL (.aPop (.aPush (.aPush (.aEmpty (.litW 0)) (.litW 11)) (.litW 22)))) (.list [.int 11]),
+    scmOutEq (evL (.aPop (.aEmpty (.litW 0)))) (.list []),
+    scmOutEq (ev (.aGet (.aPush (.aPush (.aEmpty (.litW 0)) (.litW 11)) (.litW 22)) (.litW 1))) (.int 22),
+    scmOutEq (ev (.aGet (.aPush (.aPush (.aEmpty (.litW 0)) (.litW 11)) (.litW 22)) (.wToN (.litW 0) : SCMExpr [] [] natMagTy))) (.int 11),
+    (ev (.aGet (.aMk (.litW 2) (.litW 11)) (.litW 2))).isNone,
+    (ev (.aGet (.aMk (.litW 2) (.litW 11)) (.wToN (.litW 5) : SCMExpr [] [] natMagTy))).isNone,
+    scmOutEq (evL (.aSet (.aPush (.aPush (.aEmpty (.litW 0)) (.litW 11)) (.litW 22)) (.litW 0) (.litW 99))) (.list [.int 99, .int 22]),
+    scmOutEq (evL (.aSet (.aPush (.aPush (.aEmpty (.litW 0)) (.litW 11)) (.litW 22)) (.wToN (.litW 1) : SCMExpr [] [] natMagTy) (.litW 88))) (.list [.int 11, .int 88]),
+    (evL (.aSet (.aMk (.litW 2) (.litW 11)) (.litW 2) (.litW 99))).isNone,
+    scmOutEq (evL (.aSlice (.aPush (.aPush (.aPush (.aEmpty (.litW 0)) (.litW 10)) (.litW 20)) (.litW 30)) (.litW 1) (.litW 2))) (.list [.int 20]),
+    scmOutEq (evL (.aSlice (.aPush (.aPush (.aPush (.aEmpty (.litW 0)) (.litW 10)) (.litW 20)) (.litW 30)) (.litW 1) (.litW 3))) (.list [.int 20, .int 30]),
+    scmOutEq (evL (.aSlice (.aPush (.aPush (.aEmpty (.litW 0)) (.litW 10)) (.litW 20)) (.litW 1) (.litW 99))) (.list [.int 20]),
+    scmOutEq (evL (.aSlice (.aPush (.aPush (.aEmpty (.litW 0)) (.litW 10)) (.litW 20)) (.litW 2) (.litW 1))) (.list []),
+    scmOutEq (evL (.aAppend (.aMk (.litW 2) (.litW 1)) (.aMk (.litW 1) (.litW 2)))) (.list [.int 1, .int 1, .int 2]) ]
+
+def allRows : List Bool := rowsBin ++ rowsNot ++ rowsShift ++ rowsDomain ++ rowsNested ++ rowsF64 ++ rowsArr
 
 end Residua.Bootstrap.R2.SCM
 

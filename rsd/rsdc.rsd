@@ -1,6 +1,6 @@
 -- rsd/rsdc.rsd — the compile side of RSD-0. Invoked by the `rsd`
 -- dispatcher on a cache miss (or directly for debugging); does the full
--- pipeline and always writes mod/<srcQ>:
+-- pipeline and always writes mod/<modQ>:
 --   .rsd → REF-Q import closure (computeModuleDecls / buildManifest /
 --   resolveClosureVia over the q-dir store) → rsdc stages → RSCM → rsc → wasm
 --   (patched to export memory) → store objects by q → write the record → run
@@ -35,11 +35,11 @@ def errName (err : Int) : String :=
   else if err == 14 then "runtime_primitive_scope"
   else "refusal"
 
-def refuseRsdc (stage : String) (err : Int) (pos : Int) (s : String) : IO UInt32 := do
+def refuseRsdc (o : Opts) (stage : String) (err : Int) (pos : Int) (s : String) : IO UInt32 := do
   let base : UInt32 := if stage == "parse" then 20 else 30
   let lc := lcOf 0 (s.toUTF8.data.toList.map (fun b => (b.toNat : Int))) pos
   let detail := if pos < 0 then s!"stage={stage}" else s!"stage={stage} pos={nthI lc 0}:{nthI lc 1}"
-  refuse s!"rsdc_{errName err}" detail (base + err.toNat.toUInt32)
+  refuseO o s!"rsdc_{errName err}" detail (base + err.toNat.toUInt32)
 
 -- A 32-byte q as the List Int the NF keys carry (hex → bytes → Int list).
 def qListOf (hex : String) : List Int :=
@@ -71,36 +71,20 @@ def toolchainImport (m : String) : Bool :=
 -- mount when a 9P server fronts it. Module derivations index under `mod/`.
 -- ============================================================================
 
-def readQDir (store : String) (qHex : String) : IO ReadResult := do
+-- REF-Q declarations can carry a Q-FORMAT blob header in their identity.
+-- Stored bytes omit that header. Raw Wasm keeps its bare digest.
+def readQDir (store qHex : String) (allowTaggedBlob : Bool := true) : IO ReadResult := do
   if !validHex64 qHex then
     return { ok := false, residue := "q_invalid", bytes := ByteArray.empty }
   let path := s!"{store}/q/{qHex}"
   if !(← System.FilePath.pathExists path) then
     return { ok := false, residue := "does_not_exist", bytes := ByteArray.empty }
   let bs ← IO.FS.readBinFile path
-  if sha256HexByteArray bs != qHex then
+  let blobMatches := fun () =>
+    sha256HexByteArray (intListToByteArray (Lib.Sha256.qHeader "blob" bs.size) ++ bs) == qHex
+  if sha256HexByteArray bs != qHex && !(allowTaggedBlob && blobMatches ()) then
     return { ok := false, residue := "hash_mismatch", bytes := ByteArray.empty }
   return { ok := true, residue := "", bytes := bs }
-
-def readQDirCached (store : String) (qCache : IO.Ref (StrMap (FileStat × ByteArray))) (qHex : String) : IO ReadResult := do
-  if !validHex64 qHex then
-    return { ok := false, residue := "q_invalid", bytes := ByteArray.empty }
-  let path := s!"{store}/q/{qHex}"
-  if (← IO.getEnv "RSD_NO_STAT").isNone then
-    match StrMap.find (← qCache.get) qHex with
-    | some (st0, bs0) =>
-      match ← fileStatOf path with
-      | some cur =>
-        if cur == st0 then
-          return { ok := true, residue := "", bytes := bs0 }
-      | none => pure ()
-    | none => pure ()
-  let r ← readQDir store qHex
-  if r.ok then
-    match ← fileStatOf path with
-    | some st => qCache.modify (fun m => StrMap.insert m qHex (st, r.bytes))
-    | none => pure ()
-  return r
 
 -- An existing object is reused only if it rehashes to its name; a tampered
 -- one is refused by name and rewritten (EMIT-FAST-0's `[emit_cache_tampered]`
@@ -114,26 +98,12 @@ def storePut (store : String) (bytes : ByteArray) : IO String := do
   IO.FS.writeBinFile path bytes
   return q
 
-def storeDeclObjects (store : String) (qCache : IO.Ref (StrMap (FileStat × ByteArray)))
-    (ds : List DeclMeta) : IO Unit := do
-  let noStat := (← IO.getEnv "RSD_NO_STAT").isSome
+def storeDeclObjects (store : String) (ds : List DeclMeta) : IO Unit := do
   for d in ds do
     for (q, bs) in [(d.srcQ, d.slice.toUTF8), (d.unisonQ, d.canonAst.toUTF8)] do
       let path := s!"{store}/q/{q}"
-      let mut alreadyOk := false
-      if !noStat then
-        match StrMap.find (← qCache.get) q with
-        | some (st0, _) =>
-          match ← fileStatOf path with
-          | some cur => if cur == st0 then alreadyOk := true
-          | none => pure ()
-        | none => pure ()
-      if !alreadyOk then
-        if !(← System.FilePath.pathExists path) then
-          IO.FS.writeBinFile path bs
-          match ← fileStatOf path with
-          | some st => qCache.modify (fun m => StrMap.insert m q (st, bs))
-          | none => pure ()
+      if !(← System.FilePath.pathExists path) then
+        IO.FS.writeBinFile path bs
 
 -- ============================================================================
 -- Z6 + Rank 9: per-declaration slice memoization for computeModuleDecls.
@@ -146,19 +116,18 @@ structure DeclSliceEntry where
   toks : Array String
   sQ : String
   meta : DeclMeta
-  depBindings : List (String × String)
+  depBindings : List (String × Option String)
 
 structure ScriptDeclCache where
-  namesKey : String := ""
+  namesKey : Option (String × List (String × List String) × List (List String)) := none
   slices : StrMap DeclSliceEntry := StrMap.empty
 
 def computeModuleDeclsCached (cacheRef : IO.Ref ScriptDeclCache) (modName : String) (src : String)
     (importedDecls : List DeclMeta) : IO (List String × List DeclMeta) := do
   let prevCache ← cacheRef.get
   let (imports, rawDecls) := segmentModuleDecls src
-  let namesKey := modName ++ ":" ++
-    String.intercalate "," (importedDecls.map (·.declName) ++ rawDecls.map (fun rd => String.intercalate "/" rd.names))
-  let sameNames := prevCache.namesKey == namesKey && prevCache.namesKey != ""
+  let namesKey := some (modName, importedDecls.map (fun d => (d.declName, d.allNames)), rawDecls.map (·.names))
+  let sameNames := prevCache.namesKey == namesKey
   let mut nameOwner : StrMap String := StrMap.empty
   let mut knownQ : StrMap String := StrMap.empty
   for im in importedDecls do
@@ -175,7 +144,7 @@ def computeModuleDeclsCached (cacheRef : IO.Ref ScriptDeclCache) (modName : Stri
     | some entry =>
       if sameNames && entry.meta.modName == modName && entry.meta.declName == primary &&
          entry.meta.allNames == d.names && entry.meta.kind == d.kind &&
-         entry.depBindings.all (fun (dn, qOld) => StrMap.find knownQ dn == some qOld) then
+         entry.depBindings.all (fun (dn, qOld) => StrMap.find knownQ dn == qOld) then
         reused := some (entry.meta, entry)
     | none => pure ()
     match reused with
@@ -191,6 +160,8 @@ def computeModuleDeclsCached (cacheRef : IO.Ref ScriptDeclCache) (modName : Stri
         | none => ((tokenizeDecl d.slice).toArray, sha256HexString d.slice)
       let mut depsArr : Array String := #[]
       let mut depsSet : StrMap Bool := StrMap.empty
+      let mut bindings : StrMap (Option String) := StrMap.empty
+      let mut depBindings := []
       let mut selfCount : Nat := 0
       for t in toks do
         if d.names.contains t then
@@ -198,6 +169,10 @@ def computeModuleDeclsCached (cacheRef : IO.Ref ScriptDeclCache) (modName : Stri
         if isIdentTok t then
           let base := (t.splitOn ".").headD t
           for cand in [t, base] do
+            if !(StrMap.contains bindings cand) then
+              let q := StrMap.find knownQ cand
+              bindings := StrMap.insert bindings cand q
+              depBindings := (cand, q) :: depBindings
             match StrMap.find nameOwner cand with
             | some target =>
               if target != primary && !(StrMap.contains depsSet target) then
@@ -209,7 +184,6 @@ def computeModuleDeclsCached (cacheRef : IO.Ref ScriptDeclCache) (modName : Stri
       let isSelfCyclic : Bool := decide (sccNames.length > 1) || decide (selfCount > sccNames.length)
       let (canonAst, depQs) := normalizeUnisonAstToks d toks sccNames isSelfCyclic knownQ
       let uQ := sha256HexString canonAst
-      let depBindings := depsInScope.map (fun dn => (dn, (StrMap.find knownQ dn).getD ""))
       let meta : DeclMeta := {
         modName := modName
         declName := primary
@@ -236,20 +210,21 @@ def computeModuleDeclsCached (cacheRef : IO.Ref ScriptDeclCache) (modName : Stri
 -- collects the file manifest (real path + content sha) the mod record pins.
 -- ============================================================================
 
-def findModuleFile (libDir : String) (m : String) : IO (Option String) := do
+def findModuleFile (libDir : String) (m : String) : IO (Option String × List (String × String)) := do
+  let mut missed := []
   for c in moduleCandidates libDir m do
-    if ← System.FilePath.pathExists c then return some c
-  return none
+    if ← System.FilePath.pathExists c then return (some c, missed)
+    missed := (c, "absent") :: missed
+  return (none, missed)
 
 structure ModCacheEntry where
-  st : FileStat
-  srcSha : String
-  priorQs : List String
+  modName : String
+  srcQ : String
+  priorDecls : List (String × List String × String)
   imps : List String
   ds : List DeclMeta
 
 partial def loadModuleGoCached (libDir store : String)
-    (qCache : IO.Ref (StrMap (FileStat × ByteArray)))
     (modCache : IO.Ref (StrMap ModCacheEntry))
     (fuel : Nat)
     (visited : List String) (decls : List DeclMeta) (files : List (String × String))
@@ -262,30 +237,32 @@ partial def loadModuleGoCached (libDir store : String)
     if toolchainImport m then
       return (s!"import_toolchain {m}", visited, decls, files)
     if visited.contains m then
-      loadModuleGoCached libDir store qCache modCache k visited decls files rest
+      loadModuleGoCached libDir store modCache k visited decls files rest
     else
-      match ← findModuleFile libDir m with
-      | none => return (s!"import_unresolved {m}", visited, decls, files)
+      let (found, missed) ← findModuleFile libDir m
+      match found with
+      | none => return (s!"import_unresolved {m}", visited, decls, files ++ missed)
       | some file =>
         let real ← IO.FS.realPath file
         let realStr := real.toString
-        let curStat ← fileStatOf realStr
-        let priorQs := decls.map (·.unisonQ)
-        let mut hit : Option (String × List String × List DeclMeta) := none
-        if (← IO.getEnv "RSD_NO_STAT").isNone then
-          match curStat, StrMap.find (← modCache.get) realStr with
-          | some st, some entry =>
-            if st == entry.st && priorQs == entry.priorQs then
-              hit := some (entry.srcSha, entry.imps, entry.ds)
-          | _, _ => pure ()
+        -- Read before consulting the resident cache. FileStat is an
+        -- observation only: equal (sec,nsec,size) does not identify bytes.
+        let src ← IO.FS.readFile file
+        let srcQ := contentQ src.toUTF8
+        let imps := headerImportList src
+        let priorDecls := decls.map (fun d => (d.declName, d.allNames, d.unisonQ))
+        let hit := match StrMap.find (← modCache.get) realStr with
+          | some entry =>
+            if m == entry.modName && srcQ == entry.srcQ && priorDecls == entry.priorDecls then
+              some (entry.imps, entry.ds)
+            else none
+          | none => none
         match hit with
-        | some (srcSha, imps, ds) =>
-          storeDeclObjects store qCache ds
-          loadModuleGoCached libDir store qCache modCache k (visited ++ [m]) (decls ++ ds)
-            (files ++ [(realStr, srcSha)]) (rest ++ imps)
+        | some (imps, ds) =>
+          storeDeclObjects store ds
+          loadModuleGoCached libDir store modCache k (visited ++ [m]) (decls ++ ds)
+            (files ++ missed ++ [(file, srcQ)]) (rest ++ imps)
         | none =>
-          let src ← IO.FS.readFile file
-          let imps := headerImportList src
           match imps.find? toolchainImport with
           | some t => return (s!"import_toolchain {t}", visited, decls, files)
           | none => pure ()
@@ -293,27 +270,22 @@ partial def loadModuleGoCached (libDir store : String)
           -- participate in dependency discovery and in the Unison identity.
           let pending := imps.filter (fun im => !(visited.contains im))
           if !pending.isEmpty then
-            return ← loadModuleGoCached libDir store qCache modCache k visited decls files
+            return ← loadModuleGoCached libDir store modCache k visited decls files
               (pending ++ [m] ++ rest)
           let (_, ds) := computeModuleDecls m src decls
-          storeDeclObjects store qCache ds
-          let srcSha := sha256HexString src
-          match curStat with
-          | some st =>
-            modCache.modify (fun mc => StrMap.insert mc realStr {
-              st := st, srcSha := srcSha, priorQs := priorQs, imps := imps, ds := ds
-            })
-          | none => pure ()
-          loadModuleGoCached libDir store qCache modCache k (visited ++ [m]) (decls ++ ds)
-            (files ++ [(realStr, srcSha)]) (rest ++ imps)
+          storeDeclObjects store ds
+          modCache.modify (fun mc => StrMap.insert mc realStr {
+            modName := m, srcQ := srcQ, priorDecls := priorDecls, imps := imps, ds := ds
+          })
+          loadModuleGoCached libDir store modCache k (visited ++ [m]) (decls ++ ds)
+            (files ++ missed ++ [(file, srcQ)]) (rest ++ imps)
 
 def loadModuleGo (libDir store : String) (fuel : Nat)
     (visited : List String) (decls : List DeclMeta) (files : List (String × String))
     (queue : List String)
     : IO (String × List String × List DeclMeta × List (String × String)) := do
-  let qc ← IO.mkRef StrMap.empty
   let mc ← IO.mkRef StrMap.empty
-  loadModuleGoCached libDir store qc mc fuel visited decls files queue
+  loadModuleGoCached libDir store mc fuel visited decls files queue
 
 -- ============================================================================
 -- The rsdc stages, replayed so each refusal keeps its name. Mirrors
@@ -333,11 +305,11 @@ structure EmitOut where
 
 -- A Proc main and its driver are ordinary functions in the same RSCM.
 -- The wire is the placed position plus the arena helper prefix.
-def entryMetadata (st : St) (heads : List Int) (fs : Array Fn) (ord : Array Int)
+def entryMetadata (st : St) (e : Env) (fs : Array Fn) (ord : Array Int)
     (nPre : Int) (entry : String) : Int × List Int × Int × Option Int := Id.run do
-  let name := findStructB st heads 0 [80, 114, 111, 99]
+  let name := findHeadBE st e [80, 114, 111, 99]
   let procTy := match name with
-    | [a, b] => findStruct st heads 0 a b
+    | [a, b] => findStruct st e.heads a b
     | _ => -1
   let ints := listTy 0 1
   let mut wire := -1
@@ -369,7 +341,7 @@ def emitStages (clk : Clock) (entry : String) (s : String) : IO EmitOut := do
   clk.mark "r_sigs"
   if e0.err != 0 then
     return { err := e0.err, stage := "sigs", pos := walkPos st1 0 top (emptyEnv 0), rscm := [], mainWire := -1, mainPs := [], mainRet := 0 }
-  let st2 := if e0.heads.isEmpty && e0.abs.isEmpty then st1 else qExB st1 e0 top [] [] []
+  let st2 := if cellLen e0.heads == 0 && e0.abs.isEmpty then st1 else qExB st1 e0 top [] [] []
   let e1 := walk st2 1 top e0
   clk.mark "r_fields"
   if e1.err != 0 then
@@ -379,7 +351,7 @@ def emitStages (clk : Clock) (entry : String) (s : String) : IO EmitOut := do
   if e2.err != 0 then
     return { err := e2.err, stage := "types", pos := walkPos st2 2 top e1, rscm := [], mainWire := -1, mainPs := [], mainRet := 0 }
   let st3 := RsdcNF.qExCFast st2 sigMap top [] [] [] []
-  let st := if e2.heads.isEmpty then st3 else desugar st3 e2 top top [] 0
+  let st := if cellLen e2.heads == 0 then st3 else desugar st3 e2 top top [] 0
   let cf := ckFile st e2 top
   clk.mark "r_check"
   if cf != 0 then
@@ -387,16 +359,16 @@ def emitStages (clk : Clock) (entry : String) (s : String) : IO EmitOut := do
   let scc := recStructsOf e2.heads e2.fields e2.icts e2.iargs
   let ae := if scc.err != 0 then scc.err else if hasIndRec e2.heads scc.recs then 13 else checkArenaStructs e2.heads e2.fields scc.recs
   if ae != 0 then
-    return { err := ae, stage := "arena", pos := if scc.err != 0 then nthF 0 e2.heads 0 else arenaErrPos e2.heads e2.fields scc.recs, rscm := [], mainWire := -1, mainPs := [], mainRet := 0 }
+    return { err := ae, stage := "arena", pos := if scc.err != 0 then cellAt e2.heads 0 else arenaErrPos e2.heads e2.fields scc.recs, rscm := [], mainWire := -1, mainPs := [], mainRet := 0 }
   let recs := scc.recs
-  let hasProj := lenI recs > 0 && hasRecProj st e2.heads e2.fields recs top
-  let singleL := allSingleListRecs e2.heads e2.fields recs recs
+  let hasProj := !recs.isEmpty && hasRecProj st (indexRecFields st e2.heads e2.fields recs (map0 0)) top
+  let singleL := allSingleListRecs e2.heads e2.fields (buildRecFlags e2.heads recs) recs
   let nPre : Int :=
     if lenI recs == 0 then 0
     else if !hasProj then 1
     else if singleL then 3
     else 4
-  let pk := packEF (e2.fields ++ [-10, nPre] ++ recs) e2.heads e2.icts e2.iargs
+  let pk := packEF e2.fields e2.heads e2.icts e2.iargs nPre recs false
   if checkTypeDepth pk e2.heads e2.sigs != 0 then
     return { err := 9, stage := "emit", pos := depthErrPos pk e2.heads e2.sigs, rscm := [], mainWire := -1, mainPs := [], mainRet := 0 }
   clk.mark "r_arena"
@@ -420,7 +392,7 @@ def emitStages (clk : Clock) (entry : String) (s : String) : IO EmitOut := do
   clk.mark "r_bodies"
   if bod.err != 0 then
     return { err := bod.err, stage := "body", pos := bodyErrPos st pk placed (rangeI n 0), rscm := [], mainWire := -1, mainPs := [], mainRet := 0 }
-  let (wire, ps, ret, procStep) := entryMetadata st e2.heads fsArr ordArr nPre entry
+  let (wire, ps, ret, procStep) := entryMetadata st e2 fsArr ordArr nPre entry
   -- the integer compositions the bodies name are linked here, as Compile.rsd's own emission ends
   let rscm := RsdcNF.finishImage pk nPre n sigBytes bod.bs
   if rscm.isEmpty then
@@ -449,6 +421,7 @@ structure EmitNFOut where
   bodySlices : Array (List Int) := #[]
   depEdges : Nat := 0
   rscmBytesOpt : Option ByteArray := none
+  incremental : Bool := false
 
 def utf8ToIntArray (s : String) : Array Int := Id.run do
   let ba := s.toUTF8
@@ -477,20 +450,21 @@ def rscmSlicesGo : Nat → List Int → List (List Int) → Option (List (List I
     else rscmSlicesGo k sk.rest (bs.take (bs.length - sk.rest.length) :: acc)
   | _ + 1, _, _ => none
 
-def preSlicesOf (pk : List Int) (nPre : Int) : Array (List Int) :=
+def preSlicesOf (pk : WireTables) (nPre : Int) : Array (List Int) :=
   if nPre <= 0 then #[]
   else ((rscmSlicesGo nPre.toNat (preBodsW pk nPre [0]) []).getD []).toArray
 
 structure IncRsdcState where
   entry : String
   compilerQ : List Int
+  profileQ : List Int
   dropSigs : Bool
   nPre : Int
   recs : List Int
   st : St
   e2 : Env
   sigMap : RsdcNF.StrMap Sig
-  pk : List Int
+  pk : WireTables
   ctx : List Int
   fsArr : Array Fn
   ordArr : Array Int
@@ -502,6 +476,9 @@ structure IncRsdcState where
   prefixBytes : List Int
   structChunks : Array (List Int)
   rawChunks : Array (List Int)
+  bodyReads : Array (List Int)
+  readBodies : Array Bool
+  hasDefaults : Bool
   placedJobs : Array Lib.FnNF.Job
   placedKeys : Array (String × List Int)
   placedOuts : Array (List (List Int))
@@ -514,14 +491,16 @@ structure IncRsdcState where
   procStep : Option Int
   depEdges : Nat
 
-def buildFnMap (st : St) (fsArr : Array Fn) : RsdcNF.StrMap Int := Id.run do
-  let mut fnMap : RsdcNF.StrMap Int := .leaf
-  let mut k := fsArr.size
-  while k > 0 do
-    k := k - 1
-    let f := fsArr.get! k
-    fnMap := RsdcNF.StrMap.insert fnMap (RsdcNF.spanStr st f.na f.nb) (Int.ofNat k)
-  return fnMap
+def readBodiesOf (reads : Array (List Int)) : Array Bool := Id.run do
+  let mut out := Array.mkArray reads.size false
+  for deps in reads do
+    for dep in deps do
+      out := out.set! dep.toNat true
+  return out
+
+def fnHasDefaults (st : St) (f : Fn) : Bool :=
+  let group := fd 0 st (fd 0 st f.node 2) 1
+  (defDefaults st group).xs.any (· >= 0)
 
 def matchBytesAt (src : Array Int) (pos : Nat) (pat : List Int) : Bool :=
   let rec go (i : Nat) : List Int → Bool
@@ -560,7 +539,8 @@ def tryEmitStagesNFInc (clk : Clock) (entry : String) (src : Array Int)
   match ← incRef.get with
   | none => return none
   | some prev =>
-    if prev.entry != entry || prev.compilerQ != cfg.compilerQ || prev.dropSigs != cfg.dropSigs then
+    if prev.entry != entry || prev.compilerQ != cfg.compilerQ ||
+        prev.profileQ != cfg.profileQ || prev.dropSigs != cfg.dropSigs then
       return none
     if prev.fsArr.size == 0 then
       return none
@@ -593,6 +573,11 @@ def tryEmitStagesNFInc (clk : Clock) (entry : String) (src : Array Int)
           dIdx := dIdx + 1
       if sIdx != nStructs || dIdx != n || changedRaw.size > 8 then
         return none
+      -- A dependency body may change code in an otherwise unchanged caller.
+      -- Full preparation recomputes its key and still reuses other jobs.
+      if changedRaw.any (fun (idx, _) => prev.readBodies.get! idx) ||
+          (prev.hasDefaults && !changedRaw.isEmpty) then
+        return none
       let mut stCur := prev.st
       let mut fsArrCur := prev.fsArr
       let mut rawChunksCur := prev.rawChunks
@@ -603,6 +588,7 @@ def tryEmitStagesNFInc (clk : Clock) (entry : String) (src : Array Int)
       let mut sliceBytesCur := prev.sliceBytes
       let mut storeCur := store0
       let mut ranAcc : List String := []
+      let recFields := indexRecFields prev.st prev.e2.heads prev.e2.fields prev.recs (map0 0)
       for (rawIdx, ch) in changedRaw do
         -- Node ids are dense in st.nodes. The old nxt pad was a pool-key gap.
         -- The chunk is placed at pos0, past the bytes already in input, so new
@@ -614,16 +600,16 @@ def tryEmitStagesNFInc (clk : Clock) (entry : String) (src : Array Int)
         let stInit : St := {
           pool := stCur.pool, nodes := stCur.nodes, input := input, cur := ch,
           nxt := stCur.nxt, pos := pos1,
-          line := 0, col := 0, indent := 0, err := 0, ret := -1, root := -1 }
+          line := 0, col := 0, indent := 0, err := 0, ret := -1, root := -1, depth := 0, cutCol := -1 }
         let stD := parseFile stInit
         if stD.err != 0 || stD.root < 0 then
           return none
         let topD0 := fd 0 stD stD.root 1
         if fd 0 stD topD0 0 != 19 || fd 0 stD topD0 2 >= 0 then
           return none
-        let stD1 := if prev.e2.heads.isEmpty && prev.e2.abs.isEmpty then stD else qExB stD prev.e2 topD0 [] [] []
+        let stD1 := if cellLen prev.e2.heads == 0 && prev.e2.abs.isEmpty then stD else qExB stD prev.e2 topD0 [] [] []
         let stD2 := RsdcNF.qExCFast stD1 prev.sigMap topD0 [] [] [] []
-        let stD := if prev.e2.heads.isEmpty then stD2 else desugar stD2 prev.e2 topD0 topD0 [] 0
+        let stD := if cellLen prev.e2.heads == 0 then stD2 else desugar stD2 prev.e2 topD0 topD0 [] 0
         let topD := fd 0 stD stD.root 1
         let dNode := fd 0 stD topD 1
         if fd 0 stD dNode 0 != 20 then
@@ -643,14 +629,16 @@ def tryEmitStagesNFInc (clk : Clock) (entry : String) (src : Array Int)
           return none
         if fd 0 stD sigNode 3 != oldFn.part then
           return none
-        let csD := (RsdcNF.calsOfFastGo stD fsArrCur prev.fnMap dNode #[]).toList
-        if RsdcNF.dedup csD [] != RsdcNF.dedup oldFn.cals [] then
+        let reads := RsdcNF.fnReadsGo stD fsArrCur prev.fnMap dNode ⟨#[], #[]⟩
+        let csD := reads.calls.toList
+        if RsdcNF.dedup csD [] != RsdcNF.dedup oldFn.cals [] ||
+            RsdcNF.dedup reads.bodies.toList [] != prev.bodyReads.get! rawIdx then
           return none
-        if !prev.recs.isEmpty then
-          if hasRecProj stD prev.e2.heads prev.e2.fields prev.recs dNode !=
-             hasRecProj prev.st prev.e2.heads prev.e2.fields prev.recs oldFn.node then
-            return none
+        if !prev.recs.isEmpty && hasRecProj stD recFields dNode != hasRecProj prev.st recFields oldFn.node then
+          return none
         let fNew : Fn := { oldFn with na := naD, nb := nbD, node := dNode, cals := csD }
+        if fnHasDefaults stD fNew then
+          return none
         let fs1Check := directUsesA stD prev.pk [fNew]
         if (fs1Check.headD fNew).usesA != oldFn.usesA then
           return none
@@ -749,7 +737,7 @@ def emitStagesNFFull (clk : Clock) (entry : String) (bs : List Int)
   clk.mark "r_sigs"
   if e0.err != 0 then
     return nf0 e0.err "sigs" store0 (walkPos st1 0 top (emptyEnv 0))
-  let st2 := if e0.heads.isEmpty && e0.abs.isEmpty then st1 else qExB st1 e0 top [] [] []
+  let st2 := if cellLen e0.heads == 0 && e0.abs.isEmpty then st1 else qExB st1 e0 top [] [] []
   let e1 := walk st2 1 top e0
   clk.mark "r_fields"
   if e1.err != 0 then
@@ -759,7 +747,7 @@ def emitStagesNFFull (clk : Clock) (entry : String) (bs : List Int)
   if e2.err != 0 then
     return nf0 e2.err "types" store0 (walkPos st2 2 top e1)
   let st3 := RsdcNF.qExCFast st2 sigMap top [] [] [] []
-  let st := if e2.heads.isEmpty then st3 else desugar st3 e2 top top [] 0
+  let st := if cellLen e2.heads == 0 then st3 else desugar st3 e2 top top [] 0
   let cf := RsdcNF.ckSpineFast st top
   clk.mark "r_check"
   if cf != 0 then
@@ -768,21 +756,22 @@ def emitStagesNFFull (clk : Clock) (entry : String) (bs : List Int)
   let ae := if scc.err != 0 then scc.err else if hasIndRec e2.heads scc.recs then 13 else checkArenaStructs e2.heads e2.fields scc.recs
   if ae != 0 then
     return nf0 ae "arena" store0
-      (if scc.err != 0 then nthF 0 e2.heads 0 else arenaErrPos e2.heads e2.fields scc.recs)
+      (if scc.err != 0 then cellAt e2.heads 0 else arenaErrPos e2.heads e2.fields scc.recs)
   let recs := scc.recs
-  let hasProj := lenI recs > 0 && hasRecProj st e2.heads e2.fields recs top
-  let singleL := allSingleListRecs e2.heads e2.fields recs recs
+  let hasProj := !recs.isEmpty && hasRecProj st (indexRecFields st e2.heads e2.fields recs (map0 0)) top
+  let singleL := allSingleListRecs e2.heads e2.fields (buildRecFlags e2.heads recs) recs
   let nPre : Int :=
     if lenI recs == 0 then 0
     else if !hasProj then 1
     else if singleL then 3
     else 4
-  let pk := packEF (e2.fields ++ [-10, nPre] ++ recs) e2.heads e2.icts e2.iargs
+  let pk := packEF e2.fields e2.heads e2.icts e2.iargs nPre recs false
   if checkTypeDepth pk e2.heads e2.sigs != 0 then
     return nf0 9 "emit" store0 (depthErrPos pk e2.heads e2.sigs)
   clk.mark "r_arena"
   let raw := RsdcNF.gatherFast st sigMap top
-  let fs0 := (RsdcNF.fillCFast st raw).toList
+  let (fns, bodyReads) := RsdcNF.fillReadsFast st raw
+  let fs0 := fns.toList
   if ckMixed 2 fs0 != 0 then
     return nf0 (ckMixed 2 fs0) "check" store0 (ckErrPos st e2 top)
   let fs1 := directUsesA st pk fs0
@@ -800,8 +789,8 @@ def emitStagesNFFull (clk : Clock) (entry : String) (bs : List Int)
     return nf0 9 "emit" store0 (depthSigPos pk e2.sigs)
   let src := bs.toArray
   let sortedStarts := RsdcNF.sortStarts (fs.map (fun f => RsdcNF.fnSrcStart st src.size f) ++ RsdcNF.headStarts e2.heads)
-  let ctx := Lib.FnNF.qOf "nf-ctx" (Lib.FnNF.encLL (RsdcNF.canonPk st e2))
-  let jobs := RsdcNF.mkJobsFast st src sortedStarts ctx fsArr ordArr ordPos fnSigs
+  let ctx := RsdcNF.contextQ st e2 nPre recs
+  let jobs := RsdcNF.mkJobsFast st src sortedStarts ctx fsArr ordArr ordPos fnSigs bodyReads
   let runUnit (f : Fn) : List (List Int) :=
     let ce := ckOne st e2 f.node
     if ce != 0 then [[ce, 1], []]
@@ -827,7 +816,7 @@ def emitStagesNFFull (clk : Clock) (entry : String) (bs : List Int)
     let errPos := if isCk then ckErrPos st e2 top else bodyErrPos st pk placed (rangeI n 0)
     return { out := { err := e, stage := stage, pos := errPos, rscm := [], mainWire := -1, mainPs := [], mainRet := 0 }
            , store := r.store, ran := r.ran, keys := r.keys, refused := r.refused }
-  let (wire, ps, ret, procStep) := entryMetadata st e2.heads fsArr ordArr nPre entry
+  let (wire, ps, ret, procStep) := entryMetadata st e2 fsArr ordArr nPre entry
   let bodySlices := preSlicesOf pk nPre ++ RsdcNF.bodySlicesOf r.outs
   let depEdges := fs.foldl (fun acc f => acc + (RsdcNF.dedup f.cals []).length) 0
   let totalMods : Int := nPre + Int.ofNat n
@@ -846,7 +835,7 @@ def emitStagesNFFull (clk : Clock) (entry : String) (bs : List Int)
       match scanTopDeclStarts src with
       | none => pure ()
       | some declStarts =>
-        let nStructs := e2.heads.length / 4
+        let nStructs := cellLen e2.heads / 4
         if declStarts.size == nStructs + n then
           let pfx := (src.extract 0 (declStarts.get! 0).2).toList
           let mut structChunks : Array (List Int) := Array.mkEmpty nStructs
@@ -867,6 +856,7 @@ def emitStagesNFFull (clk : Clock) (entry : String) (bs : List Int)
             ref.set (some {
               entry := entry
               compilerQ := cfg.compilerQ
+              profileQ := cfg.profileQ
               dropSigs := cfg.dropSigs
               nPre := nPre
               recs := recs
@@ -881,10 +871,13 @@ def emitStagesNFFull (clk : Clock) (entry : String) (bs : List Int)
               fnSigs := fnSigs
               sigBytes := sigBytes
               placed := placed
-              fnMap := buildFnMap st fsArr
+              fnMap := RsdcNF.fnMapOf st fsArr
               prefixBytes := pfx
               structChunks := structChunks
               rawChunks := rawChunks
+              bodyReads := bodyReads
+              readBodies := readBodiesOf bodyReads
+              hasDefaults := fsArr.any (fnHasDefaults st)
               placedJobs := (jobs.map (·.1)).toArray
               placedKeys := r.keys.toArray
               placedOuts := r.outs.toArray
@@ -903,6 +896,20 @@ def emitStagesNFFull (clk : Clock) (entry : String) (bs : List Int)
          , nPre := nPre, sigBytes := sigBytes, bodySlices := bodySlices, depEdges := depEdges
          , rscmBytesOpt := some (intListToByteArray rscm) }
 
+def emitNFBytes (res : EmitNFOut) : ByteArray :=
+  match res.rscmBytesOpt with
+  | some bs => bs
+  | none => intListToByteArray res.out.rscm
+
+def sameEmitNFOutcome (a b : EmitNFOut) : Bool :=
+  a.out.err == b.out.err && a.out.stage == b.out.stage && a.out.pos == b.out.pos &&
+    a.out.mainWire == b.out.mainWire && a.out.mainPs == b.out.mainPs &&
+    a.out.mainRet == b.out.mainRet && a.out.procStep == b.out.procStep &&
+    (emitNFBytes a).data == (emitNFBytes b).data
+
+def emptyRsdcMemo : Lib.Rsd.Store.Store :=
+  Lib.Rsd.Store.declare "blob" "nf-key"
+
 def emitStagesNF (clk : Clock) (entry : String) (s : String)
     (cfg : Lib.FnNF.Cfg) (dur : Option String) (store0 : Lib.Rsd.Store.Store)
     (incRef : Option (IO.Ref (Option IncRsdcState)) := none) : IO EmitNFOut := do
@@ -912,10 +919,13 @@ def emitStagesNF (clk : Clock) (entry : String) (s : String)
     match ← tryEmitStagesNFInc clk entry src cfg dur store0 ref with
     | some res =>
       if (← IO.getEnv "RSD_VERIFY_PATCH") == some "1" then
-        let full ← emitStagesNFFull clk entry src.toList cfg dur store0 none
-        let eq := res.out.rscm == full.out.rscm
+        let full ← emitStagesNFFull clk entry src.toList cfg none emptyRsdcMemo
+        let eq := sameEmitNFOutcome res full
         IO.eprintln s!"[rsd_inc_rsdc] ok={eq} ran={res.ran.length}/{res.keys.length}"
-      return res
+        if !eq then
+          ref.set none
+          return full
+      return { res with incremental := true }
     | none => emitStagesNFFull clk entry src.toList cfg dur store0 (some ref)
   | none =>
     emitStagesNFFull clk entry src.toList cfg dur store0 none
@@ -935,60 +945,81 @@ def nfEnabled : IO Bool := do
 -- rsc: the cached native binary, keyed by its compiler/host import closure.
 -- Includes R025 fix (canonical real paths + cwd = closure/build dir + relative
 -- filenames + leanRoot resolved in `home` so stores anywhere produce
--- byte-identical rsc-native) and Z6 (`rsc-native.stat` manifest so repeat runs
--- validate member FileStats without spawning 20 shasum subprocesses).
+-- byte-identical rsc-native). The input manifest uses the same content and
+-- absence observations as the module record.
 -- ============================================================================
 
-def checkRscNativeStat (home statPath : String) (dirs : List String) : IO (Option (String × String)) := do
-  if !(← System.FilePath.pathExists statPath) then return none
-  let ls := (← IO.FS.readFile statPath).splitOn "\n"
-  let mut sha := ""
-  let mut fstats : Array (String × String × FileStat) := #[]
-  for l in ls do
-    if l.startsWith "sha " then
-      sha := (l.drop 4).trim
-    else if l.startsWith "fstat " then
-      match parseFstatLine l with
-      | some fs => fstats := fstats.push fs
-      | none => return none
-  if sha.length != 64 || fstats.isEmpty then return none
-  let hostFile := s!"{home}/rsc/RscHost.lean"
-  let rootFile := if ← System.FilePath.pathExists hostFile then hostFile else s!"{home}/rsc/rsc.rsd"
-  if !(← System.FilePath.pathExists rootFile) then return none
-  let rootReal := (← IO.FS.realPath rootFile).toString
-  if !(fstats.any (fun (p, _, _) => p == rootReal)) then return none
-  let noStat := (← IO.getEnv "RSD_NO_STAT").isSome
-  for (p, h, st) in fstats do
-    if noStat then
-      if (← digestFile p) != h then return none
-    else
-      if !(← validateFileStat p h st) then return none
+def checkRscNativeInputs (home statPath : String) (dirs : List String)
+    : IO (Option (String × List (String × String))) := do
+  let raw ← try IO.FS.readFile statPath catch _ => return none
+  let first :: sha :: checkedHome :: expectedQ :: lines := raw.splitOn "\n" | return none
+  if first != "rsc-native-inputs-v3" || !validHex64 sha || checkedHome != home then return none
+  if expectedQ != qHexKind "text" ("\n".intercalate (sha :: home :: lines)).toUTF8 then
+    return none
+  let mut files := []
+  for l in lines do
+    if l != "" then
+      let some obs := parseFileObservation l | return none
+      files := obs :: files
+  if !(files.any (fun (p, q) => q != "absent" &&
+      [s!"{home}/rsc/rsc.rsd", s!"{home}/rsc/RscHost.lean"].contains p)) ||
+      !(← fileObservationsMatch files) then return none
   let name := s!"rsc-native-{String.take sha 12}"
   for dir in dirs do
     let p := s!"{dir}/{name}"
     if ← System.FilePath.pathExists p then
-      return some (sha, p)
+      return some (p, files.reverse)
   return none
 
-def writeRscNativeStat (bdir cdir sha : String) : IO Unit := do
-  let memPath := s!"{cdir}/rsc-closure-{sha}.members"
-  if !(← System.FilePath.pathExists memPath) then return
-  let ls := (← IO.FS.readFile memPath).splitOn "\n"
-  let mut outLines : Array String := #[s!"sha {sha}"]
-  for l in ls do
-    if l != "" then
-      match l.splitOn "\t" with
-      | [rawQ, path] =>
-        let realP ← try pure (← IO.FS.realPath path).toString catch _ => pure path
-        match ← fileStatOf realP with
-        | some st => outLines := outLines.push (formatFstatLine realP rawQ st)
-        | none => return
-      | _ => return
-  if outLines.size > 1 then
-    try IO.FS.writeFile s!"{bdir}/rsc-native.stat" ("\n".intercalate outLines.toList ++ "\n")
-    catch _ => pure ()
+def bundleRscNativeInputs (home out : String) : IO (String × System.FilePath ×
+    List (String × String) × List (String × String)) := do
+  let lib := System.FilePath.mk s!"{home}/lib"
+  let host := s!"{home}/rsc/RscHost.lean"
+  let hasHost ← System.FilePath.pathExists host
+  let root := if hasHost then host else s!"{home}/rsc/rsc.rsd"
+  let missed ← IO.mkRef (if hasHost then [] else [(host, "absent")])
+  let resolve (m : String) : IO System.FilePath := do
+    let picked ← RscSourceBundle.modulePath lib m
+    match (moduleCandidates lib.toString m).map (fun p => (System.FilePath.mk p).normalize) with
+    | [first, second] =>
+      if picked == second && picked != first then
+        missed.modify (fun xs => (first.toString, "absent") :: xs)
+    | _ => pure ()
+    return picked
+  let (sha, source) ← RscSourceBundle.bundleWithResolver resolve root lib out
+  let memPath := s!"{out}/rsc-closure-{sha}.members"
+  let mut sourceMembers := []
+  if source.toString == root then
+    sourceMembers := [(root, sha)]
+  else if ← System.FilePath.pathExists memPath then
+    for l in (← IO.FS.readFile memPath).splitOn "\n" do
+      if l != "" then
+        let [q, path] := l.splitOn "\t" | throw (IO.userError "rsc_native_member")
+        sourceMembers := (path, q) :: sourceMembers
+  else
+    throw (IO.userError "rsc_native_members_missing")
+  let homePath : System.FilePath := home
+  let runtimeSources := ["lib/rt/V1.rsd", "lib/rt/Reuse.rsd", "lib/rt/AllocFast.rsd"].map System.FilePath.mk
+  let mut resolved := []
+  let mut observed := []
+  let mut rawMembers := []
+  for (path, expectedRawQ) in sourceMembers.reverse do
+    if let some rel := runtimeSources.find? (fun rel => (homePath / rel).normalize.toString == path) then
+      let checked ← rtCheckedPath homePath rel
+      resolved := (path, resolvedPathObservation checked) :: resolved
+    let bytes ← IO.FS.readBinFile path
+    let rawQ := digestBytes bytes
+    if rawQ != expectedRawQ then throw (IO.userError s!"rsc_native_member_changed: {path}")
+    observed := (path, contentQ bytes) :: observed
+    rawMembers := (path, rawQ) :: rawMembers
+  unless resolved.isEmpty do
+    let rt := (homePath / "lib" / "rt").normalize
+    resolved := (rt.toString, resolvedPathObservation rt) :: resolved
+  return (sha, source, observed.reverse ++ resolved.reverse ++ (← missed.get).eraseDups,
+    rawMembers.reverse)
 
-def ensureRscNative (home store : String) (tcm : IO.Ref String) : IO (Option String) := do
+def ensureRscNativeChecked (home store : String) (tcm : IO.Ref String)
+    : IO (Option (String × List (String × String))) := do
   let root := s!"{home}/rsc/rsc.rsd"
   if !(← System.FilePath.pathExists root) then return none
   let bdir0 := s!"{store}/build"
@@ -1012,21 +1043,34 @@ def ensureRscNative (home store : String) (tcm : IO.Ref String) : IO (Option Str
       dirs := dirs ++ [(← IO.FS.realPath d).toString]
   | none => pure ()
   for d in dirs do
-    match ← checkRscNativeStat home s!"{d}/rsc-native.stat" dirs with
-    | some (_, p) =>
+    match ← checkRscNativeInputs home s!"{d}/rsc-native.inputs" dirs with
+    | some (p, files) =>
       linkRsc p
-      return some p
+      return some (p, files)
     | none => pure ()
-  let (sha, source) ← RscSourceBundle.bundleNative root s!"{home}/lib" cdir
+  let (sha, source, files, rawMembers) ← bundleRscNativeInputs home cdir
   let srcPath := source.toString
   if sha == "" then return none
-  writeRscNativeStat bdir cdir sha
+  if !((home :: files.map (·.1)).any (·.contains '\n')) then
+    let lines := files.map (fun (p, q) => fileObservationLine p q) ++ [""]
+    let manifestQ := qHexKind "text" ("\n".intercalate (sha :: home :: lines)).toUTF8
+    let manifest := "\n".intercalate (["rsc-native-inputs-v3", sha, home, manifestQ] ++ lines)
+    let tmp := s!"{bdir}/.rsc-inputs-{← IO.monoNanosNow}"
+    IO.FS.writeFile tmp manifest
+    IO.FS.rename tmp s!"{bdir}/rsc-native.inputs"
+    -- Keep the legacy observation export for ExportSameHead. It is never
+    -- consulted for cache admission.
+    let mut stats := [s!"sha {sha}"]
+    for (p, rawQ) in rawMembers do
+      if let some st ← fileStatOf p then
+        stats := formatFstatLine p rawQ st :: stats
+    IO.FS.writeFile s!"{bdir}/rsc-native.stat" ("\n".intercalate stats.reverse ++ "\n")
   let name := s!"rsc-native-{String.take sha 12}"
   for dir in dirs do
     let p := s!"{dir}/{name}"
     if ← System.FilePath.pathExists p then
       linkRsc p
-      return some p
+      return some (p, files)
   -- R025 + R015: resolve leanRoot with cwd = home so `<home>/lean-toolchain`
   -- governs even when rsdc is invoked from a directory outside the repo.
   let lrA ← IO.getEnv "RSD_LEANROOT"
@@ -1077,7 +1121,10 @@ def ensureRscNative (home store : String) (tcm : IO.Ref String) : IO (Option Str
     IO.eprintln s!"[rsc_build_mv] {r3.stderr.trim}"
     return none
   linkRsc s!"{bdir}/{name}"
-  return some s!"{bdir}/{name}"
+  return some (s!"{bdir}/{name}", files)
+
+def ensureRscNative (home store : String) (tcm : IO.Ref String) : IO (Option String) := do
+  return (← ensureRscNativeChecked home store tcm).map (·.1)
 
 -- ============================================================================
 -- Wasm section patching (Export section 7 + Z5 Code section 10).
@@ -1149,8 +1196,8 @@ def patchWasmMemory (bs : ByteArray) : ByteArray := Id.run do
     o := o2 + ln
   return ByteArray.mk out
 
--- Z5: Splice replaced function code entries (each encoded via `Rsc.encodeCode wfn`,
--- including its leading ULEB128 body length) into Wasm Section 10 (the Code section).
+-- Z5: Splice replaced function code entries, including each ULEB128 body
+-- length, into Wasm Section 10 (the Code section).
 def patchWasmCodeSection (bs : ByteArray) (patches : List (Nat × Array UInt8)) : Option ByteArray := Id.run do
   if patches.isEmpty then return some bs
   let a := bs.data
@@ -1447,7 +1494,7 @@ def loadIncWasmDisk (store : String) : IO (Option IncWasmState) := do
     let some (biEdgesL, o18) := getLLB b o17 | return none
     let some (rawQ, o19) := getStrB b o18 | return none
     let some (wasmQ, _) := getStrB b o19 | return none
-    let rawR ← readQDir store rawQ
+    let rawR ← readQDir store rawQ false
     if !rawR.ok then return none
     let biBetaArr := biBetaL.toArray
     return some {
@@ -1572,7 +1619,8 @@ def tryPatchIncWasm (lay : Rsc.Layers) (store tqRsdc tqRsc : String) (emN : Emit
       let codeIdx := if Rsc.biOnWithLayers lay then bi3.base + i else rtBase + i
       match wfns with
       | [wfn] =>
-        let enc := intListToU8Arr (Rsc.encodeCode wfn)
+        let body := Rsc.encodeLocals wfn.locals ++ wfn.code
+        let enc := intListToU8Arr (Rsc.lebU body.length ++ body)
         patches := patches ++ [(codeIdx, enc)]
       | _ => return none
     match patchWasmCodeSection prev.rawWasm patches with
@@ -1739,22 +1787,23 @@ def compileRscInProcess (lay : Rsc.Layers) (tqRsdc tqRsc : String) (emN : EmitNF
   return .ok (rawBytes, some state)
 
 -- ============================================================================
--- The mod record (v2; parser in common.rsd). Written before the run so a
+-- The mod record (v3; parser in common.rsd). Written before the run so a
 -- residue/refusal outcome still leaves a warm cache.
--- Rank 14 + Z6: builds lines in `Array String` + `"\n".intercalate` and
--- records `fstat` lines alongside `file` lines.
+-- File observations include failed lookups before the selected import.
 -- ============================================================================
 
-def writeMod (store srcQ : String) (tq : String × String × String)
+def writeMod (store modQ : String) (tq : String × String × String)
     (closureQ wasmQ rawQ rscmQ : String) (entry ret arity : Int) (procStep : Option Int)
     (files : List (String × String)) (nfLines : String) : IO Unit := do
+  if files.any (fun (p, _) => p.contains '\n') then return
   IO.FS.createDirAll s!"{store}/mod"
   let mut lines : Array String := #[
-    "v2",
+    "v3",
     s!"tq_rsdc {tq.1}",
     s!"tq_rsc {tq.2.1}",
     s!"tq_host {tq.2.2}",
     s!"closure_q {closureQ}",
+    s!"derivation_q {modDerivationQ modQ tq closureQ files (wasmQ, entry, ret, arity, procStep)}",
     s!"wasm {wasmQ}",
     s!"wasm_raw {rawQ}",
     s!"rscm {rscmQ}",
@@ -1766,14 +1815,11 @@ def writeMod (store srcQ : String) (tq : String × String × String)
   if let some step := procStep then
     lines := lines.push s!"proc_step {step}"
   for (p, h) in files do
-    lines := lines.push s!"file {h} {p}"
-    match ← fileStatOf p with
-    | some st => lines := lines.push (formatFstatLine p h st)
-    | none => pure ()
+    lines := lines.push (fileObservationLine p h)
   let body := "\n".intercalate lines.toList ++ "\n" ++ nfLines
-  let tmp := s!"{store}/mod/.tmp-{srcQ.take 16}"
+  let tmp := s!"{store}/mod/.tmp-{modQ.take 16}-{← IO.monoNanosNow}"
   IO.FS.writeFile tmp body
-  IO.FS.rename tmp s!"{store}/mod/{srcQ}"
+  IO.FS.rename tmp s!"{store}/mod/{modQ}"
 
 -- ============================================================================
 -- main
@@ -1782,23 +1828,19 @@ def writeMod (store srcQ : String) (tq : String × String × String)
 structure NfRefs where
   on : Bool
   rsdc : IO.Ref Lib.Rsd.Store.Store
-  qCache : IO.Ref (StrMap (FileStat × ByteArray))
   modCache : IO.Ref (StrMap ModCacheEntry)
   declCache : IO.Ref ScriptDeclCache
   incRsdc : IO.Ref (Option IncRsdcState)
   incWasm : IO.Ref (Option IncWasmState)
-  cachedTc : IO.Ref (Option (String × String × Bool × HostSpec × (String × String × String)))
 
 def nfRefsNew (on : Bool) (_store : String) : IO NfRefs := do
   return {
     on := on
-    rsdc := ← IO.mkRef Lib.Rsd.Store.empty
-    qCache := ← IO.mkRef StrMap.empty
+    rsdc := ← IO.mkRef emptyRsdcMemo
     modCache := ← IO.mkRef StrMap.empty
     declCache := ← IO.mkRef {}
     incRsdc := ← IO.mkRef none
     incWasm := ← IO.mkRef none
-    cachedTc := ← IO.mkRef none
   }
 
 -- A Proc entry needs the host-called driver and the Lib.Proc definitions
@@ -1820,79 +1862,65 @@ def rsdcRun (o : Opts) (nf : NfRefs) : IO UInt32 := do
   let clk ← clockNew
   match ← findHome o with
   | none => refuseO o "host_unavailable" "no repo home (set --home or RSD_HOME)" 70
-  | some home => do
-      let libDir := libDirOf home o
+  | some selectedHome => do
+      let home ← canonicalPath selectedHome
+      let libDir ← canonicalPath (libDirOf home o)
       IO.FS.createDirAll s!"{o.store}/q"
       let store := (← IO.FS.realPath o.store).toString
       let o := { o with store := store }
       -- 1. source identity: file bytes, minus a leading `#!` line.
+      let realScript ← canonicalPath o.file
       let raw ← IO.FS.readFile o.file
       let feed := stripShebang raw
-      let srcQ := sha256HexString feed
+      let srcQ := contentQ feed.toUTF8
+      let modQ := modRecordQ srcQ realScript home libDir (← compileProfileQ)
       -- 2. imports: name → lib file → REF-Q decls, dependencies first.
       let imps := headerImportList feed
       match imps.find? toolchainImport with
       | some t => return ← refuseO o "import_toolchain" t 61
       | none => pure ()
       clk.mark "c_source"
-      let (imErr, _, decls, files) ← loadModuleGoCached libDir store nf.qCache nf.modCache 64 [] [] [] imps
+      let (imErr, _, decls, files) ← loadModuleGoCached libDir store nf.modCache 64 [] [] [] imps
       clk.mark "c_imports"
       if imErr != "" then
         let nm := (imErr.splitOn " ").headD ""
         let det := ((imErr.splitOn " ").drop 1).foldl (fun a b => if a == "" then b else s!"{a} {b}") ""
         return ← refuseO o nm det (if nm == "import_toolchain" then 61 else 60)
       -- 3. the script's own decls join the manifest; the closure root is the
-      --    script module. Assembly reads decl objects back through readQDirCached.
+      --    script module. Assembly verifies every addressed object it reads.
       let (_, scriptDecls) ← computeModuleDeclsCached nf.declCache "Script" feed decls
-      storeDeclObjects store nf.qCache scriptDecls
+      storeDeclObjects store scriptDecls
       let allDecls := decls ++ scriptDecls
       let manifest := buildManifest allDecls
       let driverRoots := procRoots manifest scriptDecls
       let rootIds := moduleClosureRootIds manifest ["Script"] ++ driverRoots
-      let clos ← resolveClosureVia (fun q => readQDirCached store nf.qCache q) manifest rootIds
+      let closureReads ← IO.mkRef (Lean.HashMap.empty : Lean.HashMap String String)
+      let clos ← resolveClosureVia (fun q => do
+        let result ← readQDir store q
+        if result.ok then
+          closureReads.modify (fun reads => reads.insert q (contentQ result.bytes))
+        return result) manifest rootIds
       if !clos.ok then
         return ← refuseO o s!"closure_{clos.residue}" clos.failedDecl 65
-      let closureQ := sha256HexString (String.intercalate "\n" clos.orderedUnisonQs)
+      let closureQ := qHexKind "text" (String.intercalate "\n" clos.orderedUnisonQs).toUTF8
       clk.mark "c_closure"
       -- 4. toolchain parts: this binary + rsc tool + the host that runs.
       let rscNf ← do pure ((← IO.getEnv "RSD_NF_RSC") == some "1")
-      let mut resolvedTc : Option (String × Bool × HostSpec × (String × String × String)) := none
-      match ← nf.cachedTc.get with
-      | some (cHome, rscBin, rscIsNf, host, tq) =>
-        if cHome == home && rscIsNf == rscNf &&
-            (← executionHostIdentity home (some host)) == tq.2.2 then
-          resolvedTc := some (rscBin, rscIsNf, host, tq)
-      | none => pure ()
-      if resolvedTc.isNone then
-        let tcm ← IO.mkRef ""
-        let rscOpt ← if rscNf
-          then do
-            match ← findRscnf store with
-            | some p => pure (some (p, true))
-            | none => pure ((← ensureRscNative home store tcm).map (·, false))
-          else pure ((← ensureRscNative home store tcm).map (·, false))
-        match rscOpt with
-        | none => do
-          let m ← tcm.get
-          if m != "" then
-            return ← refuseO o "toolchain_mismatch" m 70
-          else
-            return ← refuseO o "host_unavailable" "rsc build failed or rsc.rsd absent" 70
-        | some (rscBin, rscIsNf) => do
-          let hostOpt ← findHost store home
-          match hostOpt with
-          | none => return ← refuseO o "host_unavailable" "no wasm host (build rsd-host or keep runhost.cjs)" 70
-          | some host => do
-            let exe ← IO.FS.realPath (← IO.appPath)
-            let rq ← binIdentity "rsdc-" exe.toString
-            let rscBinQ ← if rscIsNf then binIdentity "rscnf-" rscBin else binIdentity "rsc-native-" rscBin
-            let hq ← executionHostIdentity home (some host)
-            let tq := (rq, rscBinQ, hq)
-            nf.cachedTc.set (some (home, rscBin, rscIsNf, host, tq))
-            resolvedTc := some (rscBin, rscIsNf, host, tq)
-      let some (rscBin, rscIsNf, host, tq) := resolvedTc
-        | return ← refuseO o "host_unavailable" "toolchain resolution failed" 70
-      let (rq, rscBinQ, hq) := tq
+      let tcm ← IO.mkRef ""
+      let rscNfOpt ← if rscNf then findRscnf store else pure none
+      let rscOpt ← match rscNfOpt with
+        | some p => pure (some (p, true, []))
+        | none => pure ((← ensureRscNativeChecked home store tcm).map (fun (p, fs) => (p, false, fs)))
+      let some (rscBin, rscIsNf, backendFiles) := rscOpt | do
+        let m ← tcm.get
+        if m != "" then return ← refuseO o "toolchain_mismatch" m 70
+        return ← refuseO o "host_unavailable" "rsc build failed or rsc.rsd absent" 70
+      let some host ← findHost store home
+        | return ← refuseO o "host_unavailable" "no wasm host (build rsd-host or keep runhost.cjs)" 70
+      let rq ← binIdentity store (← IO.appPath).toString
+      let rscBinQ ← binIdentity store rscBin
+      let hq ← executionHostIdentity home store (some host)
+      let tq := (rq, rscBinQ, hq)
       clk.mark "c_toolchain"
       -- 5. rsdc stages → rscm → store; rsc → wasm → store (raw + patched).
       let cfg : Lib.FnNF.Cfg :=
@@ -1908,7 +1936,7 @@ def rsdcRun (o : Opts) (nf : NfRefs) : IO UInt32 := do
         nf.rsdc.set emN.store
         nfLines := s!"nf_rsdc_ran {emN.ran.length}\nnf_rsdc_keys {emN.keys.length}\nnf_rsdc_refused {emN.refused.length}\nnf_rsdc_dep_edges {emN.depEdges}\n"
       if em.err != 0 then
-        return ← refuseRsdc em.stage em.err em.pos clos.assembledSource
+        return ← refuseRsdc o em.stage em.err em.pos clos.assembledSource
       if em.mainWire < 0 then
         return ← refuseO o "main_absent" "script defines no `main`" 62
       if em.procStep.isSome && (driverRoots.isEmpty || em.procStep == some (-1)) then
@@ -1929,16 +1957,20 @@ def rsdcRun (o : Opts) (nf : NfRefs) : IO UInt32 := do
       if canInProcRsc && nf.on then
         match ← tryPatchIncWasm layInProc store rq rscBinQ emN nf.incWasm with
         | some (patchedRaw, changedCnt, newState) =>
-          wasmBytes := patchedRaw
-          wasmPatchedCount := changedCnt
-          if changedCnt > 0 && (← IO.getEnv "RSD_VERIFY_PATCH") == some "1" then
+          if (← IO.getEnv "RSD_VERIFY_PATCH") == some "1" then
             match compileRscInProcess layInProc rq rscBinQ emN with
             | .ok (fullRaw, _) =>
-              let pq := sha256HexByteArray patchedRaw
-              let fq := sha256HexByteArray fullRaw
-              IO.eprintln s!"[rsd_patch] ok={pq == fq} patched_q={pq} full_q={fq} changed={changedCnt}/{emN.bodySlices.size}"
+              let same := patchedRaw.data == fullRaw.data
+              IO.eprintln s!"[rsd_patch] ok={same} changed={changedCnt}/{emN.bodySlices.size}"
+              if !same then
+                nf.incWasm.set none
+                return ← refuseO o "rsd_patch_mismatch" "wasm differs from full compile" 66
             | .error e =>
               IO.eprintln s!"[rsd_patch] ok=false full_error={e}"
+              nf.incWasm.set none
+              return ← refuseO o "rsd_patch_mismatch" e 66
+          wasmBytes := patchedRaw
+          wasmPatchedCount := changedCnt
           nf.incWasm.set (some newState)
         | none => pure ()
       if wasmBytes.isEmpty then
@@ -1954,7 +1986,7 @@ def rsdcRun (o : Opts) (nf : NfRefs) : IO UInt32 := do
             wasmBytes := rawB
             nf.incWasm.set stateOpt
         else
-          let wasmTmp := s!"{store}/tmp-{srcQ.take 16}" ++ ".wasm"
+          let wasmTmp := s!"{store}/tmp-{srcQ.take 16}-{← IO.monoNanosNow}.wasm"
           let args := if rscIsNf
             then #["compile-nf", s!"{store}/q/{rscmQ}", wasmTmp, nfPath store "rsc"]
             else if layersEnv == "" then #["compile", s!"{store}/q/{rscmQ}", wasmTmp]
@@ -1983,9 +2015,9 @@ def rsdcRun (o : Opts) (nf : NfRefs) : IO UInt32 := do
         if o.worker.isNone && !o.watch then
           saveIncWasmDisk store st2
       | none => pure ()
-      let realScript ← IO.FS.realPath o.file
-      let allFiles := (realScript.toString, srcQ) :: files
-      writeMod store srcQ tq closureQ wasmQ rawQ rscmQ
+      let objects := (← closureReads.get).toList.map (fun (q, objectQ) => (s!"{store}/q/{q}", objectQ))
+      let allFiles := (realScript, contentQ raw.toUTF8) :: files ++ objects ++ backendFiles
+      writeMod store modQ tq closureQ wasmQ rawQ rscmQ
         em.mainWire em.mainRet (Int.ofNat em.mainPs.length) em.procStep allFiles nfLines
       clk.mark "c_store"
       let code ← runModule clk host home store hq wasmQ em.mainWire em.mainRet
@@ -2036,15 +2068,20 @@ def serveOpts (args : List String) : IO (Option Opts) := do
   serveOptsGo { store := s!"{home.getD "."}/.cache/rsd" } args
 
 def serveHandle (o : Opts) (home : String) (nf : NfRefs)
-    (hostOpt : Option HostSpec) (tq : String × String × String) (id : String) : IO Unit := do
+    (tq : String × String × String) (id : String) : IO Unit := do
   let store := o.store
   let body := (← IO.FS.readFile (reqPath store id)).splitOn "\n"
   try IO.FS.removeFile (reqPath store id) catch _ => pure ()
+  let argN := (body.getD 3 "0").toNat?.getD 0
+  let ctx := body.drop (4 + argN)
+  let hasCtx := ctx.headD "" == "ctx-v2"
   let o2 := { o with
     file := body.headD "",
     fuel := body.getD 1 o.fuel,
     printVal := body.getD 2 "0" == "1",
-    scriptArgs := (body.drop 4).take ((body.getD 3 "0").toNat?.getD 0),
+    scriptArgs := (body.drop 4).take argN,
+    home := if hasCtx then ctx.getD 1 o.home else o.home,
+    libDir := if hasCtx then ctx.getD 2 o.libDir else o.libDir,
     outPath := resPath store id "out",
     errPath := resPath store id "err" }
   IO.FS.writeFile (resPath store id "ack") ""
@@ -2053,15 +2090,29 @@ def serveHandle (o : Opts) (home : String) (nf : NfRefs)
       refuseO o2 "usage" s!"no such file: {o2.file}" 2
     else do
       let clk ← clockNew
+      let requestHome ← canonicalPath (if o2.home == "" then home else o2.home)
+      let requestLib ← canonicalPath (libDirOf requestHome o2)
+      let serverHome ← canonicalPath home
+      let serverLib ← canonicalPath (libDirOf serverHome o)
+      let sameContext := requestHome == serverHome && requestLib == serverLib
+      let requestHost ← findHost store requestHome
+      let requestTq ← toolchainParts requestHome store requestHost
+      let o2 := { o2 with
+        home := requestHome,
+        libDir := requestLib,
+        worker := if sameContext && requestTq.2.2 == tq.2.2 then o.worker else none }
       let feed := stripShebang (← IO.FS.readFile o2.file)
-      let srcQ := digestString feed
+      let srcQ := contentQ feed.toUTF8
+      let realScript ← canonicalPath o2.file
+      let modQ := modRecordQ srcQ realScript requestHome requestLib (← compileProfileQ)
       let mut hit : Option UInt32 := none
-      match ← readMod store srcQ with
+      let verifyPatch := (← IO.getEnv "RSD_VERIFY_PATCH") == some "1"
+      match ← if verifyPatch then pure none else readMod store modQ with
       | some rec =>
-        if (← validateMod tq rec) then
-          match hostOpt with
+        if (← validateMod requestTq rec) then
+          match requestHost with
           | some host =>
-            hit ← runModule clk host home store tq.2.2 rec.wasmQ rec.entry rec.ret rec.arity
+            hit ← runModule clk host requestHome store requestTq.2.2 rec.wasmQ rec.entry rec.ret rec.arity
               rec.procStep o2 (wasmOk store rec.wasmQ)
           | none => pure ()
       | none => pure ()
@@ -2080,7 +2131,7 @@ def serveMain (args : List String) : IO UInt32 := do
       IO.FS.createDirAll (serveDir o.store)
       let store := (← IO.FS.realPath o.store).toString
       let o := { o with store := store }
-      IO.FS.writeFile (serveLivePath store) s!"{← IO.appPath}\n"
+      let liveBin := (← IO.appPath).toString
       let nf ← nfRefsNew (← nfEnabled) store
       let hostOpt ← findHost store home
       let _ ← ensureRscNative home store (← IO.mkRef "")
@@ -2094,6 +2145,8 @@ def serveMain (args : List String) : IO UInt32 := do
             catch _ => pure none
           else pure none
         | none => pure none
+      IO.FS.writeFile (serveLivePath store)
+        s!"{liveBin}\n{← fileContentQ liveBin}\n{← compileProfileQ}\n"
       IO.eprintln s!"[rsd_serve] live store={store}"
       while true do
         let es ← try (System.FilePath.mk (serveDir store)).readDir catch _ => pure #[]
@@ -2101,7 +2154,7 @@ def serveMain (args : List String) : IO UInt32 := do
           let nm := e.fileName
           if nm.startsWith "req-" then
             try
-              serveHandle { o with worker := w, home := home } home nf hostOpt tq (nm.drop 4)
+              serveHandle { o with worker := w, home := home } home nf tq (nm.drop 4)
             catch _ =>
               IO.FS.writeFile (resPath store (nm.drop 4) "code") "70\n"
         IO.sleep 1
@@ -2109,36 +2162,32 @@ def serveMain (args : List String) : IO UInt32 := do
 
 -- ============================================================================
 -- Z5: Watch mode (`rsd watch` / `rsd --watch` / `--watch-steps N`).
--- Holds `NfRefs` and a pooled `rsd-host --worker` in memory, polls `FileStat`
--- on the script and its recorded imports, and reruns incrementally on change.
+-- Holds `NfRefs` and a pooled `rsd-host --worker` in memory. Polls the script
+-- and import observations by content and reruns incrementally on change.
 -- ============================================================================
 
-def watchedFilesOf (store realScript : String) (scriptStat0 : Option FileStat) (srcQ : String)
-    : IO (List (String × Option FileStat)) := do
-  let mut out : List (String × Option FileStat) := [(realScript, scriptStat0)]
-  match ← readMod store srcQ with
+def watchedFilesOf (store script scriptQ modQ : String) : IO (List (String × String)) := do
+  let mut out := [(script, scriptQ)]
+  match ← readMod store modQ with
   | some rec =>
-    for (p, _) in rec.files do
-      if p != realScript && !(out.any (fun (q, _) => q == p)) then
-        out := out ++ [(p, ← fileStatOf p)]
+    for (p, q) in rec.files do
+      if !(out.contains (p, q)) then
+        out := out ++ [(p, q)]
   | none => pure ()
   return out
 
-def watchChanged (watched : List (String × Option FileStat)) : IO Bool := do
-  for (p, st0) in watched do
-    let cur ← fileStatOf p
-    if cur != st0 then
-      match cur with
-      | some c =>
-        if c.size == 0 then
-          IO.sleep 2
-          match ← fileStatOf p with
-          | some c2 =>
-            if some c2 != st0 && c2.size > 0 then return true
-          | none => pure ()
-        else
-          return true
-      | none => return true
+def watchChanged (watched : List (String × String)) : IO Bool := do
+  for (p, q) in watched do
+    if q == "absent" || q.startsWith "path:" then
+      if !(← fileObservationMatches p q) then return true
+    else
+      let now ← fileContentQ p
+      if now != q then
+        if now != contentQ ByteArray.empty then return true
+        -- Editors may truncate a file briefly before replacing its contents.
+        IO.sleep 2
+        let next ← fileContentQ p
+        if next != q then return true
   return false
 
 def watchMain (o : Opts) : IO UInt32 := do
@@ -2153,7 +2202,7 @@ def watchMain (o : Opts) : IO UInt32 := do
     let nf ← nfRefsNew (← nfEnabled) store
     let hostOpt ← findHost store home
     let _ ← ensureRscNative home store (← IO.mkRef "")
-    let tq ← toolchainParts home store hostOpt
+    let startupTq ← toolchainParts home store hostOpt
     let w ← match hostOpt with
       | some h =>
         if h.precompile then
@@ -2164,17 +2213,23 @@ def watchMain (o : Opts) : IO UInt32 := do
         else pure none
       | none => pure none
     let oRun := { o with worker := w, home := home }
-    let runStep (step : Nat) : IO (UInt32 × List (String × Option FileStat)) := do
+    let runStep (step : Nat) : IO (UInt32 × List (String × String)) := do
       let t0 ← IO.monoNanosNow
       let clk ← clockNew
       let realScript ← try pure (← IO.FS.realPath oRun.file).toString catch _ => pure oRun.file
-      let scriptStat0 ← fileStatOf realScript
-      let feed := stripShebang (← IO.FS.readFile oRun.file)
-      let srcQ := digestString feed
+      let raw ← IO.FS.readFile oRun.file
+      let feed := stripShebang raw
+      let srcQ := contentQ feed.toUTF8
+      let realLib ← canonicalPath (libDirOf home oRun)
+      let realHome ← canonicalPath home
+      let modQ := modRecordQ srcQ realScript realHome realLib (← compileProfileQ)
+      let hostOpt ← findHost store home
+      let tq ← toolchainParts home store hostOpt
+      let oRun := { oRun with worker := if tq.2.2 == startupTq.2.2 then w else none }
       let verifyPatch := (← IO.getEnv "RSD_VERIFY_PATCH") == some "1"
       let mut hit : Option UInt32 := none
       if step > 1 && !verifyPatch then
-        match ← readMod store srcQ with
+        match ← readMod store modQ with
         | some rec =>
           if ← validateMod tq rec then
             match hostOpt with
@@ -2189,7 +2244,7 @@ def watchMain (o : Opts) : IO UInt32 := do
       let elapsedUs := ((← IO.monoNanosNow) - t0) / 1000
       if clk.on then
         IO.eprintln s!"[rsd_time] watch_step_{step}_us {elapsedUs}"
-      let watched ← watchedFilesOf store realScript scriptStat0 srcQ
+      let watched ← watchedFilesOf store oRun.file (contentQ raw.toUTF8) modQ
       (← IO.getStdout).flush
       (← IO.getStderr).flush
       return (code, watched)

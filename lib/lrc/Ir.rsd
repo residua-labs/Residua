@@ -181,6 +181,11 @@ def fapCold (e : N) : Bool := e.op == opFap && e.d == 1
 -- function in its table (lib/lrc/Emit.rsd `keptFns`). The call may run often, and it counts as any call does.
 def mkFapApart (f : Nat) (ys : List Int) : N := { n0 opFap with a := (f : Int), b := -1, d := 2, ys := ys }
 def fapApart (e : N) : Bool := e.op == opFap && e.d == 2
+-- The call of a lifted closed constant declaration (lib/lrc/Closed.rsd): runs at the caller's fuel even across
+-- inlining (`b` stays negative under `ilDeepen`), never refuses (`edRefuses`), is never re-inlined (`ilGo`),
+-- and is emitted as the constant's persistent object address (lib/lrc/Emit.rsd).
+def mkFapClosed (f : Nat) : N := { n0 opFap with a := (f : Int), b := -1000000000, d := 3, ys := [] }
+def fapClosed (e : N) : Bool := e.op == opFap && e.d == 3
 -- The stage's own list functions (lib/lrc/FromWire.rsd `helperDecls`) follow the nImg functions
 -- of the image. They take no fuel: the wire's fuel is the depth of source calls, and they stand
 -- for one operator. A function after them is a loop lifted out of an image function
@@ -297,10 +302,12 @@ def rcPersistent (n : N) : Bool := n.d == 1
 -- Basic:268 `del x b`
 def mkDel (x : Nat) (b : N) : N := { n0 opDel with a := (x : Int), kids := [b] }
 
--- Basic:269 `mdata d b`. The one datum: a fuel guard. Execution fails with the fuel status when
--- the function's fuel is at most `depth`; it stands where a source call was replaced by inline code.
+-- Basic:269 `mdata d b`. Datum `a = 1`: a fuel guard (execution fails with the fuel status when
+-- the function's fuel is at most `depth`; it stands where a source call was replaced by inline code).
+-- Datum `a = 2`: marks a lifted closed constant declaration's body (lib/lrc/Closed.rsd), a no-op at execution.
 def mkGuard (depth : Nat) (b : N) : N := { n0 opMData with a := 1, b := (depth : Int), kids := [b] }
 def guardDepth (n : N) : Nat := n.b.toNat
+def mkClosedMark (b : N) : N := { n0 opMData with a := 2, b := 0, kids := [b] }
 
 -- Basic:270 `case tid x xType alts`
 def mkCase (x : Nat) (xType : Int) (alts : List N) : N :=
@@ -403,6 +410,9 @@ structure Decl where
 def declAt : Nat → List Decl → Option Decl
   | _, [] => none
   | f, d :: ds => if d.f == f then some d else declAt f ds
+
+def declIsClosed (d : Decl) : Bool :=
+  !d.ext && d.xs.isEmpty && d.body.op == opMData && d.body.a == 2
 
 /-! ## The declarations by function number
 

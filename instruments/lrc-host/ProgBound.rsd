@@ -1,0 +1,56 @@
+-- micro program for the boundary's way in (lib/lrc/FromWire.rsd `unboundItems`, "The boundary"): one public entry
+-- returns a list of records that hold integers, and another takes that list from the host. A record that is a
+-- list's element crosses the boundary as a box of the boundary's words (an integer: its sign and its limbs), so the
+-- way in builds the cells again with the stage's words. The rows hand a value without an argument to the entry that
+-- reads it (ENTRY `a>b`). Integers here are small, negative, and numbers of limbs.
+structure Row where
+  key : Nat
+  bal : Int
+  tag : Nat
+
+def mkRows : Nat → List Row
+  | 0 => []
+  | n + 1 => { key := n, bal := Int.ofNat n * 30000000000000000000 - 50000000000000000007, tag := n * 3 : Row } :: mkRows n
+
+-- reads every field of every record
+def sumRows : List Row → Int
+  | [] => 0
+  | r :: rest => r.bal * Int.ofNat (r.key + 1) + Int.ofNat r.tag + sumRows rest
+
+-- a result that has the boundary's form as it is: the entry's twin is there for its parameter alone
+def checkRows : List Row → Bool
+  | [] => true
+  | r :: rest => r.tag == r.key * 3 && r.bal < 1000000000000000000000 && checkRows rest
+
+-- a record that holds such a list beside an integer of its own, and a list of lists
+structure Tab where
+  base : Int
+  rows : List Row
+
+def mkTab (n : Nat) : Tab := { base := 0 - Int.ofNat n, rows := mkRows n : Tab }
+
+def sumTab (t : Tab) : Int := t.base + sumRows t.rows
+
+def mkNest : Nat → List (List Row)
+  | 0 => []
+  | n + 1 => mkRows n :: mkNest n
+
+def sumNest : List (List Row) → Int
+  | [] => 0
+  | rs :: rest => sumRows rs + sumNest rest
+
+-- a list of integers and a list of magnitudes come in as they are
+def mkInts : Nat → List Int
+  | 0 => []
+  | n + 1 => (Int.ofNat n * 40000000000000000000 - 9) :: mkInts n
+
+def sumInts : List Int → Int
+  | [] => 0
+  | x :: rest => x + sumInts rest
+
+-- the values the rows hand on
+def rowsA : List Row := mkRows 5
+def rowsNone : List Row := mkRows 0
+def tabA : Tab := mkTab 4
+def nestA : List (List Row) := mkNest 4
+def intsA : List Int := mkInts 6

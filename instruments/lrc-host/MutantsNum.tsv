@@ -15,6 +15,9 @@
 # number's node is the guard `unpack` and `first` had; the read of the node before it has the same depth wherever the node is read
 # where it stands, so no budget tells them apart. A place whose form is not seen (`numPackSite`, `numUnpackSite` answering 0) is
 # written as the image wrote it and has the same value. The allocation's guard is a row of SidesMutants.tsv.
+# The last row: the read of a list of numbers that is a function's whole body (lib/lrc/FromWire.rsd `trTail`) taken apart as a `let`
+# again. The value is the same; the row numtail of Images.tsv (instruments/lrc-host/ProgNumTail.rsd) then allocates the cells of
+# every list `unpack` builds, and instruments/lrc-host/Peaks.tsv has the direct form's number.
 lib/lrc/FromWire.rsd	          if p2 == numPackNat || p2 == numPackInt then { form := p2 - 19, e := t.rest, ty := t.acc, fn := f2 } else numNone	          if p2 == numPackNat || p2 == numPackInt then { form := p2 - 17, e := t.rest, ty := t.acc, fn := f2 } else numNone
 lib/lrc/FromWire.rsd	    let form : Int := if first >= 0 then site.form - 2 else site.form	    let form : Int := site.form
 lib/lrc/FromWire.rsd	    let num : Int := if hit.sa / layRawNew % 4 != 0 then 0 else one	    let num : Int := if hit.sa / layRawInts % 2 != 0 then 0 else one
@@ -27,3 +30,4 @@ lib/lrc/FromWire.rsd	    let m1 := if tested.isEmpty then m else layMark m (layR
 lib/lrc/FromWire.rsd	node := replaceVar (vdeclVar n) (intAt 6 e.ys).toNat k.node }	node := replaceVar (vdeclVar n) (intAt 5 e.ys).toNat k.node }
 lib/lrc/FromWire.rsd	    else if l.num == form && l.box then	    else if l.num == form then
 lib/lrc/FromWire.rsd	      { ok := k.ok, next := k.next, node := replaceVar x h.toNat k.node }	      { ok := k.ok, next := k.next, node := k.node }
+lib/lrc/FromWire.rsd	    if tag == 4 && !(cx.num && (numUnpackSite cx.g cx.mag rest0).form != 0) then	    if tag == 4 then

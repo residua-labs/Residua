@@ -1,12 +1,12 @@
 -- rsd/shell.rsd — `rsd`, the front door of RSD-0. A deliberately
 -- small binary (stdlib + common.rsd only): it computes the source q, reads
--- mod/<srcQ>, revalidates the toolchain parts and the file manifest in one
--- shasum call, and on a hit runs the wasm under the shared host — warm runs
+-- mod/<modQ>, revalidates the toolchain parts and the file manifest by content,
+-- and on a hit runs the wasm under the shared host — warm runs
 -- skip both compilers, per the contract. On a miss (or stale record) it
 -- delegates the whole invocation to `rsdc`, which does the full pipeline,
 -- writes the record, and runs; the exit code propagates unchanged so named
 -- refusals keep their codes.
--- Concatenate after common.rsd (see rsd/build.sh). closure_claim = 0.
+-- Concatenate after common.rsd (see rsd/build.rsd). closure_claim = 0.
 
 namespace Rsd
 
@@ -22,14 +22,28 @@ def serveAckWaitUs : Nat := 500000  -- 0.5 s: a live server acks in ~ms; a stale
 
 def serveTry (o : Opts) (store : String) : IO (Option UInt32) := do
   if (← IO.getEnv "RSD_NO_SERVE").isSome then return none
+  if (← IO.getEnv "RSD_VERIFY_PATCH") == some "1" then return none
   if !(← System.FilePath.pathExists (serveLivePath store)) then return none
+  -- A live marker from an older compiler speaks an older request protocol
+  -- and may hold old cache semantics. Only delegate to the current rsdc.
+  let live := (← IO.FS.readFile (serveLivePath store)).splitOn "\n"
+  let liveBin := live.headD ""
+  let liveQ := live.getD 1 ""
+  if live.getD 2 "" != (← compileProfileQ) then return none
+  match ← findRsdc store with
+  | some current =>
+    if (← canonicalPath liveBin) != (← canonicalPath current) ||
+        liveQ == "" || liveQ != (← fileContentQ current) then
+      return none
+  | none => return none
   -- the request file is line-keyed; a newline inside a field would parse
   -- wrong, so those requests stay one-shot.
-  if (o.file :: o.fuel :: o.scriptArgs).any (·.contains '\n') then return none
+  if (o.file :: o.fuel :: o.home :: o.libDir :: o.scriptArgs).any (·.contains '\n') then return none
   IO.FS.createDirAll (serveDir store)
   let id := toString (← IO.monoNanosNow)
   let body := String.intercalate "\n"
-    ([o.file, o.fuel, if o.printVal then "1" else "0", toString o.scriptArgs.length] ++ o.scriptArgs)
+    ([o.file, o.fuel, if o.printVal then "1" else "0", toString o.scriptArgs.length] ++
+      o.scriptArgs ++ ["ctx-v2", o.home, o.libDir])
   let tmp := s!"{serveDir store}/.w{id}"
   IO.FS.writeFile tmp body
   IO.FS.rename tmp (reqPath store id)
@@ -115,20 +129,25 @@ def shellMain (argv0 : List String) : IO UInt32 := do
           return ← child.wait
       -- resident server: file the request when one is up (RSD-OPT-1).
       let real ← IO.FS.realPath o.file
-      match ← serveTry { o with file := real.toString } store with
+      let realHome ← canonicalPath home
+      let realLib ← canonicalPath (libDirOf realHome o)
+      let resolved := { o with file := real.toString, home := realHome, libDir := realLib }
+      match ← serveTry resolved store with
       | some code => return code
       | none => pure ()
       -- source identity: file bytes, minus a leading `#!` line.
       let raw ← IO.FS.readFile o.file
       let feed := stripShebang raw
-      let srcQ := digestString feed
+      let srcQ := contentQ feed.toUTF8
+      let modQ := modRecordQ srcQ real.toString realHome realLib (← compileProfileQ)
       clk.mark "d_source"
       if srcQ == "" then
         return ← refuse "store" "source hashing failed" 66
       let hostOpt ← findHost store home
       let tq ← toolchainParts home store hostOpt
       clk.mark "d_toolchain"
-      match ← readMod store srcQ with
+      let verifyPatch := (← IO.getEnv "RSD_VERIFY_PATCH") == some "1"
+      match ← if verifyPatch then pure none else readMod store modQ with
       | some rec =>
         clk.mark "d_record"
         if ← validateMod tq rec then

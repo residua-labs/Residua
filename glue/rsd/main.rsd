@@ -1,0 +1,299 @@
+-- provenance: ours (searched: rsd/shell.rsd, rsd/common.rsd, glue/host/procwt.c)
+-- glue/rsd/main.rsd — the `rsd` entry (`rsd run` front door). Appended to the
+-- rsd dispatcher concat after rsd/shell.rsd with that file's own
+-- `def main` dropped (see glue/rsd/build.rsd). `rsd run <file.rsd> [args]`
+-- runs validated Proc programs on the wasmtime host (procwt, Lib.Proc.driveS)
+-- for both warm hits and cold compiles; non-Proc modules, `rsd <file.rsd>`,
+-- `rsd serve`, and `rsd suite` delegate to Rsd.shellMain unchanged.
+-- When the script has `import` headers and no `--lib` was given, a per-dir
+-- lib view (lib/*, glue -> glue, and sibling .rsd modules beside the script)
+-- is built under the store and passed as `--lib`.
+
+def rsdProcHost (store : String) : IO (Option String) := do
+  match ← IO.getEnv "RSD_PROCWT" with
+  | some p =>
+    if ← System.FilePath.pathExists p then
+      return some (← IO.FS.realPath p).toString
+  | none => pure ()
+  let c := s!"{store}/build/procwt"
+  if ← System.FilePath.pathExists c then
+    return some (← IO.FS.realPath c).toString
+  let exe ← IO.appPath
+  match exe.parent with
+  | some d =>
+    let b := s!"{d}/procwt"
+    if ← System.FilePath.pathExists b then
+      return some (← IO.FS.realPath b).toString
+  | none => pure ()
+  return none
+
+-- <store>/libview-<key>: a symlink per lib/ entry, `glue` -> <home>/glue, and
+-- sibling `.rsd` files beside the script so `Lib.*`, `Glue.*`, and sibling
+-- modules resolve under a single `--lib` root.
+def rsdLibView (store home scriptDir : String) : IO String := do
+  let key := (Rsd.digestString scriptDir).take 12
+  let view := s!"{store}/libview-{key}"
+  IO.FS.createDirAll view
+  try
+    let es ← (System.FilePath.mk s!"{home}/lib").readDir
+    for e in es do
+      let dst := s!"{view}/{e.fileName}"
+      if !(← System.FilePath.pathExists dst) then
+        let _ ← IO.Process.output
+          { cmd := "ln", args := #["-sfn", s!"{home}/lib/{e.fileName}", dst] }
+        pure ()
+  catch _ => pure ()
+  if !(← System.FilePath.pathExists s!"{view}/glue") then
+    let _ ← IO.Process.output
+      { cmd := "ln", args := #["-sfn", s!"{home}/glue", s!"{view}/glue"] }
+    pure ()
+  if scriptDir != "" then
+    try
+      let ses ← (System.FilePath.mk scriptDir).readDir
+      for e in ses do
+        if e.fileName.endsWith ".rsd" then
+          let dst := s!"{view}/{e.fileName}"
+          if !(← System.FilePath.pathExists dst) then
+            let _ ← IO.Process.output
+              { cmd := "ln", args := #["-sfn", s!"{scriptDir}/{e.fileName}", dst] }
+            pure ()
+    catch _ => pure ()
+  return view
+
+def rsdStageLayers : String := "reg,facts,rc,borrow,drop,reuse,alloc,ctor"
+
+def rsdEffectiveLayers : IO String := do
+  match ← IO.getEnv "RSC_LAYERS" with
+  | some s => return if s == "" then rsdStageLayers else s
+  | none => return rsdStageLayers
+
+def rsdCompileProfileQ (layers : String) : IO String := do
+  let mut profile := #[]
+  for name in ["RSC_LAYERS", "RSD_NF", "RSD_NF_RSC", "RSD_FORCE_RSC_SUBPROC",
+      "RSD_NO_INC", "RSD_NO_PATCH", "RSD_LEANROOT", "RSC_LEANROOT",
+      "RSD_NO_APPLE_LD", "LEAN_CC", "RSC_BUILD"] do
+    let val ← if name == "RSC_LAYERS" then pure (some layers) else IO.getEnv name
+    profile := profile.push (name, val)
+  return Rsd.qHexKind "text" (reprStr profile).toUTF8
+
+def rsdFindWasmOpt : IO String := do
+  match ← IO.getEnv "WASM_OPT" with
+  | some p => if ← System.FilePath.pathExists p then return p
+  | none => pure ()
+  let r ← IO.Process.output
+    { cmd := "sh", args := #["-c", "command -v wasm-opt 2>/dev/null || true"] }
+  if r.stdout.trim != "" then return r.stdout.trim
+  for p in ["/opt/homebrew/bin/wasm-opt", "/usr/local/bin/wasm-opt"] do
+    if ← System.FilePath.pathExists p then return p
+  return ""
+
+-- Ensure legacy-exception Wasm modules are translated once to exnref for wasmtime.
+def rsdEnsureExnref (store wasmQ : String) : IO String := do
+  let rawPath := s!"{store}/q/{wasmQ}"
+  let exnPath := s!"{store}/q/{wasmQ}-exnref.wasm"
+  if ← System.FilePath.pathExists exnPath then return exnPath
+  let wo ← rsdFindWasmOpt
+  if wo == "" then return rawPath
+  let tmpPath := s!"{exnPath}.tmp"
+  let r ← IO.Process.output
+    { cmd := wo, args := #["--all-features", rawPath, "--translate-to-exnref", "-o", tmpPath] }
+  if r.exitCode == 0 then
+    let mv ← IO.Process.output { cmd := "mv", args := #[tmpPath, exnPath] }
+    if mv.exitCode == 0 then return exnPath
+  try IO.FS.removeFile tmpPath catch _ => pure ()
+  return rawPath
+
+-- The procwt argv mirrors exec9.cjs --proc's, with the step slot set to
+-- `auto` (the host finds driveS itself by the -7 probe). When $RSD_PROC_NS
+-- is unset or devsrv is absent, "-" selects procwt's built-in POSIX responder.
+def rsdRunProc (clk : Rsd.Clock) (wt home store wasmQ : String) (entry : Int)
+    (o : Rsd.Opts) : IO UInt32 := do
+  let devsrvCand := s!"{home}/host/devsrv/target/release/devsrv"
+  let nsOpt ← IO.getEnv "RSD_PROC_NS"
+  let useExt ← match nsOpt with
+    | some ns =>
+      if ns != "" then System.FilePath.pathExists devsrvCand else pure false
+    | none => pure false
+  let devsrv := if useExt then devsrvCand else "-"
+  let wasmFile ← rsdEnsureExnref store wasmQ
+  let args := #[wasmFile, s!"f{entry}", "auto", o.fuel,
+    o.outPath, o.errPath, devsrv] ++ o.scriptArgs.toArray
+  try
+    let child ← IO.Process.spawn { cmd := wt, args := args }
+    let code ← child.wait
+    clk.mark "host_procwt"
+    return code
+  catch _ =>
+    Rsd.refuseO o "host_unavailable" "could not run procwt host" 70
+
+-- A file importing `Rsd.Surface` is a Lean program in the surface syntax,
+-- oracle route only, reached with RSD_SURFACE=1|oracle.
+def rsdLeanRoot : IO String := do
+  match ← IO.getEnv "RSD_LEANROOT" with
+  | some r => return r
+  | none => pure ()
+  let r ← IO.Process.output
+    { cmd := "sh", args := #["-c", "lean --print-prefix 2>/dev/null || true"] }
+  return r.stdout.trim
+
+def rsdSurfaceOk (bin : String) : IO Bool := do
+  let r ← IO.Process.output { cmd := "sh", args := #["-c", s!"test -x '{bin}'"] }
+  return r.exitCode == 0
+
+def rsdSurfaceBuild (store home srcQ feed bin : String) : IO Bool := do
+  let leanRoot ← rsdLeanRoot
+  if leanRoot == "" then
+    IO.eprintln "rsd run: Rsd.Surface tool needs the Lean toolchain (RSD_LEANROOT or lean on PATH)"
+    return false
+  let lib := s!"{home}/lean/rsd-surface/.lake/build/lib"
+  let surfaceC := s!"{home}/lean/rsd-surface/.lake/build/ir/Rsd/Surface.c"
+  if !(← System.FilePath.pathExists s!"{lib}/Rsd/Surface.olean")
+      || !(← System.FilePath.pathExists surfaceC) then
+    IO.eprintln s!"rsd run: Rsd.Surface build artifacts missing ({lib}); run `lake build` in lean/rsd-surface"
+    return false
+  let dir := s!"{store}/surface"
+  IO.FS.createDirAll dir
+  let src := s!"{dir}/{srcQ}.lean"
+  IO.FS.writeFile src feed
+  let leanBin := s!"{leanRoot}/bin/lean"
+  let leancBin := s!"{leanRoot}/bin/leanc"
+  let lpEnv : Array (String × Option String) := #[("LEAN_PATH", some lib)]
+  let r1 ← IO.Process.output
+    { cmd := leanBin, args := #["-M", "6144", "-c", s!"{dir}/{srcQ}.c", src],
+      env := lpEnv }
+  if r1.exitCode != 0 then
+    IO.eprintln s!"rsd run: surface lean -c failed\n{r1.stderr.trim}{r1.stdout.trim}"
+    return false
+  let stripFlag := if System.Platform.getIsOSX () then "-Wl,-dead_strip" else "-Wl,--gc-sections"
+  let ccEnv := lpEnv ++
+    if (← IO.getEnv "RSD_NO_APPLE_LD").isSome then #[] else #[("LEAN_CC", some "/usr/bin/clang")]
+  let r2 ← IO.Process.output
+    { cmd := leancBin,
+      args := #["-O3", "-DNDEBUG", stripFlag, s!"-L{leanRoot}/lib",
+        s!"{dir}/{srcQ}.c", surfaceC, "-o", s!"{bin}.tmp"],
+      env := ccEnv }
+  if r2.exitCode != 0 then
+    IO.eprintln s!"rsd run: surface leanc failed\n{r2.stderr.trim}"
+    try IO.FS.removeFile s!"{bin}.tmp" catch _ => pure ()
+    return false
+  let rs ← IO.Process.output { cmd := "strip", args := #[s!"{bin}.tmp"] }
+  if rs.exitCode != 0 then
+    try IO.FS.removeFile s!"{bin}.tmp" catch _ => pure ()
+    return false
+  let r3 ← IO.Process.output { cmd := "mv", args := #[s!"{bin}.tmp", bin] }
+  return r3.exitCode == 0
+
+def rsdRunSurface (clk : Rsd.Clock) (home : String) (o : Rsd.Opts)
+    (feed : String) : IO UInt32 := do
+  IO.FS.createDirAll s!"{o.store}/bin"
+  let srcQ := Rsd.digestString feed
+  clk.mark "d_source"
+  let bin := s!"{o.store}/bin/{srcQ}"
+  if !(← rsdSurfaceOk bin) then
+    if !(← rsdSurfaceBuild o.store home srcQ feed bin) then
+      return ← Rsd.refuseO o "surface_build" "Rsd.Surface tool compile failed" 70
+  clk.mark "d_validate"
+  try
+    let child ← IO.Process.spawn { cmd := bin, args := o.scriptArgs.toArray }
+    let code ← child.wait
+    clk.mark "host_exec"
+    return code
+  catch _ =>
+    Rsd.refuseO o "host_unavailable" "could not run surface binary" 70
+
+def rsdRun (argv : List String) : IO UInt32 := do
+  let clk ← Rsd.clockNew
+  match ← Rsd.parseOpts argv with
+  | none => Rsd.usage "rsd"
+  | some o => do
+    match ← Rsd.findHome o with
+    | none => Rsd.refuse "host_unavailable" "no repo home (set --home or RSD_HOME)" 70
+    | some home => do
+      if !(← System.FilePath.pathExists o.file) then
+        return ← Rsd.refuse "usage" s!"no such file: {o.file}" 2
+      let feed := Rsd.stripShebang (← IO.FS.readFile o.file)
+      IO.FS.createDirAll s!"{o.store}/q"
+      let store := (← IO.FS.realPath o.store).toString
+      let real ← IO.FS.realPath o.file
+      let scriptDir := real.parent.map (·.toString) |>.getD ""
+      let (o, argv2) ←
+        if o.libDir == "" && (feed.splitOn "import ").length > 1 then do
+          let view ← rsdLibView store home scriptDir
+          pure ({ o with store := store, libDir := view }, "--lib" :: view :: argv)
+        else pure ({ o with store := store }, argv)
+      if o.watch then
+        return ← Rsd.shellMain argv2
+      if (feed.splitOn "import Rsd.Surface").length > 1 then
+        match ← IO.getEnv "RSD_SURFACE" with
+        | some v =>
+          if v == "1" || v == "oracle" then
+            return ← rsdRunSurface clk home o feed
+          return ← Rsd.refuseO o "surface_route"
+            "Rsd.Surface tools are oracle-only; set RSD_SURFACE=1 to run one" 64
+        | none =>
+          return ← Rsd.refuseO o "surface_route"
+            "Rsd.Surface tools are oracle-only; set RSD_SURFACE=1 to run one" 64
+      let realHome ← Rsd.canonicalPath home
+      let realLib ← Rsd.canonicalPath (Rsd.libDirOf realHome o)
+      match ← Rsd.serveTry { o with file := real.toString, home := realHome, libDir := realLib } store with
+      | some code => return code
+      | none => pure ()
+      let rscLayers ← rsdEffectiveLayers
+      let srcQ := Rsd.contentQ feed.toUTF8
+      let modQ := Rsd.modRecordQ srcQ real.toString realHome realLib (← rsdCompileProfileQ rscLayers)
+      clk.mark "d_source"
+      if srcQ == "" then
+        return ← Rsd.refuse "store" "source hashing failed" 66
+      let hostOpt ← Rsd.findHost store home
+      let tq ← Rsd.toolchainParts home store hostOpt
+      clk.mark "d_toolchain"
+      let tryWarmProc (wt : String) : IO (Option UInt32) := do
+        match ← Rsd.readMod store modQ with
+        | some rec =>
+          if (← Rsd.validateMod tq rec) then
+            match rec.procStep with
+            | some _ =>
+              match hostOpt with
+              | some host =>
+                if (← Rsd.executionHostIdentity home store (some host)) != tq.2.2 then
+                  return some (← Rsd.refuseO o "host_identity_changed" "Proc execution bundle changed" 70)
+                if rec.arity != 0 then
+                  return some (← Rsd.refuseO o "main_arity" "Proc main takes no parameters. Use /env/args" 63)
+                if !(← Rsd.wasmOk store rec.wasmQ) then
+                  return none
+                clk.mark "d_validate"
+                return some (← rsdRunProc clk wt home store rec.wasmQ rec.entry o)
+              | none => return none
+            | none => return none
+          else return none
+        | none => return none
+      match ← rsdProcHost store with
+      | some wt =>
+        match ← tryWarmProc wt with
+        | some code => return code
+        | none =>
+          -- Cold compile: populate mod/<modQ> and q/<wasmQ> via rsdc with
+          -- --fuel 0 so procwt takes execution once the artifact is stored.
+          match ← Rsd.findRsdc store with
+          | none => return ← Rsd.shellMain argv2
+          | some rcBin =>
+            let comp ← IO.Process.output
+              { cmd := rcBin,
+                args := #["--store", store, "--home", realHome, "--lib", realLib,
+                  "--fuel", "0", real.toString],
+                env := #[("RSC_LAYERS", some rscLayers)] }
+            match ← tryWarmProc wt with
+            | some code => return code
+            | none =>
+              if comp.exitCode != 50 then
+                if comp.stdout != "" then (← IO.getStdout).putStr comp.stdout
+                if comp.stderr != "" then IO.eprint comp.stderr
+                return comp.exitCode
+              return ← Rsd.shellMain argv2
+      | none =>
+        return ← Rsd.shellMain argv2
+
+def main (argv : List String) : IO UInt32 :=
+  match argv with
+  | "run" :: rest => rsdRun rest
+  | _ => Rsd.shellMain argv

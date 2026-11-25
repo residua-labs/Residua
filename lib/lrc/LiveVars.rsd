@@ -38,27 +38,31 @@ structure IsLiveR where
 
 mutual
 -- LiveVars:46 visitFnBody
-partial def isLiveGo (w : Nat) (n : N) (ctx : List JP) : IsLiveR :=
+partial def isLiveGo (w : Int) (n : N) (ctx : List JP) : IsLiveR :=
   if n.op == opVDecl then
-    if exprHasVar (vdeclExpr n) w then { hit := true, ctx := ctx } else isLiveGo w (bodyOf n) ctx
+    let e := vdeclExpr n
+    let hit := if e.op == opReuse then intAt 0 e.ys == w || hasIdxArgsI w (e.ys.drop 2)
+      else if e.op == opLit || e.op == opLitStr then false
+      else hasIdxArgsI w e.ys
+    if hit then { hit := true, ctx := ctx } else isLiveGo w (bodyOf n) ctx
   else if n.op == opJDecl then
     let r := isLiveGo w (jdeclBody n) ctx
     if r.hit then r else isLiveGo w (bodyOf n) r.ctx
   else if n.op == opJmp then
-    if hasIdxArgs w (jmpArgs n) then { hit := true, ctx := ctx }
+    if hasIdxArgsI w (jmpArgs n) then { hit := true, ctx := ctx }
     else
       match jpFind (jmpId n) ctx with
       -- not a local join point: visit its body once, with the declaration removed (LiveVars:60)
       | some p => isLiveGo w p.body (jpErase (jmpId n) ctx)
       -- a local join point: its body was visited at its declaration (LiveVars:64)
       | none => { hit := false, ctx := ctx }
-  else if n.op == opRet then { hit := hasIdxArgs w (retArgs n), ctx := ctx }
+  else if n.op == opRet then { hit := hasIdxArgsI w (retArgs n), ctx := ctx }
   else if n.op == opCase then
-    if n.a == (w : Int) then { hit := true, ctx := ctx } else isLiveAlts w (caseAlts n) ctx
+    if n.a == w then { hit := true, ctx := ctx } else isLiveAlts w (caseAlts n) ctx
   else if n.op == opUnreachable then { hit := false, ctx := ctx }
-  else if hasIdxArgs w (insUses n) then { hit := true, ctx := ctx }
+  else if hasIdxArgsI w (insUses n) then { hit := true, ctx := ctx }
   else isLiveGo w (bodyOf n) ctx
-partial def isLiveAlts (w : Nat) : List N → List JP → IsLiveR
+partial def isLiveAlts (w : Int) : List N → List JP → IsLiveR
   | [], ctx => { hit := false, ctx := ctx }
   | alt :: alts, ctx =>
     let r := isLiveGo w (altBody alt) ctx
@@ -66,7 +70,7 @@ partial def isLiveAlts (w : Nat) : List N → List JP → IsLiveR
 end
 
 -- LiveVars:79 FnBody.hasLiveVar: `ctx` holds every join point declaration free in `b`
-def hasLiveVar (b : N) (ctx : List JP) (x : Nat) : Bool := (isLiveGo x b ctx).hit
+def hasLiveVar (b : N) (ctx : List JP) (x : Nat) : Bool := (isLiveGo (x : Int) b ctx).hit
 
 /-! ## LiveVars (LiveVars:91): the set of variables live at the start of a body.
 `m` gives, for each join point in scope, the variables live at the start of its body
@@ -82,7 +86,10 @@ def jpLiveFind (j : Nat) : List JPLive → Option VSet
   | p :: ps => if p.j == j then some p.live else jpLiveFind j ps
 
 -- LiveVars:122 collectExpr; LiveVars:162 updateLiveVars
-def updateLiveVars (e : N) (v : VSet) : VSet := vsInsertArgs v (exprArgs e)
+def updateLiveVars (e : N) (v : VSet) : VSet :=
+  if e.op == opReuse then vsInsertArgs (if intAt 0 e.ys >= 0 then vsInsertI v (intAt 0 e.ys) else v) (e.ys.drop 2)
+  else if e.op == opLit || e.op == opLitStr then v
+  else vsInsertArgs v e.ys
 
 mutual
 -- LiveVars:137 collectFnBody. Lean composes the collectors right to left: the rest of the body
@@ -103,7 +110,15 @@ partial def liveGo (n : N) (m : List JPLive) (s : VSet) : VSet :=
     match jpLiveFind (jmpId n) m with
     | some l => vsUnion s l
     | none => s
-  else vsInsertArgs (liveGo (bodyOf n) m s) (insUses n)
+  else
+    let s := liveGo (bodyOf n) m s
+    if n.op == opSet then vsInsertArgs (if n.a >= 0 then vsInsertI s n.a else s) n.ys
+    else if n.op == opSSet then
+      let s1 := if n.a >= 0 then vsInsertI s n.a else s
+      if intAt 0 n.ys >= 0 then vsInsertI s1 (intAt 0 n.ys) else s1
+    else if n.op == opSetTag || n.op == opInc || n.op == opDec || n.op == opDel then
+      if n.a >= 0 then vsInsertI s n.a else s
+    else s
 partial def liveAlts : List N → List JPLive → VSet → VSet
   | [], _, s => s
   | alt :: alts, m, s => liveAlts alts m (liveGo (altBody alt) m s)

@@ -38,48 +38,58 @@ def paramVars : List Param → List Nat
 
 /-! ## MaxIndex (FreeVars:11): the largest index used; fresh names start above it. -/
 
-def maxOf (m : Nat) (x : Int) : Nat := if x > (m : Int) then x.toNat else m
+def maxOf (m x : Int) : Int := if x > m then x else m
 
-def maxArgs : List Int → Nat → Nat
+def maxArgs : List Int → Int → Int
   | [], m => m
   | y :: ys, m => maxArgs ys (maxOf m y)
 
-def maxNats : List Nat → Nat → Nat
+def maxNats : List Nat → Int → Int
   | [], m => m
-  | x :: xs, m => maxNats xs (if x > m then x else m)
+  | x :: xs, m => maxNats xs (maxOf m (x : Int))
 
 mutual
 -- FreeVars:59 collectFnBody
-partial def maxIndexGo (n : N) (m : Nat) : Nat :=
+partial def maxIndexGo (n : N) (m : Int) : Int :=
   if n.op == opVDecl then
-    maxIndexGo (bodyOf n) (maxArgs (exprArgs (vdeclExpr n)) (maxNats (bindVars (vdeclBinds n)) m))
+    let mb := if n.ys.isEmpty then maxOf m n.a else maxNats (bindVars n.ys) (maxOf m n.a)
+    let e := vdeclExpr n
+    let me := if e.op == opReuse then maxArgs (e.ys.drop 2) (maxOf mb (intAt 0 e.ys))
+      else if e.op == opLit || e.op == opLitStr then mb
+      else maxArgs e.ys mb
+    maxIndexGo (bodyOf n) me
   else if n.op == opJDecl then
     let m := maxOf m n.a
     let m := maxIndexGo (jdeclBody n) m
-    maxIndexGo (bodyOf n) (maxNats (paramVars (jdeclParams n)) m)
+    maxIndexGo (bodyOf n) (if n.ys.isEmpty then m else maxNats (paramVars (jdeclParams n)) m)
   else if n.op == opCase then maxIndexAlts (caseAlts n) (maxOf m n.a)
   else if n.op == opJmp then maxArgs (jmpArgs n) (maxOf m n.a)
   else if n.op == opRet then maxArgs (retArgs n) m
   else if n.op == opUnreachable then m
-  else maxIndexGo (bodyOf n) (maxArgs (insUses n) m)
-partial def maxIndexAlts : List N → Nat → Nat
+  else
+    let mi := if n.op == opSet then maxArgs n.ys (maxOf m n.a)
+      else if n.op == opSSet then maxOf (maxOf m n.a) (intAt 0 n.ys)
+      else if n.op == opSetTag || n.op == opInc || n.op == opDec || n.op == opDel then maxOf m n.a
+      else m
+    maxIndexGo (bodyOf n) mi
+partial def maxIndexAlts : List N → Int → Int
   | [], m => m
   | alt :: alts, m => maxIndexAlts alts (maxIndexGo (altBody alt) m)
 end
 
 -- FreeVars:81 FnBody.maxIndex
-def maxIndex (b : N) : Nat := maxIndexGo b 0
+def maxIndex (b : N) : Nat := (maxIndexGo b 0).toNat
 
 -- FreeVars:84 Decl.maxIndex (FreeVars:75 collectDecl)
 def declMaxIndex (d : Decl) : Nat :=
-  let m := maxNats (paramVars d.xs) 0
-  if d.ext then m else maxIndexGo d.body m
+  let m := if d.xs.isEmpty then 0 else maxNats (paramVars d.xs) 0
+  (if d.ext then m else maxIndexGo d.body m).toNat
 
 /-! ## FreeIndices (FreeVars:87): an index is free in a body when no `vdecl` or `jdecl` of the body
 binds it. `bv` is the bound set, `fv` the result so far. -/
 
 def freeIdx (x : Int) (bv : VSet) (fv : VSet) : VSet :=
-  if x < 0 || vsContains bv x.toNat then fv else vsInsert fv x.toNat
+  if x < 0 || vsContainsI bv x then fv else vsInsertI fv x
 
 def freeArgs : List Int → VSet → VSet → VSet
   | [], _, fv => fv
@@ -89,16 +99,30 @@ mutual
 -- FreeVars:154 collectFnBody
 partial def freeGo (n : N) (bv : VSet) (fv : VSet) : VSet :=
   if n.op == opVDecl then
-    let fv := freeArgs (exprArgs (vdeclExpr n)) bv fv
-    freeGo (bodyOf n) (vsInsertAll bv (bindVars (vdeclBinds n))) fv
+    let e := vdeclExpr n
+    let fv := if e.op == opReuse then freeArgs (e.ys.drop 2) bv (freeIdx (intAt 0 e.ys) bv fv)
+      else if e.op == opLit || e.op == opLitStr then fv
+      else freeArgs e.ys bv fv
+    let k := bodyOf n
+    if k.op == opUnreachable then fv
+    else
+      let bv1 := vsInsertI bv n.a
+      freeGo k (if n.ys.isEmpty then bv1 else vsInsertAll bv1 (bindVars n.ys)) fv
   else if n.op == opJDecl then
-    let fv := freeGo (jdeclBody n) (vsInsertAll bv (paramVars (jdeclParams n))) fv
+    let bvJ := if n.ys.isEmpty then bv else vsInsertAll bv (paramVars (jdeclParams n))
+    let fv := freeGo (jdeclBody n) bvJ fv
     freeGo (bodyOf n) (vsInsert bv (jdeclId n)) fv
   else if n.op == opCase then freeAlts (caseAlts n) bv (freeIdx n.a bv fv)
   else if n.op == opJmp then freeArgs (jmpArgs n) bv (freeIdx n.a bv fv)
   else if n.op == opRet then freeArgs (retArgs n) bv fv
   else if n.op == opUnreachable then fv
-  else freeGo (bodyOf n) bv (freeArgs (insUses n) bv fv)
+  else
+    let fv := if n.op == opSet then freeArgs n.ys bv (freeIdx n.a bv fv)
+      else if n.op == opSSet then freeIdx (intAt 0 n.ys) bv (freeIdx n.a bv fv)
+      else if n.op == opSetTag || n.op == opInc || n.op == opDec || n.op == opDel then freeIdx n.a bv fv
+      else fv
+    let k := bodyOf n
+    if k.op == opUnreachable then fv else freeGo k bv fv
 partial def freeAlts : List N → VSet → VSet → VSet
   | [], _, fv => fv
   | alt :: alts, bv, fv => freeAlts alts bv (freeGo (altBody alt) bv fv)
@@ -112,29 +136,45 @@ def freeIndices (b : N) : VSet := collectFreeIndices b vsEmpty
 
 /-! ## HasIndex (FreeVars:178): does the index occur in the body. A binder is not an occurrence. -/
 
-def hasIdxArgs (w : Nat) : List Int → Bool
+def hasIdxArgsI (w : Int) : List Int → Bool
   | [] => false
-  | y :: ys => y == (w : Int) || hasIdxArgs w ys
+  | y :: ys => y == w || hasIdxArgsI w ys
+
+def hasIdxArgs (w : Nat) (ys : List Int) : Bool := hasIdxArgsI (w : Int) ys
 
 -- FreeVars:196 visitExpr
-def exprHasVar (e : N) (x : Nat) : Bool := hasIdxArgs x (exprArgs e)
+def exprHasVar (e : N) (x : Nat) : Bool :=
+  let w : Int := (x : Int)
+  if e.op == opReuse then intAt 0 e.ys == w || hasIdxArgsI w (e.ys.drop 2)
+  else if e.op == opLit || e.op == opLitStr then false
+  else hasIdxArgsI w e.ys
 
 mutual
 -- FreeVars:211 visitFnBody
-partial def hasIdxGo (w : Nat) (n : N) : Bool :=
-  if n.op == opVDecl then exprHasVar (vdeclExpr n) w || hasIdxGo w (bodyOf n)
+partial def hasIdxGo (w : Int) (n : N) : Bool :=
+  if n.op == opVDecl then
+    let e := vdeclExpr n
+    let hit := if e.op == opReuse then intAt 0 e.ys == w || hasIdxArgsI w (e.ys.drop 2)
+      else if e.op == opLit || e.op == opLitStr then false
+      else hasIdxArgsI w e.ys
+    hit || hasIdxGo w (bodyOf n)
   else if n.op == opJDecl then hasIdxGo w (jdeclBody n) || hasIdxGo w (bodyOf n)
-  else if n.op == opCase then n.a == (w : Int) || hasIdxAlts w (caseAlts n)
-  else if n.op == opJmp then n.a == (w : Int) || hasIdxArgs w (jmpArgs n)
-  else if n.op == opRet then hasIdxArgs w (retArgs n)
+  else if n.op == opCase then n.a == w || hasIdxAlts w (caseAlts n)
+  else if n.op == opJmp then n.a == w || hasIdxArgsI w (jmpArgs n)
+  else if n.op == opRet then hasIdxArgsI w (retArgs n)
   else if n.op == opUnreachable then false
-  else hasIdxArgs w (insUses n) || hasIdxGo w (bodyOf n)
-partial def hasIdxAlts (w : Nat) : List N → Bool
+  else
+    let hit := if n.op == opSet then n.a == w || hasIdxArgsI w n.ys
+      else if n.op == opSSet then n.a == w || intAt 0 n.ys == w
+      else if n.op == opSetTag || n.op == opInc || n.op == opDec || n.op == opDel then n.a == w
+      else false
+    hit || hasIdxGo w (bodyOf n)
+partial def hasIdxAlts (w : Int) : List N → Bool
   | [] => false
   | alt :: alts => hasIdxGo w (altBody alt) || hasIdxAlts w alts
 end
 
 -- FreeVars:229 FnBody.hasFreeVar
-def hasFreeVar (b : N) (x : Nat) : Bool := hasIdxGo x b
+def hasFreeVar (b : N) (x : Nat) : Bool := hasIdxGo (x : Int) b
 
 end Lrc

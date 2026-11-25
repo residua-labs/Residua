@@ -453,7 +453,7 @@ def merge (a b : Store) : Store :=
     objKind := a.objKind, actKind := a.actKind }
 
 -- ============================================================================
--- The durable encoding (RAISIN-OPT-1): a Store as bytes so the NF memo
+-- The durable encoding: a Store as bytes so the NF memo
 -- folds (lib/FnNF.rsd) persist across processes. Magic `RNF1`, u32 little-
 -- endian lengths, committed objects then committed actions; staging and
 -- quarantine are session-only and never cross the boundary. A malformed

@@ -21,8 +21,8 @@
 - 源码修订：`28b9ff89f10514b93de92b8c0f60a109660ffa49`（在开发
   `main` 分支上）。
 - 独立审核：在该 sha 上判定 an independent audit passed；记录
-  `reports/release-02/evidence/AUDIT-SYNTAX-ENGINE.28b9ff89f1.md`
-  （仓库侧保存，不在本归档）。
+  `AUDIT-SYNTAX-ENGINE.28b9ff89f1.md`
+  （仓库侧保存于 0.3 线，不在本归档）。
 - 与类一致（E2）：`rsdc/syntax/ClassGate.rsd`（仓库侧）在 240 个生成文法
   与 4,334 个生成输入上——`disagreements=0`；每个文法带一个会
   改变 `refParses` 判定的变异体（240/240 已武装），并检查覆盖：

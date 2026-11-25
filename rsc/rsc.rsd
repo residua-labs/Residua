@@ -4721,6 +4721,16 @@ def outFail (c : Int) : Out :=
 def outOk (bytes : List Int) : Out :=
   { ok := profile.cOk, bytes := bytes }
 
+structure OutP where
+  ok : Int
+  words : List UInt32
+
+def outPFail (c : Int) : OutP :=
+  { ok := c, words := [] }
+
+def outPOk (words : List UInt32) : OutP :=
+  { ok := profile.cOk, words := words }
+
 def tableWithLayers (lay : Layers) : List TE :=
   tableA ++ (tableBWithLayers lay) ++ (tableCWithLayers lay)
 
@@ -4756,89 +4766,115 @@ def bindRt (rtMap : List Nat) : List TE → List TE
   | e :: es => { e with items := bindRtItems rtMap e.items } :: bindRt rtMap es
 
 -- The only representation-specific implementation is the pinned lib/rt
--- member. Decode once; both configurations share typed source, not wasm.
-def runtimePrefixDecoded : RtDecoded := rtDecodeModule runtimeSourceWire
-def runtimeReuseDecoded : RtDecoded := rtDecodeModule runtimeReuseSourceWire
-def runtimeAllocDecoded : RtDecoded := rtDecodeModule runtimeAllocSourceWire
-def runtimeSourceDecoded : RtDecoded :=
-  { runtimePrefixDecoded with
-    functions := runtimePrefixDecoded.functions ++ runtimeReuseDecoded.functions
-    error := if runtimePrefixDecoded.error != 0 then runtimePrefixDecoded.error else runtimeReuseDecoded.error }
+-- member. Decode and lower once per configuration rather than re-evaluating
+-- unmemoized 0-arity source/table definitions at every runtime function slot.
+structure RtCompiled where
+  error : Nat
+  fns : List WFn
 
-def runtimeSourceSignatures : List RtSignature := rtSignaturesOf runtimeSourceDecoded.functions
+def rtDecodeSource (rc : Bool) : RtDecoded :=
+  let pfx := rtDecodeModule (if rc then runtimeSourceWire else runtimeSourceWire)
+  let reu := rtDecodeModule runtimeReuseSourceWire
+  { pfx with
+    functions := pfx.functions ++ reu.functions
+    error := if pfx.error != 0 then pfx.error else reu.error }
+
+def runtimeAllocDecoded : RtDecoded := rtDecodeModule runtimeAllocSourceWire
 
 def rtFunctionAt : Nat → List RtFunction → RtFunction
   | _, [] => { name := "", params := [], result := 2, locals := [], body := rtNil }
   | 0, fn :: _ => fn
   | n + 1, _ :: fns => rtFunctionAt n fns
 
-def runtimeSourceError (rc : Bool) : Nat :=
-  if runtimeSourceDecoded.error != 0 then runtimeSourceDecoded.error
-  else if runtimeSourceDecoded.functions.length != 17 then 20
-  else runtimeSourceDecoded.functions.foldl
-    (fun error fn => if error != 0 then error else (rtLowerFunction rc runtimeSourceSignatures fn).error) 0
+def rtCompileFns (primRows : List (List RtPrim)) (rc : Bool) (sigs : List RtSignature) :
+    List RtFunction → Nat → List WFn → RtCompiled
+  | [], err, acc => { error := err, fns := acc.reverse }
+  | fn :: rest, err, acc =>
+    let e := rtLowerFunctionWith primRows rc sigs fn
+    let err2 := if err != 0 then err else e.error
+    let w : WFn := {
+      params := fn.params.map rtWasmType,
+      results := if fn.result == 2 then [] else [rtWasmType fn.result],
+      locals := fn.locals.map rtWasmType,
+      code := e.bytes }
+    rtCompileFns primRows rc sigs rest err2 (w :: acc)
 
+def rtCompileSource (rc : Bool) : RtCompiled :=
+  let dec := rtDecodeSource rc
+  if dec.error != 0 then { error := dec.error, fns := [] }
+  else if dec.functions.length != 17 then { error := 20, fns := [] }
+  else
+    let primRows := rtPrimRows 16 rtPrimitives
+    let sigs := rtSignaturesOf dec.functions
+    rtCompileFns primRows rc sigs dec.functions 0 []
+
+def runtimeRcCompiled : RtCompiled := rtCompileSource true
+
+def runtimePrefixDecoded : RtDecoded := rtDecodeModule runtimeSourceWire
+def runtimeReuseDecoded : RtDecoded := rtDecodeModule runtimeReuseSourceWire
+def runtimeSourceDecoded : RtDecoded := rtDecodeSource true
+def runtimeSourceSignatures : List RtSignature := rtSignaturesOf runtimeSourceDecoded.functions
+def runtimeSourceError (rc : Bool) : Nat := (rtCompileSource rc).error
 def runtimeOffError : Nat := runtimeSourceError false
-def runtimeRcError : Nat := runtimeSourceError true
-
-def runtimeOffFunctions : List WFn := runtimeSourceDecoded.functions.map (rtWasmFunction false runtimeSourceSignatures)
-def runtimeRcFunctions : List WFn := runtimeSourceDecoded.functions.map (rtWasmFunction true runtimeSourceSignatures)
+def runtimeRcError : Nat := runtimeRcCompiled.error
+def runtimeOffFunctions : List WFn := (rtCompileSource false).fns
+def runtimeRcFunctions : List WFn := runtimeRcCompiled.fns
 
 -- Memory64 versions of the same typed memory primitives. The stage uses
 -- the runtime compiler's checked call path for these stencils and expands
 -- them before any module is written. Their indices follow the last source
 -- runtime function and do not enter the module's callable index space.
-def rt64Stencils : List RtPrim :=
-  rtPrimitives.filter (fun p =>
+def rt64StencilsFrom (prims : List RtPrim) : List RtPrim :=
+  prims.filter (fun p =>
     p.memory || p.name == "RT.memoryCopy" || p.name == "RT.memorySize" || p.name == "RT.memoryGrow")
+
+def rt64Stencils : List RtPrim := rt64StencilsFrom rtPrimitives
+
+def rt64StencilBase : Nat := 17
 
 def rt64Signature (p : RtPrim) : RtSignature :=
   if p.memory then { name := p.name, params := [0] ++ p.args.drop 2 ++ [0], result := p.result }
   else if p.name == "RT.memoryCopy" then { name := p.name, params := [0, 0, 0], result := 2 }
   else { name := p.name, params := if p.name == "RT.memoryGrow" then [0] else [], result := 0 }
 
-def rt64StencilBase : Nat := runtimeSourceSignatures.length
+def rtNamedWith (primRows : List (List RtPrim)) (node : RtNode) (name : String) : Bool :=
+  node.tag == 2 && node.val >= 0 && (rtPrimFast node.val.toNat primRows).name == name
 
-def rt64Signatures : List RtSignature := runtimeSourceSignatures ++ rt64Stencils.map rt64Signature
-
-def rtNamed (node : RtNode) (name : String) : Bool :=
-  node.tag == 2 && node.val >= 0 && (rtPrimAt node.val.toNat rtPrimitives).name == name
-
-def rt64Address (node : RtNode) : RtNode :=
-  if rtNamed node "RT.addr" && node.args.length == 1 then rtAt 0 node.args
+def rt64AddressWith (primRows : List (List RtPrim)) (node : RtNode) : RtNode :=
+  if rtNamedWith primRows node "RT.addr" && node.args.length == 1 then rtAt 0 node.args
   else if node.tag == 0 && node.ty == 1 && node.val >= 0 && node.val < 4294967296 then
     { node with ty := 0 }
   else node
 
-def rt64Shift (name : String) (node : RtNode) : RtNode :=
-  { tag := 2, val := rtPrimIndex 0 rtPrimitives name, ty := 0,
+def rt64ShiftWith (prims : List RtPrim) (name : String) (node : RtNode) : RtNode :=
+  { tag := 2, val := rtPrimIndex 0 prims name, ty := 0,
     args := [node, { tag := 0, val := 3, ty := 0, args := [] }] }
 
-def rt64MemoryNode (node : RtNode) : RtNode :=
+def rt64MemoryNodeWith (prims : List RtPrim) (primRows : List (List RtPrim)) (node : RtNode) : RtNode :=
   if node.tag != 2 then node
   else
-    let p := rtPrimAt node.val.toNat rtPrimitives
+    let p := if node.val < 0 then rtPrimAt 0 [] else rtPrimFast node.val.toNat primRows
     match node.args with
     | first :: rest =>
-      if p.memory then { node with args := rt64Address first :: rest }
-      else if p.name == "RT.memoryCopy" then { node with args := node.args.map rt64Address }
-      else if p.name == "RT.memoryGrow" then { node with args := [rt64Address first], ty := 0 }
-      else if p.name == "RT.widen" && rtNamed first "RT.memorySize" then { first with ty := 0 }
-      else if p.name == "RT.eq32" && rtNamed first "RT.memoryGrow" then
+      if p.memory then { node with args := rt64AddressWith primRows first :: rest }
+      else if p.name == "RT.memoryCopy" then { node with args := node.args.map (rt64AddressWith primRows) }
+      else if p.name == "RT.memoryGrow" then { node with args := [rt64AddressWith primRows first], ty := 0 }
+      else if p.name == "RT.widen" && rtNamedWith primRows first "RT.memorySize" then { first with ty := 0 }
+      else if p.name == "RT.eq32" && rtNamedWith primRows first "RT.memoryGrow" then
         let failed := rtAt 1 node.args
         if failed.tag == 0 && failed.ty == 1 && failed.val == 4294967295 then
-          { node with val := rtPrimIndex 0 rtPrimitives "RT.eq64", args := [first, { failed with ty := 0, val := -1 }] }
+          { node with val := rtPrimIndex 0 prims "RT.eq64", args := [first, { failed with ty := 0, val := -1 }] }
         else node
       else node
     | [] => if p.name == "RT.memorySize" then { node with ty := 0 } else node
 
 -- Put a load/store's constant offset last so expansion can replace the
 -- operand with the instruction's immediate, leaving the address and value.
-def rt64StencilCall (node : RtNode) : RtNode :=
+def rt64StencilCallWith (primRows : List (List RtPrim)) (stencilBase : Nat) (stencils : List RtPrim) (node : RtNode) : RtNode :=
   if node.tag != 2 || node.val < 0 then node
   else
-    let p := rtPrimAt node.val.toNat rtPrimitives
-    let i := rtPrimIndex rt64StencilBase rt64Stencils p.name
+    let p := rtPrimFast node.val.toNat primRows
+    let i := rtPrimIndex stencilBase stencils p.name
     if i < 0 then node
     else
       let args := if p.memory then [rtAt 0 node.args] ++ node.args.drop 2 ++ [rtAt 1 node.args] else node.args
@@ -4847,38 +4883,40 @@ def rt64StencilCall (node : RtNode) : RtNode :=
 -- The first local (after two parameters) of drop_cold is 'queue'.
 -- The dead object's count field stores queue / 8: every cell is aligned
 -- to eight bytes and lies below 16 GiB. Zero still ends the queue.
-def rt64ReleaseLink (node : RtNode) : RtNode :=
+def rt64ReleaseLinkWith (prims : List RtPrim) (primRows : List (List RtPrim)) (node : RtNode) : RtNode :=
   let first := rtAt 0 node.args
-  if node.tag == 6 && node.val == 2 && rtNamed first "RT.load32" then
-    { node with args := [rt64Shift "RT.shl64" first] }
-  else if rtNamed node "RT.store32" then
+  if node.tag == 6 && node.val == 2 && rtNamedWith primRows first "RT.load32" then
+    { node with args := [rt64ShiftWith prims "RT.shl64" first] }
+  else if rtNamedWith primRows node "RT.store32" then
     let stored := rtAt 2 node.args
     if stored.tag == 1 && stored.val == 2 then
-      { node with args := node.args.take 2 ++ [rt64Shift "RT.shrU64" stored] }
+      { node with args := node.args.take 2 ++ [rt64ShiftWith prims "RT.shrU64" stored] }
     else node
   else node
 
 mutual
-  def rt64Node (cap release : Bool) : Nat → RtNode → RtNode
+  def rt64Node (prims : List RtPrim) (primRows : List (List RtPrim)) (stencilBase : Nat) (stencils : List RtPrim)
+      (cap release : Bool) : Nat → RtNode → RtNode
     | 0, node => node
     | fuel + 1, node =>
-      let node := rt64MemoryNode node
+      let node := rt64MemoryNodeWith prims primRows node
       let node := if cap && node.tag == 0 && node.ty == 0 && node.val == 4294967296 then
           { node with val := (addr64PageCap * 65536 : Nat) }
-        else if release then rt64ReleaseLink node else node
-      rt64StencilCall { node with args := rt64Nodes cap release fuel node.args }
+        else if release then rt64ReleaseLinkWith prims primRows node else node
+      rt64StencilCallWith primRows stencilBase stencils
+        { node with args := rt64Nodes prims primRows stencilBase stencils cap release fuel node.args }
 
-  def rt64Nodes (cap release : Bool) : Nat → List RtNode → List RtNode
+  def rt64Nodes (prims : List RtPrim) (primRows : List (List RtPrim)) (stencilBase : Nat) (stencils : List RtPrim)
+      (cap release : Bool) : Nat → List RtNode → List RtNode
     | 0, nodes => nodes
     | _ + 1, [] => []
-    | fuel + 1, node :: nodes => rt64Node cap release fuel node :: rt64Nodes cap release fuel nodes
+    | fuel + 1, node :: nodes =>
+      rt64Node prims primRows stencilBase stencils cap release fuel node
+        :: rt64Nodes prims primRows stencilBase stencils cap release fuel nodes
 end
 
-def rt64Function (f : RtFunction) : RtFunction :=
-  { f with body := rt64Node (f.name == "bump") (f.name == "rsd_rt_v1_drop_cold") 200000 f.body }
-
 -- Decode instructions, never scan individual bytes for call opcodes.
--- A memarg comes from the offset already checked by runtimeSourceError.
+-- A memarg comes from the offset already checked by rtCompileSource.
 -- Its nonnegative signed LEB is also an unsigned encoding of that value.
 def rt64Expand : Nat → List (List Int) → List Int → RtEmission
   | 0, _, _ => rtEmitError 20
@@ -4895,29 +4933,59 @@ def rt64Expand : Nat → List (List Int) → List Int → RtEmission
         | _ => rtEmitError 20
     else rt64Expand fuel (i.bs :: acc) i.rest
 
-def rt64Emit (f : RtFunction) : RtEmission :=
-  let e := rtLowerFunction true rt64Signatures (rt64Function f)
-  if e.error != 0 then e else rt64Expand (e.bytes.length + 1) [] e.bytes
+def rtCompile64Fns (prims : List RtPrim) (primRows : List (List RtPrim)) (stencilBase : Nat)
+    (stencils : List RtPrim) (sigs64 : List RtSignature) : List RtFunction → Nat → List WFn → RtCompiled
+  | [], err, acc => { error := err, fns := acc.reverse }
+  | f :: rest, err, acc =>
+    let f64 : RtFunction := { f with body := rt64Node prims primRows stencilBase stencils (f.name == "bump") (f.name == "rsd_rt_v1_drop_cold") 200000 f.body }
+    let e0 := rtLowerFunctionWith primRows true sigs64 f64
+    let e := if e0.error != 0 then e0 else rt64Expand (e0.bytes.length + 1) [] e0.bytes
+    let err2 := if err != 0 then err else e.error
+    let w : WFn := {
+      params := f.params.map rtWasmType,
+      results := if f.result == 2 then [] else [rtWasmType f.result],
+      locals := f.locals.map rtWasmType,
+      code := e.bytes }
+    rtCompile64Fns prims primRows stencilBase stencils sigs64 rest err2 (w :: acc)
 
-def runtime64Emissions : List RtEmission :=
-  runtimeSourceDecoded.functions.map rt64Emit
+def rtCompile64 (addr64 : Bool) : RtCompiled :=
+  if !addr64 then { error := 20, fns := [] }
+  else
+    let dec := rtDecodeSource true
+    if dec.error != 0 then { error := dec.error, fns := [] }
+    else if dec.functions.length != rt64StencilBase then { error := 20, fns := [] }
+    else
+      let prims := rtPrimitives
+      let primRows := rtPrimRows 16 prims
+      let stencils := rt64StencilsFrom prims
+      let sigs := rtSignaturesOf dec.functions
+      let sigs64 := sigs ++ stencils.map rt64Signature
+      rtCompile64Fns prims primRows rt64StencilBase stencils sigs64 dec.functions 0 []
 
-def runtime64Functions : List WFn :=
-  (runtimeSourceDecoded.functions.zip runtime64Emissions).map (fun (f, e) =>
-    { params := f.params.map rtWasmType, results := if f.result == 2 then [] else [rtWasmType f.result],
-      locals := f.locals.map rtWasmType, code := e.bytes })
+def rtCompileForLayers (lay : Layers) : RtCompiled :=
+  let base := if lay.rc then runtimeRcCompiled else rtCompileSource false
+  if base.error != 0 || !lay.addr64 then base
+  else rtCompile64 true
 
 def rtWFnAt : Nat → List WFn → WFn
   | _, [] => { params := [], results := [], locals := [], code := [] }
   | 0, fn :: _ => fn
   | n + 1, _ :: fns => rtWFnAt n fns
 
-def rtFnOfWithLayers (lay : Layers) (r : Nat) : WFn :=
-  rtWFnAt r (if lay.addr64 then runtime64Functions else if lay.rc then runtimeRcFunctions else runtimeOffFunctions)
-
-def rtFnsOfWithLayers (lay : Layers) : List Nat → List WFn
+def rtFnsFrom (fns : List WFn) : List Nat → List WFn
   | [] => []
-  | r :: rs => rtFnOfWithLayers lay r :: rtFnsOfWithLayers lay rs
+  | r :: rs => rtWFnAt r fns :: rtFnsFrom fns rs
+
+def rtFnListForLayers (lay : Layers) : List WFn :=
+  if lay.addr64 then (rtCompile64 true).fns
+  else if lay.rc then runtimeRcCompiled.fns
+  else (rtCompileSource false).fns
+
+def rtFnOfWithLayers (lay : Layers) (r : Nat) : WFn :=
+  rtWFnAt r (rtFnListForLayers lay)
+
+def rtFnsOfWithLayers (lay : Layers) (rts : List Nat) : List WFn :=
+  rtFnsFrom (rtFnListForLayers lay) rts
 
 
 
@@ -5325,32 +5393,477 @@ def rgDrop (np : Nat) : List RgR → List RgR → List RgR
   | [], acc => rgRev acc []
   | e :: es, acc => rgDrop np es (if e.loc < np then acc else e :: acc)
 
+-- Slice-free Wasm instruction metadata decoder and Int-scalar local coalescer
+-- for `rgFnO` (preserving all existing `RgF .. rgDrop` definitions and types above
+-- for external callers such as `rsc/NativeCompile.lean`).
+structure RgM where
+  ok : Bool
+  op : Int
+  n : Int
+  span : Nat
+  rest : List Int
+
+def rgMFail : RgM := { ok := false, op := 0, n := 0, span := 0, rest := [] }
+
+def rgMLebGo (orig : List Int) : Nat → Int → Int → Nat → List Int → RgM
+  | 0, _, _, _, _ => rgMFail
+  | _, _, _, _, [] => rgMFail
+  | k + 1, v, place, sp, b :: bs =>
+    if place > 562949953421312 then
+      let fb := rgLeb orig
+      if !fb.ok then rgMFail else { ok := true, op := 0, n := (fb.n : Int), span := 1 + fb.bs.length, rest := fb.rest }
+    else
+      let low : Int := if b ≥ 128 then b - 128 else b
+      let v2 := v + (if low < 0 then 0 else low) * place
+      if b < 128 then { ok := true, op := 0, n := v2, span := sp + 1, rest := bs }
+      else rgMLebGo orig k v2 (place * 128) (sp + 1) bs
+
+def rgSkipLebs : Nat → Nat → Nat → List Int → RgM
+  | 0, _, sp, bs => { ok := true, op := 0, n := 0, span := sp, rest := bs }
+  | _ + 1, 0, _, _ => rgMFail
+  | _ + 1, _, _, [] => rgMFail
+  | m + 1, k + 1, sp, b :: bs =>
+    if b < 128 then rgSkipLebs m profile.lebSFuel (sp + 1) bs
+    else rgSkipLebs (m + 1) k (sp + 1) bs
+
+def rgStepMeta : List Int → RgM
+  | [] => rgMFail
+  | b :: r =>
+    if b == 65 || b == 66 then
+      let l := rgSkipLebs 1 profile.lebSFuel 1 r
+      if !l.ok then rgMFail else { l with op := b }
+    else if b == 32 || b == 33 || b == 34 || b == 12 || b == 13 || b == 16 || b == 18 || b == 8 then
+      let l : RgM := match r with
+        | b0 :: rest0 => if b0 < 128 then { ok := true, op := b, n := (if b0 < 0 then 0 else b0), span := 2, rest := rest0 }
+                         else rgMLebGo r profile.lebSFuel 0 1 1 r
+        | [] => rgMFail
+      if !l.ok then rgMFail else { l with op := b }
+    else if b == 2 || b == 3 || b == 4 then
+      match r with
+      | t :: r2 => if t == 64 || (t ≥ 123 && t ≤ 127) then { ok := true, op := b, n := 0, span := 2, rest := r2 } else rgMFail
+      | [] => rgMFail
+    else if b ≥ 40 && b ≤ 62 then
+      let l := rgSkipLebs 2 profile.lebSFuel 1 r
+      if !l.ok then rgMFail else { l with op := b }
+    else if b == 63 || b == 64 then
+      match r with
+      | 0 :: r2 => { ok := true, op := b, n := 0, span := 2, rest := r2 }
+      | _ => rgMFail
+    else if b == 14 then
+      let c : RgM := match r with
+        | b0 :: rest0 => if b0 < 128 then { ok := true, op := 0, n := (if b0 < 0 then 0 else b0), span := 2, rest := rest0 }
+                         else rgMLebGo r profile.lebSFuel 0 1 1 r
+        | [] => rgMFail
+      if !c.ok then rgMFail
+      else
+        let l := rgSkipLebs (c.n.toNat + 1) profile.lebSFuel c.span c.rest
+        if !l.ok then rgMFail else { l with op := b }
+    else if b == 252 then
+      match r with
+      | 10 :: 0 :: 0 :: r2 => { ok := true, op := b, n := 0, span := 4, rest := r2 }
+      | 11 :: 0 :: r2 => { ok := true, op := b, n := 0, span := 3, rest := r2 }
+      | _ => rgMFail
+    else if b == 0 || b == 1 || b == 5 || b == 11 || b == 15 || b == 26 || b == 27 || (b ≥ 69 && b ≤ 196) then
+      { ok := true, op := b, n := 0, span := 1, rest := r }
+    else rgMFail
+
+def rgValidNoLocals : Nat → Int → List Bool → List Int → Bool
+  | 0, _, _, _ => false
+  | k + 1, np, st, bs =>
+    let i := rgStepMeta bs
+    if !i.ok then false
+    else if i.op == 2 || i.op == 3 || i.op == 4 then rgValidNoLocals k np (false :: st) i.rest
+    else if i.op == 5 then
+      match st with
+      | false :: st2 => rgValidNoLocals k np (true :: st2) i.rest
+      | _ => false
+    else if i.op == 11 then
+      match st with
+      | [] => i.rest.isEmpty
+      | _ :: st2 => rgValidNoLocals k np st2 i.rest
+    else if (i.op == 32 || i.op == 33 || i.op == 34) && i.n ≥ np then false
+    else rgValidNoLocals k np st i.rest
+
+structure RgFI where
+  o : Int
+  cl : Int
+  kind : Int
+  ie : Int
+
+structure RgQI where
+  s : Int
+  e : Int
+
+structure RgRI where
+  k : Int
+  loc : Int
+  pos : Int
+  get : Bool
+  cl : Int
+  lo : Int
+  hi : Int
+  fs : List RgFI
+  rs : List RgQI
+
+def rgR0I : RgRI := { k := 0, loc := 0, pos := 0, get := false, cl := 0, lo := 0, hi := 0, fs := [], rs := [] }
+
+def rgRevI : List RgRI → List RgRI → List RgRI
+  | [], acc => acc
+  | x :: xs, acc => rgRevI xs (x :: acc)
+
+structure RgSpI where
+  l : List RgRI
+  r : List RgRI
+
+def rgTakeI : Nat → List RgRI → List RgRI → RgSpI
+  | 0, xs, acc => { l := rgRevI acc [], r := xs }
+  | _, [], acc => { l := rgRevI acc [], r := [] }
+  | k + 1, x :: xs, acc => rgTakeI k xs (x :: acc)
+
+def rgMergeI : Nat → List RgRI → List RgRI → List RgRI → List RgRI
+  | 0, xs, ys, acc => rgRevI acc (xs ++ ys)
+  | _, [], ys, acc => rgRevI acc ys
+  | _, xs, [], acc => rgRevI acc xs
+  | k + 1, x :: xs, y :: ys, acc =>
+    if x.k ≤ y.k then rgMergeI k xs (y :: ys) (x :: acc) else rgMergeI k (x :: xs) ys (y :: acc)
+
+def rgSortGoI : Nat → Nat → List RgRI → List RgRI
+  | 0, _, xs => xs
+  | f + 1, n, xs =>
+    if n ≤ 1 then xs
+    else
+      let h := n / 2
+      let sp := rgTakeI h xs []
+      rgMergeI (n + 1) (rgSortGoI f h sp.l) (rgSortGoI f (n - h) sp.r) []
+
+def rgSortI (xs : List RgRI) : List RgRI :=
+  rgSortGoI (xs.length + 1) xs.length xs
+
+structure RgOI where
+  o : Int
+  t : Int
+
+def rgClosesGoI : Nat → Int → List RgOI → List RgRI → List Int → Option (List RgRI)
+  | 0, _, _, _, _ => none
+  | k + 1, pos, st, acc, bs =>
+    let i := rgStepMeta bs
+    if !i.ok then none
+    else if i.op == 2 || i.op == 3 || i.op == 4 then rgClosesGoI k (pos + 1) ({ o := pos, t := 0 } :: st) acc i.rest
+    else if i.op == 5 then
+      match st with
+      | e :: st2 => rgClosesGoI k (pos + 1) ({ o := pos, t := e.o } :: st2) acc i.rest
+      | [] => none
+    else if i.op == 11 then
+      match st with
+      | [] => if i.rest.isEmpty then some acc else none
+      | e :: st2 =>
+        let acc2 := if e.t > 0 then { rgR0I with k := e.t, cl := e.o, get := true, hi := pos } :: acc else acc
+        rgClosesGoI k (pos + 1) st2 ({ rgR0I with k := e.o, cl := pos } :: acc2) i.rest
+    else rgClosesGoI k (pos + 1) st acc i.rest
+
+def rgEvsGoI : Nat → Int → List RgFI → List RgRI → List RgRI → List Int → Option (List RgRI)
+  | 0, _, _, _, _, _ => none
+  | k + 1, pos, st, q, acc, bs =>
+    match st with
+    | [] => none
+    | top :: below =>
+      let i := rgStepMeta bs
+      if !i.ok then none
+      else if i.op == 2 || i.op == 3 || i.op == 4 then
+        match q with
+        | h :: q2 =>
+          if h.k != pos then none
+          else
+            let kind : Int := if i.op == 3 then 1 else if i.op == 4 && h.get then 2 else 0
+            rgEvsGoI k (pos + 1) ({ o := pos, cl := h.cl, kind := kind, ie := h.hi } :: st) q2 acc i.rest
+        | [] => none
+      else if i.op == 5 then
+        match q with
+        | h :: q2 =>
+          if h.k != pos then none else rgEvsGoI k (pos + 1) ({ o := pos, cl := h.cl, kind := 3, ie := h.cl } :: below) q2 acc i.rest
+        | [] => none
+      else if i.op == 11 then
+        match below with
+        | [] => some (rgRevI acc [])
+        | _ => rgEvsGoI k (pos + 1) below q acc i.rest
+      else if i.op == 32 || i.op == 33 || i.op == 34 then
+        let ev := { rgR0I with k := i.n, loc := i.n, pos := pos, get := i.op == 32, cl := top.cl, fs := st }
+        rgEvsGoI k (pos + 1) st q (ev :: acc) i.rest
+      else rgEvsGoI k (pos + 1) st q acc i.rest
+
+structure RgDI where
+  o : Int
+  c : Int
+  fs : List RgFI
+  ext : List RgQI
+
+def rgLiveI (x : Int) : List RgDI → List RgDI
+  | [] => []
+  | s :: ss => if s.c ≤ x then rgLiveI x ss else s :: ss
+
+def rgPendI (ie : Int) : List RgDI → Option RgDI
+  | [] => none
+  | d :: ds =>
+    match d.fs with
+    | f :: _ => if f.ie == ie then some d else rgPendI ie ds
+    | [] => rgPendI ie ds
+
+structure RgPI where
+  ss : List RgDI
+  pend : List RgDI
+
+def rgPushI : Nat → RgDI → List RgDI → List RgDI → RgPI
+  | 0, d, ss, pend => { ss := d :: ss, pend := pend }
+  | k + 1, d, ss, pend =>
+    match d.fs with
+    | f :: up =>
+      if f.kind == 2 then { ss := d :: ss, pend := d :: pend }
+      else if f.kind == 3 then
+        match rgPendI f.ie pend, up with
+        | some d1, g :: _ =>
+          let j : RgDI := { o := f.ie, c := g.cl, fs := up, ext := { s := d1.o, e := d1.c } :: { s := d.o, e := d.c } :: (d1.ext ++ d.ext) }
+          let r := rgPushI k j ss pend
+          { r with ss := d :: r.ss }
+        | _, _ => { ss := d :: ss, pend := pend }
+      else { ss := d :: ss, pend := pend }
+    | [] => { ss := d :: ss, pend := pend }
+
+def rgOuterI (pm : Int) (any : Bool) : List RgFI → List RgFI → List RgFI
+  | [], best => best
+  | f :: fs, best =>
+    if f.kind != 1 then rgOuterI pm any fs best
+    else if any || f.o > pm then rgOuterI pm any fs [f]
+    else best
+
+structure RgSI where
+  cur : RgRI
+  ss : List RgDI
+  pend : List RgDI
+
+def rgIvStepI (e : RgRI) (r : RgSI) : RgSI :=
+  let cur := r.cur
+  let ss2 := rgLiveI e.pos r.ss
+  if !e.get then
+    let p := rgPushI e.fs.length { o := e.pos, c := e.cl, fs := e.fs, ext := [] } ss2 r.pend
+    { r with cur := { cur with rs := { s := e.pos, e := e.pos } :: cur.rs }, ss := p.ss, pend := p.pend }
+  else
+    let nd := match ss2 with
+      | [] => true
+      | _ => false
+    let pm : Int := match ss2 with
+      | s :: _ => s.o
+      | [] => 0
+    let jx := match ss2 with
+      | s :: _ => s.ext
+      | [] => []
+    let ext := match rgOuterI pm nd e.fs [] with
+      | f :: _ => f
+      | [] => { o := e.pos, cl := e.pos, kind := 0, ie := 0 }
+    let sMin := if pm < ext.o then pm else ext.o
+    let eMax := if e.pos < ext.cl then ext.cl else e.pos
+    { r with cur := { cur with rs := { s := sMin, e := eMax } :: (jx ++ cur.rs) }, ss := ss2 }
+
+def rgQRevI : List RgQI → List RgQI → List RgQI
+  | [], acc => acc
+  | x :: xs, acc => rgQRevI xs (x :: acc)
+
+structure RgQSpI where
+  l : List RgQI
+  r : List RgQI
+
+def rgQTakeI : Nat → List RgQI → List RgQI → RgQSpI
+  | 0, xs, acc => { l := rgQRevI acc [], r := xs }
+  | _, [], acc => { l := rgQRevI acc [], r := [] }
+  | k + 1, x :: xs, acc => rgQTakeI k xs (x :: acc)
+
+partial def rgQMergeI : List RgQI → List RgQI → List RgQI → List RgQI
+  | [], ys, acc => rgQRevI acc ys
+  | xs, [], acc => rgQRevI acc xs
+  | x :: xs, y :: ys, acc =>
+    if x.s ≤ y.s then rgQMergeI xs (y :: ys) (x :: acc) else rgQMergeI (x :: xs) ys (y :: acc)
+
+def rgQSortGoI : Nat → Nat → List RgQI → List RgQI
+  | 0, _, xs => xs
+  | f + 1, n, xs =>
+    if n ≤ 1 then xs
+    else
+      let h := n / 2
+      let sp := rgQTakeI h xs []
+      rgQMergeI (rgQSortGoI f h sp.l) (rgQSortGoI f (n - h) sp.r) []
+
+def rgQJoinI : List RgQI → RgQI → List RgQI → List RgQI
+  | [], c, acc => rgQRevI (c :: acc) []
+  | r :: rs, c, acc =>
+    if r.s ≤ c.e + 1 then rgQJoinI rs { s := c.s, e := (if c.e < r.e then r.e else c.e) } acc
+    else rgQJoinI rs r (c :: acc)
+
+def rgIvDoneI (r : RgSI) : RgRI :=
+  let rs := match rgQSortGoI (r.cur.rs.length + 1) r.cur.rs.length r.cur.rs with
+    | [] => []
+    | q :: rest => rgQJoinI rest q []
+  let lo : Int := match rs with
+    | q :: _ => q.s
+    | [] => 0
+  { r.cur with lo := lo, rs := rs, fs := [] }
+
+def rgIv0I (e : RgRI) : RgSI :=
+  rgIvStepI e { cur := { rgR0I with loc := e.loc }, ss := [], pend := [] }
+
+def rgIvsGoI : List RgRI → RgSI → List RgRI → List RgRI
+  | [], r, acc => rgRevI (rgIvDoneI r :: acc) []
+  | e :: es, r, acc =>
+    if e.loc != r.cur.loc then rgIvsGoI es (rgIv0I e) (rgIvDoneI r :: acc)
+    else rgIvsGoI es (rgIvStepI e r) acc
+
+def rgTypedI : Int → List Int → List RgRI → List RgRI → Option (List RgRI)
+  | _, _, [], acc => some (rgRevI acc [])
+  | _, [], _ :: _, _ => none
+  | i, t :: ts, iv :: ivs, acc =>
+    if iv.loc < i then none
+    else if iv.loc == i then
+      if t != vtI64 && t != vtI32 then none
+      else rgTypedI (i + 1) ts ivs ({ iv with cl := t } :: acc)
+    else rgTypedI (i + 1) ts (iv :: ivs) acc
+
+def rgNoHitI : RgQI := { s := -1, e := -1 }
+
+partial def rgQHitWI (dflt : RgQI) : List RgQI → List RgQI → RgQI
+  | [], _ => dflt
+  | _, [] => dflt
+  | a :: as, b :: bs =>
+    if a.e < b.s then rgQHitWI dflt as (b :: bs)
+    else if b.e < a.s then rgQHitWI dflt (a :: as) bs
+    else b
+
+partial def rgWitBlocksI (w : RgQI) : List RgQI → Bool
+  | [] => false
+  | a :: as => if a.e < w.s then rgWitBlocksI w as else a.s ≤ w.e
+
+def rgQLastI : List RgQI → RgQI
+  | [] => { s := 0, e := 0 }
+  | r :: [] => r
+  | _ :: rs => rgQLastI rs
+
+def rgQFromI (x : Int) : List RgQI → List RgQI
+  | [] => []
+  | r :: rs => if r.e < x then rgQFromI x rs else r :: rs
+
+def rgSlRevI : List (List RgQI) → List (List RgQI) → List (List RgQI)
+  | [], acc => acc
+  | x :: xs, acc => rgSlRevI xs (x :: acc)
+
+structure RgFtI where
+  slot : Int
+  sl : List (List RgQI)
+  wl : List RgQI
+
+def rgFitI (rs : List RgQI) (lo : Int) : Int → List (List RgQI) → List RgQI → List (List RgQI) → List RgQI → RgFtI
+  | i, [], _, acc, wacc => { slot := i, sl := rgSlRevI acc [rs], wl := rgQRevI wacc [rgQLastI rs] }
+  | i, s :: ss, w :: ws, acc, wacc =>
+    let s2 := rgQFromI lo s
+    if w.e ≥ lo && rgWitBlocksI w rs then rgFitI rs lo (i + 1) ss ws (s2 :: acc) (w :: wacc)
+    else
+      let w3 := rgQHitWI rgNoHitI rs s2
+      if w3.e ≥ 0 then rgFitI rs lo (i + 1) ss ws (s2 :: acc) (w3 :: wacc)
+      else
+        let m := rgQMergeI s2 rs []
+        { slot := i, sl := rgSlRevI acc (m :: ss), wl := rgQRevI wacc (rgQLastI m :: ws) }
+  | _, _, _, _, _ => { slot := 0, sl := [], wl := [] }
+
+structure RgAI where
+  out : List RgRI
+  n : Nat
+
+def rgScanI : List RgRI → List (List RgQI) → List RgQI → List RgRI → RgAI
+  | [], sl, _, out => { out := out, n := sl.length }
+  | iv :: ivs, sl, wl, out =>
+    let f := rgFitI iv.rs iv.lo 0 sl wl [] []
+    rgScanI ivs f.sl f.wl ({ rgR0I with k := iv.loc, pos := f.slot } :: out)
+
+def rgOfTyI (t : Int) : List RgRI → List RgRI → List RgRI
+  | [], acc => rgRevI acc []
+  | iv :: ivs, acc => rgOfTyI t ivs (if iv.cl == t then iv :: acc else acc)
+
+def rgByStartI (m : Int) : List RgRI → List RgRI → List RgRI
+  | [], acc => rgRevI acc []
+  | iv :: ivs, acc => rgByStartI m ivs ({ iv with k := iv.lo * m + iv.loc } :: acc)
+
+def rgShiftI (b : Int) : List RgRI → List RgRI → List RgRI
+  | [], acc => rgRevI acc []
+  | r :: rs, acc => rgShiftI b rs ({ r with pos := r.pos + b } :: acc)
+
+def rgQueueI : List RgRI → List RgRI → List RgRI → Option (List RgRI)
+  | [], _, acc => some acc
+  | _ :: _, [], _ => none
+  | e :: es, m :: ms, acc =>
+    if m.k < e.loc then rgQueueI (e :: es) ms acc
+    else if m.k > e.loc then none
+    else rgQueueI es (m :: ms) ({ rgR0I with k := e.pos, pos := m.pos } :: acc)
+
+def rgSameMapI : List RgRI → Bool
+  | [] => true
+  | r :: rs => r.k == r.pos && rgSameMapI rs
+
+def rgPushSpan : Nat → List Int → List Int → List Int
+  | 0, _, acc => acc
+  | k + 1, b :: bs, acc => rgPushSpan k bs (b :: acc)
+  | _, [], acc => acc
+
+def rgRewriteI : Nat → Int → Int → List RgRI → List Int → List Int → Option (List Int)
+  | 0, _, _, _, _, _ => none
+  | _, _, _, _, accRev, [] => some (reverse accRev)
+  | k + 1, np, pos, q, accRev, bs =>
+    let i := rgStepMeta bs
+    if !i.ok then none
+    else if (i.op == 32 || i.op == 33 || i.op == 34) && i.n ≥ np then
+      match q with
+      | h :: q2 =>
+        if h.k != pos then none
+        else
+          let nw := h.pos.toNat
+          let acc2 := if nw < 128 then (nw : Int) :: i.op :: accRev else pushBytes (lebU nw) (i.op :: accRev)
+          rgRewriteI k np (pos + 1) q2 acc2 i.rest
+      | [] => none
+    else rgRewriteI k np (pos + 1) q (rgPushSpan i.span bs accRev) i.rest
+
+def rgDropI (np : Int) : List RgRI → List RgRI → List RgRI
+  | [], acc => rgRevI acc []
+  | e :: es, acc => rgDropI np es (if e.loc < np then acc else e :: acc)
+
 def rgFnO (f : WFn) : Option WFn :=
-  let np := f.params.length
+  let np : Int := (f.params.length : Int)
   let fuel := f.code.length + 1
-  match rgClosesGo fuel 1 [] [] f.code with
+  if f.locals.isEmpty then
+    if rgValidNoLocals fuel np [] f.code then some f else none
+  else
+  match rgClosesGoI fuel 1 [] [] f.code with
   | none => none
   | some cs =>
-    let inf := fuel + 1
-    match rgEvsGo fuel 1 [{ o := 0, cl := inf, kind := 0, ie := 0 }] (rgSort cs) [] f.code with
+    let inf : Int := (fuel + 1 : Nat)
+    match rgEvsGoI fuel 1 [{ o := 0, cl := inf, kind := 0, ie := 0 }] (rgSortI cs) [] f.code with
     | none => none
     | some evs0 =>
-      let evs := rgSort (rgDrop np evs0 [])
-      match rgTyped np f.locals (rgIvs evs) [] with
+      let evs := rgSortI (rgDropI np evs0 [])
+      let ivs0 := match evs with
+        | [] => []
+        | e :: es => rgIvsGoI es (rgIv0I e) []
+      match rgTypedI np f.locals ivs0 [] with
       | none => none
       | some ivs =>
-        if !rgAllTy ivs then none
+        let m : Int := ((f.params.length + f.locals.length + 1 : Nat) : Int)
+        let a := rgScanI (rgSortI (rgByStartI m (rgOfTyI vtI64 ivs []) [])) [] [] []
+        let b := rgScanI (rgSortI (rgByStartI m (rgOfTyI vtI32 ivs []) [])) [] [] []
+        let mp := rgSortI (rgShiftI np a.out [] ++ rgShiftI (np + (a.n : Int)) b.out [])
+        let newLocs := rgRep vtI64 a.n ++ rgRep vtI32 b.n
+        if rgSameMapI mp then
+          some { f with locals := newLocs, code := f.code }
         else
-          let m := np + f.locals.length + 1
-          let a := rgScan (rgSort (rgByStart m (rgOfTy vtI64.toNat ivs []) [])) [] []
-          let b := rgScan (rgSort (rgByStart m (rgOfTy vtI32.toNat ivs []) [])) [] []
-          let mp := rgSort (rgShift np a.out [] ++ rgShift (np + a.n) b.out [])
-          match rgQueue evs mp [] with
+          match rgQueueI evs mp [] with
           | none => none
           | some q0 =>
-            match rgRewrite fuel np 1 (rgSort q0) [] f.code with
+            match rgRewriteI fuel np 1 (rgSortI q0) [] f.code with
             | none => none
-            | some code => some { f with locals := rgRep vtI64 a.n ++ rgRep vtI32 b.n, code := code }
+            | some code => some { f with locals := newLocs, code := code }
 
 def rgFn (f : WFn) : WFn :=
   match rgFnO f with
@@ -5393,10 +5906,10 @@ def dgRead (lay : Layers) (g : Dg) : Nat → List Int → Dd
           if e.ok != profile.cOk then ddFail e.ok
           else
             match e.rest with
-            | [] => dgRead lay (dgPush (if lay.facts then tfRemember g b.bs else g) (1 :: e.n :: b.bs)) k b.rest
+            | [] => dgRead lay (dgPush (if lay.facts && !lrcOn lay then tfRemember g b.bs else g) (1 :: e.n :: b.bs)) k b.rest
             | _ => ddFail profile.cTrail
         else if kd == 2 then
-          dgRead lay (dgPush (if lay.facts then tfAnnotation g b.bs else g) [2]) k b.rest
+          dgRead lay (dgPush (if lay.facts && !lrcOn lay then tfAnnotation g b.bs else g) [2]) k b.rest
         else ddFail profile.cBody
 
 -- Validate v2 references and catch the first W tag in present lowering, even in a dead arm.
@@ -6216,14 +6729,23 @@ def lrcRefusedBase : Int := 7000000
 def lrcRefused (e : Lrc.Residue) : Int :=
   lrcRefusedBase + ((Lrc.refusalClass e * 1000 + (if Lrc.refusalFn e < 1000 then Lrc.refusalFn e else 999) : Nat) : Int)
 
+def postWFns (doRi doReg : Bool) (dup drop : WFn) : List WFn → List WFn → List WFn
+  | [], acc => revWFns acc []
+  | f :: fs, acc =>
+    let f1 := if doRi then riFunction dup drop f else f
+    let f2 := if doReg then rgFn f1 else f1
+    postWFns doRi doReg dup drop fs (f2 :: acc)
+
 -- LRC: the module of an image whose functions are IR declarations. The runtime functions come first, then the image's public entries, then its
 -- internal functions (lib/lrc/Emit.rsd `emitFns`).
-def lrcModule (lay : Layers) (g : Dg) (sigs : List (List Int)) (n : Nat) (pubs : List Int) (decls : List Lrc.Decl) : Out :=
+def lrcModuleWithRt (rtFns : List WFn) (lay : Layers) (g : Dg) (sigs : List (List Int)) (n : Nat) (pubs : List Int) (decls : List Lrc.Decl) : Out :=
   let rts := List.range (runtimeCountWithLayers lay)
   let rtBase := rts.length
+  let clRefs := Lrc.clRefsDecls decls Lrc.vsEmpty
+  let emitDecls := Lrc.clTrimTailV (n + Lrc.nHelpers) clRefs decls
   -- under the alloc layer the stage's own heap (lib/lrc/Emit.rsd, "The stage's heap"): its three
   -- functions follow the internal ones, one for each declaration
-  let heap := if lay.alloc then rtBase + n + decls.length else 0
+  let heap := if lay.alloc then rtBase + n + emitDecls.length else 0
   -- the bytes of an object field: 4 under the layer `narrow`, which is a layout of the stage's own heap
   -- (docs/OBJECT-ABI.md "Narrow fields"); such a module has one more function, exported as `fw`, that says so
   let fw := if lay.narrow && lay.alloc then 4 else 8
@@ -6231,36 +6753,67 @@ def lrcModule (lay : Layers) (g : Dg) (sigs : List (List Int)) (n : Nat) (pubs :
   -- results and a refusal is thrown to the entry (lib/lrc/Emit.rsd "How a function ends")
   let conv := if lay.facts then 1 else 0
   -- string literals as persistent objects in the module's data (lib/lrc/Emit.rsd)
-  let lits := Lrc.litPool decls
-  let em := Lrc.emitFnsFor g sigs rtBase n heap conv lits pubs decls fw lay.addr64 decls
+  let lits := Lrc.litPool emitDecls
+  let cg := Lrc.clGroundRefs n fw lits clRefs decls
+  if !cg.ok then outFail (lrcRefused (Lrc.Residue.nodeNotWritten cg.fn))
+  else
+  let lowData := Lrc.litData lits
+  let ground := if cg.pool.chunks.isEmpty then [] else [cg.pool]
+  let staticEnd := if cg.pool.chunks.isEmpty then profile.heapAt else cg.pool.next
+  let useArr := if heap == 0 then false else Lrc.declsUseArr n emitDecls
+  -- the functions that stay functions of their own, by their numbers in the module (lib/lrc/Emit.rsd `keptFns`)
+  let kept := shiftFns (rtBase + n) (Lrc.keptFns emitDecls)
+  let inl := Lrc.inlOf conv n emitDecls
+  let tab := if conv == 0 then Lrc.dtOfList (Lrc.inlKeepBodies Lrc.imEmpty emitDecls) else inl.tab
+  let pubMap := Lrc.pubMapOf pubs Lrc.it0
+  let em := Lrc.emitFnsStreamG inl tab g sigs rtBase n heap conv lits cg.addrs staticEnd pubMap fw lay.addr64 emitDecls
   if !em.ok then outFail (lrcRefused (Lrc.Residue.nodeNotWritten em.fn))
   else
-    let fns := (rtFnsOfWithLayers lay) rts ++ em.publics ++ em.internals ++ (if heap == 0 then [] else Lrc.heapFnsFor (Lrc.declsUseArr n decls) heap fw lay.addr64)
+    let preFns0 := rtFnsFrom rtFns rts
+    let emPubs := em.publics
+    let emInts := em.internals
+    let emptyFn : WFn := { params := [], results := [], locals := [], code := [] }
+    let dup := if lay.rc then preFns0.getD 6 emptyFn else emptyFn
+    let drop := if lay.rc then preFns0.getD 7 emptyFn else emptyFn
+    let preFns := if lay.reg then rgFns preFns0 else preFns0
+    let tailFns := (if heap == 0 then [] else Lrc.heapFnsFor useArr heap fw lay.addr64)
       ++ (if fw == 4 then [Lrc.narrowFn] else []) ++ (if lay.addr64 then [Lrc.addr64Fn] else [])
     -- the runtime's dup and drop, where the emitter still calls them (`compileFrom` does the same)
-    let fns := runtimeInlineFns lay rtBase fns
+    let pubs1 := postWFns lay.rc lay.reg dup drop emPubs []
+    let ints1 := postWFns lay.rc lay.reg dup drop emInts []
+    let tail1 := postWFns lay.rc lay.reg dup drop tailFns []
+    let fns := preFns ++ (pubs1 ++ (ints1 ++ tail1))
     -- the module's last function is the one that names the width (lib/lrc/Emit.rsd `narrowFn`)
     let last := fns.length - 1
     let exps := shiftExps rtBase (expsFor n) ++ (if fw == 4 then [{ name := Lrc.narrowName, idx := last }] else [])
       ++ (if lay.addr64 then [{ name := Lrc.addr64Name, idx := last }] else [])
-    -- the functions that stay functions of their own, by their numbers in the module (lib/lrc/Emit.rsd `keptFns`)
-    outOk (encode { fns := if lay.reg then rgFns fns else fns, exps := exps, tags := conv,
-                    lowData := Lrc.litData lits, addr64 := lay.addr64, kept := shiftFns (rtBase + n) (Lrc.keptFns decls) })
+    outOk (encode { fns := fns, exps := exps, ground := ground, tags := conv,
+                    lowData := lowData, addr64 := lay.addr64, kept := kept })
+
+def lrcModule (lay : Layers) (g : Dg) (sigs : List (List Int)) (n : Nat) (pubs : List Int) (decls : List Lrc.Decl) : Out :=
+  lrcModuleWithRt (rtFnListForLayers lay) lay g sigs n pubs decls
 
 -- LRC: the stage on an image. One gate admits it (lib/lrc/FromWire.rsd `q` and `admit`, an NF
 -- instance); what is admitted goes through the passes under the word's options and is written as
 -- a module. The module's functions read the class's type context, as the translation did.
-def lrcCompile (lay : Layers) (g : Dg) (intr : List Int) (sigs : List (List Int)) (n : Nat) (bodies : List Int) (ws : List (List Int)) : Out :=
+def lrcCompileWithRt (rtFns : List WFn) (lay : Layers) (g : Dg) (intr : List Int) (sigs : List (List Int)) (n : Nat) (bodies : List Int) (ws : List (List Int)) : Out :=
   -- arrays are cells of the stage's own heap: without it a list stays cells (lib/lrc/FromWire.rsd "Arrays")
   let c := Lrc.q { types := g, intr := intr, sigs := sigs, n := n, bodies := bodies, arrays := lay.alloc, narrow := lay.narrow && lay.alloc,
                    widths := ws }
+  let types := c.types
   match Lrc.admit c with
   | Except.error e => outFail (lrcRefused e)
   | Except.ok im =>
-    lrcModule lay c.types sigs n im.pubs (Lrc.pipelineWith ((if lay.cte then 1 else if lay.fuse then 0 else Lrc.pipelineDefault) + (if lay.qbe then 4 else 0) + (if lay.tail then 8 else 0) + (if lay.static then 16 else 0) + (if lay.borrow then 0 else 32) + (if lay.dropSpec then 0 else 256) + (if lay.narrow && lay.alloc then 2048 else 0)) im.n im.decls)
+    let pubs := im.pubs
+    let imN := im.n
+    let decls0 := im.decls
+    lrcModuleWithRt rtFns lay types sigs n pubs (Lrc.pipelineWith ((if lay.cte then 1 else if lay.fuse then 0 else Lrc.pipelineDefault) + (if lay.qbe then 4 else 0) + (if lay.tail then 8 else 0) + (if lay.static then 16 else 0) + (if lay.dropSpec then 0 else 256) + (if lay.narrow && lay.alloc then 2048 else 0)) imN decls0)
 
-def compileFrom (lay : Layers) (g : Dg) (tbl : List TE) (hrest : List Int) : Out :=
-    let g := { g with nodeUse := if g.on then nodeUsed g else [] }
+def lrcCompile (lay : Layers) (g : Dg) (intr : List Int) (sigs : List (List Int)) (n : Nat) (bodies : List Int) (ws : List (List Int)) : Out :=
+  lrcCompileWithRt (rtFnListForLayers lay) lay g intr sigs n bodies ws
+
+def compileFromWithRt (rtFns : List WFn) (lay : Layers) (g : Dg) (tbl : List TE) (hrest : List Int) : Out :=
+    let g := { g with nodeUse := if g.on && !lrcOn lay then nodeUsed g else [] }
     let c := readLeb hrest
     if c.ok != profile.cOk then outFail c.ok
     else if c.n < (profile.fnMin : Int) || c.n > (profile.fnMax : Int) then outFail profile.cArity
@@ -6277,7 +6830,7 @@ def compileFrom (lay : Layers) (g : Dg) (tbl : List TE) (hrest : List Int) : Out
         let intrinsics := intrinsicKinds lay g 0 ss.ss ss.rest
         -- LRC: under the stage's word the stage compiles the image or refuses it (`lrcCompile`);
         -- with the layer off every image takes the path below.
-        if lrcOn lay then lrcCompile lay g intrinsics ss.ss c.n.toNat ss.rest (readSigWs g c.n.toNat c.rest)
+        if lrcOn lay then lrcCompileWithRt rtFns lay g intrinsics ss.ss c.n.toNat ss.rest (readSigWs g c.n.toNat c.rest)
         else
         let bodies := if lay.rc && g.on then cseBodies g ss.ss intrinsics c.n.toNat 0 ss.rest else ss.rest
         let n := c.n.toNat
@@ -6324,32 +6877,37 @@ def compileFrom (lay : Layers) (g : Dg) (tbl : List TE) (hrest : List Int) : Out
             else
               let public := groundPublicFns fs.cen.ground (((arenaPublicFnsWithLayers g) lay) arr ss.ss (if (biOnWithLayers lay) then ((biWrappersWithLayers g) lay) bi arr ss.ss 0 else fs.fns))
               let internal := if (biOnWithLayers lay) then fs.fns else []
-              let fns := (rtFnsOfWithLayers lay) rts ++ public ++ ((groupFnsWithLayers g) lay) bi arr ss.ss fs.gb groups
+              let fns := rtFnsFrom rtFns rts ++ public ++ ((groupFnsWithLayers g) lay) bi arr ss.ss fs.gb groups
                 ++ ((eqFnsWithLayers g) lay) arr eqt eqb eqt ++ internal ++ workers.fns
+              let allocDec := if lay.alloc then runtimeAllocDecoded else rtDecoded []
               let fns := runtimeAllocFns lay rtBase
-                (if runtimeAllocDecoded.error == 0 then runtimeAllocDecoded.functions else []) fns
+                (if allocDec.error == 0 then allocDec.functions else []) fns
               let fns := runtimeInlineFns lay rtBase fns
               outOk (encode {
                   fns := if lay.reg then rgFns fns else fns
                   exps := shiftExps rtBase (expsFor fs.fns.length)
                   ground := fs.cen.ground })
 
+def compileFrom (lay : Layers) (g : Dg) (tbl : List TE) (hrest : List Int) : Out :=
+  compileFromWithRt (rtFnListForLayers lay) lay g tbl hrest
+
 
 def compileWithLayers (lay : Layers) (tbl : List TE) (bs : List Int) : Out :=
   if !(layerConflict lay).isEmpty then outFail profile.cLayerBits
-  else if (if lay.rc then runtimeRcError else runtimeOffError) != 0 then outFail profile.cBody
-  else if lay.addr64 && runtime64Emissions.any (fun e => e.error != 0) then outFail profile.cBody
-  else match bs with
-  | 82 :: 83 :: 67 :: 77 :: 2 :: rest =>
-    let k := readLeb rest
-    if k.ok != profile.cOk then outFail k.ok
-    else if k.n < 0 then outFail profile.cArity
-    else
-      let d := dgRead lay dgEmpty k.n.toNat k.rest
-      if d.ok != profile.cOk then outFail d.ok else compileFrom lay d.g tbl d.rest
-  | _ =>
-    let h := eatAll [82, 83, 67, 77, 1] bs
-    if h.ok != profile.cOk then outFail h.ok else compileFrom lay dgNone tbl h.rest
+  else
+    let rt := rtCompileForLayers lay
+    if rt.error != 0 then outFail profile.cBody
+    else match bs with
+    | 82 :: 83 :: 67 :: 77 :: 2 :: rest =>
+      let k := readLeb rest
+      if k.ok != profile.cOk then outFail k.ok
+      else if k.n < 0 then outFail profile.cArity
+      else
+        let d := dgRead lay dgEmpty k.n.toNat k.rest
+        if d.ok != profile.cOk then outFail d.ok else compileFromWithRt rt.fns lay d.g tbl d.rest
+    | _ =>
+      let h := eatAll [82, 83, 67, 77, 1] bs
+      if h.ok != profile.cOk then outFail h.ok else compileFromWithRt rt.fns lay dgNone tbl h.rest
 
 
 
@@ -6357,4 +6915,135 @@ def compileWithLayers (lay : Layers) (tbl : List TE) (bs : List Int) : Out :=
 def compile (config : Int) (bs : List Int) : Out :=
   match layersFromBits config with
   | none => outFail profile.cLayerBits
-  | some lay => compileWithLayers lay (tableWithLayers lay) bs
+  | some lay => compileWithLayers lay (if lrcOn lay then [] else tableWithLayers lay) bs
+
+structure EmitPackR where
+  ok : Bool
+  fn : Nat
+  pubs : List WFnP
+  ints : List WFnP
+
+def postPackOne (doRi doReg : Bool) (dup drop : WFn) (f : WFn) : WFnP :=
+  let f1 := if doRi then riFunction dup drop f else f
+  let f2 := if doReg then rgFn f1 else f1
+  packWFn f2
+
+def postWFnsPack (doRi doReg : Bool) (dup drop : WFn) : List WFn → List WFnP → List WFnP
+  | [], acc => revWFnsP acc []
+  | f :: fs, acc => postWFnsPack doRi doReg dup drop fs (postPackOne doRi doReg dup drop f :: acc)
+
+def emitPackDecls (doRi doReg : Bool) (dup drop : WFn) (inl : Lrc.Inl) (tab : Lrc.DeclTab)
+    (g : Dg) (sigs : List (List Int)) (sigIdx : Nat) (sigsTail : List (List Int))
+    (rtBase n heap conv : Nat) (lits : List Int) (closed : Lrc.IMap) (staticEnd : Int) (pubMap : Lrc.ITree) (fw : Nat) (addr64 : Bool) :
+    List Lrc.Decl → List WFnP → List WFnP → EmitPackR
+  | [], pubAcc, intAcc => { ok := true, fn := 0, pubs := revWFnsP pubAcc [], ints := revWFnsP intAcc [] }
+  | d :: ds, pubAcc, intAcc =>
+    let r := Lrc.emitOneDeclG inl tab g sigs sigIdx sigsTail rtBase n heap conv lits closed staticEnd pubMap fw addr64 d
+    if !r.ok then { ok := false, fn := r.fn, pubs := [], ints := [] }
+    else
+      let intP := postPackOne doRi doReg dup drop r.intFn
+      let pubAcc1 := match r.pub with
+        | p :: _ => postPackOne doRi doReg dup drop p :: pubAcc
+        | [] => pubAcc
+      emitPackDecls doRi doReg dup drop inl tab g sigs r.nextSigIdx r.nextSigsTail rtBase n heap conv lits closed staticEnd pubMap fw addr64 ds pubAcc1 (intP :: intAcc)
+
+def appendWFnsP : List WFnP → List WFnP → List WFnP
+  | [], tail => tail
+  | f :: fs, tail => appendWFnsP fs (f :: tail)
+
+def joinWFnsP (a b : List WFnP) : List WFnP :=
+  appendWFnsP (revWFnsP a []) b
+
+def lrcModulePackedWithRt (rtFns : List WFn) (lay : Layers) (g : Dg) (sigs : List (List Int)) (n : Nat) (pubs : List Int) (decls : List Lrc.Decl) : OutP :=
+  let rts := List.range (runtimeCountWithLayers lay)
+  let rtBase := rts.length
+  let clRefs := Lrc.clRefsDecls decls Lrc.vsEmpty
+  let emitDecls := Lrc.clTrimTailV (n + Lrc.nHelpers) clRefs decls
+  let heap := if lay.alloc then rtBase + n + emitDecls.length else 0
+  let fw := if lay.narrow && lay.alloc then 4 else 8
+  let conv := if lay.facts then 1 else 0
+  let lits := Lrc.litPool emitDecls
+  let cg := Lrc.clGroundRefs n fw lits clRefs decls
+  if !cg.ok then outPFail (lrcRefused (Lrc.Residue.nodeNotWritten cg.fn))
+  else
+  let lowData := Lrc.litData lits
+  let ground := if cg.pool.chunks.isEmpty then [] else [cg.pool]
+  let staticEnd := if cg.pool.chunks.isEmpty then profile.heapAt else cg.pool.next
+  let useArr := if heap == 0 then false else Lrc.declsUseArr n emitDecls
+  let kept := shiftFns (rtBase + n) (Lrc.keptFns emitDecls)
+  let inl := Lrc.inlOf conv n emitDecls
+  let tab := if conv == 0 then Lrc.dtOfList (Lrc.inlKeepBodies Lrc.imEmpty emitDecls) else inl.tab
+  let pubMap := Lrc.pubMapOf pubs Lrc.it0
+  let preFns0 := rtFnsFrom rtFns rts
+  let emptyFn : WFn := { params := [], results := [], locals := [], code := [] }
+  let dup := if lay.rc then preFns0.getD 6 emptyFn else emptyFn
+  let drop := if lay.rc then preFns0.getD 7 emptyFn else emptyFn
+  let pre1 := postWFnsPack false lay.reg dup drop preFns0 []
+  let tailFns := (if heap == 0 then [] else Lrc.heapFnsFor useArr heap fw lay.addr64)
+    ++ (if fw == 4 then [Lrc.narrowFn] else []) ++ (if lay.addr64 then [Lrc.addr64Fn] else [])
+  let tail1 := postWFnsPack lay.rc lay.reg dup drop tailFns []
+  let em := emitPackDecls lay.rc lay.reg dup drop inl tab g sigs 0 sigs rtBase n heap conv lits cg.addrs staticEnd pubMap fw lay.addr64 emitDecls [] []
+  if !em.ok then outPFail (lrcRefused (Lrc.Residue.nodeNotWritten em.fn))
+  else
+    let pubs1 := em.pubs
+    let ints1 := em.ints
+    let fns := joinWFnsP pre1 (joinWFnsP pubs1 (joinWFnsP ints1 tail1))
+    let lastIdx := fns.length - 1
+    let narrowExps : List WEx := if fw == 4 then [{ idx := lastIdx, name := Lrc.narrowName }] else []
+    let addr64Exps : List WEx := if lay.addr64 then [{ idx := lastIdx, name := Lrc.addr64Name }] else []
+    let expsP := shiftExps rtBase (expsFor n) ++ narrowExps ++ addr64Exps
+    outPOk (encodePacked { fns := fns, exps := expsP, ground := ground, tags := conv,
+                           lowData := lowData, addr64 := lay.addr64, kept := kept })
+
+def lrcCompilePackedWithRt (rtFns : List WFn) (lay : Layers) (g : Dg) (intr : List Int) (sigs : List (List Int)) (n : Nat) (bodies : List Int) (ws : List (List Int)) : OutP :=
+  let c := Lrc.q { types := g, intr := intr, sigs := sigs, n := n, bodies := bodies, arrays := lay.alloc, narrow := lay.narrow && lay.alloc,
+                   widths := ws }
+  let types := c.types
+  match Lrc.admit c with
+  | Except.error e => outPFail (lrcRefused e)
+  | Except.ok im =>
+    let pubs := im.pubs
+    let imN := im.n
+    let decls0 := im.decls
+    lrcModulePackedWithRt rtFns lay types sigs n pubs (Lrc.pipelineWith ((if lay.cte then 1 else if lay.fuse then 0 else Lrc.pipelineDefault) + (if lay.qbe then 4 else 0) + (if lay.tail then 8 else 0) + (if lay.static then 16 else 0) + (if lay.dropSpec then 0 else 256) + (if lay.narrow && lay.alloc then 2048 else 0)) imN decls0)
+
+def compileFromPackedWithRt (rtFns : List WFn) (lay : Layers) (g : Dg) (tbl : List TE) (hrest : List Int) : OutP :=
+  let g := { g with nodeUse := if g.on && !lrcOn lay then nodeUsed g else [] }
+  let c := readLeb hrest
+  if c.ok != profile.cOk then outPFail c.ok
+  else if c.n < (profile.fnMin : Int) || c.n > (profile.fnMax : Int) then outPFail profile.cArity
+  else
+    let ss := readSigs g c.n.toNat [] c.rest
+    let word64 := lrcOn lay
+    let chk := if ss.ok == profile.cOk && (g.on || !word64) then chkBodies g word64 c.n.toNat ss.rest else rdOk 0 ss.rest
+    if ss.ok != profile.cOk then outPFail ss.ok
+    else if chk.ok != profile.cOk && (g.on || (chk.ok >= profile.cUnsup + 64 && chk.ok <= profile.cUnsup + 77)) then outPFail chk.ok
+    else
+      let intrinsics := intrinsicKinds lay g 0 ss.ss ss.rest
+      if lrcOn lay then lrcCompilePackedWithRt rtFns lay g intrinsics ss.ss c.n.toNat ss.rest (readSigWs g c.n.toNat c.rest)
+      else
+        let o := compileFromWithRt rtFns lay g tbl hrest
+        if o.ok != profile.cOk then outPFail o.ok
+        else outPOk (packChunkU32 o.bytes [])
+
+def compileWithLayersPacked (lay : Layers) (tbl : List TE) (bs : List Int) : OutP :=
+  if !(layerConflict lay).isEmpty then outPFail profile.cLayerBits
+  else
+    let rt := rtCompileForLayers lay
+    if rt.error != 0 then outPFail profile.cBody
+    else match bs with
+    | 82 :: 83 :: 67 :: 77 :: 2 :: rest =>
+      let k := readLeb rest
+      if k.ok != profile.cOk then outPFail k.ok
+      else if k.n < 0 then outPFail profile.cArity
+      else
+        let d := dgRead lay dgEmpty k.n.toNat k.rest
+        if d.ok != profile.cOk then outPFail d.ok else compileFromPackedWithRt rt.fns lay d.g tbl d.rest
+    | _ =>
+      let h := eatAll [82, 83, 67, 77, 1] bs
+      if h.ok != profile.cOk then outPFail h.ok else compileFromPackedWithRt rt.fns lay dgNone tbl h.rest
+
+def compilePacked (config : Int) (bs : List Int) : OutP :=
+  match layersFromBits config with
+  | none => outPFail profile.cLayerBits
+  | some lay => compileWithLayersPacked lay (if lrcOn lay then [] else tableWithLayers lay) bs

@@ -1,0 +1,17 @@
+-- micro program for a call that names a literal, where the literal stands for a parameter that is a word of 64
+-- bits (lib/lrc/JoinOnce.rsd "A call that names a literal"; instruments/lrc-host/ProgLitCall.rsd has the other
+-- kinds of parameter). The present lowering takes no such word (`unsupported_64`): the row names that refusal.
+-- The row's values are stock Lean's.
+def w64 : UInt64 → List Nat → Nat
+  | _, [] => 7
+  | k, x :: xs => if k == 0 then x else w64 0 xs
+
+-- two literals of one function, at the second place
+def wpick : List Nat → UInt64 → Nat
+  | [], _ => 7
+  | x :: xs, k => if k == 3 then x else if k == 8 then 30 else wpick xs 3
+
+-- the entry of the row: no argument; one number of the seven results (4, 5, 7, 4, 30, 5, 7)
+def litWordAt : Nat :=
+  w64 0 [4, 5] + 10 * w64 9 [4, 5] + 100 * w64 9 [] + 1000 * wpick [4, 5] 3 + 10000 * wpick [4, 5] 8
+    + 1000000 * wpick [4, 5] 1 + 10000000 * wpick [] 8

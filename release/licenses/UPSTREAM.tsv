@@ -1,5 +1,6 @@
 path	url	git_blob_expected
 release/licenses/koka-LICENSE	https://raw.githubusercontent.com/koka-lang/koka/facb7932ce6871fdb063f762a304bd8238f35fba/LICENSE	82b129365bd2166c0a9c999dbc9136eaa8b9fee9
+release/licenses/lean4-LICENSE	https://raw.githubusercontent.com/leanprover/lean4/410fab7284703f41660ca2454218dcca9b2ec896/LICENSE	813da297567374691eaae7a88739dbbefd2afdfd
 release/licenses/bend-LICENSE	https://raw.githubusercontent.com/bendlang/bend/be236f324ed0338fe907fe50474468e4d3b94157/LICENSE	a20d4b8ab3ed6c76c1215488bd2d865cee1e57c4
 release/licenses/cw-plus-LICENSE-APACHE	https://raw.githubusercontent.com/CosmWasm/cw-plus/cb3c89201527aba339d77b81e3044f773e715275/LICENSE-APACHE	d645695673349e3947e8e5ae42332d0ac3164cd7
 release/licenses/cw-plus-NOTICE	https://raw.githubusercontent.com/CosmWasm/cw-plus/cb3c89201527aba339d77b81e3044f773e715275/NOTICE	09d5a6ba719444a44f99be1848e1d5e8c52031ed

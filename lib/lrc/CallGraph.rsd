@@ -11,24 +11,36 @@ import Lib.Lrc.Ir
 
 namespace Lrc
 
+structure CgAcc where
+  seen : VSet
+  list : List Int
+  deriving Inhabited
+
 mutual
--- the functions a body calls
-partial def cgCallees (n : N) (acc : List Int) : List Int :=
+partial def cgCalleesGo (n : N) (a : CgAcc) : CgAcc :=
   if n.op == opVDecl then
     let e := vdeclExpr n
-    cgCallees (bodyOf n) (if e.op == opFap && !acc.contains (fapFn e : Int) then (fapFn e : Int) :: acc else acc)
-  else if n.op == opJDecl then cgCallees (bodyOf n) (cgCallees (jdeclBody n) acc)
-  else if n.op == opCase then cgCalleesAlts (caseAlts n) acc
-  else if isTerminal n then acc
-  else cgCallees (bodyOf n) acc
-partial def cgCalleesAlts : List N → List Int → List Int
-  | [], acc => acc
-  | alt :: alts, acc => cgCalleesAlts alts (cgCallees (altBody alt) acc)
+    let fi : Int := (fapFn e : Int)
+    cgCalleesGo (bodyOf n)
+      (if e.op == opFap && !vsContainsI a.seen fi then { seen := vsInsertI a.seen fi, list := fi :: a.list } else a)
+  else if n.op == opJDecl then cgCalleesGo (bodyOf n) (cgCalleesGo (jdeclBody n) a)
+  else if n.op == opCase then cgCalleesAltsGo (caseAlts n) a
+  else if isTerminal n then a
+  else cgCalleesGo (bodyOf n) a
+partial def cgCalleesAltsGo : List N → CgAcc → CgAcc
+  | [], a => a
+  | alt :: alts, a => cgCalleesAltsGo alts (cgCalleesGo (altBody alt) a)
 end
 
-def cgOrder : List (List Int) → List Int
-  | [] => []
-  | g :: gs => g ++ cgOrder gs
+-- the functions a body calls
+def cgCallees (n : N) (acc : List Int) : List Int :=
+  (cgCalleesGo n { seen := vsInsertArgs vsEmpty acc, list := acc }).list
+
+def cgOrderRev : List (List Int) → List Int → List Int
+  | [], acc => acc
+  | g :: gs, acc => cgOrderRev gs (g.reverse ++ acc)
+
+def cgOrder (gs : List (List Int)) : List Int := (cgOrderRev gs []).reverse
 
 /-! ## The call graph's components
 
@@ -91,7 +103,7 @@ partial def tjFrom (adj : Map) (i n : Nat) (s : TjS) : TjS :=
 def cgAdj (size : Nat) : List Decl → Map → Map
   | [], m => m
   | d :: ds, m =>
-    cgAdj size ds (if d.ext then m else mapPut m (d.f : Int) 1 0 0 ((cgCallees d.body []).filter (fun c => c < (size : Int))))
+    cgAdj size ds (if d.ext || declIsClosed d then m else mapPut m (d.f : Int) 1 0 0 ((cgCallees d.body []).filter (fun c => c < (size : Int))))
 
 structure CallScc where
   -- for each declaration with a body: the functions it calls (the entry's list)
@@ -100,30 +112,43 @@ structure CallScc where
   groups : List (List Int)
   -- the functions of a cycle: a component of several, or a function that calls itself
   recs : VSet
-  -- for each function of a component of several: the component (the entry's list)
+  -- for each component of several, keyed by component number q: the component (the entry's list)
   comps : Map
+  -- for each function of a component of several: its component number q (-1 when absent)
+  compOf : ITree := it0
+  nextComp : Int := 0
   deriving Inhabited
 
-def sccComps (g : List Int) : List Int → Map → Map
-  | [], m => m
-  | v :: vs, m => sccComps g vs (mapPut m v 1 0 0 g)
+def sccCompIds (q : Int) : List Int → ITree → ITree
+  | [], t => t
+  | v :: vs, t => sccCompIds q vs (itPut t v q)
 
 def sccMark (adj : Map) : List (List Int) → CallScc → CallScc
   | [], c => c
   | g :: gs, c =>
     match g with
     | [v] => sccMark adj gs (if (mapXs adj v).contains v then { c with recs := vsInsert c.recs v.toNat } else c)
-    | _ => sccMark adj gs { c with recs := vsInsertArgs c.recs g, comps := sccComps g g c.comps }
+    | _ =>
+      let q := c.nextComp
+      sccMark adj gs { c with recs := vsInsertArgs c.recs g, comps := mapPut c.comps q 1 0 0 g,
+                              compOf := sccCompIds q g c.compOf, nextComp := q + 1 }
 
 -- `decls` in the order of their function numbers (lib/lrc/Ir.rsd `declsDense`)
 def callScc (decls : List Decl) : CallScc :=
   let adj := cgAdj decls.length decls (map0 0)
   let s := tjFrom adj 0 decls.length { disc := imEmpty, low := imEmpty, on := imEmpty, stk := [], clk := 0, groups := [] }
-  sccMark adj s.groups { adj := adj, groups := s.groups.reverse, recs := vsEmpty, comps := map0 0 }
+  sccMark adj s.groups { adj := adj, groups := s.groups.reverse, recs := vsEmpty, comps := map0 0, compOf := it0, nextComp := 0 }
 
 -- the component of f: the functions that call each other with it
 def sccOf (c : CallScc) (f : Int) : List Int :=
-  let r := mapNode c.comps f
-  if r.tag == 0 then [f] else r.extra
+  let q := itFind c.compOf f
+  if q < 0 then [f] else mapXs c.comps q
+
+-- the component number q of f when f belongs to a component of several, or -1
+def sccCompNum (c : CallScc) (f : Int) : Int := itFind c.compOf f
+
+-- is `callee` in the same component as `self` (whose multi-function component number is `comp`)
+def sccSameCompI (self comp : Int) (compOf : ITree) (callee : Int) : Bool :=
+  callee == self || (comp >= 0 && itFind compOf callee == comp)
 
 end Lrc

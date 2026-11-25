@@ -150,55 +150,81 @@ another pass's entry is `bot`: Lean starts every pass with empty assignments (El
 and here that costs nothing and leaves the other declarations' entries where they are. -/
 
 structure EvMap where
-  -- 0: the empty map
-  tag : Nat
-  key : Int
+  -- h = 0: the empty map
   h : Int
-  ep : Nat
+  key : Int
+  ep : Int
   v : EdbV
   left : List EvMap
   right : List EvMap
   deriving Inhabited
 
-def ev0 : EvMap := { tag := 0, key := 0, h := 0, ep := 0, v := edbBot, left := [], right := [] }
+def ev0 : EvMap := { h := 0, key := 0, ep := 0, v := edbBot, left := [], right := [] }
 
 def evKid : List EvMap → EvMap
   | [] => ev0
   | m :: _ => m
 
-def evBox (m : EvMap) : List EvMap := if m.tag == 0 then [] else [m]
+def evBox (m : EvMap) : List EvMap := if m.h == 0 then [] else [m]
 
-def evH (m : EvMap) : Int := if m.tag == 0 then 0 else m.h
-
-def evMk (l : EvMap) (k : Int) (ep : Nat) (v : EdbV) (r : EvMap) : EvMap :=
-  { tag := 1, key := k, h := (if evH l > evH r then evH l else evH r) + 1, ep := ep, v := v, left := evBox l, right := evBox r }
+def evMk (l : EvMap) (k : Int) (ep : Int) (v : EdbV) (r : EvMap) : EvMap :=
+  { h := (if l.h > r.h then l.h else r.h) + 1, key := k, ep := ep, v := v, left := evBox l, right := evBox r }
 
 -- lib/AvlMap.rsd `bal`: the entry `e` (its key, pass and value) between l and r
 def evBal (l : EvMap) (e : EvMap) (r : EvMap) : EvMap :=
-  if evH l > evH r + 2 then
-    (if evH (evKid l.left) >= evH (evKid l.right) then evMk (evKid l.left) l.key l.ep l.v (evMk (evKid l.right) e.key e.ep e.v r)
-     else evMk (evMk (evKid l.left) l.key l.ep l.v (evKid (evKid l.right).left)) (evKid l.right).key (evKid l.right).ep (evKid l.right).v
-            (evMk (evKid (evKid l.right).right) e.key e.ep e.v r))
-  else if evH r > evH l + 2 then
-    (if evH (evKid r.right) >= evH (evKid r.left) then evMk (evMk l e.key e.ep e.v (evKid r.left)) r.key r.ep r.v (evKid r.right)
-     else evMk (evMk l e.key e.ep e.v (evKid (evKid r.left).left)) (evKid r.left).key (evKid r.left).ep (evKid r.left).v
-            (evMk (evKid (evKid r.left).right) r.key r.ep r.v (evKid r.right)))
+  if l.h > r.h + 2 then
+    let ll := evKid l.left
+    let lr := evKid l.right
+    if ll.h >= lr.h then evMk ll l.key l.ep l.v (evMk lr e.key e.ep e.v r)
+    else evMk (evMk ll l.key l.ep l.v (evKid lr.left)) lr.key lr.ep lr.v (evMk (evKid lr.right) e.key e.ep e.v r)
+  else if r.h > l.h + 2 then
+    let rl := evKid r.left
+    let rr := evKid r.right
+    if rr.h >= rl.h then evMk (evMk l e.key e.ep e.v rl) r.key r.ep r.v rr
+    else evMk (evMk l e.key e.ep e.v (evKid rl.left)) rl.key rl.ep rl.v (evMk (evKid rl.right) r.key r.ep r.v rr)
   else evMk l e.key e.ep e.v r
 
 -- the value pass `ep` wrote at key k, `bot` when it wrote none
-partial def evGet (m : EvMap) (k : Int) (ep : Nat) : EdbV :=
-  if m.tag == 0 then edbBot
+partial def evGetI (m : EvMap) (k ep : Int) : EdbV :=
+  if m.h == 0 then edbBot
   else if k == m.key then (if m.ep == ep then m.v else edbBot)
-  else evGet (evKid (if k < m.key then m.left else m.right)) k ep
+  else
+    match (if k < m.key then m.left else m.right) with
+    | [] => edbBot
+    | c :: _ => evGetI c k ep
 
-partial def evPut (m : EvMap) (k : Int) (ep : Nat) (v : EdbV) : EvMap :=
-  if m.tag == 0 then evMk ev0 k ep v ev0
-  else if k == m.key then evMk (evKid m.left) k ep v (evKid m.right)
-  else if k < m.key then evBal (evPut (evKid m.left) k ep v) m (evKid m.right)
-  else evBal (evKid m.left) m (evPut (evKid m.right) k ep v)
+def evGet (m : EvMap) (k : Int) (ep : Nat) : EdbV := evGetI m k (ep : Int)
+
+partial def evPutI (m : EvMap) (k ep : Int) (v : EdbV) : EvMap :=
+  if m.h == 0 then { h := 1, key := k, ep := ep, v := v, left := [], right := [] }
+  else if k == m.key then { m with ep := ep, v := v }
+  else if k < m.key then
+    match m.left with
+    | [] =>
+      let leaf : EvMap := { h := 1, key := k, ep := ep, v := v, left := [], right := [] }
+      if m.right.isEmpty then { m with h := 2, left := [leaf] } else { m with left := [leaf] }
+    | l :: _ =>
+      let l1 := evPutI l k ep v
+      if l1.h == l.h then { m with left := [l1] }
+      else evBal l1 m (evKid m.right)
+  else
+    match m.right with
+    | [] =>
+      let leaf : EvMap := { h := 1, key := k, ep := ep, v := v, left := [], right := [] }
+      if m.left.isEmpty then { m with h := 2, right := [leaf] } else { m with right := [leaf] }
+    | r :: _ =>
+      let r1 := evPutI r k ep v
+      if r1.h == r.h then { m with right := [r1] }
+      else evBal (evKid m.left) m r1
+
+def evPut (m : EvMap) (k : Int) (ep : Nat) (v : EdbV) : EvMap := evPutI m k (ep : Int) v
 
 -- variable x of the declaration at position i (`s.assignments[i]!` at x)
-def edbKey (i x : Nat) : Int := ((i * 16777216 + x : Nat) : Int)
+def edbKey (i x : Nat) : Int :=
+  let ii : Int := (i : Int)
+  let xi : Int := (x : Int)
+  if ii < 65536 && xi < 32768 then ii * 32768 + xi
+  else 0 - 1 - (ii * 16777216 + xi)
 
 -- a join point of the local context (ElimDeadBranches:258 `lctx.addJP j ys v`)
 structure EdbJP where
@@ -252,7 +278,10 @@ def edbFindArg (y : Int) (ctx : EdbCtx) (s : EdbState) : EdbV :=
 
 -- ElimDeadBranches:182 updateVarAssignment
 def edbUpdVar (x : Nat) (v : EdbV) (ctx : EdbCtx) (s : EdbState) : EdbState :=
-  { s with assigns := evPut s.assigns (edbKey ctx.curr x) s.ep (edbMerge v (evGet s.assigns (edbKey ctx.curr x) s.ep)) }
+  let k := edbKey ctx.curr x
+  let old := evGet s.assigns k s.ep
+  if old.tag == 1 || (v.tag == 0 && old.tag == 0) then s
+  else { s with assigns := evPut s.assigns k s.ep (edbMerge v old) }
 
 -- was a jump to join point j walked in this pass over the function
 def edbMarked (j : Nat) (ctx : EdbCtx) (s : EdbState) : Bool :=

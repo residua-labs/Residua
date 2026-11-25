@@ -1,7 +1,8 @@
 -- LRC: sets and maps keyed by a variable or join point index.
 -- Lean uses red-black trees (IR/Basic.lean:445 IndexSet, :603 VarIdSet, :512 IndexRenaming); here the
--- persistent AVL map of lib/AvlMap.rsd carries them. A key maps to 1 when it is a member and to 0
--- after an erase; a key never inserted reads -1 (AvlMap's own missing-key value).
+-- persistent size-bounded map of lib/AvlMap.rsd stays for general integer maps while sets, index maps and class
+-- tables use compact `Int`-scalar balanced trees (keeping height, keys and scalar values in the object's
+-- scalar area rather than pointer slots, with 64-bit word comparisons and height-preserving updates).
 -- closure_claim = 0.
 import AvlMap
 
@@ -10,7 +11,8 @@ namespace Lrc
 /-! The map of lib/AvlMap.rsd read and written without the record its `get` and `ins` build at
 every level of the tree (the value, the steps, the entry): the passes read a map at every
 instruction of a program. `mapNode` is the entry of a key, an empty map (tag 0) when there is
-none; `mapPut` is `ins` with the same balancing, so the tree is the one `ins` builds. -/
+none; `mapPut` is `ins` with the same balancing, reusing unchanged sibling boxes when child
+size does not change. -/
 
 partial def mapNode (m : Map) (k : Int) : Map :=
   if m.tag == 0 || k == m.key then m
@@ -26,43 +28,167 @@ def mapVal (m : Map) (k : Int) : Int :=
 
 def mapXs (m : Map) (k : Int) : List Int := (mapNode m k).extra
 
-partial def mapPut (m : Map) (k v sa sb : Int) (xs : List Int) : Map :=
-  if m.tag == 0 then mk 0 (map0 0) k v sa sb xs (map0 0)
-  else if k == m.key then mk 0 (kid 0 m.left) k v sa sb xs (kid 0 m.right)
-  else if k < m.key then
-    bal 0 (match m.left with
-           | [] => mk 0 (map0 0) k v sa sb xs (map0 0)
-           | c :: _ => mapPut c k v sa sb xs) m.key m.val m.sa m.sb m.extra (kid 0 m.right)
-  else
-    bal 0 (kid 0 m.left) m.key m.val m.sa m.sb m.extra (match m.right with
-           | [] => mk 0 (map0 0) k v sa sb xs (map0 0)
-           | c :: _ => mapPut c k v sa sb xs)
+def mapLeaf (k v sa sb : Int) (xs : List Int) : Map :=
+  { tag := 1, key := k, val := v, h := 1, sa := sa, sb := sb, extra := xs, left := [], right := [] }
 
-structure VSet where
-  m : Map
+partial def mapPut (m : Map) (k v sa sb : Int) (xs : List Int) : Map :=
+  if m.tag == 0 then mapLeaf k v sa sb xs
+  else if k == m.key then { m with val := v, sa := sa, sb := sb, extra := xs }
+  else if k < m.key then
+    match m.left with
+    | [] =>
+      let leaf := mapLeaf k v sa sb xs
+      { m with h := m.h + 1, left := [leaf] }
+    | l :: _ =>
+      let l1 := mapPut l k v sa sb xs
+      if l1.h == l.h then { m with left := [l1] }
+      else balanceL 0 l1 m.key m.val m.sa m.sb m.extra (kid 0 m.right)
+  else
+    match m.right with
+    | [] =>
+      let leaf := mapLeaf k v sa sb xs
+      { m with h := m.h + 1, right := [leaf] }
+    | r :: _ =>
+      let r1 := mapPut r k v sa sb xs
+      if r1.h == r.h then { m with right := [r1] }
+      else balanceR 0 (kid 0 m.left) m.key m.val m.sa m.sb m.extra r1
+
+/-! ## Compact 4-field `Int`-scalar balanced set (`VTree`, `VSet`) -/
+
+structure VTree where
+  tag : Int
+  key : Int
+  left : List VTree
+  right : List VTree
   deriving Inhabited
 
-def vsEmpty : VSet := { m := map0 0 }
+def vt0 : VTree := { tag := 0, key := 0, left := [], right := [] }
 
-def vsContains (s : VSet) (x : Nat) : Bool := mapVal s.m (x : Int) == 1
+def vtKid : List VTree → VTree
+  | [] => vt0
+  | c :: _ => c
+
+def vtBox (t : VTree) : List VTree := if t.tag == 0 then [] else [t]
+
+def vtMk (l : VTree) (key : Int) (r : VTree) : VTree :=
+  { tag := (if l.tag > r.tag then l.tag else r.tag) + 1, key := key, left := vtBox l, right := vtBox r }
+
+def vtBal (l : VTree) (key : Int) (r : VTree) : VTree :=
+  if l.tag > r.tag + 2 then
+    let ll := vtKid l.left
+    let lr := vtKid l.right
+    if ll.tag >= lr.tag then vtMk ll l.key (vtMk lr key r)
+    else vtMk (vtMk ll l.key (vtKid lr.left)) lr.key (vtMk (vtKid lr.right) key r)
+  else if r.tag > l.tag + 2 then
+    let rl := vtKid r.left
+    let rr := vtKid r.right
+    if rr.tag >= rl.tag then vtMk (vtMk l key rl) r.key rr
+    else vtMk (vtMk l key (vtKid rl.left)) rl.key (vtMk (vtKid rl.right) r.key rr)
+  else vtMk l key r
+
+partial def vtHas (t : VTree) (k : Int) : Bool :=
+  if t.tag == 0 then false
+  else if k == t.key then true
+  else
+    match (if k < t.key then t.left else t.right) with
+    | [] => false
+    | c :: _ => vtHas c k
+
+partial def vtPutNew (t : VTree) (k : Int) : VTree :=
+  if t.tag == 0 then { tag := 1, key := k, left := [], right := [] }
+  else if k < t.key then
+    match t.left with
+    | [] =>
+      let leaf : VTree := { tag := 1, key := k, left := [], right := [] }
+      if t.right.isEmpty then { t with tag := 2, left := [leaf] } else { t with left := [leaf] }
+    | l :: _ =>
+      let l1 := vtPutNew l k
+      if l1.tag == l.tag then { t with left := [l1] }
+      else vtBal l1 t.key (vtKid t.right)
+  else
+    match t.right with
+    | [] =>
+      let leaf : VTree := { tag := 1, key := k, left := [], right := [] }
+      if t.left.isEmpty then { t with tag := 2, right := [leaf] } else { t with right := [leaf] }
+    | r :: _ =>
+      let r1 := vtPutNew r k
+      if r1.tag == r.tag then { t with right := [r1] }
+      else vtBal (vtKid t.left) t.key r1
+
+def vtIns (t : VTree) (k : Int) : VTree :=
+  if vtHas t k then t else vtPutNew t k
+
+partial def vtMin (t : VTree) : Int :=
+  match t.left with
+  | [] => t.key
+  | l :: _ => if l.tag == 0 then t.key else vtMin l
+
+partial def vtDelMin (t : VTree) : VTree :=
+  match t.left with
+  | [] => vtKid t.right
+  | l :: _ =>
+    if l.tag == 0 then vtKid t.right
+    else
+      let l1 := vtDelMin l
+      if l1.tag == l.tag then { t with left := vtBox l1 }
+      else vtBal l1 t.key (vtKid t.right)
+
+partial def vtDel (t : VTree) (k : Int) : VTree :=
+  if t.tag == 0 then t
+  else if k == t.key then
+    let l := vtKid t.left
+    let r := vtKid t.right
+    if l.tag == 0 then r
+    else if r.tag == 0 then l
+    else vtBal l (vtMin r) (vtDelMin r)
+  else if k < t.key then
+    let l := vtKid t.left
+    let l1 := vtDel l k
+    if l1.tag == l.tag then { t with left := vtBox l1 }
+    else vtBal l1 t.key (vtKid t.right)
+  else
+    let r := vtKid t.right
+    let r1 := vtDel r k
+    if r1.tag == r.tag then { t with right := vtBox r1 }
+    else vtBal (vtKid t.left) t.key r1
+
+partial def vtToList (t : VTree) (acc : List Nat) : List Nat :=
+  if t.tag == 0 then acc
+  else
+    let r := vtToList (vtKid t.right) acc
+    vtToList (vtKid t.left) (t.key.toNat :: r)
+
+partial def vtUnionInto (src dst : VTree) : VTree :=
+  if src.tag == 0 then dst
+  else
+    let d1 := vtUnionInto (vtKid src.left) dst
+    let d2 := vtIns d1 src.key
+    vtUnionInto (vtKid src.right) d2
+
+structure VSet where
+  m : VTree
+  deriving Inhabited
+
+def vsEmpty : VSet := { m := vt0 }
+
+def vsContainsI (s : VSet) (k : Int) : Bool := vtHas s.m k
+
+def vsInsertI (s : VSet) (k : Int) : VSet :=
+  if vtHas s.m k then s else { m := vtPutNew s.m k }
+
+def vsContains (s : VSet) (x : Nat) : Bool := vtHas s.m (x : Int)
 
 def vsInsert (s : VSet) (x : Nat) : VSet :=
-  if vsContains s x then s else { m := mapPut s.m (x : Int) 1 0 0 [] }
+  let k : Int := (x : Int)
+  if vtHas s.m k then s else { m := vtPutNew s.m k }
 
 def vsErase (s : VSet) (x : Nat) : VSet :=
-  if vsContains s x then { m := mapPut s.m (x : Int) 0 0 0 [] } else s
+  let k : Int := (x : Int)
+  if !vtHas s.m k then s else { m := vtDel s.m k }
 
--- the members in increasing order; `acc` is the list that follows them
-partial def mapMembers (m : Map) (acc : List Nat) : List Nat :=
-  if m.tag == 0 then acc
-  else
-    let r := mapMembers (kid 0 m.right) acc
-    let r := if m.val == 1 then m.key.toNat :: r else r
-    mapMembers (kid 0 m.left) r
+def vsToList (s : VSet) : List Nat := vtToList s.m []
 
-def vsToList (s : VSet) : List Nat := mapMembers s.m []
-
-def vsIsEmpty (s : VSet) : Bool := (vsToList s).isEmpty
+def vsIsEmpty (s : VSet) : Bool := s.m.tag == 0
 
 def vsInsertAll : VSet → List Nat → VSet
   | s, [] => s
@@ -72,26 +198,165 @@ def vsEraseAll : VSet → List Nat → VSet
   | s, [] => s
   | s, x :: xs => vsEraseAll (vsErase s x) xs
 
-def vsUnion (a b : VSet) : VSet := vsInsertAll a (vsToList b)
+def vsUnion (a b : VSet) : VSet :=
+  if a.m.tag == 0 then b
+  else if b.m.tag == 0 then a
+  else if a.m.tag <= b.m.tag then { m := vtUnionInto a.m b.m }
+  else { m := vtUnionInto b.m a.m }
 
 def vsOfList (xs : List Nat) : VSet := vsInsertAll vsEmpty xs
 
 -- the variables among a list of arguments (IR/Basic.lean:138: an argument is a variable or irrelevant)
 def vsInsertArgs : VSet → List Int → VSet
   | s, [] => s
-  | s, y :: ys => vsInsertArgs (if y >= 0 then vsInsert s y.toNat else s) ys
+  | s, y :: ys => vsInsertArgs (if y >= 0 then vsInsertI s y else s) ys
 
-/-! A map from an index to a natural number. `imFind` returns -1 for a key that is absent. -/
-structure IMap where
-  m : Map
+/-! ## Compact 5-field `Int`-scalar integer map (`ITree`, `IMap`) -/
+
+structure ITree where
+  tag : Int
+  key : Int
+  val : Int
+  left : List ITree
+  right : List ITree
   deriving Inhabited
 
-def imEmpty : IMap := { m := map0 0 }
+def it0 : ITree := { tag := 0, key := 0, val := 0, left := [], right := [] }
 
-def imFind (t : IMap) (k : Nat) : Int := mapVal t.m (k : Int)
+def itKid : List ITree → ITree
+  | [] => it0
+  | c :: _ => c
 
-def imInsert (t : IMap) (k : Nat) (v : Nat) : IMap := { m := mapPut t.m (k : Int) (v : Int) 0 0 [] }
+def itBox (t : ITree) : List ITree := if t.tag == 0 then [] else [t]
 
-def imContains (t : IMap) (k : Nat) : Bool := imFind t k >= 0
+def itMk (l : ITree) (key val : Int) (r : ITree) : ITree :=
+  { tag := (if l.tag > r.tag then l.tag else r.tag) + 1, key := key, val := val, left := itBox l, right := itBox r }
+
+def itBal (l : ITree) (key val : Int) (r : ITree) : ITree :=
+  if l.tag > r.tag + 2 then
+    let ll := itKid l.left
+    let lr := itKid l.right
+    if ll.tag >= lr.tag then itMk ll l.key l.val (itMk lr key val r)
+    else itMk (itMk ll l.key l.val (itKid lr.left)) lr.key lr.val (itMk (itKid lr.right) key val r)
+  else if r.tag > l.tag + 2 then
+    let rl := itKid r.left
+    let rr := itKid r.right
+    if rr.tag >= rl.tag then itMk (itMk l key val rl) r.key r.val rr
+    else itMk (itMk l key val (itKid rl.left)) rl.key rl.val (itMk (itKid rl.right) r.key r.val rr)
+  else itMk l key val r
+
+partial def itFind (t : ITree) (k : Int) : Int :=
+  if t.tag == 0 then -1
+  else if k == t.key then t.val
+  else
+    match (if k < t.key then t.left else t.right) with
+    | [] => -1
+    | c :: _ => itFind c k
+
+partial def itHas (t : ITree) (k : Int) : Bool :=
+  if t.tag == 0 then false
+  else if k == t.key then true
+  else
+    match (if k < t.key then t.left else t.right) with
+    | [] => false
+    | c :: _ => itHas c k
+
+partial def itPut (t : ITree) (k v : Int) : ITree :=
+  if t.tag == 0 then { tag := 1, key := k, val := v, left := [], right := [] }
+  else if k == t.key then (if v == t.val then t else { t with val := v })
+  else if k < t.key then
+    match t.left with
+    | [] =>
+      let leaf : ITree := { tag := 1, key := k, val := v, left := [], right := [] }
+      if t.right.isEmpty then { t with tag := 2, left := [leaf] } else { t with left := [leaf] }
+    | l :: _ =>
+      let l1 := itPut l k v
+      if l1.tag == l.tag then { t with left := [l1] }
+      else itBal l1 t.key t.val (itKid t.right)
+  else
+    match t.right with
+    | [] =>
+      let leaf : ITree := { tag := 1, key := k, val := v, left := [], right := [] }
+      if t.left.isEmpty then { t with tag := 2, right := [leaf] } else { t with right := [leaf] }
+    | r :: _ =>
+      let r1 := itPut r k v
+      if r1.tag == r.tag then { t with right := [r1] }
+      else itBal (itKid t.left) t.key t.val r1
+
+structure IMap where
+  m : ITree
+  deriving Inhabited
+
+def imEmpty : IMap := { m := it0 }
+
+def imFind (t : IMap) (k : Nat) : Int := itFind t.m (k : Int)
+
+def imInsert (t : IMap) (k : Nat) (v : Nat) : IMap := { m := itPut t.m (k : Int) (v : Int) }
+
+def imContains (t : IMap) (k : Nat) : Bool := itHas t.m (k : Int)
+
+/-! ## Compact 5-field `Int`-scalar list map (`LTree`) -/
+
+structure LTree where
+  tag : Int
+  key : Int
+  extra : List Int
+  left : List LTree
+  right : List LTree
+  deriving Inhabited
+
+def lt0 : LTree := { tag := 0, key := 0, extra := [], left := [], right := [] }
+
+def ltKid : List LTree → LTree
+  | [] => lt0
+  | c :: _ => c
+
+def ltBox (t : LTree) : List LTree := if t.tag == 0 then [] else [t]
+
+def ltMk (l : LTree) (key : Int) (xs : List Int) (r : LTree) : LTree :=
+  { tag := (if l.tag > r.tag then l.tag else r.tag) + 1, key := key, extra := xs, left := ltBox l, right := ltBox r }
+
+def ltBal (l : LTree) (key : Int) (xs : List Int) (r : LTree) : LTree :=
+  if l.tag > r.tag + 2 then
+    let ll := ltKid l.left
+    let lr := ltKid l.right
+    if ll.tag >= lr.tag then ltMk ll l.key l.extra (ltMk lr key xs r)
+    else ltMk (ltMk ll l.key l.extra (ltKid lr.left)) lr.key lr.extra (ltMk (ltKid lr.right) key xs r)
+  else if r.tag > l.tag + 2 then
+    let rl := ltKid r.left
+    let rr := ltKid r.right
+    if rr.tag >= rl.tag then ltMk (ltMk l key xs rl) r.key r.extra rr
+    else ltMk (ltMk l key xs (ltKid rl.left)) rl.key rl.extra (ltMk (ltKid rl.right) r.key r.extra rr)
+  else ltMk l key xs r
+
+partial def ltFind (t : LTree) (k : Int) : List Int :=
+  if t.tag == 0 then []
+  else if k == t.key then t.extra
+  else
+    match (if k < t.key then t.left else t.right) with
+    | [] => []
+    | c :: _ => ltFind c k
+
+partial def ltPut (t : LTree) (k : Int) (xs : List Int) : LTree :=
+  if t.tag == 0 then { tag := 1, key := k, extra := xs, left := [], right := [] }
+  else if k == t.key then { t with extra := xs }
+  else if k < t.key then
+    match t.left with
+    | [] =>
+      let leaf : LTree := { tag := 1, key := k, extra := xs, left := [], right := [] }
+      if t.right.isEmpty then { t with tag := 2, left := [leaf] } else { t with left := [leaf] }
+    | l :: _ =>
+      let l1 := ltPut l k xs
+      if l1.tag == l.tag then { t with left := [l1] }
+      else ltBal l1 t.key t.extra (ltKid t.right)
+  else
+    match t.right with
+    | [] =>
+      let leaf : LTree := { tag := 1, key := k, extra := xs, left := [], right := [] }
+      if t.left.isEmpty then { t with tag := 2, right := [leaf] } else { t with right := [leaf] }
+    | r :: _ =>
+      let r1 := ltPut r k xs
+      if r1.tag == r.tag then { t with right := [r1] }
+      else ltBal (ltKid t.left) t.key t.extra r1
 
 end Lrc

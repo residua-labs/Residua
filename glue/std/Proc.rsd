@@ -1,0 +1,49 @@
+-- provenance: ours (searched: lib/Proc9.rsd, glue/std/)
+-- glue/std/Proc.rsd — processes for glue tools.
+-- Runs a shell line through the devsrv `cmd` device: write the line to the
+-- `cmd` file, the server execs `/bin/sh -c`, read the result from `out`.
+-- Ported from lib/Proc9.rsd's session helpers (pHello/devReq/rdAllP/
+-- wrAllP/chk*/pEncode*) and host/devsrv/src/main.rs's cmd write semantics;
+-- nothing here re-implements the transport.
+
+import Lib.Proc
+import Lib.Proc9
+import Lib.ProcBytes
+import Glue.Std.Str
+
+-- open the `cmd` file on the cmd device and write the shell line, then read
+-- the whole `out` file. Output is the command's stdout (+ stderr + exit tag
+-- when the status is nonzero, per devsrv main.rs).
+def shP (line : List Int) : Proc := do {
+  let dev <- pure (devCmd 0);
+  let ms <- pHello dev;
+  let wc <- devReq dev (pEncodeWalk [[99, 109, 100]] 0 1);
+  let walked <- chkWalk wc 1;
+  let oc <- devReq dev (pEncodeOpen 1 17);
+  let opened <- chkOpen oc;
+  let wrote <- wrAllP dev 1 0 (nGet ms 0 - nIOHDRSZ 0) line;
+  let cc <- devReq dev (pEncodeClunk 1);
+  let clunked <- chkClunk cc;
+  let wo <- devReq dev (pEncodeWalk [[111, 117, 116]] 0 2);
+  let walked2 <- chkWalk wo 1;
+  let oo <- devReq dev (pEncodeOpen 2 0);
+  let opened2 <- chkOpen oo;
+  let out <- rdAllP dev 2 0 (nGet ms 0 - nIOHDRSZ 0) [];
+  let co <- devReq dev (pEncodeClunk 2);
+  let done <- chkClunk co;
+  out
+}
+
+-- read the clock device: "secs.nanos\n"
+def clockP : Proc := do {
+  let dev <- pure (devClock 0);
+  let ms <- pHello dev;
+  let w <- devReq dev (pEncodeWalk [[99, 108, 111, 99, 107]] 0 1);
+  let walked <- chkWalk w 1;
+  let o <- devReq dev (pEncodeOpen 1 0);
+  let opened <- chkOpen o;
+  let t <- rdAllP dev 1 0 (nGet ms 0 - nIOHDRSZ 0) [];
+  let c <- devReq dev (pEncodeClunk 1);
+  let done <- chkClunk c;
+  t
+}

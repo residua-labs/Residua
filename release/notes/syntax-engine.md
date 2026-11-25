@@ -25,7 +25,8 @@ surface is unchanged (the `.rsd` bootstrap subset of
 - Source revision: `28b9ff89f10514b93de92b8c0f60a109660ffa49` (on the
   development `main` branch).
 - Independent audit: an independent audit passed at that sha; transcript
-  `reports/release-02/evidence/AUDIT-SYNTAX-ENGINE.28b9ff89f1.md`
+  `AUDIT-SYNTAX-ENGINE.28b9ff89f1.md`
+  (repository-side on the 0.3 line, not in this archive)
   (repository-side, not in this archive).
 - Agreement with the class (E2): `rsdc/syntax/ClassGate.rsd` (repository-side) over 240
   generated grammars and 4,334 generated inputs —

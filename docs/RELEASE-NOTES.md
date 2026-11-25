@@ -1,139 +1,126 @@
-# RELEASE-NOTES — Residua 0.3
+# RELEASE-NOTES — Residua 0.4
 
 English | [中文](RELEASE-NOTES.zh-CN.md)
 
-Release 0.3 keeps the self-bootstrap closure — verifiable-provenance
-compilation, rebuilt byte-identically from the committed wasm seed with
-only a C compiler — and adds the `rsd` build tool, `UInt64` in the
-language, the first typed `ExecModel` instances at the execution
-boundary, and the MST-NF composition theorems. MST-NF is Residua's
-foundational theory: it lives in the public repository
+Release 0.4 keeps the self-bootstrap closure — verifiable-provenance
+compilation rebuilt byte-identically from the committed WebAssembly
+[seed](GLOSSARY.md) with only a C compiler — and adds multi-module `.rsd`
+programs, IEEE-754 `Float` (`binary64`), `Proc` `do`-notation and the
+C11 + Wasmtime `procwt` execution host, the standard `Proc` library
+(`glue/std/`), the multi-module `examples/app04` CLI, a smaller and
+faster recut seed, an Apache-2.0 balanced map (`lib/AvlMap.rsd`), and
+multi-hop plus recursion composition theorems in `lean/nf-compose/`.
+MST-NF is Residua's foundational theory: it lives in the public
+repository
 [github.com/residua-labs/MST-NF](https://github.com/residua-labs/MST-NF)
 at pinned commit `4432a34`, which holds the proofs.
 
-## New in 0.3
+## New in 0.4
 
-- **The `rsd` build tool.** `rsd build` compiles a program through the
-  content-addressed store and recompiles only what changed; `rsd test`
-  runs the end-to-end suite; `rsd run` executes; `rsd cache` is the
-  store itself. Dispatcher `rsd/`, store and graph `lib/rsd/`,
-  `lib/Rsd.rsd`; user document `docs/BUILD.md`; note
-  `release/notes/rsd-tool.md`.
-- **`UInt64` in the language.** The compiler sources now use it.
-- **Suites restored.** The benchmark and test suites 0.1.1/0.1.2
-  shipped and 0.2 dropped are back at their current bytes:
-  `benchmarks/`, `instruments/lrc-host/`, `perf/`,
-  `ACKNOWLEDGEMENTS.md`, and the TESTING guide. A new gate check
-  refuses a later release that drops a path an earlier release shipped
-  without a changelog line saying so.
-- **Typed `ExecModel` instances at the execution boundary**
-  (`semantics/Effect/AdmissionNF.lean`): `monitorModel` and
-  `exec9AdmissionModel`, with the four Tier-1 laws proved — quotient
-  factorization, admissibility soundness, residue totality and
-  representative precision. Repository-side receipt:
-  `reports/effect-sem/ADMISSION-NF.md` (11 theorems checked, axioms
-  within `propext`/`Quot.sound`, refusal control 1/1).
-- **Three surface spellings.** `examples/surfaces/` ships five
-  programs each printed in the `.rsd`, `.rsj` and `.rsm` spellings;
-  `docs/surfaces/` documents the profiles and records the round-trip
-  check that all three parse to the same tree.
-- **New seed cut; the wasm route defaults to `narrow`.** The committed
-  seed is re-cut at the pinned head; from this cut the wasm route
-  compiles with the `narrow` layer as its default, while the native
-  route stays 64-bit.
-- **The MST-NF composition theorems** (`lean/nf-compose/`): how a
-  step's necessity composes over products, sums, sequences and
-  dispatch, on the pinned necessity-execution model vendored in the
-  directory. Independent audit passed (`reports/nf-compose/REPORT.md`,
-  Lean 4.14, axioms `propext` only).
-- **Public documents for outside readers.** `README.md` in the usual
-  open-source order with a copy-paste quick start; `docs/` by the
-  Diátaxis split with an index; `docs/GLOSSARY.md`; `CONTRIBUTING.md`;
-  `CODE_OF_CONDUCT.md` (Contributor Covenant 2.1); `SECURITY.md`;
-  issue and pull-request templates. The build tool's sources ship under
-  their public names (`rsd/`, `lib/rsd/`, `lib/Rsd.rsd`). Comments in
-  pinned source bytes still name internal work items and reports; they
-  carry no personal data and change with the next seed cut.
+- **Modules, `Proc` `do`-notation, and the `procwt` execution host.**
+  Multi-module `.rsd` programs use `import` across `lib/`, `glue/std/`
+  and application modules, sequence effects with `do { let x <- … }`,
+  and run as WebAssembly on the C11 + Wasmtime host `glue/host/procwt.c`
+  (`glue/host/proc9core.h`; wasm2c counterpart `glue/host/proc9.c`).
+  `glue/std/` ships `Args`, `Files`, `Graph`, `Json`, `Map`, `Proc` and
+  `Str`; `lib/ProcBytes.rsd` and `lib/Proc9.rsd` ship the byte-slice and
+  9P2000 codecs; `glue/rsd/main.rsd` and `glue/rsd/build.rsd` wire
+  `rsd run` to `procwt`.
+- **IEEE-754 `Float` (`binary64`).** Supported end-to-end across `rsdc`,
+  the `.rscm` wire format (`docs/EMITTER.md`), `lambda-RC`, and
+  WebAssembly emission, preserving `NaN`, `±Infinity` and `-0.0`, with
+  differential oracle and mutation suites under `instruments/lrc-host/`.
+- **Three-module CLI example (`examples/app04/`).** `Stats.rsd`,
+  `Table.rsd` and `Main.rsd` read a line-delimited file of floating-point
+  numbers, compute `count`, `min`, `max`, `mean` and population
+  `variance`, format an aligned ASCII table with `String`, write an
+  output file, and exit nonzero on malformed input or I/O errors —
+  matching stock Lean `4.14.0` across all `16` differential inputs.
+- **Smaller, faster recut seed (`bootstrap/seed/stage-14274/`).**
+  `rsdc.wasm` drops from `19.9 MB` in 0.3 to `12,519,278` B
+  (`845b99ef…`, entry `f896`, `__heap_base` `765288`) and `rsc.wasm`
+  drops from `20.5 MB` to `14,275,644` B (`b52b07d1…`, entry `f2615`,
+  word `14274`, `__heap_base` `603704`). `seed-host.c` reads each
+  module's exported `__heap_base` global and supports `\0RSDC-ENTRIES\n`.
+  Clean-environment compiler rebuild runs in `105 s` (`193 s` total
+  recipe) on Linux x86-64 and `191 s` (`337 s` total recipe) on macOS
+  arm64.
+- **Apache-2.0 balanced map (`lib/AvlMap.rsd`).** Re-ported from Lean
+  `v4.36.0` (`Std/Data/DTreeMap/Internal/Def.lean` and `Balancing.lean`),
+  replacing 0.3's OCaml `stdlib/map.ml` port so every shipped compiler
+  and library file carries a permissive licence.
+- **Multi-hop and recursion MST-NF composition (`lean/nf-compose/`).**
+  `NfCompose/HopCompose.lean` proves composition across compiler hops,
+  and `NfCompose/Rec.lean` plus `NfRec/CheckedStatus.lean` prove bounded
+  and well-founded recursion composition over the pinned `ExecModel`.
 
-## MST-NF status at 0.3
+## MST-NF status at 0.4
 
 Each shipped component is either bound to the pinned `ExecModel`
-(`lean/nf-compose/pinned/MSTNecessityExecModelMWE.lean`) with the four
-Tier-1 laws proved, or recorded as a gap.
+(`lean/nf-compose/pinned/MSTNecessityExecModelMWE.lean`) with the Tier-1
+laws proved, or recorded as a gap.
 
 | shipped component | status |
 |---|---|
-| compiler chain (`rsdc`, `rsc`) | gap — no `ExecModel` instance yet |
-| execution layer (`semantics/Effect/`) | instance shipped: `monitorModel`, `exec9AdmissionModel`; Tier-1 laws proved (`AdmissionNF.lean`) |
-| syntax engine (`rsdc/profiles/`, `semantics/Syntax/`) | gap — no `ExecModel` instance yet |
-| QFormat (`docs/QFORMAT.md`, `release/checks/qformat/`) | gap — no `ExecModel` instance yet |
-| `rsd` build tool (`rsd/`, `lib/rsd/`) | gap — no `ExecModel` instance yet |
-| NF composition (`lean/nf-compose/`) | framework shipped: composition theorems over the pinned model, independently audited |
-
-0.1 and 0.2 shipped without any such instances: their `Monitor.lean`
-cited the three-form encoding, which is not the `ExecModel` definition.
-0.3 ships the first typed instances; the gaps above are recorded, not
-release-blocking.
-
-Admission-audit status: the admission audit of the wasm0 instance is
-signed on the development main line, after this release — the
-instance's decider runs by type-variable unification against an
-independent wasm-validate oracle over two seeds, with no
-counter-signature. The QFormat, rsx and scm instances passed the
-vacuity check at an earlier revision; the lambda-RC admission stays
-open, being rebuilt under a corrected criterion.
+| compiler chain (`rsdc`, `rsc`) | gap — per-hop `ExecModel` instances repository-side; hop composition proved (`HopCompose.lean`) |
+| execution layer (`semantics/Effect/`, `glue/host/`) | instance shipped: `monitorModel`, `exec9AdmissionModel`; Tier-1 laws proved (`AdmissionNF.lean`) |
+| syntax engine (`rsdc/profiles/`, `semantics/Syntax/`) | gap — no `ExecModel` instance shipped yet |
+| QFormat (`docs/QFORMAT.md`, `release/checks/qformat/`) | gap — no `ExecModel` instance shipped yet |
+| `rsd` build tool (`rsd/`, `glue/rsd/`, `lib/rsd/`) | gap — no `ExecModel` instance shipped yet |
+| NF composition (`lean/nf-compose/`) | framework shipped: product/sum/seq/dispatch, multi-hop (`HopCompose.lean`) and recursion (`Rec.lean`) composition proved |
 
 ## In this archive
 
-- the committed `rsdc`/`rsc` wasm seeds and their source closure under
-  `bootstrap/seed/`, with the recipe that rebuilds them
-- the rsd chain `rsd -> rscm -> wasm` invoked as the stage host's file
-  contract (`docs/RSD-COMMAND.md`)
-- the `rsd` build tool (`rsd/`, `lib/rsd/`, `lib/Rsd.rsd`)
+- the committed `rsdc`/`rsc` wasm seeds and their `54`-member source
+  closure under `bootstrap/seed/stage-14274/`, with the recipe that
+  rebuilds them
+- the rsd chain `rsd -> rscm -> wasm` (`docs/RSD-COMMAND.md`)
+- the `Proc` execution hosts (`glue/host/`), standard `Proc` modules
+  (`lib/ProcBytes.rsd`, `lib/Proc9.rsd`, `glue/std/`), and the
+  `examples/app04/` multi-module CLI program
+- the `rsd` build tool (`rsd/`, `glue/rsd/`, `lib/rsd/`, `lib/Rsd.rsd`)
 - frozen formal semantics per layer (scm, lambda-RC, wasm0) pinned by
-  content digest, as specification texts; `semantics/Syntax/` and
-  `semantics/Effect/` including the typed `ExecModel` instances
-- the syntax engine's grammar profiles (`rsdc/profiles/`) and
-  specification (`semantics/Syntax/`); the engine itself is inside
-  the shipped compiler sources
-- the MST-NF composition package (`lean/nf-compose/`, pinned model
-  included) and its audit report (`reports/nf-compose/REPORT.md`)
+  content digest, plus `semantics/Syntax/` and `semantics/Effect/`
+- the MST-NF composition package (`lean/nf-compose/`, including
+  `HopCompose.lean`, `Rec.lean` and `NfRec/CheckedStatus.lean`) and its
+  audit report (`reports/nf-compose/REPORT.md`)
 - the benchmark, differential and performance suites (`benchmarks/`,
   `instruments/lrc-host/`, `perf/`)
-- the language conformance corpus the bootstrap grammar was measured
-  against (`docs/LANGUAGE.md` rows)
-- the performance record (`docs/PERF-RECORD.tsv`, form in
-  `docs/PERF-RECORD.md`)
-- the stranger documents in English, with `README` and the `docs/`
-  mirrors in Chinese `.zh-CN.md`
-- the per-goal release notes (`release/notes/`), the runnable
-  conformance checks (`release/checks/`) and the vendored licence texts
-  (`release/licenses/`)
+- the language conformance corpus (`docs/LANGUAGE.md`) and performance
+  record (`docs/PERF-RECORD.tsv`, `docs/PERF-RECORD.md`)
+- English documentation with Chinese `.zh-CN.md` mirrors for `README`,
+  `CHANGELOG` and paired `docs/` pages
+- release notes (`release/notes/`), runnable conformance checks
+  (`release/checks/`), reader-facing `release/GAPS.tsv`, provenance
+  (`release/PROVENANCE.tsv`), notices (`release/NOTICES.md`, `NOTICE`)
+  and vendored licence texts (`release/licenses/`)
 
 ## Verification
 
-`docs/VERIFY-RELEASE.md` is the protocol: seed digests, the archive
-digest, then the full seed recipe on a clean Linux x86-64 or macOS
-arm64
-account — the recipe's rebuilt compiler images must compare
-byte-identical to the committed seeds (`seed_roundtrip=2/2`). Host
-receipts for the archive ship under `release/`.
+`docs/VERIFY-RELEASE.md` is the protocol: seed digests, archive digest,
+clean-environment seed rebuild on Linux x86-64 or macOS arm64 verifying
+byte-identical compiler output (`cmp` against `rsdc.wasm` and `rsc.wasm`
+plus `REBUILT-SHA256SUMS`), and building and running `examples/app04` on
+`procwt`.
 
-## Stated limits of 0.3
+## Stated limits of 0.4
 
-Single-module programs (no `import`); no I/O execution layer (the
-effect-boundary semantics specifies the host contract; the language has
-no effects); no proof checking (the R-CIC kernel is not in this
-release); a 4 GiB address space; no publish/query entry for results; no
-importable standard library. The bootstrap `.rsd` grammar refuses
-`theorem`, `axiom`, `class`, `abbrev`, `variable`, `opaque`, `by` and
-`import` as source constructs.
+Separate `.rmod` compilation omits `Float` and per-module `Proc`
+`do`-desugaring (`release/GAPS.tsv`; multi-module builds assemble source
+modules in topological order); `procwt` serves CLI arguments, clocks and
+local file I/O over an in-process 9P2000 responder (`release/GAPS.tsv`
+`G01`), without networking or subprocess spawning; part of `rsd`'s
+native compiler-worker closure stays repository-side (`release/GAPS.tsv`
+`G06`); no proof checking (the R-CIC kernel is not in this release); a
+`4 GiB` WebAssembly linear-memory address space; no publish/query entry
+for results. The bootstrap `.rsd` grammar refuses `theorem`, `axiom`,
+`class`, `abbrev`, `variable`, `opaque` and `by`.
 
-## Order after 0.3
+## Order after 0.4
 
-1. R-CIC kernel + the agent entry's publish/query entry — the first
-   point a stranger can find, check and reuse another's result.
-2. Programming completeness: modules, real programs, an execution
-   layer, 64-bit addressing, application suites.
-3. Cheap confirmation of execution: wasm0 -> AIR -> zk.
-4. Generic connectors to external semantics (K/KORE, Lean/Rocq import).
+1. R-CIC kernel and a publish/query entry for checking and reusing
+   another party's result.
+2. Separate `.rmod` compilation across the full language, 64-bit
+   addressing, broader host capabilities, and application suites.
+3. Inexpensive confirmation of execution: wasm0 -> AIR -> zk.
+4. Connectors to external semantics (K/KORE, Lean/Rocq import).

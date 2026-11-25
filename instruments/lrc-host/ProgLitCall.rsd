@@ -1,0 +1,78 @@
+-- micro program for a call that names a literal (lib/lrc/JoinOnce.rsd "A call that names a literal"): a function
+-- that calls itself is called with a literal that chooses an equation which does not hand on, and gets a form
+-- for that literal. Here: the number that only makes a definition total (`hgt 0 xs`, as the library's map has
+-- it); two literals of one function beside one that leaves the call a call and an argument that is no literal;
+-- the literal at the second place, with a call inside whose argument there is a number but no literal; an
+-- integer that is zero and one below zero; a literal whose equation hands on (no form: the call stays), and one
+-- whose form is not small (the form stays a call); a comparison of two literals that decides (`gate`); a
+-- literal for a parameter that is a byte and a truth value (for a word of 64 bits, which the present lowering
+-- does not take: instruments/lrc-host/ProgLitWord.rsd); and a function with a form for each of two places.
+-- The rows' values are stock Lean's.
+def hgt : Nat → List Nat → Nat
+  | 0, xs => xs.length + 1
+  | n + 1, xs => hgt 0 xs
+
+-- 0 chooses an equation that ends; 1 and more go on (the number before a literal is computed, not known)
+def pick : Nat → Nat → Nat
+  | 0, x => x + 1
+  | n + 1, x => if n == 0 then x * 2 else pick n (x + 3)
+
+-- no literal at the call: the number comes out of a computation
+def less (x : Nat) : Nat := x - 1
+
+-- the literal at the second place; the call inside has a number there that is no literal
+def sel : List Nat → Nat → Nat
+  | xs, 0 => xs.length * 10
+  | xs, n + 1 => sel (n :: xs) n
+
+-- an integer after the number that makes the definition total
+def zi : Nat → Int → Int
+  | 0, i => i
+  | f + 1, i => if i == 0 then 40 else if i < 0 then i - 100 else zi f (i - 1)
+
+-- the literal's equation hands on: no form
+def sumTo : Nat → List Nat → Nat → Nat
+  | 0, [], acc => acc
+  | 0, x :: xs, acc => sumTo 0 xs (acc + x)
+  | n + 1, xs, acc => sumTo n xs (acc + 1)
+
+-- the literal's equation is not small: its form is called, and takes a list it owns
+def fold0 : Nat → List Nat → Nat
+  | 0, xs => (xs.map (fun x => x + 1)).length + xs.length
+  | n + 1, xs => fold0 n (n :: xs)
+
+-- a comparison of two literals decides: 2 and 9 each choose a branch that ends
+def gate : Nat → List Nat → Nat
+  | _, [] => 7
+  | k, x :: xs => if k == 77 then gate 2 xs else if k < 3 then x else 100
+
+-- the literal for a parameter that is a byte, a truth value
+def w8 : UInt8 → List Nat → Nat
+  | _, [] => 7
+  | k, x :: xs => if k == 3 then x else w8 3 xs
+
+def bsel : Bool → List Nat → Nat
+  | _, [] => 7
+  | b, x :: xs => if b then x else bsel true xs
+
+-- an integer: zero, and one below zero
+def isel : Int → List Nat → Nat
+  | _, [] => 7
+  | i, x :: xs => if i == 0 then x else if i < 0 then 50 else isel (-4) xs
+
+-- a form for the first place and one for the second
+def two : Bool → Bool → List Nat → Nat
+  | _, _, [] => 7
+  | a, b, x :: xs => if a then x else if b then 60 else two true b xs
+
+-- an integer as a number of the row
+def znat (i : Int) : Nat := (i + 500).toNat
+
+-- the entry of the row: no argument
+def litCallAt : List Nat :=
+  [hgt 0 [1, 2, 3], hgt 5 [1], pick 0 5, pick 1 5, pick 2 5, pick 3 5, pick (less 1) 7, pick (less 2) 7,
+   sel [4, 5] 0, sel [4, 5, 6] 3, sumTo 0 [1, 2, 3] 0, sumTo 2 [5] 0, fold0 0 [7, 8], fold0 2 [9],
+   znat (zi 9 0), znat (zi 9 (-3)), znat (zi 9 2), znat (zi 0 (-7)),
+   gate 2 [4, 5], gate 9 [4, 5], gate 77 [4, 5], gate 2 [], w8 3 [4, 5], w8 1 [4, 5],
+   bsel true [4, 5], bsel false [4, 5], isel 0 [4, 5], isel (-4) [4, 5], isel 6 [4, 5], isel 6 [4],
+   two true false [4], two (less 3 == 9) true [4], two (less 3 == 9) false [4, 6], two (less 3 == 2) false [4], two (less 3 == 9) true []]

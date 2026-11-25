@@ -253,6 +253,67 @@ def zMain : Lrc.Decl :=
     (mkVDecl 2 tyI64 (mkLit 0)
     (mkVDecl 3 tyI64 (mkPrim 10 0 0 [1, 2]) (mkRet [1])))
 
+open Lrc in
+-- ASSIGN-opt-5 planted checks:
+-- f0 cConst dummy: closed constructor node (leaf, leaf, 10, 20)
+def cConst : Lrc.Decl :=
+  fn 0 [{ x := 1, borrow := false, ty := tyIrr }] tyTObj
+    (mkVDecl 2 tyTObj (mkCtor leafI [])
+    (mkVDecl 3 tyTObj (mkCtor leafI [])
+    (mkVDecl 4 tyTObj (mkCtor nodeI [2, 3])
+    (mkVDecl 5 tyI64 (mkLit 10)
+    (mkVDecl 6 tyI64 (mkLit 20)
+    (mkSSet 4 2 0 5 tyI64 (mkSSet 4 2 8 6 tyI64 (mkRet [4]))))))))
+
+open Lrc in
+-- f1 cMut newK: takes the sole reference from cConst in this frame and rebuilds nodeI with key = newK
+-- (`insertResetReuse` emits reset/reuse on t; because the kept closed cell has m_rc = 0, reuse MUST copy)
+def cMut : Lrc.Decl :=
+  fn 1 [pS 1] tyTObj
+    (mkVDecl 2 tyTObj (mkFap 0 [argIrr])
+    (mkCase 2 tyTObj
+      [mkAltCtor leafI (mkVDecl 3 tyTObj (mkCtor leafI []) (mkRet [3])),
+       mkAltCtor nodeI
+         (mkVDecl 4 tyTObj (mkProj 0 2)
+         (mkVDecl 5 tyTObj (mkProj 1 2)
+         (mkVDecl 6 tyI64 (mkSProj 2 8 2)
+         (mkVDecl 7 tyTObj (mkCtor nodeI [4, 5])
+         (mkSSet 7 2 0 1 tyI64 (mkSSet 7 2 8 6 tyI64 (mkRet [7])))))))]))
+
+open Lrc in
+-- f2 cKey t: reads key 0 of nodeI (0 for leaf)
+def cKey : Lrc.Decl :=
+  fn 2 [pO 1] tyI64
+    (mkCase 1 tyTObj
+      [mkAltCtor leafI (mkVDecl 2 tyI64 (mkLit 0) (mkRet [2])),
+       mkAltCtor nodeI (mkVDecl 3 tyI64 (mkSProj 2 0 1) (mkRet [3]))])
+
+open Lrc in
+-- f3 cMain x: mutates cConst to x (99), then reads cConst again (must still be 10): 99 * 100 + 10 = 9910
+def cMain : Lrc.Decl :=
+  fn 3 [pS 1] tyI64
+    (mkVDecl 2 tyTObj (mkFap 1 [1])
+    (mkVDecl 3 tyI64 (mkFap 2 [2])
+    (mkVDecl 4 tyTObj (mkFap 0 [argIrr])
+    (mkVDecl 5 tyI64 (mkFap 2 [4])
+    (mkVDecl 6 tyI64 (mkLit 100)
+    (mkVDecl 7 tyI64 (mkPrim 8 0 0 [3, 6])
+    (mkVDecl 8 tyI64 (mkPrim 6 0 0 [7, 5]) (mkRet [8]))))))))
+
+open Lrc in
+-- f0 cLateWrite flag: allocates a constructor with closed arguments and one direct sset, then writes its second
+-- scalar in a branch (`clTotalWrites != sr.cnt`: must NOT be extracted as an immortal static object)
+def cLateWrite : Lrc.Decl :=
+  fn 0 [pS 1] tyI64
+    (mkVDecl 2 tyTObj (mkCtor leafI [])
+    (mkVDecl 3 tyTObj (mkCtor leafI [])
+    (mkVDecl 4 tyTObj (mkCtor nodeI [2, 3])
+    (mkVDecl 5 tyI64 (mkLit 10)
+    (mkSSet 4 2 0 5 tyI64
+    (mkIfW 1
+      (mkVDecl 6 tyI64 (mkLit 20) (mkSSet 4 2 8 6 tyI64 (mkVDecl 7 tyI64 (mkSProj 2 8 4) (mkRet [7]))))
+      (mkVDecl 8 tyI64 (mkLit 30) (mkSSet 4 2 8 8 tyI64 (mkVDecl 9 tyI64 (mkSProj 2 8 4) (mkRet [9]))))))))))
+
 -- keys (mk 3) = 2 + 2; walk leaf 3 ends at the tree of depth 1, key 1.
 -- keep (build 6) keeps 5, 3, 1; keep (build 5) starts with a kept cell.
 def multiCases : List MultiCase :=
@@ -268,7 +329,55 @@ def multiCases : List MultiCase :=
      owned := [], refuses := true },
    { name := "irrelevant-through-inline", decls := [iMain, iMid, iPick 2], entry := 0, args := [47], value := "47", owned := [] },
    { name := "irrelevant-through-join", decls := [jMain, iPick 1], entry := 0, args := [77], value := "77", owned := [] },
-   { name := "dead-division", decls := [zMain], entry := 0, args := [5], value := "", owned := [], refuses := true }]
+   { name := "dead-division", decls := [zMain], entry := 0, args := [5], value := "", owned := [], refuses := true },
+   { name := "closed-mutated-copy", decls := [cConst, cMut, cKey, cMain], entry := 3, args := [99], value := "9910", owned := [] },
+   { name := "closed-late-write", decls := [cLateWrite], entry := 0, args := [1], value := "20", owned := [] }]
+
+-- ASSIGN-opt-5 direct checks on kept persistent arrays (`primArrPush`/`primArrSet` must copy)
+-- and immortal object frees (`opDel` / `freeCell` on `m_rc = 0` must be caught by `Interp`).
+def checkPersistentGuards : IO Nat := do
+  let mut bad := 0
+  -- 1. A push and an in-place set on a kept persistent array (`rc = 0`) with one owner in the frame must copy,
+  --    leaving the kept array unchanged.
+  let pushAct : IM (String × String × Nat) := do
+    set ({ counted := true,
+           heap := #[{ rc := 0, tag := 248, objs := #[.int 10, .int 20], scalars := [], persistent := true }] } : HeapSt)
+    let pushed ← primFact Lrc.primArrPush 0 [.ptr 0, .int 30]
+    let updated ← primFact Lrc.primArrSet 0 [pushed, .int 0, .int 99]
+    let keptText ← showV (.ptr 0)
+    let newText ← showV updated
+    decV updated
+    return (keptText, newText, (← get).live)
+  match pushAct.run {} with
+  | .ok ((keptText, newText, liveAfter), st) =>
+    if keptText != "#[10 20]" || newText != "#[99 20 30]" || liveAfter != 0 || st.allocs < 1 then
+      bad := bad + 1
+      IO.println s!"MISMATCH persistent-array-push: kept={keptText} new={newText} live={liveAfter} allocs={st.allocs}"
+  | .error e =>
+    bad := bad + 1
+    IO.println s!"MISMATCH persistent-array-push error: {e}"
+  -- 2. Freeing an immortal object (`opDel` or `freeCell` on `rc = 0, persistent = true`) is caught by the host check.
+  let delDecl : Lrc.Decl :=
+    fn 0 [pS 1] Lrc.tyI64
+      (Lrc.mkVDecl 2 Lrc.tyObj (Lrc.mkLitObj 0 [1, 0, 0, 0, 0, 0, 0, 0] [0, 0, 1])
+      (Lrc.mkDel 2 (Lrc.mkRet [1])))
+  let delOut := runEntry [delDecl] 0 [7] 100 true 0
+  if !(delOut.status.startsWith "del of object") then
+    bad := bad + 1
+    IO.println s!"MISMATCH persistent-del-not-caught: {delOut.show}"
+  let freeAct : IM Unit := do
+    let o : Obj := { rc := 0, tag := 1, objs := #[], scalars := [], persistent := true }
+    set ({ counted := true, heap := #[o] } : HeapSt)
+    freeCell 0 o
+  match freeAct.run {} with
+  | .ok _ =>
+    bad := bad + 1
+    IO.println "MISMATCH persistent-freeCell-not-caught"
+  | .error e =>
+    if !(e.startsWith "free of object") then
+      bad := bad + 1
+      IO.println s!"MISMATCH persistent-freeCell-wrong-error: {e}"
+  return bad
 
 def multiFuel : List Nat := [1, 2, 3, 4, 5, 6, 7, 8, 10, 12, 16, 24]
 
@@ -306,6 +415,7 @@ def checkMulti : IO Nat := do
           IO.println s!"MISMATCH multi={c.name} ({opts}): no f{f}"
       if wrong != 0 then bad := bad + 1
       IO.println s!"check multi={c.name} options={opts}: status={own.status} value={own.text} allocations={own.allocs} incs={own.incs} decs={own.decs} leaked={own.leaked} fuel_budgets={multiFuel.length} wrong={wrong}"
+  bad := bad + (← checkPersistentGuards)
   IO.println s!"check pass=multi cases={multiCases.length} mismatch={bad}"
   return bad
 

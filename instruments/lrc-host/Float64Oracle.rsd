@@ -1,0 +1,344 @@
+/-! FLOAT64-0 (docs/EMITTER.md F row): stock Lean 4.14's Float as the oracle of the F operators, the image that
+holds a function for each, and that image's rows of instruments/lrc-host/Images.tsv. Stock Lean only; no part of
+the chain. closure_claim = 0.
+
+No front end wrote the F tags when this oracle was added, so the image is assembled here byte by
+byte from the wire's forms: a header, the signatures, each body after its marker 1, the end 0; a variable is
+`3 i`, a word literal `64` and eight bytes, an integer literal `0 0` and eight bytes, a conditional `5 c a b`,
+an operator its tag and its operands. When a front end writes these tags, a source takes this image's place.
+
+`lean --run instruments/lrc-host/Diff.rsd float` checks that instruments/lrc-host/img/float64.rscm, float64all.rscm
+and their rows of Images.tsv are the ones this file gives; `float write` writes the images and prints the rows.
+The compiled host check runs `checkFloat64` (instruments/lrc-host/CheckFloat64.rsd): the reference of
+instruments/lrc-host/Interp.rsd against `leanOp` below. -/
+namespace Lrc.Host.F64
+
+/-! ## A word's Float and a Float's word
+
+Lean 4.14 has neither `Float.ofBits` nor `Float.toBits`. Both directions are exact with `UInt64.toFloat`,
+`Float.scaleB` and `Float.frExp` (Init/Data/Float.lean). -/
+
+def ofBits (u : UInt64) : Float :=
+  let ex := ((u >>> 52) &&& 2047).toNat
+  let fr := u &&& 4503599627370495
+  let mag : Float :=
+    if ex == 2047 then (if fr == 0 then 1.0 / 0.0 else 0.0 / 0.0)
+    else if ex == 0 then fr.toFloat.scaleB (-1074)
+    else (fr ||| 4503599627370496).toFloat.scaleB ((ex : Int) - 1075)
+  if u >>> 63 == 1 then -mag else mag
+
+def quietNaN : UInt64 := 9221120237041090560
+
+-- every NaN as the one quiet NaN (FLOAT64-0: a NaN's sign and payload are not a value)
+def toBits (x : Float) : UInt64 :=
+  if x.isNaN then quietNaN
+  else
+    let neg := x < 0.0 || (x == 0.0 && 1.0 / x < 0.0)
+    let a := if neg then -x else x
+    let mag : UInt64 :=
+      if a.isInf then 9218868437227405312
+      else if a == 0.0 then 0
+      else
+        -- a = m * 2^e with 1/2 <= m < 1, so m * 2^53 is the 53-bit significand
+        let (m, e) := a.frExp
+        let big := (m.scaleB 53).toUInt64
+        if e >= -1021 then ((e + 1022).toNat.toUInt64 <<< 52) ||| (big &&& 4503599627370495)
+        else big >>> ((-1021 - e).toNat.toUInt64)
+    if neg then mag ||| 9223372036854775808 else mag
+
+def signed (a : UInt64) : Int :=
+  if a.toNat < 9223372036854775808 then (a.toNat : Int) else (a.toNat : Int) - 18446744073709551616
+
+def canon (u : UInt64) : UInt64 := toBits (ofBits u)
+
+/-! ## The operators, as stock Lean computes them
+
+`leanOp tag a b` is the word that stock Lean gives for the wire operator `tag` on the words a and b (b unused
+by an operator of one operand). A Float result is read through `toBits`: the comparison of a reference with it
+canonicalizes the reference's NaN too. -/
+
+def tagResultIsFloat (tag : Nat) : Bool := (tag >= 78 && tag <= 81) || (tag >= 85 && tag <= 92)
+
+def leanOp (tag : Nat) (a b : UInt64) : UInt64 :=
+  let x := ofBits a
+  let y := ofBits b
+  match tag with
+  | 78 => toBits (x + y)
+  | 79 => toBits (x - y)
+  | 80 => toBits (x * y)
+  | 81 => toBits (x / y)
+  | 82 => if x < y then 1 else 0
+  | 83 => if x <= y then 1 else 0
+  | 84 => if x == y then 1 else 0
+  | 85 => toBits (-x)
+  | 86 => toBits x.abs
+  | 87 => toBits x.sqrt
+  | 88 => toBits x.floor
+  | 89 => toBits x.ceil
+  | 90 => toBits x.round
+  | 91 => toBits a.toFloat
+  | 92 => toBits (Float.ofInt (signed a))
+  | 93 => x.toUInt64
+  | _ => toBits x
+
+def binaryTags : List Nat := [78, 79, 80, 81, 82, 83, 84]
+def unaryTags : List Nat := [85, 86, 87, 88, 89, 90, 91, 92, 93, 94]
+
+/-! ## The boundary set
+
+Signed zeros, subnormals, the neighbours of 1/2 and of 1, ties for `round`, the powers of two around 2^53, 2^63
+and 2^64, the largest finite number, infinities, and NaNs of either sign with a payload. -/
+
+def edges : List UInt64 :=
+  [0x0000000000000000, 0x8000000000000000, 0x0000000000000001, 0x8000000000000001, 0x0000000000000003,
+   0x000FFFFFFFFFFFFF, 0x0010000000000000, 0x1FF0000000000000, 0x3CA0000000000000, 0x3FB999999999999A,
+   0x3FC999999999999A, 0x3FD3333333333333, 0xBFD3333333333333, 0x3FDFFFFFFFFFFFFF, 0xBFDFFFFFFFFFFFFF,
+   0x3FE0000000000000, 0xBFE0000000000000, 0x3FECCCCCCCCCCCCD, 0xBFECCCCCCCCCCCCD, 0x3FEFFFFFFFFFFFFD,
+   0x3FF0000000000000, 0xBFF0000000000000, 0x3FF0000000000001, 0x3FF0000000000003, 0x3FF8000000000000,
+   0xBFF8000000000000, 0x3FFFFFFFFFFFFFFF, 0x4000000000000000, 0x4004000000000000, 0xC004000000000000,
+   0x4008000000000000, 0x4010000000000000, 0x4014000000000000, 0x4059000000000000, 0x4320000000000001,
+   0xC320000000000001, 0x4320000000000003, 0x4330000000000001, 0x433FFFFFFFFFFFFF, 0x4340000000000000,
+   0x4340000000000001, 0x43E0000000000000, 0x43E0000000000001, 0x43E158E460913D00, 0x43EFFFFFFFFFFFFF,
+   0x43F0000000000000, 0x6974E718D7D7625A, 0x7CA0000000000000, 0x7FE0000000000000, 0x7FEFFFFFFFFFFFFF,
+   0xFFEFFFFFFFFFFFFF, 0x7FF0000000000000, 0xFFF0000000000000, 0x7FF8000000000000, 0x7FF0000000000001,
+   0xFFF8000000000123, 0xFFF0000000000001, 0x7FFFFFFFFFFFFFFF]
+
+-- integers as words, for the two conversions from an integer: around 2^53 (ties), 2^63 and 2^64
+def intEdges : List UInt64 :=
+  [0, 1, 12345, 123456789, 9007199254740992, 9007199254740993, 9007199254740995, 9223372036854775807,
+   9223372036854775808, 9223372036854776832, 9223372036854776833, 18446744073709550591, 18446744073709550592,
+   18446744073709550593, 18446744073709551615, 18437736874454810623, 18437736874454810621]
+
+-- xorshift64 (Marsaglia 2003), for the generated operands of the reference's check
+def nextRandom (x : UInt64) : UInt64 :=
+  let a := x ^^^ (x <<< 13)
+  let b := a ^^^ (a >>> 7)
+  b ^^^ (b <<< 17)
+
+-- a generated word and a variant of it near an exponent boundary: random bits alone almost never meet a
+-- subnormal, an infinity or two operands of close exponents
+def shaped (r : UInt64) (k : Nat) : UInt64 :=
+  match k % 4 with
+  | 0 => r
+  | 1 => r &&& 0x800FFFFFFFFFFFFF
+  | 2 => (r &&& 0x800FFFFFFFFFFFFF) ||| 0x3FF0000000000000
+  | _ => (r &&& 0x803FFFFFFFFFFFFF) ||| 0x7FC0000000000000
+
+/-! ## The image -/
+
+structure Fn where
+  name : String
+  params : List (List UInt8)
+  result : List UInt8
+  body : List UInt8
+
+def tyW : List UInt8 := [11, 64]
+def tyB : List UInt8 := [1]
+def tyI : List UInt8 := [0]
+def v0 : List UInt8 := [3, 0]
+def v1 : List UInt8 := [3, 1]
+
+def le8 (u : UInt64) : List UInt8 := (List.range 8).map fun i => (u >>> (8 * i).toUInt64).toUInt8
+def litW (u : UInt64) : List UInt8 := 64 :: le8 u
+def litI (u : UInt64) : List UInt8 := [0, 0] ++ le8 u
+
+-- The rows that take no argument: every case's result enters one word, as the sum of the results each times
+-- its own odd weight (a power of `golden`), so that one wrong case changes the word. The sum is written as a
+-- balanced tree: a chain of 136 cases is deeper than the present lowering's walk of an expression goes.
+def golden : UInt64 := 0x9E3779B97F4A7C15
+
+def weightsGo : Nat → UInt64 → List UInt64
+  | 0, _ => []
+  | n + 1, w => w :: weightsGo n (w * golden)
+
+def weights (n : Nat) : List UInt64 := weightsGo n golden
+
+-- wMul c k
+def termExpr (c : List UInt8) (k : UInt64) : List UInt8 := [67] ++ c ++ litW k
+
+partial def sumExpr (ts : List (List UInt8)) : List UInt8 :=
+  match ts with
+  | [] => litW 0
+  | [t] => t
+  | _ => let h := ts.length / 2; [65] ++ sumExpr (ts.take h) ++ sumExpr (ts.drop h)
+
+def sumWord (cs : List UInt64) : UInt64 :=
+  (cs.zip (weights cs.length)).foldl (fun acc (c, k) => acc + c * k) 0
+
+def binaryCases (tag : Nat) : List (UInt64 × UInt64) :=
+  let e := edges
+  let near : List (UInt64 × UInt64) :=
+    [(0x3FB999999999999A, 0x3FC999999999999A), (0x7FEFFFFFFFFFFFFF, 0x7FEFFFFFFFFFFFFF), (0, 0x8000000000000000),
+     (0x8000000000000000, 0x8000000000000000), (0x7FF0000000000000, 0xFFF0000000000000),
+     (0x3FF0000000000000, 0x3CA0000000000000), (0x3FF0000000000001, 0x3CA0000000000000),
+     (0x0000000000000001, 0x0000000000000001), (0x7FF8000000000000, 0x3FF0000000000000),
+     (0x3FF0000000000000, 0x7FF0000000000001), (0x4340000000000000, 0x3FF0000000000000),
+     (0xC004000000000000, 0x4004000000000000), (0x7FEFFFFFFFFFFFFF, 0x7CA0000000000000),
+     (0x000FFFFFFFFFFFFF, 0x0000000000000001), (0x3FF0000000000000, 0x3FF0000000000001),
+     (0x0010000000000000, 0x000FFFFFFFFFFFFF), (0x7FF0000000000000, 0x7FF0000000000000),
+     (0x0000000000000001, 0x3FE0000000000000), (0x0000000000000003, 0x3FE0000000000000),
+     (0x8000000000000000, 0x4014000000000000), (0x7FF0000000000000, 0), (0xFFF0000000000000, 0xBFF0000000000000),
+     (0x1FF0000000000000, 0x1FF0000000000000), (0x3FF0000000000001, 0x3FF0000000000001),
+     (0x3FF0000000000003, 0x3FEFFFFFFFFFFFFD), (0x3FF0000000000000, 0x4008000000000000),
+     (0x4000000000000000, 0x4008000000000000), (0x3FF0000000000000, 0), (0xBFF0000000000000, 0), (0, 0),
+     (0x3FF0000000000000, 0x7FF0000000000000), (0xBFF0000000000000, 0x7FF0000000000000),
+     (0x0000000000000001, 0x4000000000000000), (0x0000000000000003, 0x4000000000000000),
+     (0x3FF0000000000000, 0x7FEFFFFFFFFFFFFF), (0x000FFFFFFFFFFFFF, 0x3FF0000000000001),
+     (0, 0xBFF0000000000000), (0xFFF8000000000123, 0xFFF0000000000000), (0x8000000000000001, 0)]
+  -- the comparisons take both orders of each pair
+  if tag >= 82 then near ++ near.map (fun (a, b) => (b, a)) ++ e.map (fun a => (a, a)) else near
+
+def unaryCases (tag : Nat) : List UInt64 := if tag == 91 || tag == 92 then intEdges else edges
+
+def caseExpr (tag : Nat) (a b : List UInt8) : List UInt8 :=
+  let op : List UInt8 := if binaryTags.contains tag then [tag.toUInt8] ++ a ++ b else [tag.toUInt8] ++ a
+  if tag >= 82 && tag <= 84 then [5] ++ op ++ litW 1 ++ litW 0
+  else if tagResultIsFloat tag then [94] ++ op
+  else op
+
+def allBody (tag : Nat) : List UInt8 :=
+  let cs : List (List UInt8) :=
+    if binaryTags.contains tag then (binaryCases tag).map (fun (a, b) => caseExpr tag (litW a) (litW b))
+    else (unaryCases tag).map (fun a => caseExpr tag (if tag == 92 then litI a else litW a) [])
+  sumExpr ((cs.zip (weights cs.length)).map fun (c, k) => termExpr c k)
+
+def allValue (tag : Nat) : UInt64 :=
+  if binaryTags.contains tag then sumWord ((binaryCases tag).map fun (a, b) => leanOp tag a b)
+  else sumWord ((unaryCases tag).map fun a => leanOp tag a a)
+
+def opName (tag : Nat) : String :=
+  match tag with
+  | 78 => "Add" | 79 => "Sub" | 80 => "Mul" | 81 => "Div" | 82 => "Lt" | 83 => "Le" | 84 => "Eq"
+  | 85 => "Neg" | 86 => "Abs" | 87 => "Sqrt" | 88 => "Floor" | 89 => "Ceil" | 90 => "Round"
+  | 91 => "OfW" | 92 => "OfI" | 93 => "ToW" | _ => "Bits"
+
+-- one function of two (or one) parameters for each operator, in the order of the tags
+def opFn (tag : Nat) : Fn :=
+  let binary := binaryTags.contains tag
+  { name := "float" ++ opName tag,
+    params := if binary then [tyW, tyW] else [if tag == 92 then tyI else tyW],
+    result := if tag >= 82 && tag <= 84 then tyB else tyW,
+    body := (if tagResultIsFloat tag then [94] else []) ++ [tag.toUInt8] ++ v0 ++ (if binary then v1 else []) }
+
+def allFn (tag : Nat) : Fn :=
+  { name := "float" ++ opName tag ++ "All", params := [], result := tyW, body := allBody tag }
+
+def hypBody : List UInt8 := [94, 87, 78, 80] ++ v0 ++ v0 ++ [80] ++ v1 ++ v1
+def minBody : List UInt8 := [5, 82] ++ v0 ++ v1 ++ v0 ++ v1
+def litBody : List UInt8 := [94, 78] ++ litW 0x3FF8000000000000 ++ litW 0x3FD0000000000000
+-- a product and a sum, two operators: a route that contracts them into one fused instruction gives another word
+-- (FLOAT64-0: nothing fused). (1 + 2^-27)^2 - (1 + 2^-26) is 0 with two roundings and 2^-54 with one.
+def mulAddBody : List UInt8 := [94, 78, 80] ++ v0 ++ v1 ++ [3, 2]
+
+def tags : List Nat := binaryTags ++ unaryTags
+
+-- Two images, because a row of the host check costs a pass over its whole image: the functions that take
+-- arguments (small), and the functions of no argument that hold the boundary set (large).
+def fnsArg : List Fn :=
+  tags.map opFn ++
+  [{ name := "floatHyp", params := [tyW, tyW], result := tyW, body := hypBody },
+   { name := "floatMin", params := [tyW, tyW], result := tyW, body := minBody },
+   { name := "floatLit", params := [], result := tyW, body := litBody },
+   { name := "floatMulAdd", params := [tyW, tyW, tyW], result := tyW, body := mulAddBody }]
+
+def fnsAll : List Fn := tags.map allFn
+
+partial def leb (n : Nat) : List UInt8 :=
+  if n < 128 then [n.toUInt8] else (n % 128 + 128).toUInt8 :: leb (n / 128)
+
+def cat (xs : List (List UInt8)) : List UInt8 := xs.foldr (· ++ ·) []
+
+def imageOf (fns : List Fn) : List UInt8 :=
+  [82, 83, 67, 77, 1] ++ leb fns.length
+    ++ cat (fns.map fun f => leb f.params.length ++ cat f.params ++ f.result)
+    ++ cat (fns.map fun f => 1 :: f.body) ++ [0]
+
+def imagePath : String := "instruments/lrc-host/img/float64.rscm"
+def imageAllPath : String := "instruments/lrc-host/img/float64all.rscm"
+
+/-! ## The rows -/
+
+def showWord (a : UInt64) : String := toString (signed a)
+
+-- A row of a function of `fns`, the image at `path`. The last column is the wire tag the present lowering refuses
+-- the image at: the first operator of its first body.
+def rowOf (fns : List Fn) (path : String) (name fn : String) (args : List UInt64) (value : UInt64) : String :=
+  let entry := (fns.map (·.name)).indexOf fn
+  let refuses := ((fns.headD { name := "", params := [], result := [], body := [0] }).body.headD 0).toNat
+  "\t".intercalate [name, "file:" ++ path, "-", toString entry, ",".intercalate (args.map showWord), showWord value, toString refuses]
+
+def row (name fn : String) (args : List UInt64) (value : UInt64) : String := rowOf fnsArg imagePath name fn args value
+def rowAll (name : String) (value : UInt64) : String := rowOf fnsAll imageAllPath name name [] value
+
+-- the rows that pass arguments: a few of each operator (the whole boundary set is in the `All` rows)
+def argCases (tag : Nat) : List (UInt64 × UInt64) :=
+  match tag with
+  | 78 => [(0x3FB999999999999A, 0x3FC999999999999A), (0x7FF0000000000000, 0xFFF0000000000000)]
+  | 79 => [(0x3FF0000000000000, 0x3FF0000000000001), (0x8000000000000000, 0)]
+  | 80 => [(0x0000000000000003, 0x3FE0000000000000), (0x7FEFFFFFFFFFFFFF, 0x4000000000000000)]
+  | 81 => [(0x3FF0000000000000, 0x4008000000000000), (0xBFF0000000000000, 0)]
+  | 82 => [(0x8000000000000000, 0), (0xBFF0000000000000, 0x3FF0000000000000), (0x7FF8000000000000, 0x3FF0000000000000)]
+  | 83 => [(0, 0x8000000000000000), (0x3FF0000000000001, 0x3FF0000000000000), (0x3FF0000000000000, 0x7FF8000000000000)]
+  | 84 => [(0, 0x8000000000000000), (0x7FF8000000000000, 0x7FF8000000000000), (0x3FF0000000000000, 0x3FF0000000000000)]
+  | 85 => [(0, 0), (0x7FF8000000000000, 0)]
+  | 86 => [(0xBFF8000000000000, 0), (0xFFF0000000000000, 0)]
+  | 87 => [(0x4000000000000000, 0), (0xBFF0000000000000, 0), (0x0000000000000001, 0)]
+  | 88 => [(0xBFE0000000000000, 0), (0x3FDFFFFFFFFFFFFF, 0)]
+  | 89 => [(0xBFE0000000000000, 0), (0x0000000000000001, 0)]
+  | 90 => [(0x3FE0000000000000, 0), (0x3FDFFFFFFFFFFFFF, 0), (0xC004000000000000, 0), (0x4320000000000001, 0)]
+  | 91 => [(9007199254740993, 0), (18446744073709551615, 0)]
+  | 92 => [(18446744073709551615, 0), (9223372036854775808, 0), (9007199254740993, 0)]
+  | 93 => [(0x43E158E460913D00, 0), (0xBFECCCCCCCCCCCCD, 0), (0x43F0000000000000, 0), (0x7FF8000000000000, 0)]
+  | _ => [(0xFFF8000000000123, 0), (0x8000000000000000, 0)]
+
+def opRows (tag : Nat) : List String :=
+  let name := "float" ++ opName tag
+  let binary := binaryTags.contains tag
+  ((argCases tag).zip (List.range (argCases tag).length)).map fun ((a, b), i) =>
+    row (name ++ toString i) name (if binary then [a, b] else [a]) (leanOp tag a b)
+
+def hypValue (a b : UInt64) : UInt64 := toBits ((ofBits a * ofBits a + ofBits b * ofBits b).sqrt)
+def minValue (a b : UInt64) : UInt64 := if ofBits a < ofBits b then a else b
+-- the product is rounded before the sum is taken: `leanOp` rounds each to its word
+def mulAddValue (a b c : UInt64) : UInt64 := leanOp 78 (leanOp 80 a b) c
+
+def rows : List String :=
+  (tags.map opRows).foldr (· ++ ·) []
+    ++ [row "floatHyp0" "floatHyp" [0x4008000000000000, 0x4010000000000000] (hypValue 0x4008000000000000 0x4010000000000000),
+        row "floatHyp1" "floatHyp" [0x6974E718D7D7625A, 0x6974E718D7D7625A] (hypValue 0x6974E718D7D7625A 0x6974E718D7D7625A),
+        row "floatHyp2" "floatHyp" [0x0000000000000001, 0x7FF8000000000000] (hypValue 0x0000000000000001 0x7FF8000000000000),
+        row "floatMin0" "floatMin" [0x3FF0000000000000, 0x4000000000000000] (minValue 0x3FF0000000000000 0x4000000000000000),
+        row "floatMin1" "floatMin" [0x4000000000000000, 0xBFF0000000000000] (minValue 0x4000000000000000 0xBFF0000000000000),
+        row "floatMin2" "floatMin" [0x7FF8000000000000, 0x3FF0000000000000] (minValue 0x7FF8000000000000 0x3FF0000000000000),
+        row "floatMin3" "floatMin" [0, 0x8000000000000000] (minValue 0 0x8000000000000000),
+        row "floatLit" "floatLit" [] (toBits (ofBits 0x3FF8000000000000 + ofBits 0x3FD0000000000000)),
+        row "floatMulAdd0" "floatMulAdd" [0x3FF0000002000000, 0x3FF0000002000000, 0xBFF0000004000000]
+          (mulAddValue 0x3FF0000002000000 0x3FF0000002000000 0xBFF0000004000000),
+        row "floatMulAdd1" "floatMulAdd" [0x3FB999999999999A, 0x4008000000000000, 0xBFD3333333333333]
+          (mulAddValue 0x3FB999999999999A 0x4008000000000000 0xBFD3333333333333)]
+    ++ tags.map (fun tag => rowAll ("float" ++ opName tag ++ "All") (allValue tag))
+
+-- the rows of the table that are these images'
+def tableRows (table : String) : List String :=
+  (table.splitOn "\n").filter fun l =>
+    let source := (l.splitOn "\t").getD 1 ""
+    source == "file:" ++ imagePath || source == "file:" ++ imageAllPath
+
+-- `write`: the image files are written and the rows are printed. Otherwise both are compared with what stands.
+def run (write : Bool) : IO UInt32 := do
+  let arg := imageOf fnsArg
+  let all := imageOf fnsAll
+  if write then
+    IO.FS.writeBinFile imagePath (ByteArray.mk arg.toArray)
+    IO.FS.writeBinFile imageAllPath (ByteArray.mk all.toArray)
+    for r in rows do IO.println r
+    return 0
+  let keptArg ← IO.FS.readBinFile imagePath
+  let keptAll ← IO.FS.readBinFile imageAllPath
+  let table ← IO.FS.readFile "instruments/lrc-host/Images.tsv"
+  let imagesSame := keptArg.toList == arg && keptAll.toList == all
+  let rowsSame := tableRows table == rows
+  IO.println s!"float64 images_same={imagesSame} bytes={arg.length}+{all.length} rows_same={rowsSame} rows={rows.length}"
+  return if imagesSame && rowsSame then 0 else 1
+
+end Lrc.Host.F64

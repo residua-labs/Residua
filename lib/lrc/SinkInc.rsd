@@ -26,7 +26,7 @@
 -- * In front of `dec y` the same: drop specialization (lib/lrc/DropSpec.rsd) looks for the pair
 --   in the same way, with the same window.
 -- It runs between explicitRC and expandResetReuse.
-import Lib.Lrc.NormIds
+import Lib.Lrc.PushProj
 import Lib.Lrc.Prim
 
 namespace Lrc
@@ -38,13 +38,8 @@ def siEmit : List N → N → N
 
 -- an operator on words: it reads its arguments and consumes none (lib/lrc/Prim.rsd)
 def siPurePrim (e : N) : Bool :=
-  e.op == opPrim && (primOp e <= 17 || primOp e == primTagOf || (primOp e >= primAddW && primOp e <= primUnbox)
-    || primOp e == primShrW || primOp e == primDivU || primOp e == primRemU)
-
--- a binding the count-ups pass
-def siPasses (n : N) : Bool :=
-  let e := vdeclExpr n
-  n.op == opVDecl && n.ys.isEmpty && (e.op == opProj || e.op == opSProj || e.op == opLit || siPurePrim e)
+  let p := e.a
+  e.op == opPrim && (p <= 17 || p == 100 || (p >= 103 && p <= 109) || p == 116 || p == 117 || p == 118)
 
 structure SiTake where
   found : Bool
@@ -70,15 +65,15 @@ structure SiPairs where
 
 -- pi, py, pt: for a variable bound to `proj[i] y`, the i, the y and the binding's type
 def siPairs (pi py pt : IMap) (y : Nat) (nFields : Nat) : List N → SiPairs → SiPairs
-  | [], r => r
+  | [], r => { r with plain := revNodes r.plain [], pairs := revNodes r.pairs [] }
   | i :: rest, r =>
     let z := rcVar i
     let f := imFind pi z
     if imContains py z && imFind py z == (y : Int) && f >= 0 && f.toNat < nFields && !r.used.contains f then
       let v := r.next
       let pair := [mkVDecl v (imFind pt z) (mkProj f.toNat y) (n0 opUnreachable), { i with a := (v : Int) }]
-      siPairs pi py pt y nFields rest { next := v + 1, plain := r.plain, pairs := r.pairs ++ pair, used := f :: r.used }
-    else siPairs pi py pt y nFields rest { r with plain := r.plain ++ [i] }
+      siPairs pi py pt y nFields rest { next := v + 1, plain := r.plain, pairs := revNodes pair r.pairs, used := f :: r.used }
+    else siPairs pi py pt y nFields rest { r with plain := i :: r.plain }
 
 -- in front of a `dec` the constructor is not at hand: every field index is taken
 def siAnyField : Nat := 1000000
@@ -96,9 +91,9 @@ structure SiAlts where
 mutual
 -- `pend`: the count-ups on their way down, in their order; `next`: the first unused index
 partial def siGo (pi py pt : IMap) (pend : List N) (n : N) (next : Nat) : SiR :=
+  let e := vdeclExpr n
   if n.op == opInc && rcN n >= 1 then siGo pi py pt (pend ++ [n]) (bodyOf n) next
-  else if siPasses n then
-    let e := vdeclExpr n
+  else if n.op == opVDecl && n.ys.isEmpty && (e.op == opProj || e.op == opSProj || e.op == opLit || siPurePrim e) then
     let x := vdeclVar n
     let isProj := e.op == opProj
     let r := siGo (if isProj then imInsert pi x (projIdx e) else pi) (if isProj then imInsert py x (projVar e) else py)
@@ -106,16 +101,24 @@ partial def siGo (pi py pt : IMap) (pend : List N) (n : N) (next : Nat) : SiR :=
     { next := r.next, node := { n with kids := [e, r.node] } }
   else if n.op == opVDecl && (vdeclExpr n).op == opReset then
     let e := vdeclExpr n
-    let p := siPairs pi py pt (resetVar e) (resetN e) pend { next := next, plain := [], pairs := [], used := [] }
-    let r := siGo pi py pt [] (bodyOf n) p.next
-    { next := r.next, node := siEmit (p.plain ++ p.pairs) { n with kids := [e, r.node] } }
-  else if n.op == opDec && rcN n == 1 then
-    let t := siTake (rcVar n) n.c n.d pend
-    if t.found then siGo pi py pt t.rest (bodyOf n) next
+    if pend.isEmpty then
+      let r := siGo pi py pt [] (bodyOf n) next
+      { next := r.next, node := { n with kids := [e, r.node] } }
     else
-      let p := siPairs pi py pt (rcVar n) siAnyField pend { next := next, plain := [], pairs := [], used := [] }
+      let p := siPairs pi py pt (resetVar e) (resetN e) pend { next := next, plain := [], pairs := [], used := [] }
       let r := siGo pi py pt [] (bodyOf n) p.next
-      { next := r.next, node := siEmit (p.plain ++ p.pairs) (setBody n r.node) }
+      { next := r.next, node := siEmit (p.plain ++ p.pairs) { n with kids := [e, r.node] } }
+  else if n.op == opDec && rcN n == 1 then
+    if pend.isEmpty then
+      let r := siGo pi py pt [] (bodyOf n) next
+      { next := r.next, node := setBody n r.node }
+    else
+      let t := siTake (rcVar n) n.c n.d pend
+      if t.found then siGo pi py pt t.rest (bodyOf n) next
+      else
+        let p := siPairs pi py pt (rcVar n) siAnyField pend { next := next, plain := [], pairs := [], used := [] }
+        let r := siGo pi py pt [] (bodyOf n) p.next
+        { next := r.next, node := siEmit (p.plain ++ p.pairs) (setBody n r.node) }
   else if n.op == opCase then
     let r := siAlts pi py pt pend (caseAlts n) next
     { next := r.next, node := { n with kids := r.alts } }
@@ -135,11 +138,22 @@ partial def siAlts (pi py pt : IMap) (pend : List N) : List N → Nat → SiAlts
     { next := r.next, alts := altSetBody alt b.node :: r.alts }
 end
 
-def declSinkInc (d : Decl) : Decl :=
-  if d.ext then d else { d with body := (siGo imEmpty imEmpty imEmpty [] d.body (declMaxIndex d + 1)).node }
+mutual
+partial def siHasInc (n : N) : Bool :=
+  if n.op == opInc && n.b >= 1 then true
+  else if n.op == opJDecl then siHasInc (jdeclBody n) || siHasInc (bodyOf n)
+  else if n.op == opCase then siHasIncAlts (caseAlts n)
+  else if isTerminal n then false
+  else siHasInc (bodyOf n)
+partial def siHasIncAlts : List N → Bool
+  | [] => false
+  | alt :: alts => siHasInc (altBody alt) || siHasIncAlts alts
+end
 
 def sinkInc : List Decl → List Decl
   | [] => []
-  | d :: ds => declSinkInc d :: sinkInc ds
+  | d :: ds =>
+    let d1 := if d.ext || declIsClosed d || !siHasInc d.body then d else { d with body := (siGo imEmpty imEmpty imEmpty [] d.body (declMaxIndex d + 1)).node }
+    d1 :: sinkInc ds
 
 end Lrc

@@ -38,16 +38,10 @@ structure XrCtx where
 def xrGetDecl (ctx : XrCtx) (fid : Nat) : Option Decl :=
   dtFind ctx.decls fid
 
-def xrGetDeclParams (ctx : XrCtx) (fid : Nat) : List Param :=
-  match xrGetDecl ctx fid with
-  | some d => d.xs
-  | none => []
-
 -- RC:38 getVarInfo
 def xrGetVarInfo (ctx : XrCtx) (x : Nat) : XrVarInfo :=
-  match xrVMFind x ctx.varMap with
-  | some info => info
-  | none => xrVarInfo0
+  let v := itFind ctx.varMap.m (x : Int)
+  if v < 0 then xrVarInfo0 else { ref := v % 2 == 1, persistent := v / 2 % 2 == 1, consume := v >= 4 }
 
 -- RC:43 getJPParams
 def xrGetJPParams (ctx : XrCtx) (j : Nat) : List Param :=
@@ -63,26 +57,28 @@ def xrGetJPLiveVars (ctx : XrCtx) (j : Nat) : VSet :=
 
 -- RC:53 mustConsume
 def xrMustConsume (ctx : XrCtx) (x : Nat) : Bool :=
-  let info := xrGetVarInfo ctx x
-  info.ref && info.consume
+  let v := itFind ctx.varMap.m (x : Int)
+  v >= 4 && v % 2 == 1
 
 -- RC:57 addInc
 def xrAddInc (ctx : XrCtx) (x : Nat) (b : N) (n : Nat) : N :=
-  let info := xrGetVarInfo ctx x
-  if n == 0 then b else mkInc x n true info.persistent b
+  if n == 0 then b
+  else
+    let v := itFind ctx.varMap.m (x : Int)
+    mkInc x n true (v >= 0 && v / 2 % 2 == 1) b
 
 -- RC:61 addDec
 def xrAddDec (ctx : XrCtx) (x : Nat) (b : N) : N :=
-  let info := xrGetVarInfo ctx x
-  mkDec x 1 true info.persistent b
+  let v := itFind ctx.varMap.m (x : Int)
+  mkDec x 1 true (v >= 0 && v / 2 % 2 == 1) b
 
 -- RC:65 updateRefUsingCtorInfo
 def xrUpdateRefUsingCtorInfo (ctx : XrCtx) (x : Nat) (c : CtorInfo) : XrCtx :=
   if c.isRef then ctx
   else
-    match xrVMFind x ctx.varMap with
-    | some info => { ctx with varMap := xrVMInsert x { info with ref := false } ctx.varMap }
-    | none => ctx
+    let v := itFind ctx.varMap.m (x : Int)
+    if v < 0 || v % 2 == 0 then ctx
+    else { ctx with varMap := { m := itPut ctx.varMap.m (x : Int) (v - 1) } }
 
 def xrAddDecForAltGo (ctx : XrCtx) (altLiveVars : VSet) : List Nat → N → N
   | [], b => b
@@ -116,7 +112,7 @@ def xrIsBorrowParamAux (x : Nat) (ys : List Int) (allConsumed : Bool) (ps : List
   match ys with
   | [] => false
   | y :: rest =>
-    let hit := argIsVar y && x == y.toNat && !(xrConsumePred allConsumed ps i)
+    let hit := y == (x : Int) && !(xrConsumePred allConsumed ps i)
     hit || xrIsBorrowParamAux x rest allConsumed ps (i + 1)
 
 -- RC:93 isBorrowParam
@@ -128,7 +124,7 @@ def xrGetNumConsumptions (x : Nat) (ys : List Int) (allConsumed : Bool) (ps : Li
   match ys with
   | [] => 0
   | y :: rest =>
-    let c := if argIsVar y && x == y.toNat && xrConsumePred allConsumed ps i then 1 else 0
+    let c := if y == (x : Int) && xrConsumePred allConsumed ps i then 1 else 0
     c + xrGetNumConsumptions x rest allConsumed ps (i + 1)
 
 def xrAddIncBeforeGo (ctx : XrCtx) (xsAll : List Int) (allConsumed : Bool) (ps : List Param) (liveVarsAfter : VSet) (i : Nat) : List Int → N → N
@@ -191,9 +187,8 @@ def xrIsPersistent (e : N) : Bool :=
 -- RC:157 consumeExpr
 def xrConsumeExpr (m : IMap) (v : N) : Bool :=
   if v.op == opProj then
-    match xrVMFind (projVar v) m with
-    | some info => info.consume
-    | none => true
+    let info := itFind m.m (intAt 0 v.ys)
+    info < 0 || info >= 4
   else true
 
 -- Lean/Runtime.lean:23 maxSmallNat (2^63 - 1 on 64-bit targets, include/lean/lean.h:1156 LEAN_MAX_SMALL_NAT)
@@ -207,12 +202,10 @@ def xrIsScalarBoxedInTaggedPtr (v : N) : Bool :=
 
 -- RC:171 updateVarInfo
 def xrUpdateVarInfo (ctx : XrCtx) (x : Nat) (t : Int) (v : N) : XrCtx :=
-  let info : XrVarInfo := {
-    ref := tyIsObj t && !(xrIsScalarBoxedInTaggedPtr v),
-    persistent := xrIsPersistent v,
-    consume := xrConsumeExpr ctx.varMap v
-  }
-  { ctx with varMap := xrVMInsert x info ctx.varMap }
+  let bits : Int := (if tyIsObj t && !(xrIsScalarBoxedInTaggedPtr v) then 1 else 0)
+    + (if xrIsPersistent v then 2 else 0)
+    + (if xrConsumeExpr ctx.varMap v then 4 else 0)
+  { ctx with varMap := { m := itPut ctx.varMap.m (x : Int) bits } }
 
 def xrUpdateVarInfoBinds (ctx : XrCtx) (v : N) : List Int → XrCtx
   | x :: t :: rest => xrUpdateVarInfoBinds (xrUpdateVarInfo ctx x.toNat t v) v rest
@@ -249,21 +242,23 @@ def xrProcessVDecl (ctx : XrCtx) (n : N) (b : N) (bLiveVars : VSet) : XrBodyR :=
     else if v.op == opSProj then setBody n (xrAddDecIfNeeded ctx (sprojVar v) b bLiveVars)
     else if v.op == opFap || v.op == opPrim then
       -- a primitive that consumes an argument says so as a declaration does (lib/lrc/Prim.rsd `primParams`)
-      let ps := if v.op == opFap then xrGetDeclParams ctx (fapFn v) else primParams (primOp v) v.ys.length
+      let ps := if v.op == opFap then (match xrGetDecl ctx (fapFn v) with | some d => d.xs | none => [])
+                else primParams (primOp v) v.ys.length
       let ys := v.ys
       let b := xrAddDecAfterFullApp ctx ys ps b bLiveVars
       let b := setBody n b
       xrAddIncBefore ctx ys ps b bLiveVars
     else setBody n b
-  let liveVars := vsEraseAll (updateLiveVars v bLiveVars) (bindVars (vdeclBinds n))
+  let u := updateLiveVars v bLiveVars
+  let liveVars := if n.ys.isEmpty then vsErase u z else vsEraseAll u (bindVars (vdeclBinds n))
   { body := b1, live := liveVars }
 
 -- RC:208 updateVarInfoWithParams
 def xrUpdateVarInfoWithParams (ctx : XrCtx) : List Param → XrCtx
   | [] => ctx
   | p :: ps =>
-    let info : XrVarInfo := { ref := tyIsObj p.ty, persistent := false, consume := !p.borrow }
-    xrUpdateVarInfoWithParams { ctx with varMap := xrVMInsert p.x info ctx.varMap } ps
+    let bits : Int := (if tyIsObj p.ty then 1 else 0) + (if !p.borrow then 4 else 0)
+    xrUpdateVarInfoWithParams { ctx with varMap := { m := itPut ctx.varMap.m (p.x : Int) bits } } ps
 
 -- the live variables of the alternatives of a case
 def xrAltsLive : List XrBodyR → VSet → VSet
@@ -271,17 +266,18 @@ def xrAltsLive : List XrBodyR → VSet → VSet
   | r :: rs, s => xrAltsLive rs (vsUnion s r.live)
 
 -- RC:242 `caseLiveVars`, RC:247 `addDecForAlt`, on the visited alternatives in order
-def xrFinishAlts (x : Nat) (caseLiveVars : VSet) (ctx : XrCtx) : List N → List XrBodyR → List N
+def xrFinishAlts (x : Nat) (caseLiveList : List Nat) (ctx : XrCtx) : List N → List XrBodyR → List N
   | alt :: alts, r :: rs =>
-    altSetBody alt (xrAddDecForAlt (if altIsDefault alt then ctx else xrUpdateRefUsingCtorInfo ctx x (infoOf alt)) caseLiveVars r.live r.body)
-      :: xrFinishAlts x caseLiveVars ctx alts rs
+    altSetBody alt (xrAddDecForAltGo (if altIsDefault alt then ctx else xrUpdateRefUsingCtorInfo ctx x (infoOf alt)) r.live caseLiveList r.body)
+      :: xrFinishAlts x caseLiveList ctx alts rs
   | _, _ => []
 
 mutual
 -- RC:213 visitFnBody
 partial def xrVisitFnBody (n : N) (ctx : XrCtx) : XrBodyR :=
   if n.op == opVDecl then
-    let ctx := xrUpdateVarInfoBinds ctx (vdeclExpr n) (vdeclBinds n)
+    let v := vdeclExpr n
+    let ctx := if n.ys.isEmpty then xrUpdateVarInfo ctx n.a.toNat n.b v else xrUpdateVarInfoBinds ctx v (vdeclBinds n)
     let r := xrVisitFnBody (bodyOf n) ctx
     xrProcessVDecl ctx n r.body r.live
   else if n.op == opJDecl then
@@ -313,7 +309,8 @@ partial def xrVisitFnBody (n : N) (ctx : XrCtx) : XrBodyR :=
     -- the live variables of each alternative (LiveVars:140), which the visits return.
     let rs := xrVisitAlts (caseVar n) ctx (caseAlts n)
     let caseLiveVars := vsInsert (xrAltsLive rs vsEmpty) (caseVar n)
-    { body := { n with kids := xrFinishAlts (caseVar n) caseLiveVars ctx (caseAlts n) rs }, live := caseLiveVars }
+    let caseLiveList := vsToList caseLiveVars
+    { body := { n with kids := xrFinishAlts (caseVar n) caseLiveList ctx (caseAlts n) rs }, live := caseLiveVars }
   else if n.op == opRet then
     match retArgs n with
     | [y] =>

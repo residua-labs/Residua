@@ -1,0 +1,230 @@
+-- provenance: ours (searched: lib/ProcBytes.rsd, glue/std/)
+-- glue/std/Str.rsd — string/byte helpers for glue tools.
+-- Bytes are `List Int` in [0,255], the codebase convention (lib/ProcBytes).
+-- The rsdc subset is monomorphic and most polymorphic receiver prims do not
+-- instantiate for List Int, so every helper
+-- is an explicit recursion in lib/ProcBytes style (nLen/nRev/nAppend).
+-- Byte/string source: hyper/coreutils stream combinators (lines, fields,
+-- parseNum, digitsOf, intBytes, padLeft, ble, insert); theorems and the NF
+-- model assembly of that file are not part of the glue surface.
+
+abbrev Bs := List Int
+
+def cNL : Int := 10
+def cNUL : Int := 0
+def cTAB : Int := 9
+def cSP : Int := 32
+def cCR : Int := 13
+
+def sInSet (b : Int) : Bs → Bool
+  | [] => false
+  | x :: xs => if decide (x == b) then true else sInSet b xs
+
+-- String -> Bs via String.toList + Char.toNat (both receiver prims).
+def sBytesGo : List Char → Bs
+  | [] => []
+  | c :: cs => c.toNat :: sBytesGo cs
+
+def sBytes (s : String) : Bs := sBytesGo s.toList
+
+def sLen : Bs → Int
+  | [] => 0
+  | _ :: xs => 1 + sLen xs
+
+def sLenL : List Bs → Int
+  | [] => 0
+  | _ :: xs => 1 + sLenL xs
+
+-- append is `++` (kernel list append is fine); kept for call-site symmetry.
+def sAppend (a b : Bs) : Bs := a ++ b
+
+def sRevGo (acc : Bs) : Bs → Bs
+  | [] => acc
+  | x :: xs => sRevGo (x :: acc) xs
+
+def sRev (bs : Bs) : Bs := sRevGo [] bs
+
+def sRevLGo (acc : List Bs) : List Bs → List Bs
+  | [] => acc
+  | x :: xs => sRevLGo (x :: acc) xs
+
+def sRevL (xs : List Bs) : List Bs := sRevLGo [] xs
+
+def sLinesGo (cur : Bs) (acc : List Bs) : Bs → List Bs
+  | [] => sRevL (sRev cur :: acc)
+  | b :: bs =>
+    if decide (b == cNL) then sLinesGo [] (sRev (cNL :: cur) :: acc) bs
+    else sLinesGo (b :: cur) acc bs
+
+def sLines (bs : Bs) : List Bs := sLinesGo [] [] bs
+
+def sFieldsGo (delim : Int) (cur : Bs) (acc : List Bs) : Bs → List Bs
+  | [] => sRevL (sRev cur :: acc)
+  | b :: bs =>
+    if decide (b == delim) then sFieldsGo delim [] (sRev cur :: acc) bs
+    else sFieldsGo delim (b :: cur) acc bs
+
+def sFields (delim : Int) (bs : Bs) : List Bs := sFieldsGo delim [] [] bs
+
+def sIsDigit (b : Int) : Bool := decide (48 <= b) && decide (b <= 57)
+
+def sParseNumGo (acc : Int) : Bs → List Int
+  | [] => [acc]
+  | b :: bs => if sIsDigit b then sParseNumGo (acc * 10 + (b - 48)) bs else []
+
+def sParseNumNeg : List Int → List Int
+  | n :: _ => [-n]
+  | [] => []
+
+def sParseNum : Bs → List Int
+  | [] => []
+  | b :: rest =>
+    if decide (b == 45) then sParseNumNeg (sParseNumGo 0 rest)
+    else if decide (b == 43) then sParseNumGo 0 rest
+    else sParseNumGo 0 (b :: rest)
+
+partial def sDigitsOfGo (n : Nat) (acc : Bs) : Bs :=
+  if n == 0 then acc else sDigitsOfGo (n / 10) (Int.ofNat (48 + n % 10) :: acc)
+
+def sDigitsOf (n : Nat) : Bs :=
+  if n == 0 then [48] else sDigitsOfGo n []
+
+def sIntBytes (i : Int) : Bs :=
+  if i < 0 then 45 :: sDigitsOf i.toNat else sDigitsOf i.toNat
+
+partial def sRep (w : Int) : Bs :=
+  if w <= 0 then [] else cSP :: sRep (w - 1)
+
+def sPadLeft (w : Nat) (bs : Bs) : Bs := sRep (Int.ofNat w - sLen bs) ++ bs
+
+def sPadRight (w : Nat) (bs : Bs) : Bs := bs ++ sRep (Int.ofNat w - sLen bs)
+
+def sBle : Bs → Bs → Bool
+  | [], _ => true
+  | _ :: _, [] => false
+  | a :: as, b :: bs =>
+    if decide (a == b) then sBle as bs else decide (a < b)
+
+def sInsert : Bs → List Bs → List Bs
+  | x, [] => [x]
+  | x, y :: ys => if sBle x y then x :: y :: ys else sInsert x ys
+
+def sSortGo (acc : List Bs) : List Bs → List Bs
+  | [] => acc
+  | x :: rest => sSortGo (sInsert x acc) rest
+
+def sSort (xs : List Bs) : List Bs := sSortGo [] xs
+
+def sEq (a b : Bs) : Bool := sBle a b && sBle b a
+
+def sIsSpace (b : Int) : Bool := sInSet b [cSP, cTAB, cNL, cCR, 11, 12]
+
+-- words split on runs of whitespace, keeping order.
+def sWordsGo (acc : List Bs) (cur : Bs) : Bs → List Bs
+  | [] =>
+    let xs := if cur == [] then acc else sRev cur :: acc
+    sRevL xs
+  | b :: bs =>
+    if sIsSpace b then
+      if cur == [] then sWordsGo acc [] bs else sWordsGo (sRev cur :: acc) [] bs
+    else sWordsGo acc (b :: cur) bs
+
+def sWords (bs : Bs) : List Bs := sWordsGo [] [] bs
+
+-- trim ASCII whitespace from both ends
+def sTrimGo : Bs → Bs
+  | [] => []
+  | b :: bs => if sIsSpace b then sTrimGo bs else b :: bs
+
+def sTrimEnd : Bs → Bs
+  | [] => []
+  | b :: bs =>
+    let t := sTrimEnd bs
+    if sIsSpace b && t == [] then [] else b :: t
+
+def sTrim (bs : Bs) : Bs := sTrimEnd (sTrimGo bs)
+
+-- does bs start with pfx?
+def sStarts : Bs → Bs → Bool
+  | [], _ => true
+  | _ :: _, [] => false
+  | a :: as, b :: bs => decide (a == b) && sStarts as bs
+
+-- index of first occurrence of byte, -1 if absent
+def sIndexOfGo (b : Int) (off : Int) : Bs → Int
+  | [] => -1
+  | x :: xs => if decide (x == b) then off else sIndexOfGo b (off + 1) xs
+
+def sIndexOf (b : Int) (bs : Bs) : Int := sIndexOfGo b 0 bs
+
+-- substring match: does bs contain pat anywhere?
+def sContains (pat : Bs) : Bs → Bool
+  | [] => pat == []
+  | b :: bs => sStarts pat (b :: bs) || sContains pat bs
+
+def sTake : Int → Bs → Bs
+  | _, [] => []
+  | n, b :: bs => if n <= 0 then [] else b :: sTake (n - 1) bs
+
+def sDrop : Int → Bs → Bs
+  | _, [] => []
+  | n, b :: bs => if n <= 0 then b :: bs else sDrop (n - 1) bs
+
+def sSplitNul (bs : Bs) : List Bs := sFields 0 bs
+
+-- flatten with separator
+def sJoin (sep : Bs) : List Bs → Bs
+  | [] => []
+  | x :: [] => x
+  | x :: xs => x ++ sep ++ sJoin sep xs
+
+-- flat concat (no separator)
+def sConcat : List Bs → Bs
+  | [] => []
+  | x :: xs => x ++ sConcat xs
+
+-- Head/tail of a NUL-separated flat work list: the part before the first
+-- NUL and everything after it. Absent NUL: head is w, tail is [].
+def sHeadNul (w : Bs) : Bs :=
+  let i := sIndexOf 0 w
+  if i < 0 then w else sTake i w
+
+def sTailNul (w : Bs) : Bs :=
+  let i := sIndexOf 0 w
+  if i < 0 then [] else sDrop (i + 1) w
+
+-- monomorphic list helpers used across glue modules
+-- Recursive defs do not take function-typed parameters in the monomorphic
+-- subset, so there are no map/filter/fold combinators here: the monomorphic
+-- recursions below cover the concrete uses.
+
+-- keep only non-empty byte strings
+def sNonEmpty : List Bs → List Bs
+  | [] => []
+  | x :: xs => if x == [] then sNonEmpty xs else x :: sNonEmpty xs
+
+-- map sTrimEnd over a list (line-list cleanup after sLines)
+def sMapTrimEnd : List Bs → List Bs
+  | [] => []
+  | x :: xs => sTrimEnd x :: sMapTrimEnd xs
+
+def sAnyOpt : List (List Bs) → Bool
+  | [] => false
+  | x :: rest => !(x == []) || sAnyOpt rest
+
+def sAllOpt : List (List Bs) → Bool
+  | [] => true
+  | x :: rest => !(x == []) && sAllOpt rest
+
+def sAllNone : List (List Bs) → Bool
+  | [] => true
+  | x :: rest => x == [] && sAllNone rest
+
+def sFirstSome : List (List Bs) → List Bs
+  | [] => []
+  | x :: xs => if !(x == []) then x else sFirstSome xs
+
+def sLast (dflt : Bs) : List Bs → Bs
+  | [] => dflt
+  | x :: [] => x
+  | _ :: rest => sLast dflt rest

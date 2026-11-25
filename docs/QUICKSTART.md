@@ -1,73 +1,53 @@
-# QUICKSTART — first run against the 0.3 release
+# QUICKSTART — first run from the 0.4 source archive
 
-Release 0.3 carries the self-bootstrap closure: the committed wasm
-[seed](GLOSSARY.md), the `rsdc`/`rsc` source closure, the runtime and these documents,
-plus the `rsd` build tool as sources (`docs/BUILD.md` — it cannot be
-compiled from the archive alone) and the `examples/surfaces/` programs.
-The first run is the seed recipe itself. Every claim names its source.
-This document will change in later versions.
+Release 0.4 carries the self-bootstrapping compiler closure (`bootstrap/seed/stage-14274/`),
+the C11 `wasmtime` execution host (`glue/host/procwt.c`), the `Proc` and
+`glue/std/` standard modules, the three-module CLI example
+`examples/app04/{Stats,Table,Main}.rsd`, and the `rsd` build tool
+sources (`docs/BUILD.md`). Every command below runs on Linux x86-64 or
+macOS arm64 in a clean `PATH=/usr/bin:/bin` shell with a C11 compiler,
+`curl`, `tar`, `awk` and `grep` — no Lean, Node, OCaml or Rust.
 
-## 20 to 45 minutes: rebuild the compilers from the seed
-
-On a clean Linux x86-64 checkout — or macOS arm64; or the source
-archive extracted
-into a fresh directory (`mkdir rsd-src && tar -xf rsd-src.tar -C
-rsd-src`; the archive's members sit at its top level) — with GCC,
-GNU binutils, coreutils, Bash, curl and tar (clang on macOS), and no
-Lean, elan, lake,
-Node or OCaml on PATH, run the pinned recipe:
+## 1. Verify and extract the archive
 
 ```sh
-env -i PATH=/usr/bin:/bin bash --noprofile --norc
-# then the commands of bootstrap/seed/stage-14274/README.md
+sha256sum -c rsd-src.tar.sha256    # macOS: shasum -a 256 -c rsd-src.tar.sha256
+mkdir rsd-src && tar -xf rsd-src.tar -C rsd-src && cd rsd-src
 ```
 
-(The measured spread is 1154.8 s on the recorded perf host to 2043 s
-on a 4-vCPU Debian 12 guest — `docs/PERF-RECORD.tsv`.)
+Extract into a directory outside any `.git` working tree so the clean
+environment checks evaluate the archive alone.
 
-The recipe fetches a pinned wasmtime C API and a pinned binaryen
-(digests in `bootstrap/seed/stage-14274/{WASMTIME,BINARYEN}-SHA256SUMS`),
-recodes the seeds' legacy exception-handling instructions with
-`wasm-opt`, compiles the C host `stage-14274/seed-host.c`, and runs
-all four compiler calls inside the seed's own Wasm form. It rebuilds
-both RSCM files and both Wasm
-files byte-identical to the committed seeds and exits 0 — the recipe's
-wall and peak are recorded per version in `docs/PERF-RECORD.tsv`.
+## 2. Rebuild both compilers from the [seed](GLOSSARY.md) and run `examples/app04`
 
-## What just happened
+Run the Quick start script in [`README.md`](../README.md) (or the
+standalone bootstrap recipe in `bootstrap/seed/stage-14274/README.md`)
+inside `env -i PATH=/usr/bin:/bin /bin/sh -eu`:
 
-`bootstrap/seed/stage-14274/rsdc.wasm` (sha256 `1aeacfb6b097…dbc6be75`)
-read the whole-module input `sources/rsdc.rsd` and emitted an RSCM file
-matching the fixpoint digest; `stage-14274/rsc.wasm` (sha256
-`b7db967608fe…0b2e90`) lowered both RSCM files to Wasm matching the
-committed seeds (`stage-14274/README.md`, `REBUILT-SHA256SUMS`,
-`SHA256SUMS`). The 54 source members the seeds were cut from are pinned
-by sha256 in `stage-14274/SOURCE-MEMBERS-SHA256SUMS` — `sha256sum -c`
-verifies them against the checkout.
+1. **Verify seed pins** (`SHA256SUMS`, `SOURCE-MEMBERS-SHA256SUMS`,
+   `SEED-HOST-SHA256SUMS`) and download pinned `wasmtime` v50.0.1 C API
+   and `binaryen` `version_133` (`wasm-opt`), checking both against
+   `WASMTIME-SHA256SUMS` and `BINARYEN-SHA256SUMS`.
+2. **Translate and build hosts**: `wasm-opt --all-features --translate-to-exnref`
+   recodes the seed modules' legacy `try`/`catch` instructions to
+   `exnref`; `cc` compiles `seed-host.c` (`$out/run`) and
+   `glue/host/procwt.c` (`$out/procwt`).
+3. **Rebuild `rsdc` and `rsc`**: `$out/run` executes `rsdc` (`f896`) and
+   `rsc` (`f2615`, word `14274`) on `sources/{rsdc,rsc}.rsd`, checks
+   byte-equality with the committed seeds and `REBUILT-SHA256SUMS`
+   (`105 s` on Linux x86-64, `191 s` on macOS arm64), and translates the
+   rebuilt modules for `wasmtime`.
+4. **Compile and run `examples/app04`**: strip `^import ` lines across
+   `lib/Proc{Bytes,,9}.rsd`, `glue/std/{Str,Proc,Args,Files}.rsd`, and
+   `examples/app04/{Stats,Table,Main}.rsd` in dependency order; query
+   `\0RSDC-ENTRIES\n` for `main`'s export ordinal (`f151`); compile to
+   `app04.rscm` and `app04.wasm`; and run `$out/procwt` on a file of
+   floating-point numbers to write the formatted summary table.
 
-## Compiling a source
+## Open limits in 0.4
 
-The rebuilt runtime host is the compiler's executor:
-`$out/run rsdc <entry> <rsdc.wasm> <source.rsd> <out.rscm> 0 cons`
-compiles, and
-`$out/run rsc <entry> <rsc.wasm> <file.rscm> <out.wasm> 14274 cons`
-lowers
-(`stage-14274/README.md`, the `rebuild_root` command lines; the
-entries are read from `stage-14274/CUT.tsv`). The
-inputs the recipe demonstrates are the two whole-module sources
-`sources/{rsdc,rsc}.rsd` — "the exact RSD byte streams" of the
-seed cut, including generated runtime definitions
-(`stage-14274/README.md`); the grammar those sources are written in
-is `docs/LANGUAGE.md`, whose probe table refuses `import`,
-`theorem`, `axiom`, `class`, `abbrev`, `variable`, `opaque`, `by`
-(all err=1). `rsd/examples/answer.rsd` is a small compilable input;
-`docs/RSD-COMMAND.md` documents the executor file contract, and
-`docs/BUILD.md` documents the `rsd` verbs the tool adds on top.
-
-## Not in 0.3
-
-Modules (`import`), compiled dispatcher binaries, the 9P execution
-layer's device servers, theorem checking, the elaborator and the
-application suites are named future work (`release/GAPS.tsv`,
-`docs/OVERVIEW.md`). The `.rsm`/`.rsj` surfaces and the RSX entry do
-ship in 0.3: see `docs/surfaces/` and `examples/surfaces/`.
+Building the standalone native `rsd` compiler worker without
+repository-side `.lean` glue, separate `RMOD1` compilation of
+cross-module `Proc`/`Float` files without `import` stripping, and proof
+checking (`R-CIC`) are recorded in `release/GAPS.tsv` and
+`docs/OVERVIEW.md`.

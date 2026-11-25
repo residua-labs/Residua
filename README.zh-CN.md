@@ -2,28 +2,28 @@
 
 [English](README.md) | 中文
 
-Residua 是一个可以逐字节核对自身构建的编译器：提交的 WebAssembly [seed](docs/GLOSSARY.zh-CN.md) 只需一个 C 编译器就能从源码重建工具链，每个产物按其内容哈希寻址，而非按生产者署名。
+Residua 是一个可以逐字节核对自身构建的编译器：提交的 WebAssembly [seed](docs/GLOSSARY.zh-CN.md) 只需 C 编译器就能从源码重建工具链，每个产物按其内容哈希寻址，而非按生产者署名。
 
-它存在的原因：可验证软件真正昂贵的部分不是检查，而是信任工具链。一个署着生产者名或编译器版本号的结果，在互不信任的各方之间无法安全地比较与复用。内容寻址加上经 seed 验证的工具链，把这两个假设都去掉。
+它存在的原因：可验证软件真正昂贵的部分不是检查，而是信任工具链。署着生产者名或编译器版本号的结果，在互不信任的各方之间无法安全地比较与复用。内容寻址加上经 seed 验证的工具链，把这些假设去掉。
 
-更长远的设计是一门语言：程序与证明是同一依赖类型论中的项；本版本交付的是该设计的编译一半。
+更长远的设计是一门语言：程序与证明是同一依赖类型论中的项；本版本交付的是该设计的编译与命令行/文件执行部分。
 
-## 0.3 相对 0.2 的新内容
+## 0.4 相对 0.3 的新内容
 
-| 方面 | 0.2 | 0.3 |
+| 方面 | 0.3 | 0.4 |
 |---|---|---|
-| 构建工具 | 未随附 | `rsd build` / `rsd test` / `rsd run` / `rsd cache`（`rsd/`、`lib/rsd/`） |
-| 语言 | 无 `UInt64` | 支持 `UInt64` |
-| Seed | 0.1 时代字节 | 按本版本源码重切 |
-| 测试套件 | benchmarks/, instruments/lrc-host/, perf/ 缺失 | 已恢复（0.2 回归已修复） |
-| 文档 | 学术文体 | 面向外部读者重写；词汇表与社区文件 |
-| 规范 | 仅分层语义规范 | + Lean 4.14 的 MST-NF 复合定理（`lean/nf-compose/`；理论见 [github.com/residua-labs/MST-NF](https://github.com/residua-labs/MST-NF) 钉住提交 `4432a34`，证明由该仓持有） |
+| 模块与 I/O | 仅单模块；无 `Proc` 宿主 | 跨模块 `import`、`Proc` `do` 记法、`glue/std/` 及 C11 + Wasmtime 的 `procwt` 宿主（`glue/host/procwt.c`） |
+| 语言 | `UInt64`、整数、数组、归纳类型 | + 全链路 IEEE-754 `Float`（`binary64`：`rsdc`、`.rscm`、`lambda-RC`、WebAssembly） |
+| 示例 | 单行 `rsd/examples/answer.rsd` | 多模块 `examples/app04/{Stats,Table,Main}.rsd`（`Float` 统计 + `String` 表格 + 文件 I/O） |
+| Seed 与编译器 | `19.9 MB` / `20.5 MB` wasm；重建 `20–45 min` | `12.5 MB` / `14.3 MB` wasm（`845b99ef…` / `b52b07d1…`）；`seed-host.c` 读取 `__heap_base`；Linux 重建 `105 s`、macOS `191 s` |
+| 映射表许可证 | `lib/AvlMap.rsd` 移植自 OCaml `stdlib/map.ml`（LGPL-2.1） | `lib/AvlMap.rsd` 移植自 Lean `v4.36.0` `Std.DTreeMap`（Apache-2.0） |
+| 规范 | 积/和/序列/分派复合 | + `lean/nf-compose/` 中的多跳（`HopCompose.lean`）与递归（`Rec.lean`、`NfRec/CheckedStatus.lean`）复合定理 |
 
 ## 状态
 
-研究性版本 **0.3**。当前可用：在 Linux x86-64 和 macOS arm64 上从提交的 seed 重建编译器；把单模块 `.rsd` 源码编译为 WebAssembly；`rsd` 构建工具的四个动词；带类型的内容地址格式；语法引擎；执行边界的形式语义。执行边界工作背后的基础理论是 MST-NF，与其证明一同保存在独立仓库 [residua-labs/MST-NF](https://github.com/residua-labs/MST-NF)（提交 `4432a34`）。
+研究性版本 **0.4**。当前可用：在 Linux x86-64 和 macOS arm64 上从提交的 seed 逐字节重建编译器；把使用 `Float`（`binary64`）、`String`、`Proc` `do` 记法与 `glue/std/` 的多模块 `.rsd` 程序编译为 WebAssembly 并在 `glue/host/procwt.c` 上运行；`rsd` 构建工具各动词（[docs/BUILD.zh-CN.md](docs/BUILD.zh-CN.md)）；带类型的内容地址格式；语法引擎；执行边界形式语义与 MST-NF 复合包（`lean/nf-compose/`，基于独立仓库 [residua-labs/MST-NF](https://github.com/residua-labs/MST-NF) 提交 `4432a34` 的钉住模型）。
 
-尚不可用：模块、证明检查、I/O 执行层、真实应用套件。完整图景与限制见 [docs/OVERVIEW.zh-CN.md](docs/OVERVIEW.zh-CN.md)。
+尚不可用：证明检查（R-CIC 内核）、面向 `Float` 与 `Proc` 的独立 `.rmod` 编译（`release/GAPS.tsv`）、网络/子进程宿主服务、64 位 WebAssembly 寻址、结果发布/查询入口。完整图景与限制见 [docs/OVERVIEW.zh-CN.md](docs/OVERVIEW.zh-CN.md)。
 
 ## 评测
 
@@ -39,28 +39,112 @@ Residua 是一个可以逐字节核对自身构建的编译器：提交的 WebAs
 
 ## 快速开始
 
-需要 C 工具链、Bash、curl、tar，约 20–45 分钟。不需要 Lean、Node 或 OCaml。
+需要 C11 编译器（`cc`）、POSIX `sh`、`awk`、`curl`、`tar`（支持 `xz`）及 `sha256sum`（macOS 为 `shasum -a 256`）。不需要 Lean、Node、Python 或 OCaml。全程约 `3–6` 分钟（Linux x86-64 约 `193 s`，macOS arm64 约 `337 s`）。
+
+在任意非 `.git` 目录下校验并解压源码归档：
 
 ```sh
-# 1. 下载并校验源码归档（自发布页）
 sha256sum -c rsd-src.tar.sha256       # macOS：shasum -a 256 -c rsd-src.tar.sha256
 mkdir rsd-src && tar -xf rsd-src.tar -C rsd-src && cd rsd-src
-
-# 2. 在干净环境中从 seed 重建两个编译器
-env -i PATH=/usr/bin:/bin bash --noprofile --norc
-#    然后执行 bootstrap/seed/ 下 seed 配方 README 中的命令
 ```
 
-配方会取回钉住的 wasmtime 与 binaryen，把 seed 的旧式异常处理指令重编码，编译一个 C 宿主桥，并让全部四次编译器调用都运行在 seed 自身的 Wasm 形态上；仅当重建产物与提交的 seed 逐字节一致时才退出。
-
-然后把一个程序编译为 WebAssembly（路径按配方留下的样子）：
+随后在解压后的归档根目录以干净环境（`env -i PATH=/usr/bin:/bin /bin/sh -eu`）运行以下脚本，从 seed 重建 `rsdc` 与 `rsc`、核对逐字节不动点，并编译与运行 `examples/app04`：
 
 ```sh
-"$out/run" rsdc f832  "$out/translated/rsdc.wasm" rsd/examples/answer.rsd answer.rscm 0 cons
-"$out/run" rsc  f2268 "$out/translated/rsc.wasm"  answer.rscm answer.wasm 14274 cons
+set -eu
+export LC_ALL=C
+seed=$PWD/bootstrap/seed/stage-14274
+out=$PWD/out/app04-run
+platform=$(uname -s)-$(uname -m)
+case "$platform" in
+    Linux-x86_64)
+        SHASUM=sha256sum
+        binaryen_tar=binaryen-version_133-x86_64-linux.tar.gz
+        wasmtime_tar=wasmtime-v50.0.1-x86_64-linux-c-api.tar.xz
+        LDL=-ldl ;;
+    Darwin-arm64)
+        SHASUM="shasum -a 256"
+        binaryen_tar=binaryen-version_133-arm64-macos.tar.gz
+        wasmtime_tar=wasmtime-v50.0.1-aarch64-macos-c-api.tar.xz
+        LDL= ;;
+    *) printf 'unsupported host: %s\n' "$platform" >&2; exit 1 ;;
+esac
+
+mkdir -p "$out/tools" "$out/translated" "$out/rebuilt" "$out/app"
+( cd "$seed" && $SHASUM -c SHA256SUMS )
+$SHASUM -c "$seed/SOURCE-MEMBERS-SHA256SUMS"
+$SHASUM -c "$seed/SEED-HOST-SHA256SUMS"
+
+[ -f "$out/tools/$binaryen_tar" ] || curl -fsSL --retry 3 -o "$out/tools/$binaryen_tar" \
+    "https://github.com/WebAssembly/binaryen/releases/download/version_133/$binaryen_tar"
+[ -f "$out/tools/$wasmtime_tar" ] || curl -fsSL --retry 3 -o "$out/tools/$wasmtime_tar" \
+    "https://github.com/bytecodealliance/wasmtime/releases/download/v50.0.1/$wasmtime_tar"
+grep " $binaryen_tar\$" "$seed/BINARYEN-SHA256SUMS" > "$out/tools/pins"
+grep " $wasmtime_tar\$" "$seed/WASMTIME-SHA256SUMS" >> "$out/tools/pins"
+( cd "$out/tools" && $SHASUM -c pins && tar -xf "$binaryen_tar" && tar -xf "$wasmtime_tar" )
+
+wasmopt=$out/tools/binaryen-version_133/bin/wasm-opt
+capi=""
+for d in "$out/tools"/wasmtime-v50.0.1-*-c-api; do
+    if [ -d "$d" ]; then capi=$d; fi
+done
+
+# 1. 将 seed Wasm 模块转译为 exnref，编译 C11 seed 宿主与 procwt 宿主
+"$wasmopt" --all-features "$seed/rsdc.wasm" --translate-to-exnref -o "$out/translated/rsdc.wasm" &
+p1=$!
+"$wasmopt" --all-features "$seed/rsc.wasm" --translate-to-exnref -o "$out/translated/rsc.wasm" &
+p2=$!
+wait "$p1" "$p2"
+
+cc -O2 -std=c11 -Wall -Wextra -Werror -I "$capi/include" -c "$seed/seed-host.c" -o "$out/seed-host.o"
+cc "$out/seed-host.o" "$capi/lib/libwasmtime.a" -lpthread -lm $LDL -o "$out/run"
+cc -O2 -std=c11 -Wall -Wextra -Werror -I "$capi/include" \
+    glue/host/procwt.c "$capi/lib/libwasmtime.a" -lpthread -lm $LDL -o "$out/procwt"
+
+rsdc_entry=$(awk -F'\t' '$1=="rsdc_entry"{print $2}' "$seed/CUT.tsv")
+rsc_entry=$(awk -F'\t' '$1=="rsc_entry"{print $2}' "$seed/CUT.tsv")
+
+# 2. 用 seed 从源码重建 rsdc 与 rsc，并核对逐字节不动点
+"$out/run" rsdc "$rsdc_entry" "$out/translated/rsdc.wasm" \
+    "$seed/sources/rsdc.rsd" "$out/rebuilt/rsdc.rscm" 0 cons
+"$out/run" rsc "$rsc_entry" "$out/translated/rsc.wasm" \
+    "$out/rebuilt/rsdc.rscm" "$out/rebuilt/rsdc.raw.wasm" 14274 cons
+cmp -s "$seed/rsdc.wasm" "$out/rebuilt/rsdc.raw.wasm"
+"$wasmopt" --all-features "$out/rebuilt/rsdc.raw.wasm" --translate-to-exnref -o "$out/rebuilt/rsdc.wasm"
+
+"$out/run" rsdc "$rsdc_entry" "$out/translated/rsdc.wasm" \
+    "$seed/sources/rsc.rsd" "$out/rebuilt/rsc.rscm" 0 cons
+"$out/run" rsc "$rsc_entry" "$out/translated/rsc.wasm" \
+    "$out/rebuilt/rsc.rscm" "$out/rebuilt/rsc.raw.wasm" 14274 cons
+cmp -s "$seed/rsc.wasm" "$out/rebuilt/rsc.raw.wasm"
+( cd "$out/rebuilt" && grep "\.rscm\$" "$seed/REBUILT-SHA256SUMS" | $SHASUM -c - )
+"$wasmopt" --all-features "$out/rebuilt/rsc.raw.wasm" --translate-to-exnref -o "$out/rebuilt/rsc.wasm"
+
+# 3. 用重建出的编译器与 procwt 编译并运行多模块 app04 命令行程序
+awk '/^import / {next} {print}' \
+    lib/ProcBytes.rsd lib/Proc.rsd lib/Proc9.rsd \
+    glue/std/Str.rsd glue/std/Proc.rsd glue/std/Args.rsd glue/std/Files.rsd \
+    examples/app04/Stats.rsd examples/app04/Table.rsd examples/app04/Main.rsd \
+    > "$out/app/app04.rsd"
+
+printf '\000RSDC-ENTRIES\n' | cat - "$out/app/app04.rsd" > "$out/app/app04.ent.in"
+"$out/run" rsdc "$rsdc_entry" "$out/rebuilt/rsdc.wasm" \
+    "$out/app/app04.ent.in" "$out/app/app04.entries" 0 cons
+app_entry=$(awk -F'\t' '$1=="entry" && $3=="main" {print "f"$2}' "$out/app/app04.entries")
+
+"$out/run" rsdc "$rsdc_entry" "$out/rebuilt/rsdc.wasm" \
+    "$out/app/app04.rsd" "$out/app/app04.rscm" 0 cons
+"$out/run" rsc "$rsc_entry" "$out/rebuilt/rsc.wasm" \
+    "$out/app/app04.rscm" "$out/app/app04.raw.wasm" 14274 cons
+"$wasmopt" --all-features "$out/app/app04.raw.wasm" --translate-to-exnref -o "$out/app/app04.wasm"
+
+printf -- '-2.5\n0.0\n1.25\n2.75\n10.25\n' > "$out/app/numbers.txt"
+"$out/procwt" "$out/app/app04.wasm" "$app_entry" auto 4000000000000000 "" "" - \
+    "$out/app/numbers.txt" "$out/app/summary.txt"
+cat "$out/app/summary.txt"
 ```
 
-`answer.wasm` 可在任何 WebAssembly 运行时上运行。更高层的 `rsd build`/`rsd run` 动词见 `docs/BUILD.md`。
+更高层的 `rsd` 构建与运行动词见 [docs/BUILD.zh-CN.md](docs/BUILD.zh-CN.md)。
 
 ## 示例
 
@@ -88,25 +172,29 @@ theorem sum_mirror(t: Tree<Nat>): sum(mirror(t)) = sum(t) by {
 }
 ```
 
-程序和关于它的定理写在同一种语言里：`sum_mirror` 对每一棵树都成立，证明由内核检查。写法是 Rust 的，含义是类型论的：值不可变，每个 `match` 覆盖所有情形，每个函数都终止。
+程序和关于它的定理写在同一种语言里：`sum_mirror` 对每棵树都成立，证明由内核检查。写法是 Rust 的，含义是类型论的：值不可变，每个 `match` 覆盖所有情形，每个函数都终止。
 
-在这里含义会不同的 Rust 写法，一律按名拒绝，并给出该写的形式：
+在这里含义会不同的 Rust 写法，按名拒绝并给出该写的形式：
 
 | 写下的形式 | 拒绝名 | 改写为 |
 |---|---|---|
 | `let mut x = 1;` | `closed_mut` | `let x = 1;` |
 | `f(&x)` | `closed_borrow` | `f(x)` |
-| `return x` | `closed_return` | `x`，作为块的最后一个表达式 |
+| `return x` | `closed_return` | `x`，作为块的末尾表达式 |
 | `for y in xs { … }` | `closed_loop` | 递归或折叠 |
 | `if b { 1 }` | `if_without_else` | `if b { 1 } else { 0 }` |
 | `Nat` 上的 `a - b` | `nat_subtraction` | `Nat::sub(a, b)`，到 0 为止 |
 | `Int` 上的 `a / b` | `int_division` | `Int::tdiv(a, b)`（截断）或 `Int::ediv(a, b)`（欧几里得） |
 
-**状态。** 这套表面语法还在开发中，不在 0.3 归档里。目前它是 Lean 4.14 的语法扩展：由原版 Lean 繁饰，上面的例子与其 Lean 写法的内核项相同。0.3 的编译器读的是自举表面，即 Lean 4.14 的一个子集（[docs/LANGUAGE.md](docs/LANGUAGE.md)）；它自己的源码用它写成，快速开始里的程序也是：
+**状态。** 这套 Rust 拼写的证明表面语法还在开发中，不在 0.4 归档里。目前它是 Lean 4.14 的语法扩展：由原版 Lean 繁饰，上面的例子与其 Lean 写法的内核项相同。0.4 的编译器读的是自举表面，即 Lean 4.14 的子集（[docs/LANGUAGE.md](docs/LANGUAGE.md)）；编译器自身源码与快速开始中的多模块 `examples/app04/` 命令行程序均以它写成：
 
 ```lean
--- rsd/examples/answer.rsd
-def main : Int := 42
+-- examples/app04/Main.rsd（入口节选）
+def main : Proc := do {
+  let rawArgs <- argvP 0;
+  let out <- appDispatchArgs rawArgs;
+  out
+}
 ```
 
 ## 文档
@@ -126,6 +214,7 @@ def main : Int := 42
 | [0.1.2](https://github.com/residua-labs/Residua/releases/tag/rsd-0.1.2) | 2026-11-19 | `a3185221…` | 补丁：基准与差分测试套件随附 |
 | [0.2](https://github.com/residua-labs/Residua/releases/tag/rsd-0.2) | 2026-11-20 | `151bfd4f…` | q 格式 v1、语法引擎、效应语义 |
 | [0.3](https://github.com/residua-labs/Residua/releases/tag/rsd-0.3) | 2026-11-24 | `b07ae731…` | rsd 构建工具、UInt64、重切 seed、恢复套件、开源文档 |
+| [0.4](https://github.com/residua-labs/Residua/releases/tag/rsd-0.4) | 2026-11-25 | 见发布页 | 模块、Proc 文件/命令行 I/O、Float（binary64）、app04 示例、更小更快的 seed、Apache-2.0 映射表 |
 
 完整历史：[CHANGELOG.zh-CN.md](CHANGELOG.zh-CN.md)。
 

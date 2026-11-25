@@ -21,13 +21,17 @@ structure BwKey where
   deriving Inhabited
 
 -- Borrow:18 beq, as one number: variable x of function f
-def bwKeyNum (k : BwKey) : Nat := k.f * 16777216 + k.x
+def bwKeyNum (k : BwKey) : Int :=
+  let fi : Int := (k.f : Int)
+  let xi : Int := (k.x : Int)
+  if fi < 262144 && xi < 4096 then fi * 4096 + xi
+  else 1073741824 + fi * 16777216 + xi
 
 -- Borrow:29 OwnedSet, Borrow:31 OwnedSet.contains
-def bwOwnedContains (s : VSet) (k : BwKey) : Bool := vsContains s (bwKeyNum k)
+def bwOwnedContains (s : VSet) (k : BwKey) : Bool := vsContainsI s (bwKeyNum k)
 
 -- Borrow:30 OwnedSet.insert
-def bwOwnedInsert (s : VSet) (k : BwKey) : VSet := vsInsert s (bwKeyNum k)
+def bwOwnedInsert (s : VSet) (k : BwKey) : VSet := vsInsertI s (bwKeyNum k)
 
 -- Borrow:39 Key
 structure BwParamKey where
@@ -41,15 +45,135 @@ def bwParamKeyJP (f j : Nat) : BwParamKey := { isJP := true, f := f, j := j }
 
 -- the key as one number: function f, or join point j of function f
 def bwParamKeyNum (k : BwParamKey) : Int :=
-  ((k.f * 33554432 + (if k.isJP then 16777216 + k.j else 0) : Nat) : Int)
+  let fi : Int := (k.f : Int)
+  let ji : Int := (k.j : Int)
+  if !k.isJP && fi < 262144 then fi * 2
+  else if k.isJP && fi < 32768 && ji < 16384 then 524288 + (fi * 16384 + ji) * 2 + 1
+  else 1074790400 + fi * 33554432 + (if k.isJP then 16777216 + ji else 0)
+
+def bwExtSentinel : List Param := [{ x := 0, borrow := false, ty := -99 }]
+
+def bwIsExtSentinel : List Param → Bool
+  | [p] => p.ty == -99
+  | _ => false
+
+structure PmCut1 where
+  head : List (List Param)
+  rest : List (List Param)
+  deriving Inhabited
+
+def pmCut1 : Nat → List (List Param) → List (List Param) → PmCut1
+  | 0, acc, xs => { head := acc.reverse, rest := xs }
+  | _, acc, [] => { head := acc.reverse, rest := [] }
+  | n + 1, acc, x :: xs => pmCut1 n (x :: acc) xs
+
+partial def pmChunk1 (xs : List (List Param)) (acc : List (List (List Param))) : List (List (List Param)) :=
+  if xs.isEmpty then acc.reverse
+  else
+    let c := pmCut1 32 [] xs
+    pmChunk1 c.rest (c.head :: acc)
+
+structure PmCut2 where
+  head : List (List (List Param))
+  rest : List (List (List Param))
+  deriving Inhabited
+
+def pmCut2 : Nat → List (List (List Param)) → List (List (List Param)) → PmCut2
+  | 0, acc, xs => { head := acc.reverse, rest := xs }
+  | _, acc, [] => { head := acc.reverse, rest := [] }
+  | n + 1, acc, x :: xs => pmCut2 n (x :: acc) xs
+
+partial def pmChunk2 (xs : List (List (List Param))) (acc : List (List (List (List Param)))) : List (List (List (List Param))) :=
+  if xs.isEmpty then acc.reverse
+  else
+    let c := pmCut2 32 [] xs
+    pmChunk2 c.rest (c.head :: acc)
+
+structure PmCut3 where
+  head : List (List (List (List Param)))
+  rest : List (List (List (List Param)))
+  deriving Inhabited
+
+def pmCut3 : Nat → List (List (List (List Param))) → List (List (List (List Param))) → PmCut3
+  | 0, acc, xs => { head := acc.reverse, rest := xs }
+  | _, acc, [] => { head := acc.reverse, rest := [] }
+  | n + 1, acc, x :: xs => pmCut3 n (x :: acc) xs
+
+partial def pmChunk3 (xs : List (List (List (List Param)))) (acc : List (List (List (List (List Param))))) : List (List (List (List (List Param)))) :=
+  if xs.isEmpty then acc.reverse
+  else
+    let c := pmCut3 32 [] xs
+    pmChunk3 c.rest (c.head :: acc)
+
+def pmAt1 : Nat → List (List Param) → List Param
+  | _, [] => []
+  | 0, x :: _ => x
+  | i + 1, _ :: xs => pmAt1 i xs
+
+def pmAt2 : Nat → List (List (List Param)) → List (List Param)
+  | _, [] => []
+  | 0, x :: _ => x
+  | i + 1, _ :: xs => pmAt2 i xs
+
+def pmAt3 : Nat → List (List (List (List Param))) → List (List (List Param))
+  | _, [] => []
+  | 0, x :: _ => x
+  | i + 1, _ :: xs => pmAt3 i xs
+
+def pmAt4 : Nat → List (List (List (List (List Param)))) → List (List (List (List Param)))
+  | _, [] => []
+  | 0, x :: _ => x
+  | i + 1, _ :: xs => pmAt4 i xs
+
+def pmSet1 : Nat → List Param → List (List Param) → List (List Param)
+  | _, _, [] => []
+  | 0, v, _ :: xs => v :: xs
+  | i + 1, v, x :: xs => x :: pmSet1 i v xs
+
+def pmSet2 (i0 : Nat) (v : List Param) : Nat → List (List (List Param)) → List (List (List Param))
+  | _, [] => []
+  | 0, x :: xs => pmSet1 i0 v x :: xs
+  | i + 1, x :: xs => x :: pmSet2 i0 v i xs
+
+def pmSet3 (i0 i1 : Nat) (v : List Param) : Nat → List (List (List (List Param))) → List (List (List (List Param)))
+  | _, [] => []
+  | 0, x :: xs => pmSet2 i0 v i1 x :: xs
+  | i + 1, x :: xs => x :: pmSet3 i0 i1 v i xs
+
+def pmSet4 (i0 i1 i2 : Nat) (v : List Param) : Nat → List (List (List (List (List Param)))) → List (List (List (List (List Param))))
+  | _, [] => []
+  | 0, x :: xs => pmSet3 i0 i1 v i2 x :: xs
+  | i + 1, x :: xs => x :: pmSet4 i0 i1 i2 v i xs
+
+structure BwMap where
+  fns : List (List (List (List (List Param))))
+  size : Int
+  jps : LTree
+  deriving Inhabited
+
+def bwm0 : BwMap := { fns := [], size := 0, jps := lt0 }
 
 -- Borrow:52 ParamMap: for each key its parameters (the entry's list, lib/lrc/Ir.rsd `paramsTo`)
-def bwPMFind (k : BwParamKey) (m : Map) : Option (List Param) :=
-  let n := mapNode m (bwParamKeyNum k)
-  if n.tag == 0 then none else some (paramsOf n.extra)
+def bwPMFind (k : BwParamKey) (m : BwMap) : Option (List Param) :=
+  let fi : Int := (k.f : Int)
+  if !k.isJP && fi < m.size then
+    let ps := pmAt1 (fi % 32).toNat (pmAt2 ((fi / 32) % 32).toNat (pmAt3 ((fi / 1024) % 32).toNat (pmAt4 (fi / 32768).toNat m.fns)))
+    if bwIsExtSentinel ps then none else some ps
+  else
+    let xs := ltFind m.jps (bwParamKeyNum k)
+    if xs.isEmpty then
+      -- Note: a JP with 0 params has `xs = [-1]` marker so empty vs 0-param JP is distinguished
+      none
+    else if intAt 0 xs == -1 then some []
+    else some (paramsOf xs)
 
-def bwPMInsert (k : BwParamKey) (ps : List Param) (m : Map) : Map :=
-  mapPut m (bwParamKeyNum k) 1 0 0 (paramsTo ps)
+def bwPMInsert (k : BwParamKey) (ps : List Param) (m : BwMap) : BwMap :=
+  let fi : Int := (k.f : Int)
+  if !k.isJP && fi < m.size then
+    { m with fns := pmSet4 (fi % 32).toNat ((fi / 32) % 32).toNat ((fi / 1024) % 32).toNat ps (fi / 32768).toNat m.fns }
+  else
+    let raw := paramsTo ps
+    { m with jps := ltPut m.jps (bwParamKeyNum k) (if raw.isEmpty then [-1] else raw) }
 
 -- Borrow:68 initBorrow
 def bwInitBorrow : List Param → List Param
@@ -62,7 +186,7 @@ def bwInitBorrowIfNotExported (exported : Bool) (ps : List Param) : List Param :
 
 mutual
 -- Borrow:81 visitFnBody
-partial def bwInitBody (fnid : Nat) (n : N) (m : Map) : Map :=
+partial def bwInitBody (fnid : Nat) (n : N) (m : BwMap) : BwMap :=
   if n.op == opJDecl then
     let m := bwPMInsert (bwParamKeyJP fnid (jdeclId n)) (bwInitBorrow (jdeclParams n)) m
     let m := bwInitBody fnid (jdeclBody n) m
@@ -70,13 +194,21 @@ partial def bwInitBody (fnid : Nat) (n : N) (m : Map) : Map :=
   else if n.op == opCase then bwInitAlts fnid (caseAlts n) m
   else if isTerminal n then m
   else bwInitBody fnid (bodyOf n) m
-partial def bwInitAlts (fnid : Nat) : List N → Map → Map
+partial def bwInitAlts (fnid : Nat) : List N → BwMap → BwMap
   | [], m => m
   | alt :: alts, m => bwInitAlts fnid alts (bwInitBody fnid (altBody alt) m)
 end
 
+def bwInitList : List Decl → List (List Param) → List (List Param)
+  | [], acc => acc.reverse
+  | d :: ds, acc => bwInitList ds ((if d.ext then bwExtSentinel else bwInitBorrowIfNotExported false d.xs) :: acc)
+
+def bwInitJPs : List Decl → BwMap → BwMap
+  | [], m => m
+  | d :: ds, m => bwInitJPs ds (if d.ext then m else bwInitBody d.f d.body m)
+
 -- Borrow:92 visitDecls
-def bwInitDecls : List Decl → Map → Map
+def bwInitDecls : List Decl → BwMap → BwMap
   | [], m => m
   | d :: ds, m =>
     if d.ext then bwInitDecls ds m
@@ -86,11 +218,15 @@ def bwInitDecls : List Decl → Map → Map
       bwInitDecls ds m
 
 -- Borrow:101 mkInitParamMap
-def bwMkInitParamMap (decls : List Decl) : Map := bwInitDecls decls (map0 0)
+def bwMkInitParamMap (decls : List Decl) : BwMap :=
+  if declsDense 0 decls && decls.length <= 1048576 then
+    let fns := pmChunk3 (pmChunk2 (pmChunk1 (bwInitList decls []) []) []) []
+    bwInitJPs decls { fns := fns, size := (decls.length : Int), jps := lt0 }
+  else bwInitDecls decls bwm0
 
 mutual
 -- Borrow:108 visitFnBody
-partial def bwApplyBody (fn : Nat) (paramMap : Map) (n : N) : N :=
+partial def bwApplyBody (fn : Nat) (paramMap : BwMap) (n : N) : N :=
   if n.op == opJDecl then
     let v := bwApplyBody fn paramMap (jdeclBody n)
     let b := bwApplyBody fn paramMap (bodyOf n)
@@ -100,13 +236,13 @@ partial def bwApplyBody (fn : Nat) (paramMap : Map) (n : N) : N :=
   else if n.op == opCase then { n with kids := bwApplyAlts fn paramMap (caseAlts n) }
   else if isTerminal n then n
   else setBody n (bwApplyBody fn paramMap (bodyOf n))
-partial def bwApplyAlts (fn : Nat) (paramMap : Map) : List N → List N
+partial def bwApplyAlts (fn : Nat) (paramMap : BwMap) : List N → List N
   | [] => []
   | alt :: alts => altSetBody alt (bwApplyBody fn paramMap (altBody alt)) :: bwApplyAlts fn paramMap alts
 end
 
 -- Borrow:124 visitDecls
-def bwApplyDecls (paramMap : Map) : List Decl → List Decl
+def bwApplyDecls (paramMap : BwMap) : List Decl → List Decl
   | [] => []
   | d :: ds =>
     let d1 :=
@@ -119,7 +255,7 @@ def bwApplyDecls (paramMap : Map) : List Decl → List Decl
     d1 :: bwApplyDecls paramMap ds
 
 -- Borrow:135 applyParamMap
-def bwApplyParamMap (decls : List Decl) (map : Map) : List Decl :=
+def bwApplyParamMap (decls : List Decl) (map : BwMap) : List Decl :=
   bwApplyDecls map decls
 
 -- Borrow:138 BorrowInfCtx
@@ -137,7 +273,7 @@ structure BwCtx where
 structure BwState where
   owned : VSet
   modified : Bool
-  paramMap : Map
+  paramMap : BwMap
   deriving Inhabited
 
 -- Borrow:156 markModified
@@ -165,27 +301,28 @@ def bwIsOwned (ctx : BwCtx) (s : BwState) (x : Nat) : Bool :=
 structure BwUpdR where
   s : BwState
   ps : List Param
+  changed : Bool
   deriving Inhabited
 
 def bwUpdateParams (ctx : BwCtx) : BwState → List Param → BwUpdR
-  | s, [] => { s := s, ps := [] }
+  | s, [] => { s := s, ps := [], changed := false }
   | s, p :: ps =>
     if !p.borrow then
       let r := bwUpdateParams ctx s ps
-      { s := r.s, ps := p :: r.ps }
+      { s := r.s, ps := p :: r.ps, changed := r.changed }
     else if bwIsOwned ctx s p.x then
       let r := bwUpdateParams ctx (bwMarkModified s) ps
-      { s := r.s, ps := { p with borrow := false } :: r.ps }
+      { s := r.s, ps := { p with borrow := false } :: r.ps, changed := true }
     else
       let r := bwUpdateParams ctx s ps
-      { s := r.s, ps := p :: r.ps }
+      { s := r.s, ps := p :: r.ps, changed := r.changed }
 
 -- Borrow:179 updateParamMap
 def bwUpdateParamMap (ctx : BwCtx) (s : BwState) (k : BwParamKey) : BwState :=
   match bwPMFind k s.paramMap with
   | some ps =>
     let r := bwUpdateParams ctx s ps
-    { r.s with paramMap := bwPMInsert k r.ps r.s.paramMap }
+    if r.changed then { r.s with paramMap := bwPMInsert k r.ps r.s.paramMap } else r.s
   | none => s
 
 -- Borrow:193 getParamInfo
@@ -252,9 +389,13 @@ def bwPreserveTailCall (ctx : BwCtx) (s : BwState) (xs : List Int) (v : N) (b : 
     bwOwnParamsUsingArgs ctx s (fapArgs v) ps
   else s
 
+def bwInsertParams : VSet → List Param → VSet
+  | s, [] => s
+  | s, p :: ps => bwInsertParams (vsInsert s p.x) ps
+
 -- Borrow:267 updateParamSet
 def bwUpdateParamSet (ctx : BwCtx) (ps : List Param) : BwCtx :=
-  { ctx with paramSet := vsInsertAll ctx.paramSet (paramVars ps) }
+  { ctx with paramSet := bwInsertParams ctx.paramSet ps }
 
 mutual
 -- Borrow:270 collectFnBody
@@ -309,11 +450,11 @@ partial def bwWhileModifing (ctx : BwCtx) (s : BwState) : BwState :=
   if s.modified then bwWhileModifing ctx s else s
 
 -- Borrow:302 collectDecls
-def bwCollectDecls (ctx : BwCtx) (s : BwState) : Map :=
+def bwCollectDecls (ctx : BwCtx) (s : BwState) : BwMap :=
   (bwWhileModifing ctx s).paramMap
 
 -- Borrow:307 infer
-def bwInfer (decls : List Decl) : Map :=
+def bwInfer (decls : List Decl) : BwMap :=
   let order := if declsDense 0 decls then cgOrder (callScc decls).groups else bwListOrder decls
   let ctx : BwCtx := { decls := decls, tab := dtOfList decls, order := order, currFn := 0, paramSet := vsEmpty }
   let s : BwState := { owned := vsEmpty, modified := false, paramMap := bwMkInitParamMap decls }

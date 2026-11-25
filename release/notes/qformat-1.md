@@ -25,8 +25,8 @@ recomputable with `sha256sum` alone).
 - Source revision: `6d700789ebbf04825ab7d1c3f1baa715a124a051`
   (on the development `main` branch).
 - Independent audit: an independent audit passed at that sha, 8 attacks tried, no
-  counterexample; transcript `reports/release-02/evidence/
-  AUDIT-QFORMAT-1.6d700789eb.md` (repository-side, not in this archive).
+  counterexample; transcript `AUDIT-QFORMAT-1.6d700789eb.md` (repository-side
+  on the 0.3 line, not in this archive).
 - Controls at the landed head (all negative controls armed):
   349 hashing sites inventoried, 0 untagged identities after the batch;
   separation vectors pairwise distinct; interop control (`digest` ==

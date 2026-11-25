@@ -1,0 +1,23 @@
+# FILE	FROM	TO  (FROM occurs exactly once in FILE; every row must make the differential report a mismatch)
+# Which lists of an image that builds arrays may be arrays (lib/lrc/Classes.rsd "Which lists may be arrays", `arrClassesOf`;
+# lib/lrc/FromWire.rsd "The cells of a list that is no array"). A list that the classes do not mark is not asked for its cells, so a
+# mark that is lost shows where an array arrives: its object is read as a cell. The rows: what makes an array marks nothing (a push
+# or a write at an index; the array of a list or a slice); nothing may be an array; the cells asked of a list do not hold the list's
+# elements (an array of arrays made a list); what is stored in a node's object does not reach its field; a read of a node's field is
+# not the field; and every list that may be an array is the one left without its cells. The program that meets each of them is
+# instruments/lrc-host/ProgArrFlow.rsd (row arrflow of Images.tsv): there each way a value flows has a function of its own that
+# takes the list apart. A function that several ways share is marked through any one of them: the program's first form had one
+# such function for all, and rows 2, 4, 5 and 6 changed nothing that a check saw.
+# Not rows, and why. They leave more lists asked for their cells and no value changes: the cells asked of a list joined to the list
+# (`primArrToList` under `cx.arr`); a constant joined like a variable (`Oc.consts`); the length and the equality of lists followed as
+# functions (`ocCall`); a node's read without its tag (`layTagged`), which is then a read of every tag's field. No image has them: a
+# magnitude that is an array (the stage's functions of a number followed as functions), an object from an expression the walk does
+# not follow, a write into a field (`opSet`), a class "Layout" merged that holds an array (`ocNodeProjRound`), a class of cells of
+# both shapes (`ocKindsBad`, `ocTailRound`).
+lib/lrc/Classes.rsd	        { s with c := if cx.arr then ocAddKind cp x ockArray else cp }	        { s with c := cp }
+lib/lrc/Classes.rsd	           { s with c := if cx.arr then ocAddKind c1 x ockArray else c1 })	           { s with c := c1 })
+lib/lrc/Classes.rsd	def ocMayArr (c : Oc) (f x : Nat) : Bool := c.bad || (ocListOf c.kinds (ocFind c (ocVar f x))).contains ockArray	def ocMayArr (c : Oc) (f x : Nat) : Bool := c.bad
+lib/lrc/Classes.rsd	        if ocFind b.c a.id != ocFind b.c b.id then { c := ocUnion b.c a.id b.id, changed := true } else { t2 with c := b.c }	        { t2 with c := b.c }
+lib/lrc/Classes.rsd	      ocNodeObj self x t (fi + 1) ys (ocUnion f.c f.id (ocVar self y.toNat))	      ocNodeObj self x t (fi + 1) ys f.c
+lib/lrc/Classes.rsd	        { s with c := ocUnion ft.c x ft.id }	        { s with c := ft.c }
+lib/lrc/FromWire.rsd	    let m1 := if e.op == opPrim && primOp e == primArrToList && w >= 0 && !ocMayArr c f w.toNat then	    let m1 := if e.op == opPrim && primOp e == primArrToList && w >= 0 && ocMayArr c f w.toNat then

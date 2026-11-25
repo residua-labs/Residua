@@ -1,0 +1,569 @@
+-- Proc9: the 9P device layer for Lib.Proc scripts. T-message encoders,
+-- the R-message decoder with named residues (G1 order: msize/length before
+-- body decode, count last), chk* validators returning Proc values, and
+-- rdAllP/wrAllP read/write loops written in do-notation.
+-- Sources: restatements of lib/rsd/ninep.rsd and lib/Session.rsd.
+import Lib.Proc
+
+-- ============================================================================
+-- 0. Session validation (lib/Session.rsd restated; same conjunct order:
+--    msize, length, fid, owner, tag, reply type, then count)
+-- ============================================================================
+
+def vLenI : List Int -> Int -> Int
+  | [], n => n
+  | _ :: rest, n => vLenI rest (n + 1)
+
+def vEq1 : List Int -> Int -> Bool
+  | x :: [], e => x == e
+  | _, _ => false
+
+def vCmdOpAttach (u : Nat) : Int := 104
+def vCmdOpStat (u : Nat) : Int := 124
+def vCmdOpClunk (u : Nat) : Int := 120
+
+def vDecodeCmd (op : Int) : Int :=
+  if op == 104 then 1
+  else if op == 124 then 2
+  else if op == 120 then 3
+  else 0
+
+-- 0 none, 1 ok (op+1), 2 err (107)
+def vDecodeAns (op : Int) (r : List Int) : Int :=
+  if vEq1 r (op + 1) then 1 else if vEq1 r 107 then 2 else 0
+
+-- 0 illegal, 1 stays false, 2 true
+def vSessionStep (live : Bool) (cmd ans : Int) : Int :=
+  if live == false && cmd == 1 && ans == 1 then 2
+  else if live == false && cmd == 1 && ans == 2 then 1
+  else if live == true && cmd == 2 && (ans == 1 || ans == 2) then 2
+  else if live == true && cmd == 3 && (ans == 1 || ans == 2) then 1
+  else 0
+
+def vValidateM (m : Int) (live : Bool) (op : Int) (r : List Int) : Int :=
+  let rl : Int := vLenI r 0;
+  if m < rl then 0
+  else
+    let c : Int := vDecodeCmd op;
+    let a : Int := vDecodeAns op r;
+    if c == 0 then 0 else vSessionStep live c a
+
+-- inbound pre-checks (codes 0 ok, 1 msize, 2 frame_short, 3 size_mismatch,
+-- 4 fid_invalid, 5 owner_mismatch, 6 tag_mismatch, 7 rtype_unexpected)
+def vValidatePre (m rLen rSize : Int) (fidOk : Bool)
+    (ownerServer ownerInc endServer endInc : Int)
+    (expectedTag rTag : Int) (tOp rType : Int) : Int :=
+  if m < rLen then 1
+  else if rLen < 7 then 2
+  else if rSize != rLen then 3
+  else if !fidOk then 4
+  else if ownerServer != endServer || ownerInc != endInc then 5
+  else if rTag != expectedTag then 6
+  else if vDecodeAns tOp (rType :: []) == 0 then 7
+  else 0
+
+-- count conjuncts (8 count_over, 9 welem_over)
+def vValidateCount (tOp maxCount rCount : Int) : Int :=
+  if tOp == 110 && 16 < rCount then 9
+  else if maxCount < rCount then 8
+  else 0
+
+def vValidateInbound (m rLen rSize : Int) (fidOk : Bool)
+    (ownerServer ownerInc endServer endInc : Int)
+    (expectedTag rTag : Int) (tOp rType : Int)
+    (maxCount rCount : Int) : Int :=
+  if vValidatePre m rLen rSize fidOk ownerServer ownerInc endServer endInc expectedTag rTag tOp rType != 0 then 0
+  else if vDecodeAns tOp (rType :: []) == 2 then 1
+  else if vValidateCount tOp maxCount rCount != 0 then 0
+  else 2
+
+-- ============================================================================
+-- 1. 9P constants (lib/rsd/ninep.rsd restated)
+-- ============================================================================
+
+def nNOTAG (u : Nat) : Int := 65535
+def nNOFID (u : Nat) : Int := 4294967295
+def nDEFAULT_MSIZE (u : Nat) : Int := 8192
+def nIOHDRSZ (u : Nat) : Int := 24
+def nMAXWELEM (u : Nat) : Int := 16
+
+def nTVERSION (u : Nat) : Int := 100
+def nRVERSION (u : Nat) : Int := 101
+def nTATTACH (u : Nat) : Int := 104
+def nRATTACH (u : Nat) : Int := 105
+def nRERROR (u : Nat) : Int := 107
+def nTWALK (u : Nat) : Int := 110
+def nRWALK (u : Nat) : Int := 111
+def nTOPEN (u : Nat) : Int := 112
+def nROPEN (u : Nat) : Int := 113
+def nTCREATE (u : Nat) : Int := 114
+def nRCREATE (u : Nat) : Int := 115
+def nTREAD (u : Nat) : Int := 116
+def nRREAD (u : Nat) : Int := 117
+def nTWRITE (u : Nat) : Int := 118
+def nRWRITE (u : Nat) : Int := 119
+def nTCLUNK (u : Nat) : Int := 120
+def nRCLUNK (u : Nat) : Int := 121
+
+def nOREAD (u : Nat) : Int := 0
+def nOWRITE (u : Nat) : Int := 1
+def nORDWR (u : Nat) : Int := 2
+
+-- ============================================================================
+-- 2. Encode helpers not carried by Lib.Proc (it has nLen/nAppend/nTake/
+--    nSlice/nGet/nReadU32LE/R1/RN)
+-- ============================================================================
+
+def nMod (a b : Int) : Int :=
+  a - b * (a / b)
+
+def nPutU8 (v : Int) : List Int :=
+  nMod v 256 :: []
+
+def nPutU16LE (v : Int) : List Int :=
+  nMod v 256 :: nMod (v / 256) 256 :: []
+
+def nPutU32LE (v : Int) : List Int :=
+  nMod v 256 :: nMod (v / 256) 256 :: nMod (v / 65536) 256 :: nMod (v / 16777216) 256 :: []
+
+def nPutU64LE (v : Int) : List Int :=
+  let lo : Int := nMod v 4294967296;
+  let hi : Int := v / 4294967296;
+  nAppend (nPutU32LE lo) (nPutU32LE hi)
+
+def nPutName (bs : List Int) : List Int :=
+  nAppend (nPutU16LE (nLen bs 0)) bs
+
+def nPutNamesGo : List (List Int) -> List Int -> List Int
+  | [], acc => acc
+  | s :: rest, acc => nPutNamesGo rest (nAppend acc (nPutName s))
+
+def nReadU8 (buf : List Int) (off : Int) : R1 :=
+  if off >= 0 && off + 1 <= nLen buf 0 then
+    r1Good (nGet buf off) (off + 1)
+  else
+    r1Bad 0
+
+def nReadU16LE (buf : List Int) (off : Int) : R1 :=
+  if off >= 0 && off + 2 <= nLen buf 0 then
+    let b0 : Int := nGet buf off;
+    let b1 : Int := nGet buf (off + 1);
+    r1Good (b0 + b1 * 256) (off + 2)
+  else
+    r1Bad 0
+
+def nReadU64LE (buf : List Int) (off : Int) : R1 :=
+  let lo : R1 := nReadU32LE buf off;
+  if !lo.ok then r1Bad 0
+  else
+    let hi : R1 := nReadU32LE buf lo.off;
+    if !hi.ok then r1Bad 0
+    else r1Good (lo.v + hi.v * 4294967296) hi.off
+
+def nReadName (buf : List Int) (off : Int) : RN :=
+  let n : R1 := nReadU16LE buf off;
+  if !n.ok then rnBad 0
+  else if n.off + n.v > nLen buf 0 || n.v < 0 then rnBad 0
+  else { ok := true, bs := nSlice buf n.off n.v, off := n.off + n.v : RN }
+
+structure RQ where
+  ok : Bool
+  qt : Int
+  qv : Int
+  qp : Int
+  off : Int
+
+def rqBad (u : Nat) : RQ :=
+  { ok := false, qt := 0, qv := 0, qp := 0, off := 0 : RQ }
+
+def nReadQid (buf : List Int) (off : Int) : RQ :=
+  let t : R1 := nReadU8 buf off;
+  if !t.ok then rqBad 0
+  else
+    let v : R1 := nReadU32LE buf t.off;
+    if !v.ok then rqBad 0
+    else
+      let p : R1 := nReadU64LE buf v.off;
+      if !p.ok then rqBad 0
+      else { ok := true, qt := t.v, qv := v.v, qp := p.v, off := p.off : RQ }
+
+def nNibble (n : Int) : Int :=
+  let v : Int := nMod n 16;
+  if v < 10 then 48 + v else 87 + v
+
+def nToHexGo : List Int -> List Int -> List Int
+  | [], acc => nRev acc []
+  | b :: rest, acc =>
+    let h : Int := nNibble (b / 16);
+    let l : Int := nNibble (nMod b 16);
+    nToHexGo rest (l :: h :: acc)
+
+def nBytesToHex (bs : List Int) : List Int :=
+  nToHexGo bs []
+
+-- ============================================================================
+-- 3. Inbound decode (fat DecR; named residues)
+-- ============================================================================
+
+structure DecR where
+  code : Int
+  isErr : Bool
+  msize : Int
+  ver : List Int
+  ename : List Int
+  qt : Int
+  qv : Int
+  qp : Int
+  iou : Int
+  nwqid : Int
+  data : List Int
+
+def decBad (code : Int) : DecR :=
+  { code := code, isErr := false, msize := 0, ver := [], ename := [],
+    qt := 0, qv := 0, qp := 0, iou := 0, nwqid := 0, data := [] : DecR }
+
+def decErr (ename : List Int) : DecR :=
+  { code := 0, isErr := true, msize := 0, ver := [], ename := ename,
+    qt := 0, qv := 0, qp := 0, iou := 0, nwqid := 0, data := [] : DecR }
+
+def decOk (msize : Int) (ver : List Int) (qt qv qp iou nwqid : Int) (data : List Int) : DecR :=
+  { code := 0, isErr := false, msize := msize, ver := ver, ename := [],
+    qt := qt, qv := qv, qp := qp, iou := iou, nwqid := nwqid, data := data : DecR }
+
+def nRCountFor (rType : Int) (r : DecR) : Int :=
+  if rType == 111 then r.nwqid
+  else if rType == 117 then nLen r.data 0
+  else if rType == 119 then r.iou
+  else 0
+
+def nReadQidsLast : List Int -> Int -> Nat -> RQ -> RQ
+  | _, _, 0, last => last
+  | buf, off, n + 1, last =>
+    let q : RQ := nReadQid buf off;
+    if !q.ok then rqBad 0
+    else nReadQidsLast buf q.off n q
+
+def nDecodeBody (rType : Int) (buf : List Int) (off0 : Int) (totalLen : Int) : DecR :=
+  let no : List Int := [];
+  if rType == 101 then
+    let m : R1 := nReadU32LE buf off0;
+    if !m.ok then decBad 11
+    else
+      let ver : RN := nReadName buf m.off;
+      if !ver.ok then decBad 11
+      else if ver.off != totalLen then decBad 11
+      else decOk m.v ver.bs 0 0 0 0 0 no
+  else if rType == 107 then
+    let e : RN := nReadName buf off0;
+    if !e.ok then decBad 11
+    else if e.off != totalLen then decBad 11
+    else decErr e.bs
+  else if rType == 105 then
+    let q : RQ := nReadQid buf off0;
+    if !q.ok then decBad 11
+    else if q.off != totalLen then decBad 11
+    else decOk 0 no q.qt q.qv q.qp 0 0 no
+  else if rType == 111 then
+    let n : R1 := nReadU16LE buf off0;
+    if !n.ok then decBad 11
+    else if n.v < 0 then decBad 11
+    else
+      let last : RQ := if n.v == 0 then { ok := true, qt := 0, qv := 0, qp := 0, off := n.off : RQ } else nReadQidsLast buf n.off (Int.toNat n.v) (rqBad 0);
+      if !last.ok then decBad 11
+      else if last.off != totalLen then decBad 11
+      else decOk 0 no last.qt last.qv last.qp 0 n.v no
+  else if rType == 113 then
+    let q : RQ := nReadQid buf off0;
+    if !q.ok then decBad 11
+    else
+      let i : R1 := nReadU32LE buf q.off;
+      if !i.ok then decBad 11
+      else if i.off != totalLen then decBad 11
+      else decOk 0 no q.qt q.qv q.qp i.v 0 no
+  else if rType == 115 then
+    let q : RQ := nReadQid buf off0;
+    if !q.ok then decBad 11
+    else
+      let i : R1 := nReadU32LE buf q.off;
+      if !i.ok then decBad 11
+      else if i.off != totalLen then decBad 11
+      else decOk 0 no q.qt q.qv q.qp i.v 0 no
+  else if rType == 117 then
+    let c : R1 := nReadU32LE buf off0;
+    if !c.ok then decBad 11
+    else if c.v < 0 || c.off + c.v != totalLen then decBad 11
+    else decOk 0 no 0 0 0 0 0 (nSlice buf c.off c.v)
+  else if rType == 119 then
+    let c : R1 := nReadU32LE buf off0;
+    if !c.ok then decBad 11
+    else if c.off != totalLen then decBad 11
+    else decOk 0 no 0 0 0 c.v 0 no
+  else if rType == 121 then
+    if off0 == totalLen then decOk 0 no 0 0 0 0 0 no else decBad 11
+  else decBad 11
+
+def nInboundResidue (code : Int) : List Int :=
+  if code == 1 then [109,115,105,122,101,95,101,120,99,101,101,100,101,100]
+  else if code == 2 then [102,114,97,109,101,95,115,104,111,114,116]
+  else if code == 3 then [115,105,122,101,95,109,105,115,109,97,116,99,104]
+  else if code == 4 then [102,105,100,95,105,110,118,97,108,105,100]
+  else if code == 5 then [111,119,110,101,114,95,109,105,115,109,97,116,99,104]
+  else if code == 6 then [116,97,103,95,109,105,115,109,97,116,99,104]
+  else if code == 7 then [114,116,121,112,101,95,117,110,101,120,112,101,99,116,101,100]
+  else if code == 8 then [99,111,117,110,116,95,111,118,101,114]
+  else if code == 9 then [119,101,108,101,109,95,111,118,101,114]
+  else [98,111,100,121,95,109,97,108,102,111,114,109,101,100]
+
+def nDecodeR (msizeV : Int) (fidOk : Bool)
+    (expectedTag : Int) (tOpCode : Int) (maxCount : Int) (buf : List Int) : DecR :=
+  let totalLen : Int := nLen buf 0;
+  let szR : R1 := nReadU32LE buf 0;
+  let mtR : R1 := nReadU8 buf 4;
+  let tgR : R1 := nReadU16LE buf 5;
+  if !szR.ok || !mtR.ok || !tgR.ok then decBad 2
+  else
+    let pre : Int := vValidatePre msizeV totalLen szR.v fidOk 0 0 0 0 expectedTag tgR.v tOpCode mtR.v;
+    if pre != 0 then decBad pre
+    else
+      let body : DecR := nDecodeBody mtR.v buf 7 totalLen;
+      if body.code != 0 then body
+      else if body.isErr then body
+      else
+        let cnt : Int := nRCountFor mtR.v body;
+        let c : Int := vValidateCount tOpCode maxCount cnt;
+        if c != 0 then decBad c else body
+
+-- ============================================================================
+-- 4. T-message encoders + friendly aliases (names are byte lists)
+-- ============================================================================
+
+def pW9P (u : Nat) : List Int := [57, 80, 50, 48, 48, 48]
+def pUname (u : Nat) : List Int := []
+
+def pWrap (mtype tag : Int) (payload : List Int) : List Int :=
+  let pl : Int := nLen payload 0;
+  let total : Int := 7 + pl;
+  let hd : List Int := nAppend (nPutU32LE total) (nAppend (nPutU8 mtype) (nPutU16LE tag));
+  nAppend hd payload
+
+def pCountNames : List (List Int) -> Int -> Int
+  | [], n => n
+  | _ :: rest, n => pCountNames rest (n + 1)
+
+def pEncodeWalk (names : List (List Int)) (src dst : Int) : List Int :=
+  let h : List Int := nAppend (nPutU32LE src) (nPutU32LE dst);
+  let nw : Int := pCountNames names 0;
+  let payload : List Int := nAppend (nAppend h (nPutU16LE nw)) (nPutNamesGo names []);
+  pWrap 110 0 payload
+
+def pEncodeOpen (fid mode : Int) : List Int :=
+  pWrap 112 0 (nAppend (nPutU32LE fid) (nPutU8 mode))
+
+def pEncodeCreate (fid : Int) (name : List Int) (perm mode : Int) : List Int :=
+  let p1 : List Int := nAppend (nPutU32LE fid) (nPutName name);
+  let p2 : List Int := nAppend p1 (nAppend (nPutU32LE perm) (nPutU8 mode));
+  pWrap 114 0 p2
+
+def pEncodeRead (fid off cnt : Int) : List Int :=
+  let p1 : List Int := nAppend (nPutU32LE fid) (nPutU64LE off);
+  pWrap 116 0 (nAppend p1 (nPutU32LE cnt))
+
+def pEncodeWrite (fid off : Int) (data : List Int) : List Int :=
+  let p1 : List Int := nAppend (nPutU32LE fid) (nPutU64LE off);
+  let p2 : List Int := nAppend p1 (nAppend (nPutU32LE (nLen data 0)) data);
+  pWrap 118 0 p2
+
+def pEncodeClunk (fid : Int) : List Int :=
+  pWrap 120 0 (nPutU32LE fid)
+
+def pEncodeVersion (u : Nat) : List Int :=
+  let payload : List Int := nAppend (nPutU32LE (nDEFAULT_MSIZE 0)) (nPutName (pW9P 0));
+  pWrap 100 65535 payload
+
+def pEncodeAttach (u : Nat) : List Int :=
+  let p1 : List Int := nAppend (nPutU32LE 0) (nPutU32LE (nNOFID 0));
+  let p2 : List Int := nAppend p1 (nAppend (nPutName (pUname 0)) (nPutName []));
+  pWrap 104 0 p2
+
+def pNoNames (u : Nat) : List (List Int) := []
+
+-- ============================================================================
+-- 5. Reply validators: each returns a Proc — pure value or named refusal.
+-- ============================================================================
+
+def pResWalkInc (u : Nat) : List Int := [119,97,108,107,95,105,110,99,111,109,112,108,101,116,101]
+def pResShortWr (u : Nat) : List Int := [115,104,111,114,116,95,119,114,105,116,101]
+def pResVerRef (u : Nat) : List Int := [118,101,114,115,105,111,110,95,114,101,102,117,115,101,100]
+def pResRvMsize (u : Nat) : List Int := [114,118,101,114,115,105,111,110,95,109,115,105,122,101,95,111,118,101,114,115,105,122,101]
+def pResReadBack (u : Nat) : List Int := [114,101,97,100,98,97,99,107,95,109,105,115,109,97,116,99,104]
+def pResQInvalid (u : Nat) : List Int := [113,95,105,110,118,97,108,105,100]
+def pResHashMis (u : Nat) : List Int := [104,97,115,104,95,109,105,115,109,97,116,99,104]
+
+
+def decStep (expTag tOp maxc : Int) (r : List Int) : DecR :=
+  nDecodeR (nDEFAULT_MSIZE 0) true expTag tOp maxc r
+
+def chkVer (r : List Int) : Proc :=
+  let d : DecR := decStep 65535 100 0 r;
+  if d.code != 0 then refuseP (nInboundResidue d.code)
+  else if d.isErr then refuseP d.ename
+  else if !(eqB d.ver (pW9P 0)) || d.msize <= nIOHDRSZ 0 then refuseP (pResVerRef 0)
+  else if d.msize > nDEFAULT_MSIZE 0 then refuseP (pResRvMsize 0)
+  else pure (d.msize :: [])
+
+def chkAtt (r : List Int) : Proc :=
+  let d : DecR := decStep 0 104 0 r;
+  if d.code != 0 then refuseP (nInboundResidue d.code)
+  else if d.isErr then refuseP d.ename
+  else pure []
+
+def chkWalk (r : List Int) (nw : Int) : Proc :=
+  let d : DecR := decStep 0 110 nw r;
+  if d.code != 0 then refuseP (nInboundResidue d.code)
+  else if d.isErr then refuseP d.ename
+  else if d.nwqid != nw then refuseP (pResWalkInc 0)
+  else pure []
+
+def chkOpen (r : List Int) : Proc :=
+  let d : DecR := decStep 0 112 0 r;
+  if d.code != 0 then refuseP (nInboundResidue d.code)
+  else if d.isErr then refuseP d.ename
+  else pure []
+
+def chkCreate (r : List Int) : Proc :=
+  let d : DecR := decStep 0 114 0 r;
+  if d.code != 0 then refuseP (nInboundResidue d.code)
+  else if d.isErr then refuseP d.ename
+  else pure []
+
+def chkRead (r : List Int) (cnt : Int) : Proc :=
+  let d : DecR := decStep 0 116 cnt r;
+  if d.code != 0 then refuseP (nInboundResidue d.code)
+  else if d.isErr then refuseP d.ename
+  else pure d.data
+
+def chkWrite (r : List Int) (want : Int) : Proc :=
+  let d : DecR := decStep 0 118 want r;
+  if d.code != 0 then refuseP (nInboundResidue d.code)
+  else if d.isErr then refuseP d.ename
+  else if d.iou != want then refuseP (pResShortWr 0)
+  else pure (d.iou :: [])
+
+def chkClunk (r : List Int) : Proc :=
+  let d : DecR := decStep 0 120 0 r;
+  if d.code != 0 then refuseP (nInboundResidue d.code)
+  else if d.isErr then refuseP d.ename
+  else pure []
+
+-- ============================================================================
+-- 6. Device routing: the host maps the first line of req bytes (`dev\n` ++
+--    T-frame) to the unix socket <ns>/<dev> (serve9.sh layout: one socket
+--    per device, no mux). Device names + the dev-wrapped request primitive.
+-- ============================================================================
+
+def devFs (u : Nat) : List Int := [102, 115]
+def devStore (u : Nat) : List Int := [115, 116, 111, 114, 101]
+def devClock (u : Nat) : List Int := [99, 108, 111, 99, 107]
+def devCmd (u : Nat) : List Int := [99, 109, 100]
+def devEnv (u : Nat) : List Int := [101, 110, 118]
+
+def pDev (dev : List Int) (t : List Int) : List Int :=
+  dev ++ [10] ++ t
+
+def devReq (dev : List Int) (t : List Int) : Proc :=
+  request (pDev dev t)
+
+-- ============================================================================
+-- 7. Read/write loops in do-notation + fid allocation helpers.
+--    Convention (serve9 plan): fid 0 = attach root; device fids 1,2,3,...
+-- ============================================================================
+
+-- rdAllPGo prepends each chunk's bytes reversed onto a flat acc; rdAllP
+-- reverses it once. A k-chunk read copies each byte a constant number of
+-- times, not k^2/2 via acc appends. rsdc's do-desugar only admits
+-- Int/Nat/List Int params (tyClass/envOK), so a List (List Int) chunk
+-- list cannot ride the signature.
+partial def rdAllPGo (dev : List Int) (fid off cnt : Int) (acc : List Int) : Proc := do {
+  let r <- devReq dev (pEncodeRead fid off cnt);
+  let d <- chkRead r cnt;
+  let x <- if nLen d 0 < cnt then pure (nRev d acc) else rdAllPGo dev fid (off + nLen d 0) cnt (nRev d acc);
+  x
+}
+
+partial def rdAllP (dev : List Int) (fid off cnt : Int) (acc : List Int) : Proc := do {
+  let racc <- rdAllPGo dev fid off cnt [];
+  let x <- pure (nAppend acc (nRev racc []));
+  x
+}
+
+partial def wrAllP (dev : List Int) (fid off cnt : Int) (data : List Int) : Proc := do {
+  let send : List Int := nTake data cnt;
+  let r <- devReq dev (pEncodeWrite fid off send);
+  let i <- chkWrite r (nLen send 0);
+  let x <- if nLen data 0 > nLen send 0
+       then wrAllP dev fid (off + nGet i 0) cnt (nSlice data (nLen send 0) (nLen data 0 - nLen send 0))
+       else pure [];
+  x
+}
+
+-- session prologue every device row shares: version then attach on `dev`
+def pHello (dev : List Int) : Proc := do {
+  let v <- devReq dev (pEncodeVersion 0);
+  let ms <- chkVer v;
+  let a <- devReq dev (pEncodeAttach 0);
+  let e <- chkAtt a;
+  ms
+}
+
+def readDevFileP (dev name : List Int) : Proc := do {
+  let hello <- pHello dev;
+  let walk <- devReq dev (pEncodeWalk [name] 0 1);
+  let walked <- chkWalk walk 1;
+  let opened <- devReq dev (pEncodeOpen 1 0);
+  let checked <- chkOpen opened;
+  let data <- rdAllP dev 1 0 512 [];
+  let closed <- devReq dev (pEncodeClunk 1);
+  let done <- chkClunk closed;
+  data
+}
+
+def readFileP (name : List Int) : Proc := readDevFileP (devFs 0) name
+
+-- The argv file holds one UTF-8 entry with a NUL terminator per argument.
+def argBytesP (u : Nat) : Proc := readDevFileP (devEnv 0) [97, 114, 103, 115]
+
+-- Match writeBinFile's create-or-truncate behavior. A failed create may
+-- mean the name already exists; walk/open then determines whether it can be
+-- overwritten. Malformed replies are never interpreted as an existing file.
+def openExistingWriteP (dev name : List Int) : Proc := do {
+  let walk <- devReq dev (pEncodeWalk [name] 0 2);
+  let walked <- chkWalk walk 1;
+  let opened <- devReq dev (pEncodeOpen 2 17);
+  let checked <- chkOpen opened;
+  let result : List Int := [2];
+  result
+}
+
+def admitWriteP (dev name reply : List Int) : Proc :=
+  let d : DecR := decStep 0 114 0 reply;
+  if d.code != 0 then refuseP (nInboundResidue d.code)
+  else if d.isErr then openExistingWriteP dev name
+  else pure [1]
+
+-- Create a new file or truncate an existing regular file before writing.
+def createFileP (name data : List Int) : Proc := do {
+  let dev : List Int := devFs 0;
+  let hello <- pHello dev;
+  let cloned <- devReq dev (pEncodeWalk (pNoNames 0) 0 1);
+  let checked <- chkWalk cloned 0;
+  let created <- devReq dev (pEncodeCreate 1 name 420 1);
+  let admitted <- admitWriteP dev name created;
+  let fid : Int := nGet admitted 0;
+  let written <- wrAllP dev fid 0 512 data;
+  let closed <- devReq dev (pEncodeClunk fid);
+  let done <- chkClunk closed;
+  done
+}
+
+-- The terminal Proc result is the exit byte followed by raw stdout bytes.
+def procResult (code : Int) (out : List Int) : List Int := code :: out

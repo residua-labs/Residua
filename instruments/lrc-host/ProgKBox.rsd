@@ -1,0 +1,84 @@
+-- micro program for the node that is its list of children (lib/lrc/FromWire.rsd "Layout", `Lay.kbox`). The front
+-- end keeps a field of a recursive type that is a list of such values, and a string, in a child node of its own,
+-- and that node holds nothing else: the stage keeps the list where the child stood. Here: a type with one such
+-- list and a string, built from a literal list, from the empty one and from a list that is no literal, read as a
+-- list, by its first elements and by its length; a type with two such lists (the shape of lib/AvlMap.rsd); and a
+-- node held by two parents. The rows' values are stock Lean's. (A constructor of a type with several that has a
+-- list of such values the front end refuses, `rsdc_arena_field`: no image has a node of this kind whose tag is
+-- asked for.)
+structure T where
+  k : Nat
+  name : String
+  kids : List T
+
+def leaf (k : Nat) : T := { k := k, name := "l", kids := [] }
+
+-- a literal list of children
+def mkT : Nat → Nat → T
+  | 0, k => leaf k
+  | d + 1, k => { k := k, name := "n", kids := [mkT d (k + 1), leaf (k + 2), mkT d (k + 3)] }
+
+-- a list of children that is no literal, and a string that is none
+def grow (t : T) (xs : List T) : T := { k := t.k + 1, name := t.name ++ "g", kids := xs ++ t.kids }
+
+def sumList : Nat → List T → Nat
+  | 0, _ => 0
+  | _, [] => 0
+  | f + 1, t :: ts => t.k + t.name.length + sumList f t.kids + sumList f ts
+
+def sumT (f : Nat) (t : T) : Nat := t.k + t.name.length * 100 + sumList f t.kids
+
+-- the first elements, and the length
+def firstK (t : T) : Nat :=
+  match t.kids with
+  | [] => 7
+  | a :: rest =>
+    match rest with
+    | [] => a.k + 1000
+    | b :: _ => a.k + b.k * 3 + t.kids.length
+
+-- two lists of children in one node: the shape of the map of lib/AvlMap.rsd
+structure M where
+  key : Nat
+  left : List M
+  right : List M
+
+def mEmpty : M := { key := 0, left := [], right := [] }
+
+def mIns : Nat → M → Nat → M
+  | 0, m, _ => m
+  | f + 1, m, k =>
+    if m.key == 0 then { key := k, left := [], right := [] }
+    else if k < m.key then
+      (match m.left with
+       | [] => { key := m.key, left := [{ key := k, left := [], right := [] }], right := m.right }
+       | c :: _ => { key := m.key, left := [mIns f c k], right := m.right })
+    else
+      (match m.right with
+       | [] => { key := m.key, left := m.left, right := [{ key := k, left := [], right := [] }] }
+       | c :: _ => { key := m.key, left := m.left, right := [mIns f c k] })
+
+def mSum : Nat → M → Nat
+  | 0, _ => 0
+  | f + 1, m =>
+    let l := match m.left with
+      | [] => 0
+      | c :: _ => mSum f c
+    let r := match m.right with
+      | [] => 0
+      | c :: _ => mSum f c
+    m.key + l * 2 + r * 3
+
+def mOf : Nat → Nat → M → M
+  | 0, _, m => m
+  | n + 1, s, m => mOf n ((s * 7 + 3) % 31 + 1) (mIns 40 m s)
+
+-- one node under two parents
+def twice (t : T) : T := { k := 5, name := "tw", kids := [t, t] }
+
+-- the entry of the row: no argument
+def kboxAt : List Nat :=
+  let t := mkT 2 1
+  let g := grow t [leaf 40, mkT 1 50]
+  [sumT 9 t, sumT 9 g, firstK t, firstK g, firstK (leaf 3), firstK (grow (leaf 2) [leaf 9]), g.name.length,
+   mSum 40 (mOf 12 9 mEmpty), sumT 9 (twice g)]

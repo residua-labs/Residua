@@ -58,6 +58,8 @@ structure RiWalk where
   locals : List Int := []
   dupBase : Nat := 0
   dropBase : Nat := 0
+  dupCode : List Int := []
+  dropCode : List Int := []
   hasDup : Bool := false
   hasDrop : Bool := false
   sites : Nat := 0
@@ -81,12 +83,79 @@ structure RiWalk where
 -- The cap counts instruction-code bytes, excluding encoded local groups.
 def riCodeCap : Nat := 8000
 
+mutual
+partial def riSkipLeb1 (k fuel sz : Nat) : List Int → Bool
+  | [] => false
+  | b :: bs =>
+    if k == 0 || sz > riCodeCap + 16 then false
+    else if b < 128 then riHasSite fuel (sz + 1) bs
+    else riSkipLeb1 (k - 1) fuel (sz + 1) bs
+
+partial def riSkipLebN (m k fuel sz : Nat) : List Int → Bool
+  | bs =>
+    if m == 0 then riHasSite fuel sz bs
+    else
+      match bs with
+      | [] => false
+      | b :: rest =>
+        if k == 0 || sz > riCodeCap + 16 then false
+        else if b < 128 then riSkipLebN (m - 1) profile.lebSFuel fuel (sz + 1) rest
+        else riSkipLebN m (k - 1) fuel (sz + 1) rest
+
+partial def riCallIdx (k v place fuel sz : Nat) : List Int → Bool
+  | [] => false
+  | b :: bs =>
+    if k == 0 || sz > riCodeCap + 16 then false
+    else
+      let low : Int := if b >= 128 then b - 128 else b
+      let v2 := v + low.toNat * place
+      if b < 128 then (v2 == 6 || v2 == 7) || riHasSite fuel (sz + 1) bs
+      else riCallIdx (k - 1) v2 (place * 128) fuel (sz + 1) bs
+
+partial def riBrTable (k v place fuel sz : Nat) : List Int → Bool
+  | [] => false
+  | b :: bs =>
+    if k == 0 || sz > riCodeCap + 16 then false
+    else
+      let low : Int := if b >= 128 then b - 128 else b
+      let v2 := v + low.toNat * place
+      if b < 128 then riSkipLebN (v2 + 1) profile.lebSFuel fuel (sz + 1) bs
+      else riBrTable (k - 1) v2 (place * 128) fuel (sz + 1) bs
+
+partial def riHasSite (fuel sz : Nat) : List Int → Bool
+  | [] => false
+  | b :: r =>
+    if fuel == 0 || sz > riCodeCap + 16 then false
+    else if b == 16 then riCallIdx profile.lebSFuel 0 1 (fuel - 1) (sz + 1) r
+    else if b == 65 || b == 66 || b == 32 || b == 33 || b == 34 || b == 12 || b == 13 || b == 18 || b == 8 then
+      riSkipLeb1 profile.lebSFuel (fuel - 1) (sz + 1) r
+    else if b == 2 || b == 3 || b == 4 then
+      match r with
+      | t :: r2 => (t == 64 || (t >= 123 && t <= 127)) && riHasSite (fuel - 1) (sz + 2) r2
+      | [] => false
+    else if b >= 40 && b <= 62 then
+      riSkipLebN 2 profile.lebSFuel (fuel - 1) (sz + 1) r
+    else if b == 63 || b == 64 then
+      match r with
+      | 0 :: r2 => riHasSite (fuel - 1) (sz + 2) r2
+      | _ => false
+    else if b == 14 then riBrTable profile.lebSFuel 0 1 (fuel - 1) (sz + 1) r
+    else if b == 252 then
+      match r with
+      | 10 :: 0 :: 0 :: r2 => riHasSite (fuel - 1) (sz + 4) r2
+      | 11 :: 0 :: r2 => riHasSite (fuel - 1) (sz + 3) r2
+      | _ => false
+    else if b == 0 || b == 1 || b == 5 || b == 11 || b == 15 || b == 26 || b == 27 || (b >= 69 && b <= 196) then
+      riHasSite (fuel - 1) (sz + 1) r
+    else false
+end
+
 -- Templates are exactly the two source-lowered functions, not guessed byte
 -- sequences. A failed decode preserves the entire original function, and
 -- so does a rewritten body larger than `cap` bytes.
 def riWalk (dup drop : WFn) (np cap : Nat) : Nat → RiWalk → List (List Int) → List Int → RiWalk
   | 0, _, _, _ => {}
-  | _ + 1, state, acc, [] => { state with ok := true, code := riJoin acc }
+  | _ + 1, state, acc, [] => if state.sites == 0 then state else { state with ok := true, code := riJoin acc }
   | fuel + 1, state, acc, bs =>
     let i := rgStep bs
     if !i.ok || state.size > cap then {}
@@ -95,13 +164,15 @@ def riWalk (dup drop : WFn) (np cap : Nat) : Nat → RiWalk → List (List Int) 
       let f := if isDup then dup else drop
       let present := if isDup then state.hasDup else state.hasDrop
       let base := if present then (if isDup then state.dupBase else state.dropBase) else np + state.locals.length
-      let expansion := riExpand f base
+      let expansion := if present then { ok := true, code := if isDup then state.dupCode else state.dropCode } else riExpand f base
       if !expansion.ok then {}
       else
         let next := { state with
           locals := if present then state.locals else state.locals ++ f.params ++ f.locals
           dupBase := if isDup then base else state.dupBase
           dropBase := if isDup then state.dropBase else base
+          dupCode := if isDup then expansion.code else state.dupCode
+          dropCode := if isDup then state.dropCode else expansion.code
           hasDup := state.hasDup || isDup
           hasDrop := state.hasDrop || !isDup
           sites := state.sites + 1
@@ -110,10 +181,12 @@ def riWalk (dup drop : WFn) (np cap : Nat) : Nat → RiWalk → List (List Int) 
     else riWalk dup drop np cap fuel { state with size := state.size + i.bs.length } (i.bs :: acc) i.rest
 
 def riFunction (dup drop : WFn) (f : WFn) : WFn :=
-  let rewritten := riWalk dup drop f.params.length riCodeCap (f.code.length + 1) { locals := f.locals } [] f.code
-  if rewritten.ok && rewritten.sites > 0 && rewritten.size ≤ riCodeCap then
-    { f with code := rewritten.code, locals := rewritten.locals }
-  else f
+  if !riHasSite (riCodeCap + 2) 0 f.code then f
+  else
+    let rewritten := riWalk dup drop f.params.length riCodeCap (f.code.length + 1) { locals := f.locals } [] f.code
+    if rewritten.ok && rewritten.sites > 0 && rewritten.size ≤ riCodeCap then
+      { f with code := rewritten.code, locals := rewritten.locals }
+    else f
 
 def runtimeInlineFns (lay : Layers) (rtCount : Nat) (fns : List WFn) : List WFn :=
   if !lay.rc then fns

@@ -28,7 +28,9 @@ mutual
 -- NormIds:21 checkFnBody
 partial def uniqGo (n : N) (r : UniqR) : UniqR :=
   if !r.ok then r
-  else if n.op == opVDecl then uniqGo (bodyOf n) (uniqIds (bindVars (vdeclBinds n)) r)
+  else if n.op == opVDecl then
+    let r1 := if n.ys.isEmpty then uniqId n.a.toNat r else uniqIds (bindVars (vdeclBinds n)) r
+    uniqGo (bodyOf n) r1
   else if n.op == opJDecl then
     uniqGo (bodyOf n) (uniqIds (paramVars (jdeclParams n)) (uniqId (jdeclId n) r))
   else if n.op == opCase then uniqAlts (caseAlts n) r
@@ -49,7 +51,7 @@ def declUniqueIds (d : Decl) : Bool :=
 def renIdx (m : IMap) (x : Int) : Int :=
   if x < 0 then x
   else
-    let y := imFind m x.toNat
+    let y := itFind m.m x
     if y == (irrIdx : Int) then argIrr else if y >= 0 then y else x
 
 def renArgs (m : IMap) : List Int → List Int
@@ -59,13 +61,14 @@ def renArgs (m : IMap) : List Int → List Int
 -- NormIds:59 normExpr, NormIds:137 MapVars.mapExpr
 def renExpr (m : IMap) (e : N) : N :=
   if e.op == opReuse then { e with ys := renIdx m (intAt 0 e.ys) :: intAt 1 e.ys :: renArgs m (e.ys.drop 2) }
-  else if e.op == opLit || e.op == opLitStr then e
+  else if e.ys.isEmpty || e.op == opLit || e.op == opLitStr then e
   else { e with ys := renArgs m e.ys }
 
 -- the instruction's own variable occurrences renamed; its rest is left alone
 -- (set, setTag, sset, inc, dec, del carry x in field a and an argument list; mdata carries neither)
 def renIns (m : IMap) (n : N) : N :=
-  if n.op == opMData then n else { n with a := renIdx m n.a, ys := renArgs m n.ys }
+  if n.op == opMData then n
+  else { n with a := renIdx m n.a, ys := (if n.ys.isEmpty then [] else renArgs m n.ys) }
 
 /-! ## NormalizeIds (NormIds:37): rename every bound index to 1, 2, 3, ... in the order of binding. -/
 
@@ -110,14 +113,18 @@ mutual
 partial def normGo (n : N) (m : IMap) (next : Nat) : NormR :=
   if n.op == opVDecl then
     let e := renExpr m (vdeclExpr n)
-    let b := normBinds (vdeclBinds n) next m
-    let r := normGo (bodyOf n) b.m b.next
-    { next := r.next, node := { n with a := intAt 0 b.binds, ys := b.binds.drop 2, kids := [e, r.node] } }
+    if n.ys.isEmpty then
+      let r := normGo (bodyOf n) { m := itPut m.m n.a (next : Int) } (next + 1)
+      { next := r.next, node := { n with a := (next : Int), kids := [e, r.node] } }
+    else
+      let b := normBinds (vdeclBinds n) next m
+      let r := normGo (bodyOf n) b.m b.next
+      { next := r.next, node := { n with a := intAt 0 b.binds, ys := b.binds.drop 2, kids := [e, r.node] } }
   else if n.op == opJDecl then
     let ps := normParams (jdeclParams n) next m
     let v := normGo (jdeclBody n) ps.m ps.next
     let j := v.next
-    let r := normGo (bodyOf n) (imInsert m (jdeclId n) j) (j + 1)
+    let r := normGo (bodyOf n) { m := itPut m.m n.a (j : Int) } (j + 1)
     { next := r.next, node := { n with a := (j : Int), ys := paramsTo ps.xs, kids := [v.node, r.node] } }
   else if n.op == opCase then
     let r := normAlts (caseAlts n) m next

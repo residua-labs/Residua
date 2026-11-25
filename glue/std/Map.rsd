@@ -1,0 +1,120 @@
+-- provenance: ours (searched: lib/OrderedMap.rsd, glue/std/Str.rsd)
+-- glue/std/Map.rsd — ordered byte-key maps and byte sets for glue tools.
+-- Keys are `Bs` (List Int bytes). The rsdc subset is monomorphic:
+-- parameterized structures are rejected at the fields stage,
+-- so the three concrete instantiations live
+-- here: KV for Bs->Bs, KVI for Bs->Int, KVL for Bs->List Bs.
+-- Ported from the ordered association-list used by OrderedMap / the FnNF
+-- store (sorted insert, linear lookup) with keys switched to byte strings.
+
+import Glue.Std.Str
+
+structure KV where
+  k : Bs
+  v : Bs
+
+structure KVI where
+  k : Bs
+  v : Int
+
+structure KVL where
+  k : Bs
+  v : List Bs
+
+-- Sorted insert-or-replace by byte order (sBle). Same shape as OrderedMap's
+-- ins: first key >= k replaces, else prepend.
+def mInsert (k v : Bs) : List KV → List KV
+  | [] => [{ k := k, v := v }]
+  | x :: xs =>
+    if sEq x.k k then { k := k, v := v } :: xs
+    else if sBle k x.k then { k := k, v := v } :: x :: xs
+    else x :: mInsert k v xs
+
+def mLookup (k : Bs) : List KV → List KV
+  | [] => []
+  | x :: xs => if sEq x.k k then [x] else mLookup k xs
+
+def mKeysGo (acc : List Bs) : List KV → List Bs
+  | [] => sRevL acc
+  | x :: xs => mKeysGo (x.k :: acc) xs
+
+def mKeys (m : List KV) : List Bs := mKeysGo [] m
+
+def mMem (k : Bs) (m : List KV) : Bool := !(mLookup k m == [])
+
+def mInsertI (k : Bs) (v : Int) : List KVI → List KVI
+  | [] => [{ k := k, v := v }]
+  | x :: xs =>
+    if sEq x.k k then { k := k, v := v } :: xs
+    else if sBle k x.k then { k := k, v := v } :: x :: xs
+    else x :: mInsertI k v xs
+
+def mLookupI (k : Bs) : List KVI → List KVI
+  | [] => []
+  | x :: xs => if sEq x.k k then [x] else mLookupI k xs
+
+def mKeysIGo (acc : List Bs) : List KVI → List Bs
+  | [] => sRevL acc
+  | x :: xs => mKeysIGo (x.k :: acc) xs
+
+def mKeysI (m : List KVI) : List Bs := mKeysIGo [] m
+
+def mInsertL (k : Bs) (v : List Bs) : List KVL → List KVL
+  | [] => [{ k := k, v := v }]
+  | x :: xs =>
+    if sEq x.k k then { k := k, v := v } :: xs
+    else if sBle k x.k then { k := k, v := v } :: x :: xs
+    else x :: mInsertL k v xs
+
+def mLookupL (k : Bs) : List KVL → List KVL
+  | [] => []
+  | x :: xs => if sEq x.k k then [x] else mLookupL k xs
+
+-- Byte sets: sorted duplicate-free List Bs.
+def sSetInsert (x : Bs) : List Bs → List Bs
+  | [] => [x]
+  | y :: ys =>
+    if sEq x y then y :: ys
+    else if sBle x y then x :: y :: ys
+    else y :: sSetInsert x ys
+
+def sSetMem (x : Bs) : List Bs → Bool
+  | [] => false
+  | y :: ys => if sEq x y then true else sSetMem x ys
+
+def sSetOf : List Bs → List Bs
+  | [] => []
+  | x :: xs => sSetInsert x (sSetOf xs)
+
+def sSetUnion : List Bs → List Bs → List Bs
+  | [], ys => ys
+  | x :: xs, ys => sSetInsert x (sSetUnion xs ys)
+
+def sSetInter : List Bs → List Bs → List Bs
+  | [], _ => []
+  | x :: xs, ys => if sSetMem x ys then x :: sSetInter xs ys else sSetInter xs ys
+
+def sSetDiff : List Bs → List Bs → List Bs
+  | [], _ => []
+  | x :: xs, ys => if sSetMem x ys then sSetDiff xs ys else sSetDiff xs ys
+
+-- monomorphic membership filters (the subset has no recursive HOFs)
+def sFilterIn (xs : List Bs) (set : List Bs) : List Bs :=
+  match xs with
+  | [] => []
+  | x :: rest => if sSetMem x set then x :: sFilterIn rest set else sFilterIn rest set
+
+def sFilterNotIn (xs : List Bs) (set : List Bs) : List Bs :=
+  match xs with
+  | [] => []
+  | x :: rest => if sSetMem x set then sFilterNotIn rest set else x :: sFilterNotIn rest set
+
+def sAnyIn (xs : List Bs) (set : List Bs) : Bool :=
+  match xs with
+  | [] => false
+  | x :: rest => sSetMem x set || sAnyIn rest set
+
+def sAnyNotIn (xs : List Bs) (set : List Bs) : Bool :=
+  match xs with
+  | [] => false
+  | x :: rest => !(sSetMem x set) || sAnyNotIn rest set

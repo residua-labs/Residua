@@ -1,7 +1,7 @@
 # Release manifest: closure roles and pending files
 
 This file is the release inventory, one section per version (0.1,
-0.2, 0.3 below). The 0.1 section is the inventory for release 0.1,
+0.2, 0.3, 0.4 below). The 0.1 section is the inventory for release 0.1,
 the minimal self-bootstrap closure, not a publishable file list. The
 requirements are
 the public-release-0 requirement revisions 4e and 4f and the
@@ -175,3 +175,33 @@ dogfood targets, the URL parser (a separate repository's work), compiled
 dispatcher binaries, modules, proof checking and the application
 suites. macOS arm64 remains a named gap: the generated seed recipe is
 Linux x86-64 only (`release/GAPS.tsv`).
+
+## 0.4
+
+0.4 is a feature release on a recut seed (`476f974ed5`, from the frozen
+compiler head `2ba35d752d`): the committed seed is rebuilt at this
+release's sources and carries `Float` (`binary64`), modules and `Proc`
+`do`-notation over the same 54-member source closure
+(`bootstrap/seed/stage-14274/SOURCE-MEMBERS-SHA256SUMS` — 54 members,
+`SHA256SUMS` digests `845b99efab72…`/`b52b07d1009f…`; `seed-host.c`
+reads each module's exported `__heap_base`). In the release archive, in
+closing order:
+
+- the `Proc` execution hosts (`glue/host/`), the standard `Proc` modules
+  (`lib/ProcBytes.rsd`, `lib/Proc9.rsd`, `glue/std/`) and the `rsd run`
+  entry (`glue/rsd/`);
+- the multi-module CLI example (`examples/app04/`), built and run from
+  the seed by the `README.md` quick start;
+- the Apache-2.0 balanced map (`lib/AvlMap.rsd`, ported from Lean
+  v4.36.0), replacing the 0.3 port named in `release/PROVENANCE.tsv`;
+- the multi-hop and recursion composition theorems
+  (`lean/nf-compose/NfCompose/HopCompose.lean`,
+  `lean/nf-compose/NfCompose/Rec.lean`,
+  `lean/nf-compose/NfRec/CheckedStatus.lean`) and the `Float`
+  differential and mutation inputs under `instruments/lrc-host/`.
+
+Held out of 0.4: GPU benchmarks (`benchmarks/bend/`), the surface-syntax
+Lean package, Cedar, proof checking, and the repository-side parts of
+the `rsd` native build closure (`release/GAPS.tsv`). No path shipped in
+0.3 leaves the archive (`release/PRIOR-SHIP-SETS.tsv` carries the 602
+`rsd-0.3` rows).

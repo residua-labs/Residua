@@ -79,31 +79,42 @@ def lwLookup (x : Nat) : List NN -> Option Nat
 
 /-! ## What the program has: the functions that are pap targets and the widest application -/
 
+structure ClScanAcc where
+  seen : VSet
+  rev : List Nat
+  cw : Nat
+  deriving Inhabited
+
 mutual
-partial def lwScan (n : N) (fs : List Nat) (w : Nat) : ClScan :=
+partial def lwScanGo (n : N) (a : ClScanAcc) : ClScanAcc :=
   if n.op == opVDecl then
     let e := vdeclExpr n
-    let fs := if e.op == opPap && !fs.contains (papFn e) then fs ++ [papFn e] else fs
-    let w := if e.op == opAp && (apArgs e).length > w then (apArgs e).length else w
-    lwScan (bodyOf n) fs w
+    let a1 := if e.op == opPap && !vsContains a.seen (papFn e) then
+        { a with seen := vsInsert a.seen (papFn e), rev := papFn e :: a.rev }
+      else a
+    let w := if e.op == opAp && (apArgs e).length > a1.cw then (apArgs e).length else a1.cw
+    lwScanGo (bodyOf n) { a1 with cw := w }
   else if n.op == opJDecl then
-    let r := lwScan (jdeclBody n) fs w
-    lwScan (bodyOf n) r.cfs r.cw
-  else if n.op == opCase then lwScanAlts (caseAlts n) fs w
-  else if n.op == opJmp || n.op == opRet || n.op == opUnreachable then { cfs := fs, cw := w : ClScan }
-  else lwScan (bodyOf n) fs w
-partial def lwScanAlts : List N → List Nat → Nat → ClScan
-  | [], fs, w => { cfs := fs, cw := w : ClScan }
-  | alt :: alts, fs, w =>
-    let r := lwScan (altBody alt) fs w
-    lwScanAlts alts r.cfs r.cw
+    lwScanGo (bodyOf n) (lwScanGo (jdeclBody n) a)
+  else if n.op == opCase then lwScanAltsGo (caseAlts n) a
+  else if n.op == opJmp || n.op == opRet || n.op == opUnreachable then a
+  else lwScanGo (bodyOf n) a
+partial def lwScanAltsGo : List N → ClScanAcc → ClScanAcc
+  | [], a => a
+  | alt :: alts, a => lwScanAltsGo alts (lwScanGo (altBody alt) a)
 end
 
-def lwScanDecls : List Decl → List Nat → Nat → ClScan
-  | [], fs, w => { cfs := fs, cw := w : ClScan }
-  | d :: ds, fs, w =>
-    let r := if d.ext then { cfs := fs, cw := w : ClScan } else lwScan d.body fs w
-    lwScanDecls ds r.cfs r.cw
+def lwScan (n : N) (fs : List Nat) (w : Nat) : ClScan :=
+  let a := lwScanGo n { seen := vsOfList fs, rev := fs.reverse, cw := w }
+  { cfs := a.rev.reverse, cw := a.cw : ClScan }
+
+def lwScanDeclsGo : List Decl → ClScanAcc → ClScanAcc
+  | [], a => a
+  | d :: ds, a => lwScanDeclsGo ds (if d.ext then a else lwScanGo d.body a)
+
+def lwScanDecls (ds : List Decl) (fs : List Nat) (w : Nat) : ClScan :=
+  let a := lwScanDeclsGo ds { seen := vsOfList fs, rev := fs.reverse, cw := w }
+  { cfs := a.rev.reverse, cw := a.cw : ClScan }
 
 def lwMaxFn : List Decl → Nat → Nat
   | [], m => m
@@ -149,29 +160,36 @@ def lwArm (dBase f a k n next : Nat) : ClR :=
   lwClR (lwBindCaps 1 (next - k) k body.node) body.next
 
 -- the arms of every (f, k) with k below the arity of f, for each pap target f
-def lwArmsK (dBase f a n c : Nat) : Nat -> Nat -> List N -> ClsR
-  | 0, next, acc => { nodes := acc, next := next }
-  | k + 1, next, acc =>
+def lwArmsKRev (dBase f a n c : Nat) : Nat -> Nat -> List N -> ClsR
+  | 0, next, accRev => { nodes := accRev, next := next }
+  | k + 1, next, accRev =>
     let kk := c - (k + 1)
     let arm := lwArm dBase f a kk n next
-    lwArmsK dBase f a n c k arm.next (acc ++ [mkAltCtor (lwScalar (lwCode f kk)) arm.node])
+    lwArmsKRev dBase f a n c k arm.next (mkAltCtor (lwScalar (lwCode f kk)) arm.node :: accRev)
 
-def lwArms (dBase : Nat) (decls : List Decl) (n : Nat) : List Nat -> Nat -> ClsR
-  | [], next => { nodes := [], next := next }
-  | f :: fs, next =>
-    let a := match declAt f decls with
+def lwArmsK (dBase f a n c k next : Nat) (acc : List N) : ClsR :=
+  let r := lwArmsKRev dBase f a n c k next acc.reverse
+  { nodes := r.nodes.reverse, next := r.next }
+
+def lwArmsTabGo (dBase : Nat) (tab : DeclTab) (n : Nat) (tail : List N) : List Nat -> Nat -> List N -> ClsR
+  | [], next, accRev => { nodes := accRev.reverse ++ tail, next := next }
+  | f :: fs, next, accRev =>
+    let a := match dtFind tab f with
       | some d => d.xs.length
       | none => 0
-    let r := lwArmsK dBase f a n (if a < lwCodeMul then a else lwCodeMul) (if a < lwCodeMul then a else lwCodeMul) next []
-    let rest := lwArms dBase decls n fs r.next
-    { nodes := r.nodes ++ rest.nodes, next := rest.next }
+    let cap := if a < lwCodeMul then a else lwCodeMul
+    let r := lwArmsKRev dBase f a n cap cap next accRev
+    lwArmsTabGo dBase tab n tail fs r.next r.nodes
 
-def lwApplyDecl (dBase : Nat) (decls : List Decl) (fs : List Nat) (n : Nat) : Decl :=
+def lwArms (dBase : Nat) (decls : List Decl) (n : Nat) (fs : List Nat) (next : Nat) : ClsR :=
+  lwArmsTabGo dBase (dtOfList decls) n [] fs next []
+
+def lwApplyDeclTab (dBase : Nat) (tab : DeclTab) (fs : List Nat) (n : Nat) : Decl :=
   let xs : List Param := (List.range (n + 1)).map (fun i => { x := i + 1, borrow := false, ty := tyObj })
   let sv := n + 2
   let v := n + 3
-  let arms := lwArms dBase decls n fs (n + 4)
-  let dispatch := mkCase v tyObj (arms.nodes ++ [mkAltDefault mkUnreachable])
+  let arms := lwArmsTabGo dBase tab n [mkAltDefault mkUnreachable] fs (n + 4) []
+  let dispatch := mkCase v tyObj arms.nodes
   -- the tag 244 is also a scalar word (an erased proof can be any word): apply.cpp tests `lean_is_scalar` first, so under
   -- the tag the word is tested once more (a word of another tag is returned as it is in the default arm below;
   -- `primIsScalar` has no meaning on an unboxed integer, Sem.rsd, so a typed word 244 held as an integer stays a stop)
@@ -181,6 +199,9 @@ def lwApplyDecl (dBase : Nat) (decls : List Decl) (fs : List Nat) (n : Nat) : De
   -- `lean_is_scalar`; an object of another tag would be a type error, which the typed IR excludes and Sem.rsd refuses.)
   let scalarAlt := mkAltDefault (mkRet [1])
   { f := dBase + n - 1, xs := xs, rets := [tyObj], ext := false, body := mkCase 1 tyObj [closureAlt, scalarAlt] }
+
+def lwApplyDecl (dBase : Nat) (decls : List Decl) (fs : List Nat) (n : Nat) : Decl :=
+  lwApplyDeclTab dBase (dtOfList decls) fs n
 
 /-! ## The rewrite of a body -/
 
@@ -279,8 +300,9 @@ def lowerR2 (decls : List Decl) : List Decl :=
   else
     let sc := lwScanDecls decls [] 0
     let dBase := lwMaxFn decls 0 + 1
+    let tab := dtOfList decls
     let lowered := decls.map (lwDecl dBase)
-    lowered ++ ((List.range sc.cw).map (fun i => lwApplyDecl dBase decls sc.cfs (i + 1)))
+    lowered ++ ((List.range sc.cw).map (fun i => lwApplyDeclTab dBase tab sc.cfs (i + 1)))
 
 /-! ## Under narrow fields
 

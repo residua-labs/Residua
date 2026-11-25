@@ -1,6 +1,6 @@
 -- rsd/common.rsd — shared by the `rsd` dispatcher (shell.rsd) and the
 -- `rsdc` compiler driver (rsdc.rsd). One definition, two consumers:
--- CLI options, repo-home discovery, q-dir hashing, the mod/<srcQ> record
+-- CLI options, repo-home discovery, q-dir hashing, the mod/<modQ> record
 -- format, host resolution, and the wasm run protocol (rsc ABI status →
 -- process exit). Stdlib-only so the dispatcher binary stays small.
 -- closure_claim = 0.
@@ -66,6 +66,38 @@ def digestFile (path : String) : IO String := do
 
 def digestString (s : String) : String := digestBytes s.toUTF8
 
+/-- Q-FORMAT 1: typed identity for a canonical byte string. -/
+def qHexKind (kind : String) (b : ByteArray) : String :=
+  Lib.Olean.sha256Hex ((kind ++ " " ++ toString b.size ++ "\x00").toUTF8 ++ b)
+
+def contentQ (b : ByteArray) : String := qHexKind "blob" b
+
+def fileContentQ (path : String) : IO String := do
+  try
+    return contentQ (← IO.FS.readBinFile path)
+  catch _ =>
+    return ""
+
+def canonicalPath (path : String) : IO String := do
+  try
+    return (← IO.FS.realPath path).toString
+  catch _ =>
+    return path
+
+/-- The module record is local to both the source bytes and the resolution
+    context. Paths cannot contain NUL, so the canonical is unambiguous. -/
+def compileProfileQ : IO String := do
+  let mut profile := #[]
+  for name in ["RSC_LAYERS", "RSD_NF", "RSD_NF_RSC", "RSD_FORCE_RSC_SUBPROC",
+      "RSD_NO_INC", "RSD_NO_PATCH", "RSD_LEANROOT", "RSC_LEANROOT",
+      "RSD_NO_APPLE_LD", "LEAN_CC", "RSC_BUILD"] do
+    profile := profile.push (name, ← IO.getEnv name)
+  return qHexKind "text" (reprStr profile).toUTF8
+
+def modRecordQ (srcQ realScript realHome realLib profileQ : String) : String :=
+  qHexKind "text" ("rsd-mod-v3\x00" ++
+    "\x00".intercalate [srcQ, realScript, realHome, realLib, profileQ]).toUTF8
+
 -- ============================================================================
 -- CLI options (shared grammar: `rsd` and `rsdc` take the same flags)
 -- ============================================================================
@@ -92,59 +124,6 @@ def fileStatOf (path : String) : IO (Option FileStat) := do
 
 def formatFstatLine (p h : String) (st : FileStat) : String :=
   s!"fstat {h} {st.sec} {st.nsec} {st.size.toNat} {p}"
-
-def parseFstatLine (l : String) : Option (String × String × FileStat) :=
-  if !(l.startsWith "fstat ") || l.length <= 72 then none
-  else
-    let rest := l.drop 6
-    let h := rest.take 64
-    let r1 := rest.drop 65
-    let parts := r1.splitOn " "
-    match parts with
-    | secS :: nsecS :: sizeS :: pathParts =>
-      match secS.toInt?, nsecS.toNat?, sizeS.toNat? with
-      | some sec, some nsec, some sz =>
-        let path := " ".intercalate pathParts
-        if path == "" then none
-        else some (path, h, { sec := sec, nsec := nsec, size := sz.toUInt64 })
-      | _, _, _ => none
-    | _ => none
-
-def validateFileStat (p h : String) (st : FileStat) : IO Bool := do
-  match ← fileStatOf p with
-  | none => return false
-  | some cur =>
-    if cur == st then return true
-    if cur.size == st.size then return (← digestFile p) == h
-    return false
-
--- Z6: stat-then-hash lookup for an input file under <store>/stat/<key>.
-def statShaFile (store path : String) : IO (String × Option FileStat) := do
-  let stOpt ← fileStatOf path
-  if (← IO.getEnv "RSD_NO_STAT").isNone then
-    match stOpt with
-    | some st =>
-      let key := digestString path
-      let idx := s!"{store}/stat/{key}"
-      if ← System.FilePath.pathExists idx then
-        let line := ((← IO.FS.readFile idx).splitOn "\n").headD ""
-        match parseFstatLine line with
-        | some (p0, h0, st0) =>
-          if p0 == path && st0 == st && h0.length == 64 then
-            return (h0, some st)
-        | none => pure ()
-    | none => pure ()
-  let h ← digestFile path
-  match stOpt with
-  | some st =>
-    if h.length == 64 then
-      try
-        IO.FS.createDirAll s!"{store}/stat"
-        let key := digestString path
-        IO.FS.writeFile s!"{store}/stat/{key}" (formatFstatLine path h st ++ "\n")
-      catch _ => pure ()
-  | none => pure ()
-  return (h, stOpt)
 
 structure Opts where
   file : String := ""
@@ -243,11 +222,10 @@ def refuseO (o : Opts) (name detail : String) (code : UInt32) : IO UInt32 := do
   return code
 
 -- ============================================================================
--- mod/<srcQ> records (v2). The dispatcher cannot recompute a decl-level
--- closure q, so the record pins the closure by its *file manifest*: every
--- source file rsdc read, with its sha256 (plus Z6 fstat metadata). A warm
--- hit requires: toolchain parts equal, every recorded file matching its
--- fstat (or rehashing equal), and the wasm object rehashing to its name.
+-- mod/<modQ> records (v3). The dispatcher pins the declaration closure by
+-- every source file's digest and every failed import lookup. A warm hit
+-- requires matching toolchain identities and file observations, and the
+-- wasm object is hashed when it is read.
 -- ============================================================================
 
 structure ModRecord where
@@ -261,24 +239,64 @@ structure ModRecord where
   arity : Int
   procStep : Option Int := none
   files : List (String × String)
-  fstats : List (String × String × FileStat) := []
 
-def readMod (store srcQ : String) : IO (Option ModRecord) := do
-  let p := s!"{store}/mod/{srcQ}"
+def fileObservationLine (p q : String) : String :=
+  if q == "absent" then s!"missing {p}"
+  else if q.startsWith "path:" then s!"path {q.drop 5} {p}"
+  else s!"file {q} {p}"
+
+def parseFileObservation (line : String) : Option (String × String) :=
+  let isPath := line.startsWith "path "
+  if (isPath || line.startsWith "file ") && line.length > 70 && (line.drop 69).startsWith " " then
+    let q := (line.drop 5).take 64
+    let path := line.drop 70
+    if q.toList.all (fun c => ('0' ≤ c && c ≤ '9') || ('a' ≤ c && c ≤ 'f')) then
+      some (path, if isPath then "path:" ++ q else q)
+    else none
+  else if line.startsWith "missing " && line.length > 8 then
+    some (line.drop 8, "absent")
+  else none
+
+def resolvedPathObservation (path : System.FilePath) : String :=
+  "path:" ++ qHexKind "text" path.toString.toUTF8
+
+def fileObservationMatches (p q : String) : IO Bool := do
+  if q == "absent" then
+    return !(← System.FilePath.pathExists p)
+  if q.startsWith "path:" then
+    if !(← System.FilePath.pathExists p) then return false
+    try
+      return resolvedPathObservation (← IO.FS.realPath p) == q
+    catch _ => return false
+  return (← fileContentQ p) == q
+
+def fileObservationsMatch (files : List (String × String)) : IO Bool := do
+  for (p, q) in files do
+    if !(← fileObservationMatches p q) then return false
+  return true
+
+def modDerivationQ (modQ : String) (tq : String × String × String)
+    (closureQ : String) (files : List (String × String))
+    (result : String × Int × Int × Int × Option Int) : String :=
+  qHexKind "text" (reprStr (modQ, tq, closureQ, files, result)).toUTF8
+
+def readMod (store modQ : String) : IO (Option ModRecord) := do
+  let p := s!"{store}/mod/{modQ}"
   if !(← System.FilePath.pathExists p) then return none
   let ls := (← IO.FS.readFile p).splitOn "\n"
-  if ls.headD "" != "v2" then return none
+  if ls.headD "" != "v3" then return none
   let mut tqRsdc := ""
   let mut tqRsc := ""
   let mut tqHost := ""
   let mut closureQ := ""
+  let mut derivationQ := ""
   let mut wasmQ := ""
   let mut entry : Int := 0
   let mut ret : Int := 0
   let mut arity : Int := 0
   let mut procStep : Option Int := none
   let mut files : Array (String × String) := #[]
-  let mut fstats : Array (String × String × FileStat) := #[]
+  let mut fileCount : Option Nat := none
   for l in ls do
     if l.startsWith "v " then
       return none
@@ -290,6 +308,8 @@ def readMod (store srcQ : String) : IO (Option ModRecord) := do
       tqHost := l.drop 8
     else if l.startsWith "closure_q " then
       closureQ := l.drop 10
+    else if l.startsWith "derivation_q " then
+      derivationQ := l.drop 13
     else if l.startsWith "wasm " then
       wasmQ := l.drop 5
     else if l.startsWith "entry " then
@@ -302,15 +322,14 @@ def readMod (store srcQ : String) : IO (Option ModRecord) := do
       let some step := (l.drop 10).toNat? | return none
       if procStep.isSome then return none
       procStep := some (Int.ofNat step)
-    else if l.startsWith "file " && l.length > 70 then
-      let h := (l.drop 5).take 64
-      let path := (l.drop 5).drop 65
-      files := files.push (path, h)
-    else if l.startsWith "fstat " then
-      match parseFstatLine l with
-      | some fs => fstats := fstats.push fs
-      | none => pure ()
-  if wasmQ == "" || wasmQ.length != 64 then return none
+    else if l.startsWith "files " then
+      fileCount := (l.drop 6).toNat?
+    else if let some obs := parseFileObservation l then
+      files := files.push obs
+  if wasmQ.length != 64 || files.isEmpty || fileCount != some files.size then return none
+  if derivationQ != modDerivationQ modQ (tqRsdc, tqRsc, tqHost) closureQ files.toList
+      (wasmQ, entry, ret, arity, procStep) then
+    return none
   return some {
     tqRsdc := tqRsdc,
     tqRsc := tqRsc,
@@ -321,8 +340,7 @@ def readMod (store srcQ : String) : IO (Option ModRecord) := do
     ret := ret,
     arity := arity,
     procStep := procStep,
-    files := files.toList,
-    fstats := fstats.toList }
+    files := files.toList }
 
 -- ============================================================================
 -- The node runhost: the rsc-ABI wasm runner as one string (the rsc.rsd /
@@ -518,7 +536,8 @@ def runHostJs : String :=
     "  }",
     "  const mem = inst.exports.memory;",
     "  const view = new DataView(mem.buffer);",
-    "  put(view, BLOCK + 0, HEAP);",
+    "  const heapBase = inst.exports.__heap_base ? BigInt.asUintN(64, BigInt(inst.exports.__heap_base.value)) : BigInt(HEAP);",
+    "  put(view, BLOCK + 0, heapBase);",
     "  put(view, BLOCK + 8, mem.buffer.byteLength);",
     "  put(view, BLOCK + 16, 0n);",
     "  put(view, BLOCK + 24, 0n);",
@@ -636,14 +655,9 @@ def findRscNative (store : String) : IO (Option String) := do
     catch _ => pure ()
   return none
 
--- A binary's identity: build.sh names binaries `<name>-<sha12>` where the
--- sha is over the sources that produced them — content identity already.
--- Any other name falls back to hashing the file itself.
-def binIdentity (pfx : String) (path : String) : IO String := do
-  let nm := (System.FilePath.mk path).fileName.getD ""
-  if nm.startsWith pfx && nm.length == pfx.length + 12 then
-    return nm.drop pfx.length
-  digestFile path
+-- Build names identify a recipe. Cache admission checks the executable bytes.
+def binIdentity (_store path : String) : IO String :=
+  fileContentQ path
 
 -- The NF-wrapped rsc compiler (RSD-OPT-1): `rscnf-<sha12>` beside
 -- rsc-native in the store's build dir. When RSD_NF is on and the binary
@@ -666,21 +680,21 @@ def rscToolIdentity (store : String) : IO String := do
   -- opt-in RSD_NF_RSC — the identity must match what produced the wasm.
   if (← IO.getEnv "RSD_NF_RSC") == some "1" then
     match ← findRscnf store with
-    | some p => return ← binIdentity "rscnf-" p
+    | some p => return ← binIdentity store p
     | none => pure ()
   match ← findRscNative store with
-  | some p => binIdentity "rsc-native-" p
+  | some p => binIdentity store p
   | none => pure "absent"
 
 -- Pin the execution bundle by bytes, including the Proc bridge and device
 -- server. File names are not identities for these mutable executable inputs.
-def executionHostIdentity (home : String) (hostOpt : Option HostSpec) : IO String := do
+def executionHostIdentity (home _store : String) (hostOpt : Option HostSpec) : IO String := do
   let scalar ← match hostOpt with
-    | some h => digestFile h.identityPath
+    | some h => fileContentQ h.identityPath
     | none => pure "absent"
-  let bridge ← digestFile s!"{home}/host/exec9.cjs"
-  let device ← digestFile s!"{home}/host/devsrv/target/release/devsrv"
-  return digestString (String.intercalate "\n" ["execution-host-v2", scalar, bridge, device])
+  let bridge ← fileContentQ s!"{home}/host/exec9.cjs"
+  let device ← fileContentQ s!"{home}/host/devsrv/target/release/devsrv"
+  return qHexKind "text" (String.intercalate "\n" ["execution-host-v2", scalar, bridge, device]).toUTF8
 
 -- The three toolchain parts pinned in every mod record. `"absent"` marks a
 -- part that could not be resolved — records carrying it only hit under an
@@ -688,10 +702,10 @@ def executionHostIdentity (home : String) (hostOpt : Option HostSpec) : IO Strin
 def toolchainParts (home store : String) (hostOpt : Option HostSpec)
     : IO (String × String × String) := do
   let rq ← match ← findRsdc store with
-    | some p => binIdentity "rsdc-" p
+    | some p => binIdentity store p
     | none => pure "absent"
   let rscQ ← rscToolIdentity store
-  let hq ← executionHostIdentity home hostOpt
+  let hq ← executionHostIdentity home store hostOpt
   return (rq, rscQ, hq)
 
 -- ============================================================================
@@ -829,9 +843,6 @@ def runWasm (clk : Clock) (host : HostSpec) (hostFlags : List String) (store : S
 /-- Q-FORMAT 1: the composite cache key is a `cwasm-key` q — the preimage
     (wasmQ NUL hostQ) is unchanged inside the canonical form; the header
     supplies the domain tag (FORMAT.md section 2). -/
-def qHexKind (kind : String) (b : ByteArray) : String :=
-  Lib.Olean.sha256Hex ((kind ++ " " ++ toString b.size ++ "\x00").toUTF8 ++ b)
-
 def cwasmKey (wasmQ hostQ : String) : IO String := do
   let mutant := (← IO.getEnv "RSD_KEY_MUTANT") == some "drop_input"
   let lbytes := if mutant then ByteArray.empty else wasmQ.toUTF8
@@ -877,7 +888,7 @@ def runModule (clk : Clock) (host : HostSpec) (home store hostQ wasmQ : String)
     (entry ret arity : Int) (procStep : Option Int) (o : Opts) (wasmOk : IO Bool) : IO (Option UInt32) := do
   if let some step := procStep then
     -- Recheck even in a resident server: its startup tuple can be stale.
-    if (← executionHostIdentity home (some host)) != hostQ then
+    if (← executionHostIdentity home store (some host)) != hostQ then
       return some (← refuseO o "host_identity_changed" "Proc execution bundle changed" 70)
     if arity != 0 then
       return some (← refuseO o "main_arity" "Proc main takes no parameters. Use /env/args" 63)
@@ -914,13 +925,8 @@ def runModule (clk : Clock) (host : HostSpec) (home store hostQ wasmQ : String)
 def validateMod (tq : String × String × String) (rec : ModRecord) : IO Bool := do
   if rec.tqRsdc != tq.1 || rec.tqRsc != tq.2.1 || rec.tqHost != tq.2.2 then
     return false
-  if (← IO.getEnv "RSD_NO_STAT").isNone && !rec.fstats.isEmpty && rec.fstats.length == rec.files.length then
-    for (p, h, st) in rec.fstats do
-      if !(← validateFileStat p h st) then return false
-    return true
-  for (p, h) in rec.files do
-    if (← digestFile p) != h then return false
-  return true
+  if rec.files.isEmpty then return false
+  fileObservationsMatch rec.files
 
 def wasmOk (store wasmQ : String) : IO Bool := do
   if (← digestFile s!"{store}/q/{wasmQ}") == wasmQ then return true

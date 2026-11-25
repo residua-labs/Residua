@@ -1,0 +1,7 @@
+# FLOAT64-0 (F row). The wire: an operator of two operands read as none, an operator of one operand not translated. The
+# reference interpreter: ties rounded up, the sum of a number and its negative with the first operand's sign.
+# FILE	FROM	TO
+lib/RscBase.rsd	def fBinary (tag : Int) : Bool := tag >= 78 && tag <= 84	def fBinary (tag : Int) : Bool := tag >= 78 && tag <= 83
+lib/lrc/FromWire.rsd	    else if tag == 9 || tag == 17 || wfUnary tag then	    else if tag == 9 || tag == 17 || tag == 75 then
+instruments/lrc-host/Interp.rsd	        if low > half || (low == half && (sticky || keep % 2 == 1)) then keep + 1 else keep	        if low >= half then keep + 1 else keep
+instruments/lrc-host/Interp.rsd	    else fZero 0	    else fZero (fSign a)

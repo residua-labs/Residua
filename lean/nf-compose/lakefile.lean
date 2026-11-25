@@ -31,4 +31,5 @@ lean_lib algorithms where
 lean_lib NfCompose where
   roots := #[`NfCompose.Basic, `NfCompose.Bridge, `NfCompose.Sum,
     `NfCompose.Seq, `NfCompose.Prod, `NfCompose.AtMostOne,
-    `NfCompose.Dispatch, `NfCompose.Axioms]
+    `NfCompose.Dispatch, `NfCompose.Axioms, `NfCompose.Hop, `NfCompose.Rec,
+    `NfCompose.HopCompose]

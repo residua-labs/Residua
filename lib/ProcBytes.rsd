@@ -1,0 +1,89 @@
+-- Shared byte/list semantics for both Proc execution runtimes.
+def lenEq : List Int -> List Int -> Bool
+  | [], [] => true
+  | [], _ => false
+  | _, [] => false
+  | _ :: xs, _ :: ys => lenEq xs ys
+
+def eqGo : List Int -> List Int -> Bool
+  | [], _ => true
+  | _, [] => false
+  | x :: xs, y :: ys => if x == y then eqGo xs ys else false
+
+def eqB (xs : List Int) (ys : List Int) : Bool :=
+  if lenEq xs ys then eqGo xs ys else false
+
+def nRev : List Int -> List Int -> List Int
+  | [], acc => acc
+  | b :: rest, acc => nRev rest (b :: acc)
+
+def nLen : List Int -> Int -> Int
+  | [], n => n
+  | _ :: rest, n => nLen rest (n + 1)
+
+def nAppend (a b : List Int) : List Int :=
+  nRev (nRev a []) b
+
+def nTakeGo : List Int -> Int -> List Int -> List Int
+  | [], _, acc => nRev acc []
+  | b :: rest, n, acc => if n <= 0 then nRev acc [] else nTakeGo rest (n - 1) (b :: acc)
+
+def nTake (buf : List Int) (n : Int) : List Int :=
+  if n <= 0 then [] else nTakeGo buf n []
+
+def nSkipTakeGo : List Int -> Int -> Int -> List Int -> List Int
+  | [], _, _, acc => nRev acc []
+  | b :: rest, skip, len, acc =>
+    if skip > 0 then nSkipTakeGo rest (skip - 1) len acc
+    else if len > 0 then nSkipTakeGo rest 0 (len - 1) (b :: acc)
+    else nRev acc []
+
+def nSlice (buf : List Int) (start len : Int) : List Int :=
+  if start < 0 || len < 0 then [] else nSkipTakeGo buf start len []
+
+def nGetGo : List Int -> Int -> Int -> Int
+  | [], _, d => d
+  | b :: rest, i, d => if i <= 0 then b else nGetGo rest (i - 1) d
+
+def nGet (buf : List Int) (idx : Int) : Int :=
+  if idx < 0 then 0 else nGetGo buf idx 0
+
+structure R1 where
+  ok : Bool
+  v : Int
+  off : Int
+
+def r1Bad (u : Nat) : R1 :=
+  { ok := false, v := 0, off := 0 : R1 }
+
+def r1Good (v : Int) (off : Int) : R1 :=
+  { ok := true, v := v, off := off : R1 }
+
+def nReadU32LE (buf : List Int) (off : Int) : R1 :=
+  if off >= 0 && off + 4 <= nLen buf 0 then
+    let b0 : Int := nGet buf off;
+    let b1 : Int := nGet buf (off + 1);
+    let b2 : Int := nGet buf (off + 2);
+    let b3 : Int := nGet buf (off + 3);
+    r1Good (b0 + b1 * 256 + b2 * 65536 + b3 * 16777216) (off + 4)
+  else
+    r1Bad 0
+
+structure RN where
+  ok : Bool
+  bs : List Int
+  off : Int
+
+def rnBad (u : Nat) : RN :=
+  { ok := false, bs := [], off := 0 : RN }
+
+-- lp-encoded Proc state for the cross-call boundary
+def pLP (xs : List Int) : List Int := nLen xs 0 :: xs
+
+def rdL (bs : List Int) (off : Int) : RN :=
+  if off < 0 || off >= nLen bs 0 then rnBad 0
+  else
+    let n : Int := nGet bs off;
+    if n < 0 || off + 1 + n > nLen bs 0 then rnBad 0
+    else { ok := true, bs := nSlice bs (off + 1) n, off := off + 1 + n : RN }
+

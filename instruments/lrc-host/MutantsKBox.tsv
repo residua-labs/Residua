@@ -1,0 +1,14 @@
+# FILE	FROM	TO  (FROM occurs exactly once in FILE; every row must make the differential report a mismatch)
+# The node that is its list of children (lib/lrc/FromWire.rsd "Layout", `Lay.kbox`): an allocation that gives children
+# as a list and nothing else is the list, and a read of the children as a list is the node. The rows: a list of
+# children that is no literal is dropped; a literal list is built last child first; the allocation keeps its object
+# while the reads take the node for its list; the reads keep their field while the allocations are lists. The program
+# that meets them is instruments/lrc-host/ProgKBox.rsd (row kbox of Images.tsv).
+# Not rows, and why: no image of the front end has them. A node of this kind whose class is marked (its tag is asked
+# for: the front end refuses a constructor of a type with several that has a list of such values, `rsdc_arena_field`);
+# one whose allocations also give a string f7, a list of integers f8 or a scalar field; a read of f8 from one; a read
+# of one of its children by number (it is written as the first of what `drop i` leaves of the node).
+lib/lrc/FromWire.rsd	      let built := e.c >= 0 || intAt 0 kids < 0	      let built := true
+lib/lrc/FromWire.rsd	      let cells := if e.c >= 0 then layCells kids.reverse (next : Int) (next + 1) else { next := next + 1, items := [], ws := [(next : Int)] }	      let cells := if e.c >= 0 then layCells kids (next : Int) (next + 1) else { next := next + 1, items := [], ws := [(next : Int)] }
+lib/lrc/FromWire.rsd	    else if l.kbox && numForm e == 0 then	    else if false && numForm e == 0 then
+lib/lrc/FromWire.rsd	    else if primOp e == primNodeKids && l.kbox then	    else if primOp e == primNodeKids && false then

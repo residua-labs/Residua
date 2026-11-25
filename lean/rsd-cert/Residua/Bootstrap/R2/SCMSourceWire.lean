@@ -106,6 +106,48 @@ mutual
     | .wNot a => do return 75 :: (← expr a)
     | .wShl a b => do return [76] ++ (← expr a) ++ (← expr b)
     | .wShr a b => do return [77] ++ (← expr a) ++ (← expr b)
+    | .fAdd a b => do return [78] ++ (← expr a) ++ (← expr b)
+    | .fSub a b => do return [79] ++ (← expr a) ++ (← expr b)
+    | .fMul a b => do return [80] ++ (← expr a) ++ (← expr b)
+    | .fDiv a b => do return [81] ++ (← expr a) ++ (← expr b)
+    | .fLt a b => do return [82] ++ (← expr a) ++ (← expr b)
+    | .fLe a b => do return [83] ++ (← expr a) ++ (← expr b)
+    | .fEq a b => do return [84] ++ (← expr a) ++ (← expr b)
+    | .fNeg a => do return 85 :: (← expr a)
+    | .fAbs a => do return 86 :: (← expr a)
+    | .fSqrt a => do return 87 :: (← expr a)
+    | .fFloor a => do return 88 :: (← expr a)
+    | .fCeil a => do return 89 :: (← expr a)
+    | .fRound a => do return 90 :: (← expr a)
+    | .fOfW a => do return 91 :: (← expr a)
+    | .fOfI a => do return 92 :: (← expr a)
+    | .fToW a => do return 93 :: (← expr a)
+    | .fBits a => do return 94 :: (← expr a)
+    | .aUSize (a := a) arr => do
+        return [55] ++ BootTypeWire.encode (.list a) ++ (← expr arr)
+    | .wToN w => do return 56 :: (← expr w)
+    | .aEmpty (a := a) c => do
+        return [57] ++ BootTypeWire.encode (.list a) ++ (← expr c)
+    | .aMk (a := a) n v => do
+        return [58] ++ BootTypeWire.encode (.list a) ++ (← expr n) ++ (← expr v)
+    | .aOfList (a := a) xs => do
+        return [59] ++ BootTypeWire.encode (.list a) ++ (← expr xs)
+    | .aToList (a := a) arr => do
+        return [60] ++ BootTypeWire.encode (.list a) ++ (← expr arr)
+    | .aSize (a := a) arr => do
+        return [61] ++ BootTypeWire.encode (.list a) ++ (← expr arr)
+    | .aGet (a := a) arr i => do
+        return [62] ++ BootTypeWire.encode (.list a) ++ (← expr arr) ++ (← expr i)
+    | .aSet (a := a) arr i v => do
+        return [63] ++ BootTypeWire.encode (.list a) ++ (← expr arr) ++ (← expr i) ++ (← expr v)
+    | .aPush (a := a) arr v => do
+        return [95] ++ BootTypeWire.encode (.list a) ++ (← expr arr) ++ (← expr v)
+    | .aPop (a := a) arr => do
+        return [96] ++ BootTypeWire.encode (.list a) ++ (← expr arr)
+    | .aSlice (a := a) arr i j => do
+        return [97] ++ BootTypeWire.encode (.list a) ++ (← expr arr) ++ (← expr i) ++ (← expr j)
+    | .aAppend (a := a) a1 a2 => do
+        return [98] ++ BootTypeWire.encode (.list a) ++ (← expr a1) ++ (← expr a2)
 
   def args : SCMArgs S G ts → Option Bytes
     | .nil => some [0]

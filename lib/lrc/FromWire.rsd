@@ -375,84 +375,98 @@ def ctSite (g : Dg) (tab : CtorTab) (rec : List Int) : CtorTab :=
 
 def intrKind (intr : List Int) (f : Nat) : Int := intAt f intr
 
+def allocSetOf (i : Int) (s : VSet) : List Int → VSet
+  | [] => s
+  | k :: ks => allocSetOf (i + 1) (if k == 3 then vsInsertI s i else s) ks
+
 structure ScanR where
   ok : Bool
   tab : CtorTab
   rest : List Int
+  seen : VSet := vsEmpty
   deriving Inhabited
 
 mutual
 -- every allocation in one expression, by the wire's grammar (lib/RscBase.rsd `skipEGo`)
-partial def scanE (g : Dg) (intr : List Int) (tab : CtorTab) (rest0 : List Int) : ScanR :=
+partial def scanEGo (g : Dg) (allocs : VSet) (tab : CtorTab) (seen : VSet) (rest0 : List Int) : ScanR :=
   match rest0 with
-  | [] => { ok := false, tab := tab, rest := [] }
-  | 53 :: _ =>
-    -- a reference into the node table: scan the node, then continue after the reference
+  | [] => { ok := false, tab := tab, rest := [], seen := seen }
+  | 53 :: bs =>
+    -- a reference into the node table: scan each node once, then continue after the reference
     let s := skipE g profile.v2Fuel rest0
-    let inner := scanE g intr tab (drE g rest0)
-    { ok := s.ok == profile.cOk && inner.ok, tab := inner.tab, rest := s.rest }
+    if s.ok != profile.cOk then { ok := false, tab := tab, rest := s.rest, seen := seen }
+    else
+      let r := readLeb bs
+      if vsContains seen r.n.toNat then { ok := true, tab := tab, rest := s.rest, seen := seen }
+      else
+        match dgAt g r.n.toNat with
+        | 1 :: _ :: c =>
+          let inner := scanEGo g allocs tab seen c
+          { ok := inner.ok && inner.rest.isEmpty, tab := inner.tab, rest := s.rest,
+            seen := if inner.ok && inner.rest.isEmpty then vsInsert inner.seen r.n.toNat else inner.seen }
+        | _ => { ok := false, tab := tab, rest := s.rest, seen := seen }
   | tag :: bs =>
-    if tag == 0 || tag == 41 then scanSkip tab (skipBytes 9 bs)
-    else if tag == 64 then scanSkip tab (skipBytes 8 bs)
-    else if tag == 1 then scanSkip tab (skipBytes 1 bs)
-    else if tag == 2 then scanSkip tab (skipName bs)
-    else if tag == 3 then scanSkip tab (readLeb bs)
-    else if tag == 22 || tag == 33 || tag == 37 then { ok := true, tab := tab, rest := bs }
-    else if tag == 4 then scanTy g intr tab 2 bs
-    else if tag == 5 || tag == 20 || tag == 48 then scanN g intr tab 3 bs
+    if tag == 0 || tag == 41 then scanSkip tab seen (skipBytes 9 bs)
+    else if tag == 64 then scanSkip tab seen (skipBytes 8 bs)
+    else if tag == 1 then scanSkip tab seen (skipBytes 1 bs)
+    else if tag == 2 then scanSkip tab seen (skipName bs)
+    else if tag == 3 then scanSkip tab seen (readLeb bs)
+    else if tag == 22 || tag == 33 || tag == 37 then { ok := true, tab := tab, rest := bs, seen := seen }
+    else if tag == 4 then scanTy g allocs tab seen 2 bs
+    else if tag == 5 || tag == 20 || tag == 48 then scanN g allocs tab seen 3 bs
     else if tag == 6 || tag == 7 || tag == 8 || tag == 10 || tag == 11 || tag == 12 || tag == 13 || tag == 15 || tag == 16
-        || tag == 19 || tag == 26 || tag == 27 || tag == 28 || tag == 47 || wBinary tag then scanN g intr tab 2 bs
+        || tag == 19 || tag == 26 || tag == 27 || tag == 28 || tag == 47 || wfBinary tag then scanN g allocs tab seen 2 bs
     else if tag == 9 || tag == 17 || tag == 18 || tag == 21 || tag == 23 || tag == 25 || tag == 36 || tag == 39 || tag == 40
-        || tag == 44 || tag == 45 || tag == 46 || tag == 49 || tag == 75 then scanN g intr tab 1 bs
-    else if tag == 14 then scanTy g intr tab 2 bs
-    else if tag == 24 || tag == 29 || tag == 30 || tag == 38 || tag == 42 || tag == 43 then scanTy g intr tab 1 bs
+        || tag == 44 || tag == 45 || tag == 46 || tag == 49 || wfUnary tag then scanN g allocs tab seen 1 bs
+    else if tag == 14 then scanTy g allocs tab seen 2 bs
+    else if tag == 24 || tag == 29 || tag == 30 || tag == 38 || tag == 42 || tag == 43 then scanTy g allocs tab seen 1 bs
     else if tag == 31 then
       let r := readLeb bs
-      if r.ok != profile.cOk then { ok := false, tab := tab, rest := bs } else scanN g intr tab 1 r.rest
+      if r.ok != profile.cOk then { ok := false, tab := tab, rest := bs, seen := seen } else scanN g allocs tab seen 1 r.rest
     else if tag == 32 then
       let t := skipTyD g bs
-      if t.ok != profile.cOk then { ok := false, tab := tab, rest := bs }
+      if t.ok != profile.cOk then { ok := false, tab := tab, rest := bs, seen := seen }
       else
-        let a := scanE g intr tab t.rest
-        if !a.ok then a else scanArgs g intr a.tab a.rest
+        let a := scanEGo g allocs tab seen t.rest
+        if !a.ok then a else scanArgs g allocs a.tab a.seen a.rest
     else if tag == 34 then
       let nm := skipName bs
-      if nm.ok != profile.cOk then { ok := false, tab := tab, rest := bs } else scanN g intr tab 2 nm.rest
+      if nm.ok != profile.cOk then { ok := false, tab := tab, rest := bs, seen := seen } else scanN g allocs tab seen 2 nm.rest
     else if tag == 35 then
       let t := skipTyD g bs
-      if t.ok != profile.cOk then { ok := false, tab := tab, rest := bs }
+      if t.ok != profile.cOk then { ok := false, tab := tab, rest := bs, seen := seen }
       else
         let r := readLeb t.rest
-        if r.ok != profile.cOk then { ok := false, tab := tab, rest := bs } else scanN g intr tab 1 r.rest
-    else if tag == 50 then scanTy g intr tab 3 bs
-    else if tag == 51 then scanTy g intr tab 4 bs
+        if r.ok != profile.cOk then { ok := false, tab := tab, rest := bs, seen := seen } else scanN g allocs tab seen 1 r.rest
+    else if tag == 50 then scanTy g allocs tab seen 3 bs
+    else if tag == 51 then scanTy g allocs tab seen 4 bs
     else if tag == 52 then
       let r := readLeb bs
-      if r.ok != profile.cOk || r.n < 0 then { ok := false, tab := tab, rest := bs }
+      if r.ok != profile.cOk || r.n < 0 then { ok := false, tab := tab, rest := bs, seen := seen }
       else
-        let tab := if intrKind intr r.n.toNat == 3 then
+        let tab := if vsContainsI allocs r.n then
             match r.rest with
             | 1 :: rec => ctSite g tab rec
             | _ => { tab with ok := false, err := some fwAllocShape }
           else tab
-        scanArgs g intr tab r.rest
-    else { ok := false, tab := tab, rest := bs }
-partial def scanSkip (tab : CtorTab) (r : Rd) : ScanR :=
-  { ok := r.ok == profile.cOk, tab := tab, rest := r.rest }
-partial def scanTy (g : Dg) (intr : List Int) (tab : CtorTab) (n : Nat) (bs : List Int) : ScanR :=
+        scanArgs g allocs tab seen r.rest
+    else { ok := false, tab := tab, rest := bs, seen := seen }
+partial def scanSkip (tab : CtorTab) (seen : VSet) (r : Rd) : ScanR :=
+  { ok := r.ok == profile.cOk, tab := tab, rest := r.rest, seen := seen }
+partial def scanTy (g : Dg) (allocs : VSet) (tab : CtorTab) (seen : VSet) (n : Nat) (bs : List Int) : ScanR :=
   let t := skipTyD g bs
-  if t.ok != profile.cOk then { ok := false, tab := tab, rest := bs } else scanN g intr tab n t.rest
-partial def scanN (g : Dg) (intr : List Int) (tab : CtorTab) : Nat → List Int → ScanR
-  | 0, rest => { ok := true, tab := tab, rest := rest }
+  if t.ok != profile.cOk then { ok := false, tab := tab, rest := bs, seen := seen } else scanN g allocs tab seen n t.rest
+partial def scanN (g : Dg) (allocs : VSet) (tab : CtorTab) (seen : VSet) : Nat → List Int → ScanR
+  | 0, rest => { ok := true, tab := tab, rest := rest, seen := seen }
   | k + 1, rest =>
-    let a := scanE g intr tab rest
-    if !a.ok then a else scanN g intr a.tab k a.rest
-partial def scanArgs (g : Dg) (intr : List Int) (tab : CtorTab) : List Int → ScanR
-  | 0 :: rest => { ok := true, tab := tab, rest := rest }
+    let a := scanEGo g allocs tab seen rest
+    if !a.ok then a else scanN g allocs a.tab a.seen k a.rest
+partial def scanArgs (g : Dg) (allocs : VSet) (tab : CtorTab) (seen : VSet) : List Int → ScanR
+  | 0 :: rest => { ok := true, tab := tab, rest := rest, seen := seen }
   | 1 :: rest =>
-    let a := scanE g intr tab rest
-    if !a.ok then a else scanArgs g intr a.tab a.rest
-  | rest => { ok := false, tab := tab, rest := rest }
+    let a := scanEGo g allocs tab seen rest
+    if !a.ok then a else scanArgs g allocs a.tab a.seen a.rest
+  | rest => { ok := false, tab := tab, rest := rest, seen := seen }
 end
 
 /-! ### The functions only the reserved forms call
@@ -470,9 +484,9 @@ partial def calledE (g : Dg) (acc : List Nat) (rest0 : List Int) : List Nat :=
     if tag == 4 || tag == 14 then calledN g acc 2 (skipTyD g bs).rest
     else if tag == 5 || tag == 20 || tag == 48 then calledN g acc 3 bs
     else if tag == 6 || tag == 7 || tag == 8 || tag == 10 || tag == 11 || tag == 12 || tag == 13 || tag == 15 || tag == 16
-        || tag == 19 || tag == 26 || tag == 27 || tag == 28 || tag == 47 || wBinary tag then calledN g acc 2 bs
+        || tag == 19 || tag == 26 || tag == 27 || tag == 28 || tag == 47 || wfBinary tag then calledN g acc 2 bs
     else if tag == 9 || tag == 17 || tag == 18 || tag == 21 || tag == 23 || tag == 25 || tag == 36 || tag == 39 || tag == 40
-        || tag == 44 || tag == 45 || tag == 46 || tag == 49 || tag == 75 then calledN g acc 1 bs
+        || tag == 44 || tag == 45 || tag == 46 || tag == 49 || wfUnary tag then calledN g acc 1 bs
     else if tag == 24 || tag == 29 || tag == 30 || tag == 38 || tag == 42 || tag == 43 then calledN g acc 1 (skipTyD g bs).rest
     else if tag == 31 then calledN g acc 1 (readLeb bs).rest
     else if tag == 32 then
@@ -580,6 +594,71 @@ def wtRecHead (g : Dg) (wt : List Int) : RecHead :=
       else { ok := true, head := t.acc, tail := 7 :: (lebU (n.n.toNat - 1) ++ t.rest) }
   | _ => { ok := false, head := [], tail := [] }
 
+-- does a parameter or the result of the signature have the node record's type
+partial def sigHasNode (g : Dg) : Nat → List Int → Bool
+  | 0, rest => isHeapNode g (readTyD g rest).acc
+  | k + 1, rest =>
+    let t := readTyD g rest
+    isHeapNode g t.acc || sigHasNode g k t.rest
+
+structure FnInfo where
+  intr : Int
+  sig : List Int
+  ws : List Int
+  sg : SigR
+  resW64 : Bool
+  hasNode : Bool
+  inlBody : List Int
+  deriving Inhabited
+
+def fnInfo0 : FnInfo :=
+  { intr := 0, sig := [], ws := [], sg := sigFail, resW64 := false, hasNode := false, inlBody := [] }
+
+def ftAt1 : Nat → List FnInfo → FnInfo
+  | _, [] => fnInfo0
+  | 0, x :: _ => x
+  | i + 1, _ :: xs => ftAt1 i xs
+
+def ftAt2 : Nat → List (List FnInfo) → List FnInfo
+  | _, [] => []
+  | 0, x :: _ => x
+  | i + 1, _ :: xs => ftAt2 i xs
+
+structure FtRowR where
+  row : List FnInfo
+  intr : List Int
+  sigs : List (List Int)
+  ws : List (List Int)
+  bodies : List Int
+  deriving Inhabited
+
+partial def ftRow (g : Dg) : Nat → Nat → Nat → List Int → List (List Int) → List (List Int) → List Int → FtRowR
+  | 0, _, _, intr, sigs, ws, bodies => { row := [], intr := intr, sigs := sigs, ws := ws, bodies := bodies }
+  | k + 1, f, n, intr, sigs, ws, bodies =>
+    if f >= n then { row := [], intr := intr, sigs := sigs, ws := ws, bodies := bodies }
+    else
+      let ki := intr.headD 0
+      let sig := sigs.headD []
+      let w := ws.headD []
+      let hasNode := ki == 0 && sigHasNode g (sigCount sig) (sigParams sig)
+      let sg := fwSig g sig
+      let resW64 := sg.ok && intAt sg.params.length w == 64
+      let inlB : List Int := match bodies with
+        | 1 :: body => if hasNode then body else []
+        | _ => []
+      let after : List Int := match bodies with
+        | 1 :: body => (skipE g profile.v2Fuel body).rest
+        | _ => []
+      let fi : FnInfo := { intr := ki, sig := sig, ws := w, sg := sg, resW64 := resW64, hasNode := hasNode, inlBody := inlB }
+      let r := ftRow g k (f + 1) n (intr.drop 1) (sigs.drop 1) (ws.drop 1) after
+      { r with row := fi :: r.row }
+
+partial def ftGrid (g : Dg) (f n : Nat) (intr : List Int) (sigs ws : List (List Int)) (bodies : List Int) : List (List FnInfo) :=
+  if f >= n then []
+  else
+    let r1 := ftRow g 64 f n intr sigs ws bodies
+    r1.row :: ftGrid g (f + 64) n r1.intr r1.sigs r1.ws r1.bodies
+
 -- what is fixed while one function is translated
 structure Cx where
   g : Dg
@@ -591,10 +670,10 @@ structure Cx where
   -- the wire type of the result of the function being translated: what an expression in tail
   -- position is expected to have
   rty : List Int := []
-  -- the functions whose signature holds the node record (`fwInl`): for each, its number and then
-  -- the stream at its body. A call of one is translated in place (`trCall`).
-  inl : List (List Int) := []
-  -- the functions of `inl` whose bodies are being translated in place, innermost first. Their
+  -- pre-indexed 64xN table of per-function metadata and inlined-body streams (`ftGrid`);
+  -- a call whose signature holds the node record is translated in place (`trCall`)
+  ftab : List (List FnInfo) := []
+  -- the functions whose bodies are being translated in place, innermost first. Their
   -- number is how many calls the code written now stands below its place (`mkFapAt`, `mkGuard`).
   inlOn : List Int := []
   -- pairs (function, operation) for the functions that are the front end's integer operations ("Magnitudes", `magFind`)
@@ -693,11 +772,16 @@ def litOf (g : Dg) (env : List Val) (a : List Int) : Int :=
       | none => -1
   | _ => -1
 
--- the stream at the body of function f among `Cx.inl`, [] when f is not one of them
-def inlBody (f : Int) : List (List Int) → List Int
-  | [] => []
-  | (g :: body) :: rest => if g == f then body else inlBody f rest
-  | [] :: rest => inlBody f rest
+def ftLookup (cx : Cx) (f : Nat) : FnInfo :=
+  if !cx.ftab.isEmpty && f < cx.n then ftAt1 (f % 64) (ftAt2 (f / 64) cx.ftab)
+  else
+    let k := intrKind cx.intr f
+    let sig := sigOf cx.sigs f
+    let widths0 := sigOf cx.ws f
+    let sg := fwSig cx.g sig
+    let hasNode := k == 0 && sigHasNode cx.g (sigCount sig) (sigParams sig)
+    { intr := k, sig := sig, ws := widths0, sg := sg, resW64 := sg.ok && intAt sg.params.length widths0 == 64,
+      hasNode := hasNode, inlBody := [] }
 
 -- the arguments of a call that is translated in place: their instructions, their values in order,
 -- and the stream of the callee's signature after its parameters
@@ -1129,9 +1213,9 @@ partial def fvE (g : Dg) (depth : Nat) (acc : List Nat) (rest0 : List Int) : FvR
         if !v.ok then v else fvE g (depth + 1) v.acc v.rest
     else if tag == 5 || tag == 20 || tag == 48 then fvN g depth acc 3 bs
     else if tag == 6 || tag == 7 || tag == 8 || tag == 10 || tag == 11 || tag == 12 || tag == 13 || tag == 15 || tag == 16
-        || tag == 19 || tag == 26 || tag == 27 || tag == 28 || tag == 47 || wBinary tag then fvN g depth acc 2 bs
+        || tag == 19 || tag == 26 || tag == 27 || tag == 28 || tag == 47 || wfBinary tag then fvN g depth acc 2 bs
     else if tag == 9 || tag == 17 || tag == 18 || tag == 21 || tag == 23 || tag == 25 || tag == 36 || tag == 39 || tag == 40
-        || tag == 44 || tag == 45 || tag == 46 || tag == 49 || tag == 75 then fvN g depth acc 1 bs
+        || tag == 44 || tag == 45 || tag == 46 || tag == 49 || wfUnary tag then fvN g depth acc 1 bs
     else if tag == 14 then fvTy g depth acc 2 bs
     else if tag == 24 || tag == 29 || tag == 30 || tag == 38 || tag == 42 || tag == 43 then fvTy g depth acc 1 bs
     else if tag == 31 then
@@ -1724,38 +1808,142 @@ def magNum (h : MagH) : Int := h.a * 134217728 + h.b
 
 def magMixAll (h : MagH) (xs : List Int) : MagH := xs.foldl magMix h
 
+-- a wire scan that also says where the expression it read ends (`rest` is the position
+-- `skipE g profile.v2Fuel` would find), so a caller never re-walks the bytes just read
+structure MagScan where
+  acc : List Int
+  rest : List Int
+  pos : Nat
+  deriving Inhabited
+
+structure MagSp where
+  sp : Nat
+  rest : List Int
+  deriving Inhabited
+
+-- the bytes `skipName` reads, without walking it again
+def magNameSpan : List Int → Nat
+  | 1 :: b :: bs =>
+    if b >= 0 && b < 128 then 2 + b.toNat
+    else 1 + (lebSpan (b :: bs)).n.toNat + (readLeb (b :: bs)).n.toNat
+  | _ => 0
+
+-- the bytes `skipTyD` reads, without walking the remaining stream again: the same worklist
+-- traversal as `skipTyIter`, each arm charging what that arm consumes. Failure arms (never taken
+-- on a valid image) charge by difference, which is exact.
+partial def magTyIter (g : Dg) (fuel : Nat) (work : List Nat) (n : Nat) (rest : List Int) : MagSp :=
+  match fuel with
+  | 0 => { sp := n, rest := rest }
+  | k + 1 =>
+    match work with
+    | [] => { sp := n, rest := rest }
+    | w :: ws =>
+      if w >= 2 then
+        match (w - 2) / 2 with
+        | 0 => magTyIter g k ws n rest
+        | _ + 1 =>
+          let nm := if w % 2 == 1 then skipName rest else rdOk 0 rest
+          if nm.ok != profile.cOk then { sp := n + (rest.length - nm.rest.length), rest := nm.rest }
+          else magTyIter g k (0 :: (w - 2) :: ws) (n + (if w % 2 == 1 then magNameSpan rest else 0)) nm.rest
+      else
+        match rest with
+        | [] => { sp := n, rest := [] }
+        | 54 :: bs =>
+          let r := readLeb bs
+          if !g.on then { sp := n + 1, rest := bs }
+          else if r.ok != profile.cOk then { sp := n + (rest.length - r.rest.length), rest := r.rest }
+          else if r.n < 0 then { sp := n + 1 + (lebSpan bs).n.toNat, rest := r.rest }
+          else
+            match dgAt g r.n.toNat with
+            | [] => { sp := n + 1 + (lebSpan bs).n.toNat, rest := r.rest }
+            | 0 :: _ :: _ :: _ :: _ => magTyIter g k ws (n + 1 + (lebSpan bs).n.toNat) r.rest
+            | _ => { sp := n + 1 + (lebSpan bs).n.toNat, rest := r.rest }
+        | 11 :: _ :: bs => magTyIter g k ws (n + 2) bs
+        | 10 :: _ :: _ :: bs => magTyIter g k (0 :: ws) (n + 3) bs
+        | t :: bs =>
+          if t == 0 || t == 1 || t == 2 || t == 3 then magTyIter g k ws (n + 1) bs
+          else if t == 4 || t == 8 || t == 9 then magTyIter g k (0 :: ws) (n + 1) bs
+          else if t == 5 then magTyIter g k (0 :: 0 :: ws) (n + 1) bs
+          else if t == 6 || t == 7 then
+            let r := readLeb bs
+            if r.ok != profile.cOk then { sp := n + (rest.length - r.rest.length), rest := r.rest }
+            else if r.n < 0 then { sp := n + 1 + (lebSpan bs).n.toNat, rest := r.rest }
+            else magTyIter g k (((if t == 6 then 2 else 3) + 2 * r.n.toNat) :: ws) (n + 1 + (lebSpan bs).n.toNat) r.rest
+          else { sp := n + 1, rest := bs }
+
+-- the bytes `skipTyD g rest` reads
+def magTyD (g : Dg) (rest : List Int) : MagSp :=
+  magTyIter g profile.v2Fuel [0] 0 rest
+
 mutual
 -- the calls of a body: for each, how many bytes of the body are left at its function index, the
--- bytes of the index, and the function, the last call first
-partial def magCallsE (g : Dg) (acc : List Int) (rest0 : List Int) : List Int :=
+-- bytes of the index, and the function, the last call first. Single pass: every arm's `rest` is
+-- the position after the expression, the same `skipE` would report (arm-by-arm the tables of
+-- `skipEWith`), and `pos` counts the bytes read so each call's `left` is one subtraction instead
+-- of measuring the rest of the stream. Before, each child was read once here and skipped once by
+-- the caller's `skipE`, and `bs.length` measured the tail at every call — both quadratic.
+partial def magCallsE (g : Dg) (total pos : Nat) (acc : List Int) (rest0 : List Int) : MagScan :=
   match rest0 with
-  | [] => acc
+  | [] => { acc := acc, rest := [], pos := pos }
   | tag :: bs =>
-    if tag == 4 || tag == 14 then magCallsN g acc 2 (skipTyD g bs).rest
-    else if tag == 5 || tag == 20 || tag == 48 then magCallsN g acc 3 bs
+    if tag == 4 || tag == 14 then
+      let t := magTyD g bs
+      magCallsN g total (pos + 1 + t.sp) acc 2 t.rest
+    else if tag == 5 || tag == 20 || tag == 48 then magCallsN g total (pos + 1) acc 3 bs
     else if tag == 6 || tag == 7 || tag == 8 || tag == 10 || tag == 11 || tag == 12 || tag == 13 || tag == 15 || tag == 16
-        || tag == 19 || tag == 26 || tag == 27 || tag == 28 || tag == 47 || wBinary tag then magCallsN g acc 2 bs
+        || tag == 19 || tag == 26 || tag == 27 || tag == 28 || tag == 47 || wfBinary tag then magCallsN g total (pos + 1) acc 2 bs
     else if tag == 9 || tag == 17 || tag == 18 || tag == 21 || tag == 23 || tag == 25 || tag == 36 || tag == 39 || tag == 40
-        || tag == 44 || tag == 45 || tag == 46 || tag == 49 || tag == 75 then magCallsN g acc 1 bs
-    else if tag == 24 || tag == 29 || tag == 30 || tag == 38 || tag == 42 || tag == 43 then magCallsN g acc 1 (skipTyD g bs).rest
-    else if tag == 31 then magCallsN g acc 1 (readLeb bs).rest
+        || tag == 44 || tag == 45 || tag == 46 || tag == 49 || wfUnary tag then magCallsN g total (pos + 1) acc 1 bs
+    else if tag == 24 || tag == 29 || tag == 30 || tag == 38 || tag == 42 || tag == 43 then
+      let t := magTyD g bs
+      magCallsN g total (pos + 1 + t.sp) acc 1 t.rest
+    else if tag == 31 then
+      let r := readLeb bs
+      magCallsN g total (pos + 1 + (if r.ok == profile.cOk then (lebSpan bs).n.toNat else bs.length - r.rest.length)) acc 1 r.rest
     else if tag == 32 then
-      let t := skipTyD g bs
-      magCallsArgs g (magCallsE g acc t.rest) (skipE g profile.v2Fuel t.rest).rest
-    else if tag == 34 then magCallsN g acc 2 (skipName bs).rest
-    else if tag == 35 then magCallsN g acc 1 (readLeb (skipTyD g bs).rest).rest
-    else if tag == 50 then magCallsN g acc 3 (skipTyD g bs).rest
-    else if tag == 51 then magCallsN g acc 4 (skipTyD g bs).rest
+      let t := magTyD g bs
+      let s := magCallsE g total (pos + 1 + t.sp) acc t.rest
+      magCallsArgs g total s.pos s.acc s.rest
+    else if tag == 34 then
+      let nm := skipName bs
+      magCallsN g total (pos + 1 + (if nm.ok == profile.cOk then magNameSpan bs else bs.length - nm.rest.length)) acc 2 nm.rest
+    else if tag == 35 then
+      let t := magTyD g bs
+      let r := readLeb t.rest
+      magCallsN g total (pos + 1 + t.sp + (if r.ok == profile.cOk then (lebSpan t.rest).n.toNat else t.rest.length - r.rest.length)) acc 1 r.rest
+    else if tag == 50 then
+      let t := magTyD g bs
+      magCallsN g total (pos + 1 + t.sp) acc 3 t.rest
+    else if tag == 51 then
+      let t := magTyD g bs
+      magCallsN g total (pos + 1 + t.sp) acc 4 t.rest
     else if tag == 52 then
       let r := readLeb bs
-      magCallsArgs g ((bs.length : Int) :: ((bs.length - r.rest.length : Nat) : Int) :: r.n :: acc) r.rest
-    else acc
-partial def magCallsN (g : Dg) (acc : List Int) : Nat → List Int → List Int
-  | 0, _ => acc
-  | k + 1, rest => magCallsN g (magCallsE g acc rest) k (skipE g profile.v2Fuel rest).rest
-partial def magCallsArgs (g : Dg) (acc : List Int) : List Int → List Int
-  | 1 :: rest => magCallsArgs g (magCallsE g acc rest) (skipE g profile.v2Fuel rest).rest
-  | _ => acc
+      let len := if r.ok == profile.cOk then (lebSpan bs).n.toNat else bs.length - r.rest.length
+      magCallsArgs g total (pos + 1 + len) (((total - pos - 1) : Int) :: (len : Int) :: r.n :: acc) r.rest
+    else
+      let s := skipE g profile.v2Fuel rest0
+      { acc := acc, rest := s.rest,
+        pos := pos + (if tag == 53 && !g.on then 1
+          else if s.ok != profile.cOk then rest0.length - s.rest.length
+          else if tag == 0 || tag == 41 then 10
+          else if tag == 1 then 2
+          else if tag == 2 then 1 + magNameSpan bs
+          else if tag == 3 || tag == 53 then 1 + (lebSpan bs).n.toNat
+          else if tag == 22 || tag == 33 || tag == 37 then 1
+          else if tag == 64 then 9
+          else rest0.length - s.rest.length) }
+partial def magCallsN (g : Dg) (total pos : Nat) (acc : List Int) : Nat → List Int → MagScan
+  | 0, rest => { acc := acc, rest := rest, pos := pos }
+  | k + 1, rest =>
+    let s := magCallsE g total pos acc rest
+    magCallsN g total s.pos s.acc k s.rest
+partial def magCallsArgs (g : Dg) (total pos : Nat) (acc : List Int) : List Int → MagScan
+  | 1 :: rest =>
+    let s := magCallsE g total (pos + 1) acc rest
+    magCallsArgs g total s.pos s.acc s.rest
+  | 0 :: rest => { acc := acc, rest := rest, pos := pos + 1 }
+  | rest => { acc := acc, rest := rest, pos := pos }
 end
 
 -- the calls in the order of the bytes
@@ -1784,7 +1972,7 @@ structure MagFn where
   deriving Inhabited
 
 def magFirst (g : Dg) (sig body : List Int) (f : Nat) : MagFn :=
-  let calls := magCallsRev (magCallsE g [] body) []
+  let calls := magCallsRev (magCallsE g body.length 0 [] body).acc []
   let h := magMixBody (magMix (magMixAll magH0 sig) 256) (body.length : Int) calls body
   { f := f, num := magNum h, calls := magCallees calls }
 
@@ -1867,35 +2055,8 @@ def magVarIs (g : Dg) (e : List Int) (i : Int) : Bool :=
     vi.ok == profile.cOk && vi.n == i
   | _ => false
 
--- `unwrap (first v0)`
-def numIsFirst (g : Dg) (body : List Int) : Bool :=
-  match drE g body with
-  | 39 :: b1 =>
-    match drE g b1 with
-    | 25 :: b2 => magVarIs g b2 0
-    | _ => false
-  | _ => false
-
--- `alloc {f0 := 0, f1 := [], f2 .. f6 at their defaults, f7 := "", f8 := v0} v1`
-def numIsHold (g : Dg) (intr : List Int) (body : List Int) : Bool :=
-  match drE g body with
-  | 52 :: bs =>
-    let f := readLeb bs
-    if f.ok != profile.cOk || f.n < 0 || intrKind intr f.n.toNat != 3 then false
-    else
-      match f.rest with
-      | 1 :: rec =>
-        fwIsIntLit g (fwFieldAt g 0 rec) 0 && fwKidCount g (fwFieldAt g 1 rec) == 0
-          && fwIsIntLit g (fwFieldAt g 2 rec) 0 && fwIsIntLit g (fwFieldAt g 3 rec) 0 && fwIsIntLit g (fwFieldAt g 4 rec) 0
-          && fwIsFalse g (fwFieldAt g 5 rec) && fwIsFalse g (fwFieldAt g 6 rec) && fwIsEmptyStr g (fwFieldAt g 7 rec)
-          && magVarIs g (fwFieldAt g 8 rec) 0
-          && (match (skipE g profile.v2Fuel rec).rest with
-              | 1 :: a => magVarIs g a 1 && (skipE g profile.v2Fuel a).rest.headD 1 == 0
-              | _ => false)
-      | _ => false
-  | _ => false
-
--- of the last `left` functions (the last first), `first` and `hold`, each with its operation
+-- of the last `left` functions (the last first), `first` (`unwrap (first v0)`) and `hold`
+-- (`alloc {f0 := 0, f1 := [], f2 .. f6 at their defaults, f7 := "", f8 := v0} v1`), each with its operation
 partial def numShapes (g : Dg) (intr : List Int) (sigs : List (List Int)) (f : Nat) (left : Nat) (starts : List (List Int)) : List Int :=
   match starts with
   | [] => []
@@ -1904,9 +2065,29 @@ partial def numShapes (g : Dg) (intr : List Int) (sigs : List (List Int)) (f : N
     else
       let rest := numShapes g intr sigs (f - 1) (left - 1) more
       let k := sigCount (sigOf sigs f)
-      if k == 1 && numIsFirst g body then (f : Int) :: numFirst :: rest
-      else if k == 2 && numIsHold g intr body then (f : Int) :: numHold :: rest
-      else rest
+      let isFirst := k == 1 && (match drE g body with
+        | 39 :: b1 => match drE g b1 with | 25 :: b2 => magVarIs g b2 0 | _ => false
+        | _ => false)
+      if isFirst then (f : Int) :: numFirst :: rest
+      else
+        let isHold := k == 2 && (match drE g body with
+          | 52 :: bs =>
+            let fn := readLeb bs
+            if fn.ok != profile.cOk || fn.n < 0 || intrKind intr fn.n.toNat != 3 then false
+            else
+              match fn.rest with
+              | 1 :: rec =>
+                fwIsIntLit g (fwFieldAt g 0 rec) 0 && fwKidCount g (fwFieldAt g 1 rec) == 0
+                  && fwIsIntLit g (fwFieldAt g 2 rec) 0 && fwIsIntLit g (fwFieldAt g 3 rec) 0 && fwIsIntLit g (fwFieldAt g 4 rec) 0
+                  && fwIsFalse g (fwFieldAt g 5 rec) && fwIsFalse g (fwFieldAt g 6 rec) && fwIsEmptyStr g (fwFieldAt g 7 rec)
+                  && magVarIs g (fwFieldAt g 8 rec) 0
+                  && (match (skipE g profile.v2Fuel rec).rest with
+                      | 1 :: a => magVarIs g a 1 && (skipE g profile.v2Fuel a).rest.headD 1 == 0
+                      | _ => false)
+              | _ => false
+          | _ => false)
+        if isHold then (f : Int) :: numHold :: rest
+        else rest
 
 -- `intr`: the kinds of the image's functions, for `hold`; without them only the numbered functions are found
 def magFind (g : Dg) (sigs : List (List Int)) (n : Nat) (bodies : List Int) (intr : List Int := []) : List Int :=
@@ -2147,40 +2328,77 @@ def elemWord (ws ts : List Int) (next : Nat) : ItemsR :=
     { next := next + 1, ws := [(next : Int)], items := [mkVDecl next tyTObj (mkCtor info (objWords ws ts)) mkUnreachable] ++ boxSSets next info.size 0 ws ts }
   else { next := next, items := [], ws := [intAt 0 live] }
 
+structure ArrR where
+  hit : Bool
+  seen : VSet
+  rest : List Int
+  deriving Inhabited
+
 mutual
 -- does an expression build an array: an append whose right operand is one element or the empty
 -- list, and whose left operand is not one element (`[x] ++ xs` is a cell)
-partial def arrE (g : Dg) (rest0 : List Int) : Bool :=
-  match drE g rest0 with
-  | [] => false
+partial def arrScan (g : Dg) (seen : VSet) (rest0 : List Int) : ArrR :=
+  match rest0 with
+  | [] => { hit := false, seen := seen, rest := [] }
+  | 53 :: bs =>
+    if g.on then
+      let r := readLeb bs
+      if r.ok != profile.cOk || r.n < 0 then { hit := false, seen := seen, rest := r.rest }
+      else if vsContains seen r.n.toNat then { hit := false, seen := seen, rest := r.rest }
+      else
+        match dgAt g r.n.toNat with
+        | 1 :: _ :: c =>
+          let a := arrScan g seen c
+          if a.hit then a else { hit := false, seen := vsInsert a.seen r.n.toNat, rest := r.rest }
+        | _ => { hit := false, seen := seen, rest := r.rest }
+    else { hit := false, seen := seen, rest := bs }
   | tag :: bs =>
     if tag == 26 then
-      let second := (drE g (skipE g profile.v2Fuel bs).rest).headD 0
-      ((drE g bs).headD 0 != 23 && (second == 23 || second == 22)) || arrN g 2 bs
-    else if tag == 4 || tag == 14 then arrN g 2 (skipTyD g bs).rest
-    else if tag == 5 || tag == 20 || tag == 48 then arrN g 3 bs
+      let firstTag := (drE g bs).headD 0
+      let a := arrScan g seen bs
+      if a.hit then a
+      else
+        let second := (drE g a.rest).headD 0
+        if firstTag != 23 && (second == 23 || second == 22) then { hit := true, seen := a.seen, rest := [] }
+        else arrScan g a.seen a.rest
+    else if tag == 0 || tag == 41 then { hit := false, seen := seen, rest := (skipBytes 9 bs).rest }
+    else if tag == 64 then { hit := false, seen := seen, rest := (skipBytes 8 bs).rest }
+    else if tag == 1 then { hit := false, seen := seen, rest := (skipBytes 1 bs).rest }
+    else if tag == 2 then { hit := false, seen := seen, rest := (skipName bs).rest }
+    else if tag == 3 then { hit := false, seen := seen, rest := (readLeb bs).rest }
+    else if tag == 22 || tag == 33 || tag == 37 then { hit := false, seen := seen, rest := bs }
+    else if tag == 4 || tag == 14 then arrScanN g seen 2 (skipTyD g bs).rest
+    else if tag == 5 || tag == 20 || tag == 48 then arrScanN g seen 3 bs
     else if tag == 6 || tag == 7 || tag == 8 || tag == 10 || tag == 11 || tag == 12 || tag == 13 || tag == 15 || tag == 16
-        || tag == 19 || tag == 27 || tag == 28 || tag == 47 || wBinary tag then arrN g 2 bs
+        || tag == 19 || tag == 27 || tag == 28 || tag == 47 || wfBinary tag then arrScanN g seen 2 bs
     else if tag == 9 || tag == 17 || tag == 18 || tag == 21 || tag == 23 || tag == 25 || tag == 36 || tag == 39 || tag == 40
-        || tag == 44 || tag == 45 || tag == 46 || tag == 49 || tag == 75 then arrN g 1 bs
-    else if tag == 24 || tag == 29 || tag == 30 || tag == 38 || tag == 42 || tag == 43 then arrN g 1 (skipTyD g bs).rest
-    else if tag == 31 then arrN g 1 (readLeb bs).rest
+        || tag == 44 || tag == 45 || tag == 46 || tag == 49 || wfUnary tag then arrScanN g seen 1 bs
+    else if tag == 24 || tag == 29 || tag == 30 || tag == 38 || tag == 42 || tag == 43 then arrScanN g seen 1 (skipTyD g bs).rest
+    else if tag == 31 then arrScanN g seen 1 (readLeb bs).rest
     else if tag == 32 then
       let t := skipTyD g bs
-      arrE g t.rest || arrArgs g (skipE g profile.v2Fuel t.rest).rest
-    else if tag == 34 then arrN g 2 (skipName bs).rest
-    else if tag == 35 then arrN g 1 (readLeb (skipTyD g bs).rest).rest
-    else if tag == 50 then arrN g 3 (skipTyD g bs).rest
-    else if tag == 51 then arrN g 4 (skipTyD g bs).rest
-    else if tag == 52 then arrArgs g (readLeb bs).rest
-    else false
-partial def arrN (g : Dg) : Nat → List Int → Bool
-  | 0, _ => false
-  | k + 1, rest => arrE g rest || arrN g k (skipE g profile.v2Fuel rest).rest
-partial def arrArgs (g : Dg) : List Int → Bool
-  | 1 :: rest => arrE g rest || arrArgs g (skipE g profile.v2Fuel rest).rest
-  | _ => false
+      let a := arrScan g seen t.rest
+      if a.hit then a else arrScanArgs g a.seen a.rest
+    else if tag == 34 then arrScanN g seen 2 (skipName bs).rest
+    else if tag == 35 then arrScanN g seen 1 (readLeb (skipTyD g bs).rest).rest
+    else if tag == 50 then arrScanN g seen 3 (skipTyD g bs).rest
+    else if tag == 51 then arrScanN g seen 4 (skipTyD g bs).rest
+    else if tag == 52 then arrScanArgs g seen (readLeb bs).rest
+    else { hit := false, seen := seen, rest := bs }
+partial def arrScanN (g : Dg) (seen : VSet) : Nat → List Int → ArrR
+  | 0, rest => { hit := false, seen := seen, rest := rest }
+  | k + 1, rest =>
+    let a := arrScan g seen rest
+    if a.hit then a else arrScanN g a.seen k a.rest
+partial def arrScanArgs (g : Dg) (seen : VSet) : List Int → ArrR
+  | 0 :: rest => { hit := false, seen := seen, rest := rest }
+  | 1 :: rest =>
+    let a := arrScan g seen rest
+    if a.hit then a else arrScanArgs g a.seen a.rest
+  | rest => { hit := false, seen := seen, rest := rest }
 end
+
+def arrE (g : Dg) (rest0 : List Int) : Bool := (arrScan g vsEmpty rest0).hit
 
 /-! ### The front end's loops over an array
 
@@ -2278,11 +2496,16 @@ def elemReads (ts : List Int) (w : Nat) (next : Nat) : ItemsR :=
 
 -- Does a function of the image build an array. A reserved form is not asked: its body is a
 -- certificate of its meaning that is never run (the arena's `alloc` is written `arena ++ [node]`).
-partial def arrAny (g : Dg) (intr : List Int) (f n : Nat) (bodies : List Int) : Bool :=
+partial def arrAny (g : Dg) (intr : List Int) (f n : Nat) (bodies : List Int) (seen : List VTree := []) (started : Bool := false) : Bool :=
   if f >= n then false
   else
+    let ks := if started then intr else intr.drop f
     match bodies with
-    | 1 :: body => (intrKind intr f == 0 && arrE g body) || arrAny g intr (f + 1) n (skipE g profile.v2Fuel body).rest
+    | 1 :: body =>
+      if ks.headD 0 != 0 then arrAny g (ks.drop 1) (f + 1) n (skipE g profile.v2Fuel body).rest seen true
+      else
+        let a := arrScan g { m := vtKid seen } body
+        a.hit || arrAny g (ks.drop 1) (f + 1) n a.rest (vtBox a.seen.m) true
     | _ => false
 
 /-! ## Equality
@@ -2685,6 +2908,9 @@ structure ScalarFields where
   rest : List Int
   deriving Inhabited
 
+def exprAfter (g : Dg) (rest0 : List Int) : List Int :=
+  (skipE g profile.v2Fuel rest0).rest
+
 mutual
 -- An expression whose value is used: the instructions that compute it, in order, and the value.
 -- `want` is the wire type the place expects, [] where it is not known: the wire writes `none`, `[]`
@@ -2697,8 +2923,6 @@ partial def trValV (cx : Cx) (want : List Int) (env : List Val) (facts : List In
   match drE cx.g rest0 with
   | [] => tvFail fwWire []
   | tag :: bs =>
-    -- `after` is what follows this expression in the enclosing stream
-    let after := (skipE cx.g profile.v2Fuel rest0).rest
     if tag == 0 || tag == 64 then
       let n := if tag == 64 then readI64Go profile.i64Bytes 0 1 bs else readLeafI64 bs
       if n.ok != profile.cOk then tvFail fwWire bs
@@ -2706,11 +2930,11 @@ partial def trValV (cx : Cx) (want : List Int) (env : List Val) (facts : List In
         -- The scalar packing pass runs before optimizations and keeps W literals as eight-byte fields.
         let lit := if tag == 64 then { mkLit n.n with b := 64 } else mkLit n.n
         { ok := true, err := none, next := next + 1, items := [mkVDecl next tyI64 lit mkUnreachable],
-          val := valLit (next : Int) n.n, rest := after }
+          val := valLit (next : Int) n.n, rest := n.rest }
     else if tag == 1 then
       match bs with
-      | b :: _ => { ok := true, err := none, next := next + 1, items := [mkVDecl next tyI64 (mkLit b) mkUnreachable],
-                    val := valWords [(next : Int)] [tyI64], rest := after }
+      | b :: rest1 => { ok := true, err := none, next := next + 1, items := [mkVDecl next tyI64 (mkLit b) mkUnreachable],
+                        val := valWords [(next : Int)] [tyI64], rest := rest1 }
       | [] => tvFail fwWire bs
     else if tag == 2 then
       let s := readStr bs
@@ -2718,16 +2942,16 @@ partial def trValV (cx : Cx) (want : List Int) (env : List Val) (facts : List In
       else if s.bs.length > litMax then tvFail fwLit bs
       else
         { ok := true, err := none, next := next + 1, items := [mkVDecl next tyObj (if s.n == 0 then mkLitStr "" else mkLitBytes s.bs) mkUnreachable],
-          val := valTyped [(next : Int)] [tyObj] [2], rest := after }
+          val := valTyped [(next : Int)] [tyObj] [2], rest := s.rest }
     else if tag == 3 then
       let ix := readLeb bs
       if ix.ok != profile.cOk || ix.n < 0 then tvFail fwWire bs
       else
         match envAt ix.n.toNat env with
-        | some v => { ok := true, err := none, next := next, items := [], val := v, rest := after }
+        | some v => { ok := true, err := none, next := next, items := [], val := v, rest := ix.rest }
         | none => tvFail fwWire bs
     else if tag == 4 && cx.num && (numUnpackSite cx.g cx.mag rest0).form != 0 then
-      trNumRead cx env facts next (numUnpackSite cx.g cx.mag rest0) (-1) after
+      trNumRead cx env facts next (numUnpackSite cx.g cx.mag rest0) (-1) (exprAfter cx.g rest0)
     else if tag == 4 then
       let t := readTyD cx.g bs
       if t.ok != profile.cOk then tvFail fwWire bs
@@ -2738,7 +2962,7 @@ partial def trValV (cx : Cx) (want : List Int) (env : List Val) (facts : List In
           -- the binding's annotation is the value's wire type
           let bound := if v.val.kind == 0 then { v.val with wt := t.acc, w64 := tyRawWidth bs == 64 } else v.val
           let b := trValV cx want (bound :: env) facts v.next v.rest
-          if !b.ok then b else { b with items := v.items ++ b.items, rest := after }
+          if !b.ok then b else { b with items := v.items ++ b.items }
     else if tag == 5 && (fwLenTest cx bs).ok then
       -- a match on a list: the alternatives jump to a join point with the value
       let j := next
@@ -2747,7 +2971,7 @@ partial def trValV (cx : Cx) (want : List Int) (env : List Val) (facts : List In
       else
         let ps := freshFor r.ts r.next
         let split := mkSplit j (paramsOfWords ps.vars r.ts) (mkCase r.x tyTObj r.alts)
-        { ok := true, err := none, next := ps.next, items := r.pre ++ [split], val := valWords ps.vars r.ts, rest := after }
+        { ok := true, err := none, next := ps.next, items := r.pre ++ [split], val := valWords ps.vars r.ts, rest := r.rest }
     else if tag == 5 then
       let tt := fwTagTest cx env bs
       if tt.h >= 0 then
@@ -2757,7 +2981,7 @@ partial def trValV (cx : Cx) (want : List Int) (env : List Val) (facts : List In
         else
           let ps := freshFor r.ts r.next
           let split := mkSplit next (paramsOfWords ps.vars r.ts) (mkCase tt.h.toNat tyTObj r.alts)
-          { ok := true, err := none, next := ps.next, items := [split], val := valWords ps.vars r.ts, rest := after }
+          { ok := true, err := none, next := ps.next, items := [split], val := valWords ps.vars r.ts, rest := r.rest }
       else
         let c := trVal cx [1] env facts (next + 1) bs
         if !c.ok then c
@@ -2775,8 +2999,8 @@ partial def trValV (cx : Cx) (want : List Int) (env : List Val) (facts : List In
               let thenB := assemble a.items (mkJmp j (liveWords a.val.ws a.val.ts))
               let elseB := assemble b.items (mkJmp j (liveWords b.val.ws b.val.ts))
               let split := mkSplit j (paramsOfWords ps.vars a.val.ts) (mkIfW (intAt 0 c.val.ws).toNat thenB elseB)
-              { ok := true, err := none, next := ps.next, items := c.items ++ [split], val := valWords ps.vars a.val.ts, rest := after }
-    else if tag == 6 || tag == 7 || tag == 8 || tag == 10 || tag == 11 || tag == 12 || tag == 13 || tag == 15 || tag == 16 || wBinary tag then
+              { ok := true, err := none, next := ps.next, items := c.items ++ [split], val := valWords ps.vars a.val.ts, rest := b.rest }
+    else if tag == 6 || tag == 7 || tag == 8 || tag == 10 || tag == 11 || tag == 12 || tag == 13 || tag == 15 || tag == 16 || wfBinary tag then
       let opTy : List Int := if tag == 15 || tag == 16 then [1] else [0]
       let a := trVal cx opTy env facts next bs
       if !a.ok then a
@@ -2788,15 +3012,15 @@ partial def trValV (cx : Cx) (want : List Int) (env : List Val) (facts : List In
           let x := b.next
           { ok := true, err := none, next := x + 1,
             items := a.items ++ b.items ++ [mkVDecl x tyI64 (mkPrim tag.toNat 0 0 (a.val.ws ++ b.val.ws)) mkUnreachable],
-            val := valWords [(x : Int)] [tyI64], rest := after }
-    else if tag == 9 || tag == 17 || tag == 75 then
+            val := valWords [(x : Int)] [tyI64], rest := b.rest }
+    else if tag == 9 || tag == 17 || wfUnary tag then
       let a := trVal cx (if tag == 17 then [1] else [0]) env facts next bs
       if !a.ok then a
       else if a.val.kind != 0 || a.val.ts != [tyI64] then tvFail fwType bs
       else
         let x := a.next
         { ok := true, err := none, next := x + 1, items := a.items ++ [mkVDecl x tyI64 (mkPrim tag.toNat 0 0 a.val.ws) mkUnreachable],
-          val := valWords [(x : Int)] [tyI64], rest := after }
+          val := valWords [(x : Int)] [tyI64], rest := a.rest }
     else if tag == 14 && (magZeroTest cx.g bs).ok then
       -- is a number zero ("A magnitude where no list is needed")
       let pz := magZeroTest cx.g bs
@@ -2815,7 +3039,7 @@ partial def trValV (cx : Cx) (want : List Int) (env : List Val) (facts : List In
         let other := assemble [magL (x + 6) 0] (mkJmp j [((x + 6 : Nat) : Int)])
         { ok := true, err := none, next := x + 7,
           items := r.items ++ mw.items ++ [magI x primIsScalar [w], mkSplit j (paramsOfWords [(res : Int)] [tyI64]) (mkIfW x small other)],
-          val := valWords [(res : Int)] [tyI64], rest := after }
+          val := valWords [(res : Int)] [tyI64], rest := exprAfter cx.g rest0 }
     else if tag == 14 then
       -- equality at the written type ("Equality")
       let t := readTyD cx.g bs
@@ -2831,14 +3055,14 @@ partial def trValV (cx : Cx) (want : List Int) (env : List Val) (facts : List In
           else
             let e := eqItems cx t.acc a.val.ws b.val.ws b.next
             if !e.ok then tvFail fwType bs
-            else { ok := true, err := none, next := e.next, items := a.items ++ b.items ++ e.items, val := valWords [e.r] [tyI64], rest := after }
-    else if tag == 33 then { ok := true, err := none, next := next, items := [], val := valNone, rest := after }
+            else { ok := true, err := none, next := e.next, items := a.items ++ b.items ++ e.items, val := valWords [e.r] [tyI64], rest := b.rest }
+    else if tag == 33 then { ok := true, err := none, next := next, items := [], val := valNone, rest := bs }
     else if tag == 34 && magNameAt intSgnName bs && (intLit (magLimsOf cx.narrow) cx.g bs).ok then
       -- an integer written out: its word ("An integer is one word")
       let i := (intLit (magLimsOf cx.narrow) cx.g bs).n
       { ok := true, err := none, next := next + 2,
         items := [mkVDecl next tyI64 (mkLit i) mkUnreachable, mkVDecl (next + 1) tyTObj (mkPrim primBoxS 0 0 [(next : Int)]) mkUnreachable],
-        val := valWords [((next + 1 : Nat) : Int)] [tyTObj], rest := after }
+        val := valWords [((next + 1 : Nat) : Int)] [tyTObj], rest := exprAfter cx.g rest0 }
     else if tag == 34 then
       let nm := skipName bs
       if nm.ok != profile.cOk then tvFail fwWire bs
@@ -2880,9 +3104,9 @@ partial def trValV (cx : Cx) (want : List Int) (env : List Val) (facts : List In
             (if a.val.ts != [tyI64] || b.val.ts != [tyTObj] then tvFail fwType bs
              else { ok := true, err := none, next := b.next + 1,
                     items := a.items ++ b.items ++ [mkVDecl b.next tyTObj (mkFap (hIntOf cx.n) (a.val.ws ++ b.val.ws)) mkUnreachable],
-                    val := valWords [(b.next : Int)] [tyTObj], rest := after })
+                    val := valWords [(b.next : Int)] [tyTObj], rest := b.rest })
           else { ok := true, err := none, next := b.next, items := a.items ++ b.items,
-                 val := valWords (a.val.ws ++ b.val.ws) (a.val.ts ++ b.val.ts), rest := after }
+                 val := valWords (a.val.ws ++ b.val.ws) (a.val.ts ++ b.val.ts), rest := b.rest }
     else if tag == 35 then
       let rt := readTyD cx.g bs
       let ix := readLeb rt.rest
@@ -2890,30 +3114,30 @@ partial def trValV (cx : Cx) (want : List Int) (env : List Val) (facts : List In
       else
         let a := trVal cx rt.acc env facts next ix.rest
         if !a.ok then a
-        else if a.val.kind == 1 then trNodeField cx facts a (intAt 0 a.val.ws) ix.n.toNat (4 :: heapHandleOf cx.g rt.acc) after
+        else if a.val.kind == 1 then trNodeField cx facts a (intAt 0 a.val.ws) ix.n.toNat (4 :: heapHandleOf cx.g rt.acc) a.rest
         else if a.val.kind != 0 then tvFail fwNodeUse bs
         else if tyView cx.g rt.acc == intRecTy then
           -- a field of an integer, read from its word: the sign, or the magnitude as its limb list ("An integer is one word")
           (if a.val.ws.length != 1 || ix.n > 1 then tvFail fwType bs
            else if ix.n == 0 then
              { a with next := a.next + 1, items := a.items ++ [mkVDecl a.next tyI64 (mkFap (hIntSign cx.n) a.val.ws) mkUnreachable],
-                      val := valTyped [(a.next : Int)] [tyI64] [1], rest := after }
+                      val := valTyped [(a.next : Int)] [tyI64] [1] }
            else
              { a with next := a.next + 2,
                       items := a.items ++ [mkVDecl a.next tyTObj (mkFap (hIntMag cx.n) a.val.ws) mkUnreachable,
                                            mkVDecl (a.next + 1) tyTObj (mkFap (hNatDigits cx.n) [(a.next : Int)]) mkUnreachable],
-                      val := valTyped [((a.next + 1 : Nat) : Int)] [tyTObj] [4, 0], rest := after })
+                      val := valTyped [((a.next + 1 : Nat) : Int)] [tyTObj] [4, 0] })
         else
           let s := fwSlice cx.g rt.acc ix.n.toNat
           if !s.ok || s.off + s.width > a.val.ws.length then tvFail fwType bs
           else if magField cx.g rt.acc == ix.n && s.width == 1 then
             -- the magnitude of a marker record, read as its limb list ("Magnitudes")
             let read := mkVDecl a.next tyTObj (mkFap (hNatDigits cx.n) (takeI 1 (a.val.ws.drop s.off))) mkUnreachable
-            { a with next := a.next + 1, items := a.items ++ [read], val := valTyped [(a.next : Int)] [tyTObj] s.ty, rest := after }
-          else { a with val := valTyped (takeI s.width (a.val.ws.drop s.off)) (takeI s.width (a.val.ts.drop s.off)) s.ty, rest := after }
+            { a with next := a.next + 1, items := a.items ++ [read], val := valTyped [(a.next : Int)] [tyTObj] s.ty }
+          else { a with val := valTyped (takeI s.width (a.val.ws.drop s.off)) (takeI s.width (a.val.ts.drop s.off)) s.ty }
     else if tag == 22 then
       { ok := true, err := none, next := next + 1, items := [mkVDecl next tyTObj (mkCtor nilInfo []) mkUnreachable],
-        val := valTyped [(next : Int)] [tyTObj] (if wtIsList cx.g want then want else []), rest := after }
+        val := valTyped [(next : Int)] [tyTObj] (if wtIsList cx.g want then want else []), rest := bs }
     else if tag == 23 then
       -- [e]: the cell of e and nil
       let a := trVal cx (wtElem cx.g want) env facts next bs
@@ -2923,7 +3147,7 @@ partial def trValV (cx : Cx) (want : List Int) (env : List Val) (facts : List In
         let nl := a.next
         let c := consItems cx.narrow a.val.ws a.val.ts (nl : Int) (nl + 1) a.val.lit
         { ok := true, err := none, next := c.next, items := a.items ++ [mkVDecl nl tyTObj (mkCtor nilInfo []) mkUnreachable] ++ c.items,
-          val := valTyped c.ws [tyTObj] (if wtIsList cx.g want then want else wtListOf a.val.wt), rest := after }
+          val := valTyped c.ws [tyTObj] (if wtIsList cx.g want then want else wtListOf a.val.wt), rest := a.rest }
     else if tag == 26 then
       match drE cx.g bs with
       | 23 :: e =>
@@ -2940,7 +3164,7 @@ partial def trValV (cx : Cx) (want : List Int) (env : List Val) (facts : List In
             let fb := forceItem cx.arr (intAt 0 b.val.ws) b.next
             let c := consItems cx.narrow a.val.ws a.val.ts (intAt 0 fb.ws) fb.next a.val.lit
             let wt := if wtIsList cx.g want then want else if !b.val.wt.isEmpty then b.val.wt else wtListOf a.val.wt
-            { ok := true, err := none, next := c.next, items := a.items ++ b.items ++ fb.items ++ c.items, val := valTyped c.ws [tyTObj] wt, rest := after }
+            { ok := true, err := none, next := c.next, items := a.items ++ b.items ++ fb.items ++ c.items, val := valTyped c.ws [tyTObj] wt, rest := b.rest }
       | _ =>
         let lty : List Int := if wtIsList cx.g want then want else []
         let a := trVal cx lty env facts next bs
@@ -2953,7 +3177,7 @@ partial def trValV (cx : Cx) (want : List Int) (env : List Val) (facts : List In
           let x := a.next
           let grow := mkPrim primArrOfList ((elemShape et.ts : Nat) : Int) 0 a.val.ws
           if (wtElem cx.g wt0).isEmpty || !et.ok then tvFail fwType bs
-          else { ok := true, err := none, next := x + 1, items := a.items ++ [mkVDecl x tyTObj grow mkUnreachable], val := valTyped [(x : Int)] [tyTObj] wt0, rest := after }
+          else { ok := true, err := none, next := x + 1, items := a.items ++ [mkVDecl x tyTObj grow mkUnreachable], val := valTyped [(x : Int)] [tyTObj] wt0, rest := exprAfter cx.g a.rest }
         else if second == 23 then
           -- xs ++ [e]: the array of xs with e at its end ("Arrays")
           let v := trVal cx (wtElem cx.g wt0) env facts a.next ((drE cx.g a.rest).drop 1)
@@ -2964,7 +3188,7 @@ partial def trValV (cx : Cx) (want : List Int) (env : List Val) (facts : List In
           if !v.ok then v
           else if v.val.kind != 0 then tvFail fwNodeUse bs
           else if wt.isEmpty then tvFail fwType bs
-          else { ok := true, err := none, next := x + 1, items := a.items ++ v.items ++ w.items ++ [mkVDecl x tyTObj grow mkUnreachable], val := valTyped [(x : Int)] [tyTObj] wt, rest := after }
+          else { ok := true, err := none, next := x + 1, items := a.items ++ v.items ++ w.items ++ [mkVDecl x tyTObj grow mkUnreachable], val := valTyped [(x : Int)] [tyTObj] wt, rest := v.rest }
         else
           let b := trVal cx (if lty.isEmpty then a.val.wt else lty) env facts a.next a.rest
           if !b.ok then b
@@ -2980,7 +3204,7 @@ partial def trValV (cx : Cx) (want : List Int) (env : List Val) (facts : List In
               let x := fb.next
               { ok := true, err := none, next := x + 1,
                 items := a.items ++ b.items ++ fa.items ++ fb.items ++ [mkVDecl x tyTObj (mkFap (hApp cx.n (cellShape cx.narrow et.ts)) (fa.ws ++ fb.ws)) mkUnreachable],
-                val := valTyped [(x : Int)] [tyTObj] wt, rest := after }
+                val := valTyped [(x : Int)] [tyTObj] wt, rest := b.rest }
     else if tag == 24 then
       -- the length as a number
       let t := readTyD cx.g bs
@@ -2997,11 +3221,11 @@ partial def trValV (cx : Cx) (want : List Int) (env : List Val) (facts : List In
           let len := if cx.arr then mkFap (hLenA cx.n (cellShape cx.narrow et.ts)) a.val.ws else mkFap (hLen cx.n (cellShape cx.narrow et.ts)) (a.val.ws ++ [(z : Int)])
           { ok := true, err := none, next := x + 1,
             items := a.items ++ [mkVDecl z tyI64 (mkLit 0) mkUnreachable, mkVDecl x tyI64 len mkUnreachable],
-            val := valTyped [(x : Int)] [tyI64] [0], rest := after }
-    else if tag == 25 then trFirst cx (wtListOf (wtPayload cx.g want)) env facts next bs after false
+            val := valTyped [(x : Int)] [tyI64] [0], rest := a.rest }
+    else if tag == 25 then trFirst cx (wtListOf (wtPayload cx.g want)) env facts next bs false
     else if tag == 39 then
       match drE cx.g bs with
-      | 25 :: e => trFirst cx (wtListOf want) env facts next e after true
+      | 25 :: e => trFirst cx (wtListOf want) env facts next e true
       | _ =>
         let a := trVal cx (wtOptionOf want) env facts next bs
         if !a.ok then a
@@ -3014,7 +3238,7 @@ partial def trValV (cx : Cx) (want : List Int) (env : List Val) (facts : List In
           let fl := if (liveTys pts).isEmpty then failAlways ps.next else failItems ps.next pts
           let split := mkSplit j (paramsOfWords ps.vars pts)
             (mkIfW (intAt 0 a.val.ws).toNat (mkJmp j (liveWords pws pts)) (assemble fl.items (mkJmp j (liveWords fl.ws pts))))
-          { ok := true, err := none, next := fl.next, items := a.items ++ [split], val := valTyped ps.vars pts (wtPayload cx.g a.val.wt), rest := after }
+          { ok := true, err := none, next := fl.next, items := a.items ++ [split], val := valTyped ps.vars pts (wtPayload cx.g a.val.wt), rest := a.rest }
     else if tag == 27 then
       -- drop k xs
       let k := trVal cx [0] env facts next bs
@@ -3022,7 +3246,7 @@ partial def trValV (cx : Cx) (want : List Int) (env : List Val) (facts : List In
       if !k.ok then k
       else if taken.headD 0 == 50 && (foldIdiom cx.g (taken.drop 1)).kind == 2 then
         -- drop A (take B xs): the elements from index A up to B ("The front end's loops over an array")
-        trTakeIdiom cx env facts k.next k.items k.val.ws (foldIdiom cx.g (taken.drop 1)) (readTyD cx.g (taken.drop 1)).acc after
+        trTakeIdiom cx env facts k.next k.items k.val.ws (foldIdiom cx.g (taken.drop 1)) (readTyD cx.g (taken.drop 1)).acc (exprAfter cx.g k.rest)
       else
         let l := trVal cx (if wtIsList cx.g want then want else []) env facts k.next k.rest
         if !l.ok then l
@@ -3039,7 +3263,7 @@ partial def trValV (cx : Cx) (want : List Int) (env : List Val) (facts : List In
             -- the tail of a cell known to be one is a read; anything else is the function
             let e := if known then mkProj (consTail (cellShape cx.narrow et.ts)) xs else mkFap (hDrop cx.n (cellShape cx.narrow et.ts)) (k.val.ws ++ fl.ws)
             { ok := true, err := none, next := x + 1, items := k.items ++ l.items ++ fl.items ++ [mkVDecl x tyTObj e mkUnreachable],
-              val := valTyped [(x : Int)] [tyTObj] l.val.wt, rest := after }
+              val := valTyped [(x : Int)] [tyTObj] l.val.wt, rest := l.rest }
     else if tag == 36 then
       -- some e: the flag, then e's words
       let a := trVal cx (wtPayload cx.g want) env facts next bs
@@ -3049,7 +3273,7 @@ partial def trValV (cx : Cx) (want : List Int) (env : List Val) (facts : List In
         let x := a.next
         { ok := true, err := none, next := x + 1, items := a.items ++ [mkVDecl x tyI64 (mkLit 1) mkUnreachable],
           val := valTyped ((x : Int) :: a.val.ws) (tyI64 :: a.val.ts) (if !(wtPayload cx.g want).isEmpty then want else wtOptionOf a.val.wt),
-          rest := after }
+          rest := a.rest }
     else if tag == 37 then
       -- none: the flag, then a word per word of the payload, which nothing reads. The payload's
       -- type is the place's: the wire writes none without it.
@@ -3059,7 +3283,7 @@ partial def trValV (cx : Cx) (want : List Int) (env : List Val) (facts : List In
       else
         let d := dummyItems (next + 1) et.ts
         { ok := true, err := none, next := d.next, items := mkVDecl next tyI64 (mkLit 0) mkUnreachable :: d.items,
-          val := valTyped ((next : Int) :: d.ws) (tyI64 :: et.ts) want, rest := after }
+          val := valTyped ((next : Int) :: d.ws) (tyI64 :: et.ts) want, rest := bs }
     else if tag == 38 then
       -- isSome: the flag
       let t := readTyD cx.g bs
@@ -3068,7 +3292,7 @@ partial def trValV (cx : Cx) (want : List Int) (env : List Val) (facts : List In
         let a := trVal cx t.acc env facts next t.rest
         if !a.ok then a
         else if a.val.kind != 0 || a.val.ts.headD tyIrr != tyI64 then tvFail fwType bs
-        else { a with val := valTyped (takeI 1 a.val.ws) [tyI64] [1], rest := after }
+        else { a with val := valTyped (takeI 1 a.val.ws) [tyI64] [1] }
     else if tag == 31 then
       -- inj k e: constructor k of the place's sum type over e's words ("Sums")
       let ix := readLeb bs
@@ -3084,7 +3308,7 @@ partial def trValV (cx : Cx) (want : List Int) (env : List Val) (facts : List In
         else if !ft.ok || a.val.ts != ft.ts then tvFail fwType bs
         else
           let c := sumItems (sumTid cx.g want) ix.n.toNat a.val.ws a.val.ts a.next
-          { ok := true, err := none, next := c.next, items := a.items ++ c.items, val := valTyped c.ws [tyTObj] want, rest := after }
+          { ok := true, err := none, next := c.next, items := a.items ++ c.items, val := valTyped c.ws [tyTObj] want, rest := a.rest }
     else if tag == 32 then
       -- match on a sum whose value is used: the alternatives jump to a join point with the value
       let t := readTyD cx.g bs
@@ -3102,11 +3326,11 @@ partial def trValV (cx : Cx) (want : List Int) (env : List Val) (facts : List In
           else
             let ps := freshFor r.ts r.next
             let split := mkSplit j (paramsOfWords ps.vars r.ts) (mkCase x tyTObj r.alts)
-            { ok := true, err := none, next := ps.next, items := sv.items ++ [split], val := valTyped ps.vars r.ts want, rest := after }
+            { ok := true, err := none, next := ps.next, items := sv.items ++ [split], val := valTyped ps.vars r.ts want, rest := r.rest }
     else if tag == 50 && cx.arr && (foldIdiom cx.g bs).kind == 1 then
-      trSetIdiom cx env facts next (foldIdiom cx.g bs) (readTyD cx.g bs).acc after
+      trSetIdiom cx env facts next (foldIdiom cx.g bs) (readTyD cx.g bs).acc (exprAfter cx.g rest0)
     else if tag == 50 && cx.arr && (foldIdiom cx.g bs).kind == 2 then
-      trTakeIdiom cx env facts next [] [] (foldIdiom cx.g bs) (readTyD cx.g bs).acc after
+      trTakeIdiom cx env facts next [] [] (foldIdiom cx.g bs) (readTyD cx.g bs).acc (exprAfter cx.g rest0)
     else if tag == 50 then
       -- fold xs z body ("Loops"): the list, the start value, then the loop as a function of its own:
       --   loop xs acc = case xs of nil => acc | cons => loop (tail xs) (body (head xs) acc)
@@ -3150,7 +3374,7 @@ partial def trValV (cx : Cx) (want : List Int) (env : List Val) (facts : List In
               let fxs := forceItem cx.arr (intAt 0 xs.val.ws) again.next
               let out := callItem accTs (mkFapSame tmp (fxs.ws ++ liveWords z.val.ws accTs ++ mapOlds le.map)) fxs.next
               { ok := true, err := none, next := out.next, items := xs.items ++ z.items ++ fxs.items ++ [liftItem x0 tmp ps (liftRets accTs) loop, out.item],
-                val := valTyped out.vars accTs accTy, rest := after }
+                val := valTyped out.vars accTs accTy, rest := b.rest }
     else if tag == 51 then
       -- fix stop step z bound ("Loops"): the start state and the bound are evaluated first; a
       -- negative bound refuses (lib/RscBase.rsd `stNegativeFixBound`); then
@@ -3223,12 +3447,12 @@ partial def trValV (cx : Cx) (want : List Int) (env : List Val) (facts : List In
                   items := z.items ++ bd.items ++ [mkVDecl zero tyI64 (mkLit 0) mkUnreachable,
                       mkVDecl neg tyI64 (mkPrim primLt 0 0 [bound0, (zero : Int)]) mkUnreachable, chk,
                       liftItem x0 tmp ps (liftRets rts) loop, mkVDecl s0 tyI64 (mkLit 0) mkUnreachable, out.item],
-                  val := valTyped out.vars rts want, rest := after }
+                  val := valTyped out.vars rts want, rest := bd.rest }
     else if tag == 52 then
       let f := readLeb bs
       if f.ok != profile.cOk || f.n < 0 then tvFail fwWire bs
       else
-        let k := intrKind cx.intr f.n.toNat
+        let k := (ftLookup cx f.n.toNat).intr
         -- a number in a node ("Numbers in nodes"): `hold` of a packed number, `first` of an unpacked list
         let op := if cx.num then factOf f.n cx.mag else -1
         let arg1 : List Int := match f.rest with
@@ -3236,20 +3460,20 @@ partial def trValV (cx : Cx) (want : List Int) (env : List Val) (facts : List In
           | _ => []
         let packed := if op == numHold then numPackSite cx.g cx.mag arg1 else numNone
         let unpacked := if op == numFirst then numUnpackSite cx.g cx.mag arg1 else numNone
-        if k == 4 then trRead cx env facts next f.rest after
-        else if k == 3 then trAlloc cx env facts next f.rest after
-        else if k == 5 then trKid cx env facts next f.rest after
-        else if packed.form != 0 then trNumHold cx env facts next packed (skipE cx.g profile.v2Fuel arg1).rest after
+        if k == 4 then trRead cx env facts next f.rest
+        else if k == 3 then trAlloc cx env facts next f.rest
+        else if k == 5 then trKid cx env facts next f.rest (exprAfter cx.g rest0)
+        else if packed.form != 0 then trNumHold cx env facts next packed (skipE cx.g profile.v2Fuel arg1).rest
         else if unpacked.form != 0 && (skipE cx.g profile.v2Fuel arg1).rest.headD 1 == 0 then
-          trNumRead cx env facts next unpacked f.n after
-        else trCall cx env facts next f.n.toNat f.rest after
+          trNumRead cx env facts next unpacked f.n ((skipE cx.g profile.v2Fuel arg1).rest.drop 1)
+        else trCall cx env facts next f.n.toNat f.rest rest0
     else tvFail (fwUnsup tag) bs
 
 -- A number or a list of numbers read from the node that holds it ("Numbers in nodes"). `first` is the
 -- image's function that takes the first number of the list, -1 when the place takes the list.
 partial def trNumRead (cx : Cx) (env : List Val) (facts : List Int) (next : Nat) (site : NumSite) (first : Int) (after : List Int) : TV :=
   let a := trVal cx site.ty env facts next site.e
-  let rty := (fwSig cx.g (sigOf cx.sigs (if first >= 0 then first.toNat else site.fn.toNat))).rty
+  let rty := (ftLookup cx (if first >= 0 then first.toNat else site.fn.toNat)).sg.rty
   if !a.ok then a
   else if a.val.kind != 1 then tvFail fwNodeUse site.e
   else
@@ -3266,7 +3490,7 @@ partial def trNumRead (cx : Cx) (env : List Val) (facts : List Int) (next : Nat)
 
 -- `hold packed arena` with the number or the list `site` names: the node that holds it. The guard
 -- is that of the allocation in `hold`, two calls down; the one `pack` had is weaker.
-partial def trNumHold (cx : Cx) (env : List Val) (facts : List Int) (next : Nat) (site : NumSite) (arena : List Int) (after : List Int) : TV :=
+partial def trNumHold (cx : Cx) (env : List Val) (facts : List Int) (next : Nat) (site : NumSite) (arena : List Int) : TV :=
   let v := trVal cx site.ty env facts next site.e
   if !v.ok then v
   else if v.val.kind != 0 || v.val.ts != [tyTObj] then tvFail fwType site.e
@@ -3281,16 +3505,16 @@ partial def trNumHold (cx : Cx) (env : List Val) (facts : List Int) (next : Nat)
         let node := numMark site.form cx.inlOn.length (mkPrim primNodeNew 0 0 [argIrr, argIrr, argIrr, argIrr, argIrr, argIrr, intAt 0 v.val.ws])
         { ok := true, err := none, next := x + 1,
           items := v.items ++ ar.items ++ [mkGuard (cx.inlOn.length + 2) mkUnreachable, mkVDecl x tyTObj node mkUnreachable],
-          val := valWords [(x : Int), argIrr] [tyTObj, tyIrr], rest := after }
+          val := valWords [(x : Int), argIrr] [tyTObj, tyIrr], rest := ar.rest.drop 1 }
     | _ => tvFail fwWire arena
 
 -- `first e`, an option of the head (`unwrapped` = false), or `unwrap (first e)`, the head itself,
 -- which refuses on nil. A cell known to be one is read; a list known to be nil has no head;
 -- otherwise a case on the list.
-partial def trFirst (cx : Cx) (lty : List Int) (env : List Val) (facts : List Int) (next : Nat) (e : List Int) (after : List Int) (unwrapped : Bool) : TV :=
+partial def trFirst (cx : Cx) (lty : List Int) (env : List Val) (facts : List Int) (next : Nat) (e : List Int) (unwrapped : Bool) : TV :=
   let dropped : List Int := if cx.arr then drE cx.g e else []
   -- first (drop K xs) with K not the literal 1: a read at an index ("The front end's loops over an array")
-  if dropped.headD 0 == 27 && !fwIsOne cx (dropped.drop 1) then trGetIdiom cx lty env facts next (dropped.drop 1) after unwrapped
+  if dropped.headD 0 == 27 && !fwIsOne cx (dropped.drop 1) then trGetIdiom cx lty env facts next (dropped.drop 1) unwrapped
   else
   let a := trVal cx lty env facts next e
   if !a.ok then a
@@ -3306,10 +3530,10 @@ partial def trFirst (cx : Cx) (lty : List Int) (env : List Val) (facts : List In
       let ts := if unwrapped then et.ts else tyI64 :: et.ts
       if fact == 1 then
         let h := headItems cx.narrow et.ts x a.next
-        if unwrapped then { ok := true, err := none, next := h.next, items := a.items ++ h.items, val := valTyped h.ws ts wt, rest := after }
+        if unwrapped then { ok := true, err := none, next := h.next, items := a.items ++ h.items, val := valTyped h.ws ts wt, rest := a.rest }
         else
           { ok := true, err := none, next := h.next + 1, items := a.items ++ h.items ++ [mkVDecl h.next tyI64 (mkLit 1) mkUnreachable],
-            val := valTyped ((h.next : Int) :: h.ws) ts wt, rest := after }
+            val := valTyped ((h.next : Int) :: h.ws) ts wt, rest := a.rest }
       else
         -- as cells ("Arrays")
         let fx := forceItem cx.arr (intAt 0 a.val.ws) a.next
@@ -3328,12 +3552,12 @@ partial def trFirst (cx : Cx) (lty : List Int) (env : List Val) (facts : List In
           else assemble (mkVDecl n0 tyI64 (mkLit 0) mkUnreachable :: fl.items) (mkJmp j ((n0 : Int) :: liveWords fl.ws et.ts))
         let cs := mkCase x tyTObj [mkAltCtor nilInfo nilB, mkAltCtor (consInfo (cellShape cx.narrow et.ts)) consB]
         { ok := true, err := none, next := fl.next, items := a.items ++ fx.items ++ [mkSplit j (paramsOfWords ps.vars ts) cs],
-          val := valTyped ps.vars ts wt, rest := after }
+          val := valTyped ps.vars ts wt, rest := a.rest }
 
 -- first (drop K xs), `de` the stream at K. Of an array: a read at index K, when K is an index of it (K below zero reads
 -- the first, as `drop` then drops nothing). Of cells: the first of what `drop` leaves, as before. Either way the
 -- answer is a flag and the element's one word (`elemWord`), which a join point takes.
-partial def trGetIdiom (cx : Cx) (lty : List Int) (env : List Val) (facts : List Int) (next : Nat) (de : List Int) (after : List Int) (unwrapped : Bool) : TV :=
+partial def trGetIdiom (cx : Cx) (lty : List Int) (env : List Val) (facts : List Int) (next : Nat) (de : List Int) (unwrapped : Bool) : TV :=
   let k := trVal cx [0] env facts next de
   let l := trVal cx lty env facts k.next k.rest
   let elem := wtElem cx.g l.val.wt
@@ -3401,7 +3625,7 @@ partial def trGetIdiom (cx : Cx) (lty : List Int) (env : List Val) (facts : List
       else assemble (mkVDecl n0 tyI64 (mkLit 0) mkUnreachable :: fl0.items) (mkJmp j ((n0 : Int) :: liveWords fl0.ws et.ts))
     let test := mkVDecl isA tyI64 (mkPrim primIsArr 0 0 [lw]) mkUnreachable
     { ok := true, err := none, next := fl0.next, items := k.items ++ l.items ++ [test, first, mkSplit j (paramsOfWords ps.vars ts) (mkIfW fl someB noneB)],
-      val := valTyped ps.vars ts wt, rest := after }
+      val := valTyped ps.vars ts wt, rest := l.rest }
 
 -- set xs K V (`fi`), `lty` the list's type: the array of xs, written at index K when K is an index of it
 partial def trSetIdiom (cx : Cx) (env : List Val) (facts : List Int) (next : Nat) (fi : FoldIdiom) (lty : List Int) (after : List Int) : TV :=
@@ -3522,7 +3746,7 @@ partial def trNodeField (cx : Cx) (facts : List Int) (a : TV) (h : Int) (i : Nat
   else tvFail fwNodeV2 after
 
 -- `call read arena h`: both arguments are evaluated, the call leaves a guard of depth 1
-partial def trRead (cx : Cx) (env : List Val) (facts : List Int) (next : Nat) (args : List Int) (after : List Int) : TV :=
+partial def trRead (cx : Cx) (env : List Val) (facts : List Int) (next : Nat) (args : List Int) : TV :=
   match args with
   | 1 :: a0 =>
     let ar := trVal cx [] env facts next a0
@@ -3534,7 +3758,7 @@ partial def trRead (cx : Cx) (env : List Val) (facts : List Int) (next : Nat) (a
         if !h.ok then h
         else if h.val.kind != 0 || h.val.ts != [tyTObj] || h.rest.headD 1 != 0 then tvFail fwNodeUse a1
         else { ok := true, err := none, next := h.next, items := ar.items ++ h.items ++ [mkGuard (cx.inlOn.length + 1) mkUnreachable],
-               val := { kind := 1, ws := h.val.ws, ts := [] }, rest := after }
+               val := { kind := 1, ws := h.val.ws, ts := [] }, rest := h.rest.drop 1 }
       | _ => tvFail fwWire args
   | _ => tvFail fwWire args
 
@@ -3564,7 +3788,7 @@ partial def trKid (cx : Cx) (env : List Val) (facts : List Int) (next : Nat) (ar
 -- the children of an allocation's record, each a handle: 22, or 26 (23 e) rest
 partial def trKids (cx : Cx) (env : List Val) (facts : List Int) (next : Nat) (rest : List Int) : TV :=
   match drE cx.g rest with
-  | 22 :: _ => { ok := true, err := none, next := next, items := [], val := valNone, rest := (skipE cx.g profile.v2Fuel rest).rest }
+  | 22 :: r1 => { ok := true, err := none, next := next, items := [], val := valNone, rest := r1 }
   | 26 :: bs =>
     match drE cx.g bs with
     | 23 :: e =>
@@ -3575,7 +3799,7 @@ partial def trKids (cx : Cx) (env : List Val) (facts : List Int) (next : Nat) (r
         let b := trKids cx env facts a.next a.rest
         if !b.ok then b
         else { ok := true, err := none, next := b.next, items := a.items ++ b.items,
-               val := valWords (a.val.ws ++ b.val.ws) (a.val.ts ++ b.val.ts), rest := (skipE cx.g profile.v2Fuel rest).rest }
+               val := valWords (a.val.ws ++ b.val.ws) (a.val.ts ++ b.val.ts), rest := b.rest }
     | _ => tvFail fwAllocShape bs
   | _ => tvFail fwAllocShape rest
 
@@ -3605,7 +3829,7 @@ partial def trScalars (cx : Cx) (env : List Val) (facts : List Int) (next : Nat)
 -- `call alloc {f0 := t, f1 := kids, f2 .. f6, f7, f8} arena`: the node, written by its fields
 -- (`primNodeNew`; "Layout" says where each lies). The children are a literal list of handles or
 -- any list of them.
-partial def trAlloc (cx : Cx) (env : List Val) (facts : List Int) (next : Nat) (args : List Int) (after : List Int) : TV :=
+partial def trAlloc (cx : Cx) (env : List Val) (facts : List Int) (next : Nat) (args : List Int) : TV :=
   match args with
   | 1 :: rec =>
     match drE cx.g (fwFieldAt cx.g 0 rec) with
@@ -3640,7 +3864,7 @@ partial def trAlloc (cx : Cx) (env : List Val) (facts : List Int) (next : Nat) (
                     { ok := true, err := none, next := str.next, items := [], val := valWords [argIrr] [tyTObj], rest := [] }
                   else trVal cx [4, 0] env facts str.next f8
                 -- the record ends (33), then the arena argument
-                let recAfter := (skipE cx.g profile.v2Fuel rec).rest
+                let recAfter := (skipE cx.g profile.v2Fuel str.rest).rest
                 if !ints.ok then ints
                 else if ints.val.kind != 0 || ints.val.ts != [tyTObj] then tvFail fwAllocShape f7
                 else
@@ -3659,7 +3883,7 @@ partial def trAlloc (cx : Cx) (env : List Val) (facts : List Int) (next : Nat) (
                     { ok := true, err := none, next := x + 1,
                       items := kids.items ++ sc.items ++ str.items ++ ints.items ++ ar.items ++ fk.items
                         ++ [mkGuard (cx.inlOn.length + 1) mkUnreachable, mkVDecl x tyTObj node mkUnreachable],
-                      val := valWords [(x : Int), argIrr] [tyTObj, tyIrr], rest := after }
+                      val := valWords [(x : Int), argIrr] [tyTObj, tyIrr], rest := ar.rest.drop 1 }
                 | _ => tvFail fwWire rec
             | _ => tvFail fwAllocShape rec
     | _ => tvFail fwAllocShape rec
@@ -3710,13 +3934,14 @@ partial def trInArgs (cx : Cx) (env : List Val) (facts : List Int) (next : Nat) 
 -- A call of a function of the image. With the node record in the callee's signature it is: the
 -- arguments in order, the guard the callee's entry was, then the callee's body with the arguments
 -- as its variables, one call deeper. A callee that comes back to itself this way has no translation.
-partial def trCall (cx : Cx) (env : List Val) (facts : List Int) (next : Nat) (f : Nat) (args : List Int) (after : List Int) : TV :=
-  let body := inlBody (f : Int) cx.inl
-  if body.isEmpty then trCallFn cx env facts next f args after
+partial def trCall (cx : Cx) (env : List Val) (facts : List Int) (next : Nat) (f : Nat) (args : List Int) (rest0 : List Int) : TV :=
+  let fi := ftLookup cx f
+  let body := fi.inlBody
+  if body.isEmpty then trCallFn cx env facts next f args
   else if cx.inlOn.contains (f : Int) then tvFail fwNodeUse args
   else
-    let sig := sigOf cx.sigs f
-    let widths := sigOf cx.ws f
+    let sig := fi.sig
+    let widths := fi.ws
     let a := trInArgs cx env facts next (sigCount sig) (sigParams sig) widths args
     let rt := readTyD cx.g a.sig
     if !a.ok then tvPass a.err args
@@ -3725,11 +3950,12 @@ partial def trCall (cx : Cx) (env : List Val) (facts : List Int) (next : Nat) (f
       let r := trValV { cx with inlOn := (f : Int) :: cx.inlOn } rt.acc a.env facts a.next body
       if !r.ok then r
       else { r with items := a.items ++ (mkGuard (cx.inlOn.length + 1) mkUnreachable :: r.items),
-                    val := { r.val with w64 := intAt (sigCount sig) widths == 64 }, rest := after }
+                    val := { r.val with w64 := intAt (sigCount sig) widths == 64 }, rest := exprAfter cx.g rest0 }
 
 -- a call of a function that has a translation of its own
-partial def trCallFn (cx : Cx) (env : List Val) (facts : List Int) (next : Nat) (f : Nat) (args : List Int) (after : List Int) : TV :=
-  let sg := fwSig cx.g (sigOf cx.sigs f)
+partial def trCallFn (cx : Cx) (env : List Val) (facts : List Int) (next : Nat) (f : Nat) (args : List Int) : TV :=
+  let fi := ftLookup cx f
+  let sg := fi.sg
   if !sg.ok then tvFail fwType args
   else
     let a := trArgs cx env facts next sg.params sg.ptys args
@@ -3746,11 +3972,11 @@ partial def trCallFn (cx : Cx) (env : List Val) (facts : List Int) (next : Nat) 
       | x :: ty :: extra =>
         let v := valTyped rs.vars sg.result sg.rty
         { ok := true, err := none, next := rs.next, items := a.items ++ [mkVDecls x.toNat ty extra call mkUnreachable],
-          val := { v with w64 := intAt sg.params.length (sigOf cx.ws f) == 64 }, rest := after }
+          val := { v with w64 := fi.resW64 }, rest := a.rest.drop 1 }
       | _ =>
         -- no live result word: the call still runs; its one irrelevant result is bound and unused
         { ok := true, err := none, next := rs.next + 1, items := a.items ++ [mkVDecl rs.next tyIrr call mkUnreachable],
-          val := valWords rs.vars sg.result, rest := after }
+          val := valWords rs.vars sg.result, rest := a.rest.drop 1 }
 
 -- The alternatives of a match on the node of handle `tt.h`, from the chain
 --   if n.f0 == t1 then A1 else if n.f0 == t2 then A2 else ... else B.
@@ -3830,8 +4056,10 @@ partial def trTail (cx : Cx) (env : List Val) (facts : List Int) (next : Nat) (r
   match drE cx.g rest0 with
   | [] => tvFail fwWire []
   | tag :: bs =>
-    let after := (skipE cx.g profile.v2Fuel rest0).rest
-    if tag == 4 then
+    -- A list of numbers read from its node ("Numbers in nodes": `let [W] n.f8 (unpack v0)`) is a value here too,
+    -- and goes to the last case: taken apart as a `let` it would be a read of f8 as the wire's list and a call of
+    -- the image's `unpack`, and one such read makes every read of the node's class a call of `unpack` ("Layout").
+    if tag == 4 && !(cx.num && (numUnpackSite cx.g cx.mag rest0).form != 0) then
       let t := readTyD cx.g bs
       if t.ok != profile.cOk then tvFail fwWire bs
       else
@@ -3840,17 +4068,17 @@ partial def trTail (cx : Cx) (env : List Val) (facts : List Int) (next : Nat) (r
         else
           let bound := if v.val.kind == 0 then { v.val with wt := t.acc, w64 := tyRawWidth bs == 64 } else v.val
           let b := trTail cx (bound :: env) facts v.next v.rest
-          if !b.ok then b else { b with items := [assemble v.items (kidAt 0 b.items)], rest := after }
+          if !b.ok then b else { b with items := [assemble v.items (kidAt 0 b.items)] }
     else if tag == 5 && (fwLenTest cx bs).ok then
       let r := trLenAlts cx cx.rty env facts next true (fwLenTest cx bs) 0
       if !r.ok then tvPass r.err bs
-      else { ok := true, err := none, next := r.next, items := [assemble r.pre (mkCase r.x tyTObj r.alts)], val := valNone, rest := after }
+      else { ok := true, err := none, next := r.next, items := [assemble r.pre (mkCase r.x tyTObj r.alts)], val := valNone, rest := r.rest }
     else if tag == 5 then
       let tt := fwTagTest cx env bs
       if tt.h >= 0 then
         let r := trAlts cx cx.rty env facts next true tt bs [] 0
         if !r.ok then tvPass r.err bs
-        else { ok := true, err := none, next := r.next, items := [mkCase tt.h.toNat tyTObj r.alts], val := valNone, rest := after }
+        else { ok := true, err := none, next := r.next, items := [mkCase tt.h.toNat tyTObj r.alts], val := valNone, rest := r.rest }
       else
         let c := trVal cx [1] env facts next bs
         if !c.ok then c
@@ -3863,7 +4091,7 @@ partial def trTail (cx : Cx) (env : List Val) (facts : List Int) (next : Nat) (r
             if !b.ok then b
             else { ok := true, err := none, next := b.next,
                    items := [assemble c.items (mkIfW (intAt 0 c.val.ws).toNat (kidAt 0 a.items) (kidAt 0 b.items))],
-                   val := valNone, rest := after }
+                   val := valNone, rest := b.rest }
     else if tag == 32 then
       -- match on a sum: each alternative returns
       let t := readTyD cx.g bs
@@ -3878,7 +4106,7 @@ partial def trTail (cx : Cx) (env : List Val) (facts : List Int) (next : Nat) (r
           if !r.ok then tvPass r.err bs
           else
             -- a match on the empty sum has no alternative: no value reaches it
-            { ok := true, err := none, next := r.next, val := valNone, rest := after,
+            { ok := true, err := none, next := r.next, val := valNone, rest := r.rest,
               items := [assemble sv.items (if r.alts.isEmpty then mkUnreachable else mkCase x tyTObj r.alts)] }
     else
       let v := trVal cx cx.rty env facts next rest0
@@ -3923,22 +4151,27 @@ def declNone (f : Nat) : Decl := { f := f, xs := [], rets := [], body := mkUnrea
 
 -- function f, its body at `body` (after the marker byte)
 def fwFn (cx : Cx) (f : Nat) (body : List Int) : FnR :=
-  let after := (skipE cx.g profile.v2Fuel body).rest
-  let sg := fwSig cx.g (sigOf cx.sigs f)
-  if !sg.ok then { ok := false, err := some fwType, decl := declNone f, rest := after }
+  let cxOrig := cx
+  let fOrig := f
+  let fi := ftLookup cxOrig fOrig
+  let sg := fi.sg
+  if !sg.ok then { ok := false, err := some fwType, decl := declNone fOrig, rest := exprAfter cxOrig.g body }
   else
+    let fast := !cxOrig.ftab.isEmpty && fOrig < cxOrig.n
+    let cx := if fast then { cxOrig with ws := [fi.ws, (if fOrig + 1 < cxOrig.n then (ftLookup cxOrig (fOrig + 1)).ws else [])] } else cxOrig
+    let f := if fast then 0 else fOrig
     let ws := sigOf cx.ws f
-    let ps := fwParams cx.g sg.params sg.ptys 1 ws
+    let ps := fwParams cxOrig.g sg.params sg.ptys 1 ws
     -- a function without a live parameter takes one irrelevant parameter (see trCall)
     let xs := if ps.ps.isEmpty then [{ x := ps.next, borrow := false, ty := tyIrr }] else ps.ps
     let next := if ps.ps.isEmpty then ps.next + 1 else ps.next
-    let b := trTail { cx with rty := sg.rty } ps.env [] next body
-    let rets := tysOfWidth (tyView cx.g sg.rty == [1]) (intAt sg.params.length ws) (liveTys sg.result)
-    if !b.ok then { ok := false, err := b.err, decl := declNone f, rest := after }
+    let b := trTail { cxOrig with rty := sg.rty } ps.env [] next body
+    let rets := tysOfWidth (tyView cxOrig.g sg.rty == [1]) (intAt sg.params.length ws) (liveTys sg.result)
+    if !b.ok then { ok := false, err := b.err, decl := declNone fOrig, rest := exprAfter cxOrig.g body }
     else
       let lo := liftsOut (kidAt 0 b.items)
-      { ok := true, err := none, rest := after, lifts := lo.decls,
-        decl := { f := f, xs := xs, rets := (if rets.isEmpty then [tyIrr] else rets), body := lo.node, ext := false } }
+      { ok := true, err := none, rest := b.rest, lifts := lo.decls,
+        decl := { f := fOrig, xs := xs, rets := (if rets.isEmpty then [tyIrr] else rets), body := lo.node, ext := false } }
 
 /-! ## The boundary
 
@@ -3982,11 +4215,23 @@ structure BoundR where
   next : Nat
   items : List N
   ws : List Int
+  -- the boundary's loops lifted so far (`loopFind`)
+  loops : List (List Int) := []
   deriving Inhabited
 
+-- The boundary's loops are shared. The loop that builds a list's cells again depends on the list's type and on the
+-- direction alone, so an image has one for each: the first twin that needs it lifts it, and every later value of
+-- that type calls it. An entry of `loops` is the loop's function, the direction (0 out, 1 in) and the list's type as
+-- `tyView` gives it; the function is a number of the moment inside the twin that lifts it and the loop's place in
+-- the image after that (`loopsPlaced`).
+def loopFind (key : List Int) : List (List Int) → Int
+  | [] => -1
+  | (f :: k) :: rest => if k == key then f else loopFind key rest
+  | [] :: rest => loopFind key rest
+
 -- `ws` are the words of a value of wire type `ty`; the result's words are the value in the boundary's forms
-partial def boundItems (cx : Cx) (ty : List Int) (ws : List Int) (next : Nat) : BoundR :=
-  if !boundNeeds cx.g cx.arr ty then { ok := true, next := next, items := [], ws := ws }
+partial def boundItems (cx : Cx) (ty : List Int) (ws : List Int) (next : Nat) (loops : List (List Int) := []) : BoundR :=
+  if !boundNeeds cx.g cx.arr ty then { ok := true, next := next, items := [], ws := ws, loops := loops }
   else
     match tyView cx.g ty with
     | 4 :: elem =>
@@ -3996,7 +4241,16 @@ partial def boundItems (cx : Cx) (ty : List Int) (ws : List Int) (next : Nat) : 
       let fw := forceItem cx.arr (intAt 0 ws) next
       let ws := fw.ws
       let next := fw.next
-      if !boundNeeds cx.g cx.arr elem then { ok := et.ok, next := next, items := fw.items, ws := ws }
+      if !boundNeeds cx.g cx.arr elem then { ok := et.ok, next := next, items := fw.items, ws := ws, loops := loops }
+      else
+      let key := (0 : Int) :: tyView cx.g ty
+      let got := loopFind key loops
+      if got >= 0 then
+        -- the loop is there: its call alone
+        let z := next
+        let out := callItem [tyTObj] (mkFapSame got.toNat (ws ++ [(z : Int)])) (z + 1)
+        { ok := true, next := out.next, ws := out.vars, loops := loops,
+          items := fw.items ++ [mkVDecl z tyTObj (mkCtor nilInfo []) mkUnreachable, out.item] }
       else
       let tmp := liftBase + next
       let px := next + 1
@@ -4006,7 +4260,7 @@ partial def boundItems (cx : Cx) (ty : List Int) (ws : List Int) (next : Nat) : 
       let etB := fwFlatB cx.g elem
       let shapeB := cellShape cx.narrow etB.ts
       let h := headItems cx.narrow et.ts px (next + 3)
-      let e := boundItems cx elem h.ws h.next
+      let e := boundItems cx elem h.ws h.next loops
       let tl := e.next
       let c := consItems cx.narrow e.ws etB.ts (pacc : Int) (tl + 1)
       let again := callItem [tyTObj] (mkFapSame tmp ((tl : Int) :: c.ws)) c.next
@@ -4017,24 +4271,25 @@ partial def boundItems (cx : Cx) (ty : List Int) (ws : List Int) (next : Nat) : 
       let loop := mkCase px tyTObj [mkAltCtor nilInfo done, mkAltCtor (consInfo shape) step]
       let z := back + 1
       let out := callItem [tyTObj] (mkFapSame tmp (ws ++ [(z : Int)])) (z + 1)
-      { ok := et.ok && etB.ok && e.ok, next := out.next, ws := out.vars,
+      { ok := et.ok && etB.ok && e.ok, next := out.next, ws := out.vars, loops := ((tmp : Int) :: key) :: e.loops,
         items := fw.items ++ [liftItem next tmp [pT px, pT pacc] [tyTObj] loop, mkVDecl z tyTObj (mkCtor nilInfo []) mkUnreachable, out.item] }
     | 8 :: t =>
       -- the flag, then the payload's words, which are no value when the flag is 0 (words of their types are given then)
       let pt := fwFlatB cx.g t
       let j := next
       let ps := freshFor pt.ts (next + 1)
-      let e := boundItems cx t (ws.drop 1) ps.next
+      let e := boundItems cx t (ws.drop 1) ps.next loops
       let d := absentItems pt.ts e.next
       let split := mkSplit j (paramsOfWords ps.vars pt.ts)
         (mkIfW (intAt 0 ws).toNat (assemble e.items (mkJmp j (liveWords e.ws pt.ts))) (assemble d.items (mkJmp j (liveWords d.ws pt.ts))))
-      { ok := pt.ok && e.ok, next := d.next, items := [split], ws := intAt 0 ws :: ps.vars }
+      { ok := pt.ok && e.ok, next := d.next, items := [split], ws := intAt 0 ws :: ps.vars, loops := e.loops }
     | 7 :: _ =>
       if magField cx.g ty == 0 then
-        { ok := true, next := next + 1, ws := [(next : Int)], items := [mkVDecl next tyTObj (mkFap (hNatDigits cx.n) ws) mkUnreachable] }
+        { ok := true, next := next + 1, ws := [(next : Int)], loops := loops,
+          items := [mkVDecl next tyTObj (mkFap (hNatDigits cx.n) ws) mkUnreachable] }
       else if magField cx.g ty == 1 then
         -- an integer's word: its sign, and its magnitude's limb list ("An integer is one word")
-        { ok := ws.length == 1, next := next + 3, ws := [(next : Int), ((next + 2 : Nat) : Int)],
+        { ok := ws.length == 1, next := next + 3, ws := [(next : Int), ((next + 2 : Nat) : Int)], loops := loops,
           items := [mkVDecl next tyI64 (mkFap (hIntSign cx.n) ws) mkUnreachable, mkVDecl (next + 1) tyTObj (mkFap (hIntMag cx.n) ws) mkUnreachable,
                     mkVDecl (next + 2) tyTObj (mkFap (hNatDigits cx.n) [((next + 1 : Nat) : Int)]) mkUnreachable] }
       else
@@ -4042,71 +4297,142 @@ partial def boundItems (cx : Cx) (ty : List Int) (ws : List Int) (next : Nat) : 
         let rh := wtRecHead cx.g ty
         let ft := fwFlat cx.g rh.head
         let w := ft.ts.length
-        let a := boundItems cx rh.head (takeI w ws) next
-        let b := boundItems cx rh.tail (ws.drop w) a.next
-        { ok := rh.ok && ft.ok && a.ok && b.ok, next := b.next, items := a.items ++ b.items, ws := a.ws ++ b.ws }
-    | _ => { ok := false, next := next, items := [], ws := ws }
+        let a := boundItems cx rh.head (takeI w ws) next loops
+        let b := boundItems cx rh.tail (ws.drop w) a.next a.loops
+        { ok := rh.ok && ft.ok && a.ok && b.ok, next := b.next, items := a.items ++ b.items, ws := a.ws ++ b.ws, loops := b.loops }
+    | _ => { ok := false, next := next, items := [], ws := ws, loops := loops }
+
+-- does a value of wire type `ty`, as a host passes it, hold a word or a box of another form than the stage's. An
+-- integer by itself does (two words for the stage's one). An integer that is a list's element does not: it comes as
+-- the object a host writes, and that is one of the stage's forms; and a magnitude may come in either form. A record
+-- that is a list's element comes as a box of the boundary's words, so a list of records with an integer in them does.
+partial def unboundNeeds (g : Dg) (ty : List Int) : Bool :=
+  if isHeapHandle g ty then false
+  else
+    match tyView g ty with
+    | 4 :: elem => !isHeapNode g elem && magField g elem < 0 && unboundNeeds g elem
+    | 8 :: t => unboundNeeds g t
+    | 7 :: _ =>
+      if magField g ty >= 0 then magField g ty == 1
+      else
+        let rh := wtRecHead g ty
+        rh.ok && (unboundNeeds g rh.head || unboundNeeds g rh.tail)
+    | _ => false
 
 -- The way in. `ws` are the boundary's words of a value of wire type `ty`, as a host passes them: the result's words
 -- are the stage's. The two differ in an integer outside a list, which the stage holds as one word ("An integer is
--- one word"); an integer inside a list is the object a host writes, and that is one of the stage's forms.
-partial def unboundItems (cx : Cx) (ty : List Int) (ws : List Int) (next : Nat) : BoundR :=
-  if (fwFlatB cx.g ty).ts == (fwFlat cx.g ty).ts then { ok := true, next := next, items := [], ws := ws }
+-- one word"), and so in every box that holds one: a list's cells are built again with their elements in the stage's
+-- words, as the way out builds them with the boundary's.
+partial def unboundItems (cx : Cx) (ty : List Int) (ws : List Int) (next : Nat) (loops : List (List Int) := []) : BoundR :=
+  if !unboundNeeds cx.g ty then { ok := true, next := next, items := [], ws := ws, loops := loops }
   else
     match tyView cx.g ty with
+    | 4 :: elem =>
+      -- loop xs acc, as on the way out, with the two forms the other way round
+      let key := (1 : Int) :: tyView cx.g ty
+      let got := loopFind key loops
+      if got >= 0 then
+        -- the loop is there: its call alone
+        let z := next
+        let out := callItem [tyTObj] (mkFapSame got.toNat (ws ++ [(z : Int)])) (z + 1)
+        { ok := ws.length == 1, next := out.next, ws := out.vars, loops := loops,
+          items := [mkVDecl z tyTObj (mkCtor nilInfo []) mkUnreachable, out.item] }
+      else
+      let et := fwFlat cx.g elem
+      let etB := fwFlatB cx.g elem
+      let tmp := liftBase + next
+      let px := next + 1
+      let pacc := next + 2
+      let shape := cellShape cx.narrow et.ts
+      let shapeB := cellShape cx.narrow etB.ts
+      let h := headItems cx.narrow etB.ts px (next + 3)
+      let e := unboundItems cx elem h.ws h.next loops
+      let tl := e.next
+      let c := consItems cx.narrow e.ws et.ts (pacc : Int) (tl + 1)
+      let again := callItem [tyTObj] (mkFapSame tmp ((tl : Int) :: c.ws)) c.next
+      let nl := again.next
+      let back := nl + 1
+      let step := assemble (h.items ++ e.items ++ [mkVDecl tl tyTObj (mkProj (consTail shapeB) px) mkUnreachable] ++ c.items ++ [again.item]) (mkRet again.vars)
+      let done := mkVDecl nl tyTObj (mkCtor nilInfo []) (mkVDecl back tyTObj (mkFap (hRev cx.n shape) [(pacc : Int), (nl : Int)]) (mkRet [(back : Int)]))
+      let loop := mkCase px tyTObj [mkAltCtor nilInfo done, mkAltCtor (consInfo shapeB) step]
+      let z := back + 1
+      let out := callItem [tyTObj] (mkFapSame tmp (ws ++ [(z : Int)])) (z + 1)
+      { ok := et.ok && etB.ok && e.ok && ws.length == 1, next := out.next, ws := out.vars, loops := ((tmp : Int) :: key) :: e.loops,
+        items := [liftItem next tmp [pT px, pT pacc] [tyTObj] loop, mkVDecl z tyTObj (mkCtor nilInfo []) mkUnreachable, out.item] }
     | 8 :: t =>
       let pt := fwFlat cx.g t
       let j := next
       let ps := freshFor pt.ts (next + 1)
-      let e := unboundItems cx t (ws.drop 1) ps.next
+      let e := unboundItems cx t (ws.drop 1) ps.next loops
       let d := absentItems pt.ts e.next
       let split := mkSplit j (paramsOfWords ps.vars pt.ts)
         (mkIfW (intAt 0 ws).toNat (assemble e.items (mkJmp j (liveWords e.ws pt.ts))) (assemble d.items (mkJmp j (liveWords d.ws pt.ts))))
-      { ok := pt.ok && e.ok, next := d.next, items := [split], ws := intAt 0 ws :: ps.vars }
+      { ok := pt.ok && e.ok, next := d.next, items := [split], ws := intAt 0 ws :: ps.vars, loops := e.loops }
     | 7 :: _ =>
       if tyView cx.g ty == intRecTy then
-        { ok := ws.length == 2, next := next + 1, items := [mkVDecl next tyTObj (mkFap (hIntOf cx.n) ws) mkUnreachable], ws := [(next : Int)] }
+        { ok := ws.length == 2, next := next + 1, items := [mkVDecl next tyTObj (mkFap (hIntOf cx.n) ws) mkUnreachable], ws := [(next : Int)],
+          loops := loops }
       else
         let rh := wtRecHead cx.g ty
         let w := (fwFlatB cx.g rh.head).ts.length
-        let a := unboundItems cx rh.head (takeI w ws) next
-        let b := unboundItems cx rh.tail (ws.drop w) a.next
-        { ok := rh.ok && a.ok && b.ok, next := b.next, items := a.items ++ b.items, ws := a.ws ++ b.ws }
-    | _ => { ok := false, next := next, items := [], ws := ws }
+        let a := unboundItems cx rh.head (takeI w ws) next loops
+        let b := unboundItems cx rh.tail (ws.drop w) a.next a.loops
+        { ok := rh.ok && a.ok && b.ok, next := b.next, items := a.items ++ b.items, ws := a.ws ++ b.ws, loops := b.loops }
+    | _ => { ok := false, next := next, items := [], ws := ws, loops := loops }
 
 -- the types of every parameter's words, one after the other
 def runsFlat : List (List Int) → List Int
   | [] => []
   | ts :: rest => ts ++ runsFlat rest
 
+-- does a parameter come in with a word or a box of another form
+def unboundAny (g : Dg) : List (List Int) → Bool
+  | [] => false
+  | wt :: wts => unboundNeeds g wt || unboundAny g wts
+
 -- every parameter of a twin, from the boundary's words to the stage's
-def unboundParams (cx : Cx) : List (List Int) → List Val → Nat → BoundR
-  | wt :: wts, v :: vs, next =>
-    let a := unboundItems cx wt v.ws next
-    let b := unboundParams cx wts vs a.next
-    { ok := a.ok && b.ok, next := b.next, items := a.items ++ b.items, ws := a.ws ++ b.ws }
-  | _, _, next => { ok := true, next := next, items := [], ws := [] }
+def unboundParams (cx : Cx) : List (List Int) → List Val → Nat → List (List Int) → BoundR
+  | wt :: wts, v :: vs, next, loops =>
+    let a := unboundItems cx wt v.ws next loops
+    let b := unboundParams cx wts vs a.next a.loops
+    { ok := a.ok && b.ok, next := b.next, items := a.items ++ b.items, ws := a.ws ++ b.ws, loops := b.loops }
+  | _, _, next, loops => { ok := true, next := next, items := [], ws := [], loops := loops }
+
+structure TwinR where
+  decls : List Decl
+  -- the boundary's loops of the image so far, this twin's among them under their numbers of the moment
+  loops : List (List Int)
+  deriving Inhabited
+
+-- the loops under their places in the image: an entry under a number of the moment is one the last twin lifted
+def loopsPlaced (m : List Int) : List (List Int) → List (List Int)
+  | [] => []
+  | (f :: k) :: rest => (if f >= (liftBase : Int) then varMapFind f m :: k else f :: k) :: loopsPlaced m rest
+  | [] :: rest => loopsPlaced m rest
 
 -- The boundary twin of function f under the number `tmp`, with the loops it lifts before it (the
 -- twin is the last); [] when f's parameters and result have the boundary's forms as they are. Its
 -- parameters and its result are the boundary's words. Its variables are numbered from `from1`,
 -- past those of f's declaration, so that the numbers of the moment of its loops are not those of f's.
-def pubTwin (cx : Cx) (f tmp from1 : Nat) : List Decl :=
-  let sg := fwSig cx.g (sigOf cx.sigs f)
-  let sgB := fwSigB cx.g (sigOf cx.sigs f)
-  if !sg.ok || !sgB.ok || (!boundNeeds cx.g cx.arr sg.rty && sg.params == sgB.params) then []
+-- `loops`: the boundary's loops the image has, which the twin calls where it would lift its own.
+def pubTwin (cx : Cx) (f tmp from1 : Nat) (loops : List (List Int)) : TwinR :=
+  let fi := ftLookup cx f
+  let sg := fi.sg
+  let sgB := fwSigB cx.g fi.sig
+  if !sg.ok || !sgB.ok || (!boundNeeds cx.g cx.arr sg.rty && sg.params == sgB.params && !unboundAny cx.g sgB.ptys) then
+    { decls := [], loops := loops }
   else
-    let ps := fwParams cx.g sgB.params sgB.ptys from1 (sigOf cx.ws f)
+    let ps := fwParams cx.g sgB.params sgB.ptys from1 fi.ws
     let xs := if ps.ps.isEmpty then [{ x := ps.next, borrow := false, ty := tyIrr }] else ps.ps
     let next := if ps.ps.isEmpty then ps.next + 1 else ps.next
-    let inw := unboundParams cx sgB.ptys ps.env next
+    let inw := unboundParams cx sgB.ptys ps.env next loops
     let args := liveWords inw.ws (runsFlat sg.params)
     let call := callItem sg.result (mkFapSame f (if args.isEmpty then [argIrr] else args)) inw.next
-    let nr := boundItems cx sg.rty call.vars call.next
-    if !inw.ok || !nr.ok then []
+    let nr := boundItems cx sg.rty call.vars call.next inw.loops
+    if !inw.ok || !nr.ok then { decls := [], loops := loops }
     else
       let lo := liftsOut (assemble (inw.items ++ call.item :: nr.items) (mkRet (liveWords nr.ws sgB.result)))
-      lo.decls ++ [{ f := tmp, xs := xs, rets := liveTys sgB.result, body := lo.node, ext := false }]
+      { decls := lo.decls ++ [{ f := tmp, xs := xs, rets := liveTys sgB.result, body := lo.node, ext := false }], loops := nr.loops }
 
 structure ImageR where
   ok : Bool
@@ -4123,17 +4449,20 @@ structure ImageR where
   deriving Inhabited
 
 -- every allocation of the functions that are not reserved forms
-partial def fwScan (g : Dg) (intr : List Int) (tab : CtorTab) (f n : Nat) (bodies : List Int) : CtorTab :=
+partial def fwScan (g : Dg) (intr : List Int) (tab : CtorTab) (f n : Nat) (bodies : List Int)
+    (seen : List VTree := []) (allocs : List VTree := []) (started : Bool := false) : CtorTab :=
   if f >= n || !tab.ok then tab
   else
+    let aSet : VSet := if started then { m := vtKid allocs } else allocSetOf 0 vsEmpty intr
+    let aBox := vtBox aSet.m
+    let ks := if started then intr else intr.drop f
     match bodies with
     | 1 :: body =>
-      let after := (skipE g profile.v2Fuel body).rest
-      if intrKind intr f != 0 then fwScan g intr tab (f + 1) n after
+      if ks.headD 0 != 0 then fwScan g (ks.drop 1) tab (f + 1) n (skipE g profile.v2Fuel body).rest seen aBox true
       else
-        let s := scanE g intr tab body
+        let s := scanEGo g aSet tab { m := vtKid seen } body
         if !s.ok then { s.tab with ok := false, err := (if s.tab.ok then some fwWire else s.tab.err) }
-        else fwScan g intr s.tab (f + 1) n after
+        else fwScan g (ks.drop 1) s.tab (f + 1) n s.rest (vtBox s.seen.m) aBox true
     | _ => { tab with ok := false, err := some fwWire }
 
 -- the functions a body calls (IR/Basic.lean:210 `fap`)
@@ -4151,14 +4480,11 @@ partial def calleesAlts : List N → List Nat → List Nat
   | alt :: alts, acc => calleesAlts alts (calleesGo (altBody alt) acc)
 end
 
-def declIsBody (ds : DeclTab) (f : Nat) : Bool :=
-  match dtFind ds f with
-  | some d => !d.ext
-  | none => false
-
 def firstNoBody (ds : DeclTab) : List Nat → Int
   | [] => -1
-  | f :: fs => if declIsBody ds f then firstNoBody ds fs else (f : Int)
+  | f :: fs =>
+    let hasBody := match dtFind ds f with | some d => !d.ext | none => false
+    if hasBody then firstNoBody ds fs else (f : Int)
 
 -- the first declaration with a body that calls a function without one: caller, callee
 def badCall (all : DeclTab) : List Decl → List Int
@@ -4169,46 +4495,26 @@ def badCall (all : DeclTab) : List Decl → List Int
       let c := firstNoBody all (calleesGo d.body [])
       if c >= 0 then [(d.f : Int), c] else badCall all ds
 
--- does a parameter or the result of the signature have the node record's type
-partial def sigHasNode (g : Dg) : Nat → List Int → Bool
-  | 0, rest => isHeapNode g (readTyD g rest).acc
-  | k + 1, rest =>
-    let t := readTyD g rest
-    isHeapNode g t.acc || sigHasNode g k t.rest
-
--- the functions whose signature holds the node record and that are no reserved form, each as its
--- number and then the stream at its body (`Cx.inl`)
-partial def fwInl (g : Dg) (intr : List Int) (sigs : List (List Int)) (f n : Nat) (bodies : List Int) (acc : List (List Int)) : List (List Int) :=
-  if f >= n then acc
-  else
-    match bodies with
-    | 1 :: body =>
-      let after := (skipE g profile.v2Fuel body).rest
-      if intrKind intr f == 0 && sigHasNode g (sigCount (sigOf sigs f)) (sigParams (sigOf sigs f)) then
-        fwInl g intr sigs (f + 1) n after (((f : Int) :: body) :: acc)
-      else fwInl g intr sigs (f + 1) n after acc
-    | _ => acc
-
 -- the refusal kept for function f, when one is
 def errsFind (f : Nat) : List Residue → Option Residue
   | [] => none
   | e :: es => if refusalFn e == f then some e else errsFind f es
 
-def errsAdd (f : Nat) (err : Option Residue) (errs : List Residue) : List Residue :=
-  match err with
-  | some e => residueAt f e :: errs
-  | none => residueAt f (Residue.causeMissing 0) :: errs
+def revPrependDecls : List Decl → List Decl → List Decl
+  | [], acc => acc
+  | d :: ds, acc => revPrependDecls ds (d :: acc)
 
 -- `helpers` are the functions the reserved forms call. A function whose signature holds the node
 -- record itself is kept without a body (with nodes as objects no such value exists; rsdc's prelude
 -- ships one, the default record; a call of one is translated in place, `trCall`), and so is one of
 -- the helpers when it refuses; its refusal goes to `errs`, at its function. Any other function that refuses refuses the image, and so does a call
 -- from a translated body to a function without a body.
--- `lifted`: the loops lifted so far, in their places after the list functions.
-partial def fwFns (cx : Cx) (helpers : List Nat) (f n : Nat) (bodies : List Int) (acc : List Decl) (errs : List Residue) (lifted : List Decl)
-    (pubs : List Int := []) : ImageR :=
+-- `liftedRev`: the loops lifted so far (reversed), in their places after the list functions. `loops`: the boundary's loops among
+-- them, by direction and type (`loopFind`).
+partial def fwFns (cx : Cx) (helpers : List Nat) (f n : Nat) (bodies : List Int) (acc : List Decl) (errs : List Residue) (liftedRev : List Decl)
+    (pubs : List Int := []) (loops : List (List Int) := []) (nLifted : Nat := 0) : ImageR :=
   if f >= n then
-    let decls := acc.reverse ++ helperDecls cx.n cx.narrow ++ lifted
+    let decls := revPrependDecls acc (helperDecls cx.n cx.narrow ++ revPrependDecls liftedRev [])
     match badCall (dtOfList decls) decls with
     | [caller, callee] =>
       -- the callee's own refusal when it has one, at the callee; a call of a function without a body, at the caller
@@ -4219,10 +4525,11 @@ partial def fwFns (cx : Cx) (helpers : List Nat) (f n : Nat) (bodies : List Int)
   else
     match bodies with
     | 1 :: body =>
-      if intrKind cx.intr f != 0 then fwFns cx helpers (f + 1) n (skipE cx.g profile.v2Fuel body).rest (declNone f :: acc) errs lifted pubs
+      let fi := ftLookup cx f
+      if fi.intr != 0 then fwFns cx helpers (f + 1) n (skipE cx.g profile.v2Fuel body).rest (declNone f :: acc) errs liftedRev pubs loops nLifted
       -- the node record itself in the signature: no such value exists here, translated or not
-      else if sigHasNode cx.g (sigCount (sigOf cx.sigs f)) (sigParams (sigOf cx.sigs f)) then
-        fwFns cx helpers (f + 1) n (skipE cx.g profile.v2Fuel body).rest (declNone f :: acc) (residueAt f fwNodeUse :: errs) lifted pubs
+      else if fi.hasNode then
+        fwFns cx helpers (f + 1) n (skipE cx.g profile.v2Fuel body).rest (declNone f :: acc) (residueAt f fwNodeUse :: errs) liftedRev pubs loops nLifted
       else
         let r := fwFn cx f body
         if r.ok then
@@ -4230,20 +4537,67 @@ partial def fwFns (cx : Cx) (helpers : List Nat) (f n : Nat) (bodies : List Int)
           let op := factOf (f : Int) cx.mag
           let tmp := liftBase + declMaxIndex r.decl + 1
           let mask := if cx.shortNatWord then natWordMask body else -1
-          let mask := if mask >= 0 && sigOf cx.sigs f == (1 :: (natRecTy ++ [0])) then mask else -1
+          let mask := if mask >= 0 && fi.sig == (1 :: (natRecTy ++ [0])) then mask else -1
           let w := if mask >= 0 || (op >= 0 && (op % 100 < 20 || op == 30 || op == 31)) then magWrap (magLimsOf cx.narrow) op r.decl tmp mask
             else { ok := false, body := r.decl.body }
           let lifts := if w.ok then r.lifts ++ [{ r.decl with f := tmp }] else r.lifts
           -- the boundary twin, when the result's forms inside are not the boundary's ("The boundary")
-          let twin := pubTwin cx f (tmp + 1) (declMaxIndex r.decl + 3)
+          let tw := pubTwin cx f (tmp + 1) (declMaxIndex r.decl + 3) loops
+          let twin := tw.decls
           let lifts := lifts ++ twin
-          let m := liftPlaces (cx.n + helperCount + lifted.length) lifts
+          let m := liftPlaces (cx.n + helperCount + nLifted) lifts
           let pubs := if twin.isEmpty then pubs else (f : Int) :: varMapFind ((tmp + 1 : Nat) : Int) m :: pubs
-          fwFns cx helpers (f + 1) n r.rest ({ r.decl with body := liftRenum m w.body } :: acc) errs (lifted ++ liftPlaced m lifts) pubs
+          let placed := liftPlaced m lifts
+          let nextLoops := if m.isEmpty then tw.loops else loopsPlaced m tw.loops
+          fwFns cx helpers (f + 1) n r.rest ({ r.decl with body := liftRenum m w.body } :: acc) errs
+            (revPrependDecls placed liftedRev) pubs nextLoops (nLifted + placed.length)
         else if helpers.contains f then
-          fwFns cx helpers (f + 1) n r.rest (declNone f :: acc) (errsAdd f r.err errs) lifted pubs
+          let eNew := match r.err with | some e => residueAt f e | none => residueAt f (Residue.causeMissing 0)
+          fwFns cx helpers (f + 1) n r.rest (declNone f :: acc) (eNew :: errs) liftedRev pubs loops nLifted
         else { ok := false, err := r.err, fn := f, decls := [], tab := cx.tab }
     | _ => { ok := false, err := some fwWire, fn := f, decls := [], tab := cx.tab }
+
+/-! ## A case that the path decides
+
+Under the alternative of one constructor of a value, a case on the same value runs its alternative for that
+constructor. The front end writes such cases: a match inside the
+arm for "any other constructor" of a match on the same value stands once in every alternative of the outer match,
+with all its own alternatives. Here such a case is written as the alternative it runs, for a value of any kind (a
+node, a sum, a list, a word); a variable is bound once in a function, so what an alternative says of its case's
+variable holds in all of the alternative.
+For a node this is more than code that is not kept. The arm of an alternative that does not run takes the node
+for a constructor that the node is not: a child read under the known tag is handed on as that constructor's child
+and asked for what that child holds. The classes then join two types (lib/lrc/Classes.rsd), and "Layout" finds a
+read without a single tag and lays the class out as one (`layMergeTag`): every tag with the fields of the widest,
+the places left over filled, a number's node an object. The image of the SQL engine was laid out so by two
+functions (instruments/lrc-host/ProgPad.rsd has their shape). -/
+
+-- the alternative for constructor k (none for k = -1: the constructor is not known)
+def dcLive (k : Int) : List N → Option N
+  | [] => none
+  | alt :: alts => if alt.op == opAltCtor && ((infoOf alt).cidx : Int) == k then some alt else dcLive k alts
+
+mutual
+-- known: the constructor of each variable whose alternative is being walked (pairs variable, constructor)
+partial def dcGo (known : List Int) (n : N) : N :=
+  if n.op == opVDecl then { n with kids := [vdeclExpr n, dcGo known (bodyOf n)] }
+  else if n.op == opJDecl then { n with kids := [dcGo known (jdeclBody n), dcGo known (bodyOf n)] }
+  else if n.op == opCase then
+    match dcLive (factOf (caseVar n : Int) known) (caseAlts n) with
+    | some alt => dcGo known (altBody alt)
+    | none => { n with kids := dcAlts known (caseVar n : Int) (caseAlts n) }
+  else if isTerminal n then n
+  else setBody n (dcGo known (bodyOf n))
+partial def dcAlts (known : List Int) (x : Int) : List N → List N
+  | [] => []
+  | alt :: alts =>
+    let known1 := if alt.op == opAltCtor then x :: ((infoOf alt).cidx : Int) :: known else known
+    altSetBody alt (dcGo known1 (altBody alt)) :: dcAlts known x alts
+end
+
+def dcDecls : List Decl → List Decl
+  | [] => []
+  | d :: ds => (if d.ext then d else { d with body := dcGo [] d.body }) :: dcDecls ds
 
 /-! ## Layout
 
@@ -4263,10 +4617,9 @@ its own allocations need:
     default, 8 bytes each in the scalar area.
 A class and tag whose allocations store nothing is a constant constructor: its value is the boxed
 tag (lean.h `lean_box`). A field the layout does not store reads as its default. An allocation
-with fewer children than the layout has fills the rest with a word no child is (the boxed scalar
-255: a tag is at most 244), and a read of a child that may be such a word, or of a child no
-allocation has, refuses as the wire's `kid` does on a list that is too short (`unwrap` of an
-absent first element).
+with fewer children than the layout has fills the rest with a cell no child is (`padCell`), and
+a read of a child that may be that cell, or of a child no allocation has, refuses as the wire's
+`kid` does on a list that is too short (`unwrap` of an absent first element).
 
 A read's constructor is the tag known at the read, or the one tag its node's class leaves when
 the tags tested before the read are taken away. A read whose class leaves no tag stands where no
@@ -4368,6 +4721,13 @@ structure Lay where
   -- (Lean/Compiler/LCNF/MonoTypes.lean:44 `hasTrivialStructure?`). An allocation is then its number, and a
   -- read of the number is the node.
   box : Bool := false
+  -- The node is its list of children, and no object: the same rule for the other thing a node may consist of. The
+  -- front end keeps a field of a recursive type that is a list of such values, and a string, in a child node of
+  -- its own; that node's allocations give children as a list and nothing else (no string f7, no list of integers,
+  -- no scalar field, no number), no read asks it for f8, and its class is not marked. An allocation is then its
+  -- list (a literal list of children is built as a list), the children as a list are the node, and child i is the
+  -- first of what `drop i` leaves of it.
+  kbox : Bool := false
   deriving Inhabited
 
 -- The layouts, in a map from class and tag: the entry's value is the longest literal list of
@@ -4386,6 +4746,8 @@ def layOf (m : Map) (root : Nat) (t : Int) : Lay :=
     let marked := (mapNode m (layKey root layMarkTag)).tag != 0
     -- with `num` every allocation of the class and tag is a number's: no child, no string, no scalar is stored
     { found := true, kids := hit.val.toNat, minKids := hit.sb.toNat, str := hit.sa % 2 == 1, ints := hit.sa / 2 % 2 == 1,
+      -- `kbox`, bits 0 and 1: no string and no list of integers; bits 3 to 7: no scalar field; bit 9: no read of f8; bits 10 to 13: no number
+      kbox := hit.sa / 4 % 2 == 1 && hit.sa % 4 == 0 && hit.sa / 8 % 32 == 0 && hit.sa / layRawInts % 2 == 0 && forms == 0 && !marked,
       list := hit.sa / 4 % 2 == 1, rel := relOfMask (hit.sa / 8), num := num, box := num != 0 && hit.sa / 4 % 2 == 0 && !marked }
 
 def layMerged (m : Map) (root : Nat) : Bool := (mapNode m (layKey root layMergeTag)).tag != 0
@@ -4437,10 +4799,18 @@ def layInfo (l : Lay) (t : Int) : CtorInfo :=
   if !l.found || layConst l then nodeAlt t
   else { cidx := t.toNat, size := layListIdx l + (if l.list then 1 else 0), ssize := 8 * relCount l.rel, tid := 1 }
 
--- the word that fills the place of a child an allocation does not have
-def padInfo : CtorInfo := { cidx := 255, size := 0, ssize := 0, tid := 1 }
+-- What fills the place of a child an allocation does not have. A read of such a place has to tell it from every
+-- child, and a child may be any object, a constructor without fields or the box of a number: under either width of
+-- an object field every odd word is the box of some number (`magLimsOf`), so no word without fields will do (the
+-- constructor 255 without fields, which stood here, is the box of the number 255). It is a cell of the literal pool
+-- (lib/lrc/Ir.rsd `mkLitObj`: an object that nothing counts and nothing releases) whose tag no object of the
+-- program has: lean.h's closure tag, which a lowered program does not use (lib/lrc/Closures.rsd `lwCloTag`).
+def padTag : Nat := 245
+def padCell : N := mkLitObj padTag [] []
 
 structure LayCx where
+  -- the image builds arrays: a read of a node's object carries its tag (`layTagged`)
+  arr : Bool := false
   cl : Oc
   -- the image's tags
   tags : List Int
@@ -4553,7 +4923,7 @@ def layNew (l : Lay) (x : Nat) (e : N) (next : Nat) : ItemsR :=
     let short := !l.list && kids.length < l.kids
     let cells := if built then layCells kids.reverse (n2 : Int) (n2 + 1) else { next := n2, items := [], ws := [] }
     let kidI := if built then mkVDecl n2 tyTObj (mkCtor nilInfo []) mkUnreachable :: cells.items
-      else if short then [mkVDecl n2 tyTObj (mkCtor padInfo []) mkUnreachable] else []
+      else if short then [mkVDecl n2 tyTObj padCell mkUnreachable] else []
     let n3 := if built then cells.next else n2 + kidI.length
     let kidW : List Int := if built then cells.ws else if l.list then kids else kids ++ padWords (l.kids - kids.length) (n2 : Int)
     let info := layInfo l e.b
@@ -4602,6 +4972,12 @@ structure LyR where
   node : N
   deriving Inhabited
 
+-- A read of a node's object with the tag it was read under, in an image that builds arrays: lib/lrc/Classes.rsd
+-- `arrClassesOf` keeps the fields of two tags apart by it ("Which lists may be arrays"). The tag rides in a place
+-- of the projection that nothing else reads; -1 (a merged class) leaves it empty.
+def layTagged (arr : Bool) (t : Int) (e : N) : N :=
+  if arr && t >= 0 && e.op == opProj then { e with d := t + 1 } else e
+
 structure LyAlts where
   ok : Bool
   next : Nat
@@ -4618,6 +4994,15 @@ partial def layGo (lx : LayCx) (f : Nat) (known excl : List Int) (next : Nat) (n
       -- the node is its number (`Lay.box`): no allocation
       let k := layGo lx f known excl next (bodyOf n)
       { ok := k.ok, next := k.next, node := replaceVar (vdeclVar n) (intAt 6 e.ys).toNat k.node }
+    else if l.kbox && numForm e == 0 then
+      -- the node is its list of children (`Lay.kbox`): no allocation; a literal list of children is built
+      let kids := e.ys.drop 7
+      let built := e.c >= 0 || intAt 0 kids < 0
+      let cells := if e.c >= 0 then layCells kids.reverse (next : Int) (next + 1) else { next := next + 1, items := [], ws := [(next : Int)] }
+      let pre := if built then mkVDecl next tyTObj (mkCtor nilInfo []) mkUnreachable :: cells.items else []
+      let lst : Int := if built then intAt 0 cells.ws else intAt 0 kids
+      let k := layGo lx f known excl (if built then cells.next else next) (bodyOf n)
+      { ok := k.ok, next := k.next, node := assemble pre (replaceVar (vdeclVar n) lst.toNat k.node) }
     else
     -- a number's node in a class that does not keep the number: as the image wrote it
     let w := if numForm e != 0 && l.num != numForm e then layNumNew lx.mag e next else { next := next, items := [], e := e }
@@ -4645,10 +5030,10 @@ partial def layGo (lx : LayCx) (f : Nat) (known excl : List Int) (next : Nat) (n
     else if l.num == form then
       -- the class keeps the number or the list where f8 stands
       let k := layGo lx f known excl next (bodyOf n)
-      { ok := k.ok, next := k.next, node := { n with kids := [layRead l t plain h.toNat, k.node] } }
+      { ok := k.ok, next := k.next, node := { n with kids := [layTagged lx.arr t (layRead l t plain h.toNat), k.node] } }
     else
       -- as the image wrote it: f8 unpacked by the image's function, and the first number of it for the two forms of one number
-      let words := layRead l t (mkPrim primNodeInts 0 0 [h]) h.toNat
+      let words := layTagged lx.arr t (layRead l t (mkPrim primNodeInts 0 0 [h]) h.toNat)
       let unpack := numFn (if form == 1 || form == 3 then numUnpackNat else numUnpackInt) lx.mag
       let first := e.c - 1
       let ws := next
@@ -4669,19 +5054,33 @@ partial def layGo (lx : LayCx) (f : Nat) (known excl : List Int) (next : Nat) (n
     let k := layGo lx f known excl (next + 6) (bodyOf n)
     if t == -1 && !layMerged lx.m (layRoot lx f h) then { ok := false, next := next, node := n }
     else if dead then { ok := k.ok, next := k.next, node := { n with kids := [layDummy e, k.node] } }
+    else if primOp e == primNodeKids && l.kbox then
+      -- the node is its list of children (`Lay.kbox`): no read
+      let rest := replaceVar x h.toNat k.node
+      { ok := k.ok, next := k.next, node := rest }
     else if primOp e == primNodeKid && l.list then
       -- child i of a list of children: the first of what `drop i` leaves, the refusal when it leaves nothing
       let cs := mkCase (next + 2) tyTObj
         [mkAltCtor nilInfo (mkVDecl (next + 4) tyTObj (mkPrim primFail 0 0 [argIrr]) (mkJmp (next + 3) [((next + 4 : Nat) : Int)])),
          mkAltCtor (consInfo lsObject) (mkVDecl (next + 5) tyTObj (mkProj 0 (next + 2)) (mkJmp (next + 3) [((next + 5 : Nat) : Int)]))]
+      -- the list: the node itself (`Lay.kbox`), or the field that holds it
+      let lst : Int := if l.kbox then h else (next : Int)
+      let walk := mkVDecl (next + 1) tyI64 (mkLit e.b)
+          (mkVDecl (next + 2) tyTObj (mkFap (hDrop lx.nImg lsObject) [((next + 1 : Nat) : Int), lst]) (mkJDecl (next + 3) [pT x] k.node cs))
       { ok := k.ok, next := k.next,
-        node := mkVDecl next tyTObj (mkProj (layListIdx l) h.toNat) (mkVDecl (next + 1) tyI64 (mkLit e.b)
-          (mkVDecl (next + 2) tyTObj (mkFap (hDrop lx.nImg lsObject) [((next + 1 : Nat) : Int), (next : Int)]) (mkJDecl (next + 3) [pT x] k.node cs))) }
+        node := if l.kbox then walk else mkVDecl next tyTObj (layTagged lx.arr t (mkProj (layListIdx l) h.toNat)) walk }
     else if primOp e == primNodeKid && !layConst l && i < l.kids && i >= l.minKids then
-      -- a child some allocation of the class does not have: the refusal on the word that fills its place
-      let cs := mkCase x tyTObj [mkAltCtor padInfo (mkVDecl next tyI64 (mkPrim primFail 0 0 [argIrr]) mkUnreachable), mkAltDefault k.node]
-      { ok := k.ok, next := k.next, node := { n with kids := [mkProj (layChild l i) h.toNat, cs] } }
-    else { ok := k.ok, next := k.next, node := { n with kids := [layRead l t e h.toNat, k.node] } }
+      -- A child some allocation of the class does not have: the refusal on the cell that fills its place. The cell
+      -- is the one object of its tag. A child that is no object (a constructor without fields, the box of a number)
+      -- has its number where an object has its tag (`primTagOf`), so the tag is counted for an object only: the word
+      -- tested is the tag times "is no scalar", which is the cell's tag for the cell and for nothing else.
+      let obj := mkPrim primNot 0 0 [((next + 1 : Nat) : Int)]
+      let word := mkPrim primMulW 0 0 [((next + 3 : Nat) : Int), ((next + 2 : Nat) : Int)]
+      let cs := mkCase (next + 4) tyI64 [mkAltCtor (boolInfo padTag) (mkVDecl next tyI64 (mkPrim primFail 0 0 [argIrr]) mkUnreachable), mkAltDefault k.node]
+      let test := mkVDecl (next + 1) tyI64 (mkPrim primIsScalar 0 0 [(x : Int)]) (mkVDecl (next + 2) tyI64 obj
+        (mkVDecl (next + 3) tyI64 (mkPrim primTagOf 0 0 [(x : Int)]) (mkVDecl (next + 4) tyI64 word cs)))
+      { ok := k.ok, next := k.next, node := { n with kids := [layTagged lx.arr t (mkProj (layChild l i) h.toNat), test] } }
+    else { ok := k.ok, next := k.next, node := { n with kids := [layTagged lx.arr t (layRead l t e h.toNat), k.node] } }
   else if n.op == opJDecl then
     let v := layGo lx f known excl next (jdeclBody n)
     let k := layGo lx f known excl v.next (bodyOf n)
@@ -4742,6 +5141,64 @@ def layAnyDecl : List Decl → Bool
   | [] => false
   | d :: ds => (!d.ext && layAny d.body) || layAnyDecl ds
 
+/-! ### The cells of a list that is no array
+
+In an image that builds arrays every place that takes a list apart asks for its cells first (`forceItem`), and the
+primitive takes its argument owned: an array nothing else holds is taken apart in place. So the borrow inference
+makes the list owned, and with it the parameter it came in by and every structure it was read from
+(lib/lrc/Borrow.rsd `bwOwnArgsUsingParams`, the rule of a projection): a function that only reads a tree counts
+every node up and down, in a program that makes one array anywhere. Most lists of such a program are never
+arrays. lib/lrc/Classes.rsd `arrClassesOf` says which can be ("Which lists may be arrays"); the cells asked of a
+list that cannot be are the list itself, and the instruction goes. Where the classes say nothing (`bad`) every
+instruction stays. -/
+
+mutual
+-- the variables that hold the cells asked of a list that is no array, each with the list it stands for (the list
+-- may itself be such cells: the first of the chain)
+partial def unforceVars (c : Oc) (f : Nat) (n : N) (m : IMap) : IMap :=
+  if n.op == opVDecl then
+    let e := vdeclExpr n
+    let w := intAt 0 e.ys
+    let m1 := if e.op == opPrim && primOp e == primArrToList && w >= 0 && !ocMayArr c f w.toNat then
+        let first := imFind m w.toNat
+        imInsert m (vdeclVar n) (if first >= 0 then first.toNat else w.toNat)
+      else m
+    unforceVars c f (bodyOf n) m1
+  else if n.op == opJDecl then unforceVars c f (bodyOf n) (unforceVars c f (jdeclBody n) m)
+  else if n.op == opCase then unforceAlts c f (caseAlts n) m
+  else if isTerminal n then m
+  else unforceVars c f (bodyOf n) m
+partial def unforceAlts (c : Oc) (f : Nat) : List N → IMap → IMap
+  | [], m => m
+  | alt :: alts, m => unforceAlts c f alts (unforceVars c f (altBody alt) m)
+end
+
+mutual
+-- the body without the instructions of those variables
+partial def unforceGo (m : IMap) (n : N) : N :=
+  if n.op == opVDecl then
+    if imFind m (vdeclVar n) >= 0 && (vdeclExpr n).op == opPrim && primOp (vdeclExpr n) == primArrToList then unforceGo m (bodyOf n)
+    else { n with kids := [vdeclExpr n, unforceGo m (bodyOf n)] }
+  else if n.op == opJDecl then { n with kids := [unforceGo m (jdeclBody n), unforceGo m (bodyOf n)] }
+  else if n.op == opCase then { n with kids := unforceGoAlts m (caseAlts n) }
+  else if isTerminal n then n
+  else setBody n (unforceGo m (bodyOf n))
+partial def unforceGoAlts (m : IMap) : List N → List N
+  | [] => []
+  | alt :: alts => altSetBody alt (unforceGo m (altBody alt)) :: unforceGoAlts m alts
+end
+
+def unforceDecls (c : Oc) : List Decl → List Decl
+  | [] => []
+  | d :: ds =>
+    let m := if d.ext then imEmpty else unforceVars c d.f d.body imEmpty
+    (if m.m.tag == 0 then d else { d with body := mapVarsGo m (unforceGo m d.body) }) :: unforceDecls c ds
+
+-- the declarations of an image that builds arrays, where a list that is no array is not asked for its cells
+def arrUnforce (nImg : Nat) (narrow : Bool) (decls : List Decl) : List Decl :=
+  let c := arrClassesOf nImg decls narrow
+  if c.bad then decls else unforceDecls c decls
+
 -- The image's functions as IR declarations, in order. A reserved form (alloc, read, kid) has no
 -- body here (`ext`): nothing calls it once the forms are IR. `intr` gives each function's kind
 -- (rsc/rsc.rsd `intrinsicKinds`: 3 alloc, 4 read, 5 kid, 0 otherwise), `bodies` the body stream.
@@ -4761,18 +5218,21 @@ def fromWireWith (oneClass plain : Bool) (g : Dg) (intr : List Int) (sigs : List
   else
     let reserved := reservedFns intr 0
     let helpers := (calledClosure g bodies reserved reserved).filter (fun f => !reserved.contains f)
-    let cx : Cx := { g := g, intr := intr, sigs := sigs, tab := tab, n := n, inl := fwInl g intr sigs 0 n bodies [],
+    let cx : Cx := { g := g, intr := intr, sigs := sigs, tab := tab, n := n, ftab := ftGrid g 0 n intr sigs widths bodies,
                      mag := if plain then [] else magFind g sigs n bodies intr, arr := arrays && arrAny g intr 0 n bodies,
                      shortNatWord := !plain && !g.on, narrow := narrow, ws := widths }
     let cx := { cx with num := numFn numUnpackNat cx.mag >= 0 || numFn numUnpackInt cx.mag >= 0 || numFn numHold cx.mag >= 0 }
     let im := fwFns cx helpers 0 n bodies [] [] []
+    -- the cases that the path decides, before anything is concluded from an alternative
+    let im := if im.ok then { im with decls := dcDecls im.decls } else im
     -- an image without a node is as it was written; the classes are found only for one that has some
-    if !im.ok || !layAnyDecl im.decls then im
+    if !im.ok then im
+    else if !layAnyDecl im.decls then { im with decls := (if cx.arr then arrUnforce n narrow im.decls else im.decls) }
     else
       let cl := classesOf n im.decls narrow
-      let lx : LayCx := { cl := { cl with bad := cl.bad || oneClass }, tags := tab.tags, m := map0 0, nImg := n, mag := cx.mag }
+      let lx : LayCx := { arr := cx.arr, cl := { cl with bad := cl.bad || oneClass }, tags := tab.tags, m := map0 0, nImg := n, mag := cx.mag }
       let r := layDecls { lx with m := layScanDecls lx im.decls (map0 0) } im.decls
-      if r.ok then { im with decls := r.decls }
+      if r.ok then { im with decls := (if cx.arr then arrUnforce n narrow r.decls else r.decls) }
       else { ok := false, err := some fwKidShape, fn := (if r.fn < n then r.fn else 0), decls := [], tab := tab }
 
 def fromWire (g : Dg) (intr : List Int) (sigs : List (List Int)) (n : Nat) (bodies : List Int) : ImageR :=

@@ -29,6 +29,10 @@ import Lean
      lean --run instruments/lrc-host/Diff.rsd mag [write]     the table of the front end's integer operations in
                                                       lib/lrc/FromWire.rsd is the one the twin gives now
                                                       (instruments/lrc-host/MagTable.rsd); `write` writes it
+     lean --run instruments/lrc-host/Diff.rsd float [write]   the image of the F operators (instruments/lrc-host/img/float64.rscm)
+                                                      and its rows of Images.tsv are the ones stock Lean's Float gives
+                                                      (instruments/lrc-host/Float64Oracle.rsd); `write` writes the image
+                                                      and prints the rows
      lean --run instruments/lrc-host/Diff.rsd rsdc            the chain frontend's twin (instruments/rsdc-ml/rsdc.ml,
                                                       built with ocamlopt into out/lrc) checks the LRC modules
                                                       that exist, as one source; exit 0 when it accepts them
@@ -167,7 +171,8 @@ def post : List String :=
 
 def host : List String :=
   ["instruments/lrc-host/Oracle.rsd", "instruments/lrc-host/Image.rsd", "instruments/lrc-host/Interp.rsd", "instruments/lrc-host/Cases.rsd",
-   "instruments/lrc-host/Verdict.rsd", "instruments/lrc-host/CheckBase.rsd", "instruments/lrc-host/CheckImage.rsd", "instruments/lrc-host/Multi.rsd", "instruments/lrc-host/IrOut.rsd"]
+   "instruments/lrc-host/Verdict.rsd", "instruments/lrc-host/CheckBase.rsd", "instruments/lrc-host/CheckImage.rsd", "instruments/lrc-host/Multi.rsd", "instruments/lrc-host/IrOut.rsd",
+   "instruments/lrc-host/Float64Oracle.rsd", "instruments/lrc-host/CheckFloat64.rsd"]
 
 -- the files instruments/lrc-host/<pre><Tag><suffix> with a non-empty Tag, by name: their tags
 def tagged (pre suffix : String) : IO (List String) := do
@@ -239,6 +244,9 @@ def main (args : List String) : IO UInt32 := do
     { name := \"corpus\", cause := .corpusNotTaken, compared := written.length, differ := refused }]
   tallies := tallies ++ [{ name := \"multi\", cause := .writtenProgramDiffers, compared := Lrc.Host.multiCases.length, differ := (← Lrc.Host.checkMulti) }]
   tallies := tallies ++ [{ name := \"base\", cause := .foundationDiffers, compared := (written ++ lean).length, differ := (← Lrc.Host.checkBase (written ++ lean)) }]
+  -- FLOAT64-0: the interpreter's reference of the F operators against stock Lean's Float
+  let f64 ← Lrc.Host.checkFloat64
+  tallies := tallies ++ [{ name := \"float64\", cause := .foundationDiffers, compared := f64.1, differ := f64.2 }]
 " ++ calls ++ (if present.contains "ElimDeadBranches" then "\n  tallies := tallies ++ [{ name := \"ElimDeadBranches, a shared index\", cause := .passDiffers, compared := 1, differ := (← Lrc.Host.checkEdbSharedIndex env) }]" else "") ++ "
   IO.println s!\"total mismatch={tallies.foldl (· + ·.differ) 0}\"
   match Lrc.Host.Verdict.admit (Lrc.Host.Verdict.q { tallies := tallies }) with
@@ -472,6 +480,18 @@ def mag (write : Bool) : IO UInt32 := do
   IO.eprint r.stderr
   return r.exitCode
 
+-- FLOAT64-0: the image of the F operators and its rows of Images.tsv are the ones
+-- instruments/lrc-host/Float64Oracle.rsd gives under stock Lean; `write` writes the image and prints the rows.
+def float (write : Bool) : IO UInt32 := do
+  let src := "import Lean\n" ++ (← readSource none "instruments/lrc-host/Float64Oracle.rsd")
+    ++ "\ndef main (args : List String) : IO UInt32 := Lrc.Host.F64.run (args.contains \"write\")\n"
+  IO.FS.createDirAll "out/lrc"
+  IO.FS.writeFile "out/lrc/Float64All.lean" src
+  let r ← IO.Process.output { cmd := "lean", args := #["--run", "out/lrc/Float64All.lean"] ++ (if write then #["write"] else #[]) }
+  IO.print r.stdout
+  IO.eprint r.stderr
+  return r.exitCode
+
 /-! ## cite: the line citations of the ported modules, checked against the pinned Lean sources
 
 A ported module cites what it ports as `File:LINE name` (lib/lrc/PushProj.rsd). Checked for every
@@ -559,6 +579,8 @@ def main (args : List String) : IO UInt32 := do
   | ["emit", tag, dir] => Lrc.Diff.emit tag dir
   | ["plants"] => Lrc.Diff.plants
   | ["rsdc"] => Lrc.Diff.rsdc
+  | ["float"] => Lrc.Diff.float false
+  | ["float", "write"] => Lrc.Diff.float true
   | ["mag"] => Lrc.Diff.mag false
   | ["mag", "write"] => Lrc.Diff.mag true
   | ["ir"] => Lrc.Diff.run #["ir"]

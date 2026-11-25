@@ -31,7 +31,7 @@ and tables are the audit copy.
 # 1. image+module step (minutes; the only step that builds residua
 #    artifacts): today's images by the twin, modules by the compiler
 #    built by the import closure under --store
-lean --run benchmarks/koka/KokaBase.rsd images [14274] \
+lean --run benchmarks/koka/KokaBase.rsd images 14274 \
   [out/kbstore/build/rsc-native compile]
 #    env: KB_VARIANT_cfold / KB_VARIANT_deriv — a second source for a
 #    refused program (rows labelled `variant, not the source`)

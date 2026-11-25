@@ -7,13 +7,96 @@
 0.2、0.3、…；对已发布版本的补丁版本（文档、署名、打包、随附测试套件；自举配方的输入不变）编号
 0.x.y。已发布的 tag 永不移动。每个版本列出其源码归档的 SHA-256；tag 处的仓库树与归档一致。
 
+## [0.4] — 2026-11-25
+
+### 新增
+
+- `examples/app04/`（`examples/app04/Stats.rsd`、`examples/app04/Table.rsd`、
+  `examples/app04/Main.rsd`）：多模块命令行程序，读取按行分隔的浮点数文件，
+  用 `Float`（`binary64`）计算 `count`、`min`、`max`、`mean` 与总体
+  `variance`，用 `String` 排版对齐的 ASCII 表格并写出文件，在行格式错误或
+  I/O 错误时打印诊断并以非零码退出。
+- `glue/host/`（`glue/host/procwt.c`、`glue/host/proc9core.h`、
+  `glue/host/proc9.c`）：面向 WebAssembly（Wasmtime C API v50.0.1，读取导出
+  的 `__heap_base` 并自动探测 `driveS`）与 wasm2c 的 C11 `Proc` 执行宿主，
+  内置进程内 9P2000 响应器，提供 `/env/args`、`/dev/time`、`/dev/mono` 及
+  宿主文件读写。
+- `glue/std/`（`glue/std/Args.rsd`、`glue/std/Files.rsd`、
+  `glue/std/Graph.rsd`、`glue/std/Json.rsd`、`glue/std/Map.rsd`、
+  `glue/std/Proc.rsd`、`glue/std/Str.rsd`）及 `lib/ProcBytes.rsd`、
+  `lib/Proc9.rsd`：命令行参数、分块文件 I/O、字符串、JSON、映射表、图、
+  字节切片与 9P2000 帧的标准 `Proc` 模块。
+- `glue/rsd/`（`glue/rsd/main.rsd`、`glue/rsd/build.rsd`）：`rsd run`
+  入口与构建脚本，将含 `import` 的 `Proc` 程序接入 `procwt` 与
+  `wasm-opt --translate-to-exnref`。
+- `lean/nf-compose/NfCompose/HopCompose.lean`、
+  `lean/nf-compose/NfCompose/Rec.lean` 与
+  `lean/nf-compose/NfRec/CheckedStatus.lean`：钉住 `ExecModel` 上的多跳
+  编译复合与有界/良基递归复合定理。
+- `instruments/lrc-host/CheckFloat64.rsd`、
+  `instruments/lrc-host/Float64Oracle.rsd`、
+  `instruments/lrc-host/Wasm2CHost.c`、
+  `instruments/lrc-host/MutantsBound.tsv`、
+  `instruments/lrc-host/MutantsExcl.tsv`、
+  `instruments/lrc-host/MutantsF64.tsv`、
+  `instruments/lrc-host/MutantsFlow.tsv`、
+  `instruments/lrc-host/MutantsKBox.tsv`、
+  `instruments/lrc-host/MutantsLit.tsv`、
+  `instruments/lrc-host/MutantsLoops.tsv`、
+  `instruments/lrc-host/ProgArrFlow.rsd`、
+  `instruments/lrc-host/ProgBound.rsd`、
+  `instruments/lrc-host/ProgKBox.rsd`、
+  `instruments/lrc-host/ProgLitCall.rsd`、
+  `instruments/lrc-host/ProgLitWord.rsd`、
+  `instruments/lrc-host/ProgNumTail.rsd` 与
+  `instruments/lrc-host/ProgPad.rsd`：IEEE-754 `Float`（`binary64`）差分
+  预言机、wasm2c 宿主及编译器变异与回归测试输入。
+
+### 变更
+
+- 在 `bootstrap/seed/stage-14274/` 重切 seed 并更新 `bootstrap/README.md`：
+  以 `rsdc.wasm`（`12,519,278` B，`845b99ef…`，入口 `f896`，`__heap_base`
+  `765288`）与 `rsc.wasm`（`14,275,644` B，`b52b07d1…`，入口 `f2615`，构造字
+  `14274`，`__heap_base` `603704`）取代 0.3 的 seed 文件（`19.9 MB` /
+  `20.5 MB`）；`seed-host.c` 读取加载模块导出的 `__heap_base` 全局量并支持
+  `\0RSDC-ENTRIES\n` 查询头；干净环境重建在 Linux x86-64 上耗时 `105 s`，
+  在 macOS arm64 上耗时 `191 s`。
+- `rsdc/`、`rsc/`、`lib/`、`lib/lrc/`、`docs/EMITTER.md`、`semantics/`、
+  `lean/rsd-cert/Residua/Bootstrap/R2/` 与 `instruments/lrc-host/`：加入
+  IEEE-754 `Float`（`binary64`）、多模块 `import` 支持、`Proc` `do` 记法、
+  `\0RSDC-ENTRIES\n` 入口查询，并更新数组、构造子布局与引用计数各 pass。
+- `lib/AvlMap.rsd`：以 Lean `v4.36.0` 权重平衡树
+  （`Std/Data/DTreeMap/Internal/Def.lean` 与 `Balancing.lean`）的 Apache-2.0
+  移植取代 0.3 中源于 OCaml `stdlib/map.ml` 的移植。
+- `rsd/`、`lib/rsd/` 与 `benchmarks/MANIFEST.tsv`：按 0.4 树更新构建工具
+  模块与基准清单元数据。
+- `lean/nf-compose/NfCompose/Hop.lean` 与
+  `lean/nf-compose/lakefile.lean`：一跳的接纳现在还要求翻译出的程序在目标侧
+  也可接纳；包里构建新增的模块。
+- `gates/semalign/METHOD.md`、`reports/nf-compose/REPORT.md`、
+  `benchmarks/koka/README.md` 与 `benchmarks/koka/README.zh-CN.md`：更正代码
+  片段的标记与一处命令行，含义不变。
+- `README.md`、`README.zh-CN.md`、`CHANGELOG.md`、`CHANGELOG.zh-CN.md`、
+  `docs/`、`NOTICE` 与 `release/`：更新
+  快速开始（从 seed 构建并运行 `examples/app04`）、`docs/BUILD.md` 与
+  `.zh-CN.md`、`docs/VERIFY-RELEASE.md`、`docs/SPECS.md`、`docs/LANGUAGE.md`、
+  `docs/STDLIB.md`、`docs/OVERVIEW.md` 与 `.zh-CN.md`、
+  `docs/RELEASE-NOTES.md` 与 `.zh-CN.md`、`release/GAPS.tsv`、
+  `release/SHIP-RULES.tsv`、`release/PROVENANCE.tsv`、`release/NOTICES.md`、
+  `release/BUILD-INPUTS.tsv`、`release/MANIFEST.md` 与
+  `release/PRIOR-SHIP-SETS.tsv`。
+
+### 移除
+
+- 无（0.3 随附的全部路径在 0.4 中均保留）。
+
 ## [0.3] — 2026-11-24
 
 ### 新增
 
 - `rsd` 构建工具：`rsd build`、`rsd test`、`rsd run`、`rsd cache`
   （调度器与编译 worker 在 `rsd/`；存储、依赖图与会话层在 `lib/rsd/`、`lib/Rsd.rsd`；
-  用户文档 `docs/BUILD.md`；植入行一致性检查 `release/checks/rsd-tool/`）。
+  用户文档 `docs/BUILD.zh-CN.md`；植入行一致性检查 `release/checks/rsd-tool/`）。
   随附的是源码；`lib/laws/RsdScheduleLaws.rsd` 随附 `lib/rsd/schedule.rsd` 的
   调度定律。构建该工具本身需要开发仓库——本归档内可运行的编译器是
   seed 配方。
@@ -84,7 +167,7 @@
   新的 wasm 运行时配方在 Linux x86-64 与 macOS arm64 上运行，无需
   WABT 工具链。
 - 生成物与二进制文件不再随源码归档发布（本版仅随附
-  stage-14274 一对 seed 文件；其余由用户构建或生成）。以下
+  重切的一对 seed 文件；其余由用户构建或生成）。以下
   各路径在所注早前版本中曾随附：
   - `benchmarks/bfs.rscm`（0.1.2）—— 发射模块（生成物）；.rsd 源随附。
   - `benchmarks/bfs.rscm.meta`（0.1.2）—— 发射模块的生成副档。
@@ -131,8 +214,8 @@
   - `bootstrap/ProcWasm2CHost.c`（0.1/0.1.1/0.1.2/0.2）—— wasm2c C 宿主；seed 现经 stage-14274/seed-host.c 在钉住 wasmtime 上运行。
   - `bootstrap/seed/manifest.json`（0.1/0.1.1/0.1.2/0.2）—— 被取代的 seed 清单；stage-14274/CUT.tsv 为 cut 记录。
   - `bootstrap/seed/rsc.rscm`（0.1/0.1.1/0.1.2/0.2）—— 发射模块（生成物）；.rsd 源随附。
-  - `bootstrap/seed/rsc.wasm`（0.1/0.1.1/0.1.2/0.2）—— 被取代的钉住 seed 块；stage-14274 一对是唯一 seed。
-  - `bootstrap/seed/rsdc.wasm`（0.1/0.1.1/0.1.2/0.2）—— 被取代的钉住 seed 块；stage-14274 一对是唯一 seed。
+  - `bootstrap/seed/rsc.wasm`（0.1/0.1.1/0.1.2/0.2）—— 被取代的钉住 seed 块；重切的一对是唯一 seed。
+  - `bootstrap/seed/rsdc.wasm`（0.1/0.1.1/0.1.2/0.2）—— 被取代的钉住 seed 块；重切的一对是唯一 seed。
   - `bootstrap/seed/stage-14274/EXECUTOR-SHA256SUMS`（0.1/0.1.1/0.1.2/0.2）—— wasm2c 路线钉文件；为内部检查工具保留于仓库侧。
   - `bootstrap/seed/stage-14274/WABT-RUNTIME-SHA256SUMS`（0.1/0.1.1/0.1.2/0.2）—— wasm2c 路线钉文件；为内部检查工具保留于仓库侧。
   - `bootstrap/seed/stage-14274/WABT-SHA256SUMS`（0.1/0.1.1/0.1.2/0.2）—— wasm2c 路线钉文件；为内部检查工具保留于仓库侧。
@@ -205,7 +288,7 @@
 
 - 带类型的内容地址（q 格式 v1）：`q(kind, c) =
   SHA-256("<kind> <len>\0" ++ c)`，打印为 `sha256:<hex>`；裸 SHA-256 保留为
-  `digest`，仅用于文件完整性与互操作。（[`docs/QFORMAT.md`](docs/QFORMAT.md)，
+  `digest`，仅用于文件完整性与互操作。（[`docs/QFORMAT.zh-CN.md`](docs/QFORMAT.zh-CN.md)，
   检查 [`release/checks/qformat/`](release/checks/qformat/)）。
 - 在其文法类上闭合的语法引擎：文法数据上的一个函数，与机械验证的参考判定器
   核对一致（`semantics/Syntax/`；源码 `rsdc/syntax/`；轮廓 `rsdc/profiles/*.syn`）。
@@ -282,6 +365,7 @@
 - 归档：`rsd-src.tar`，SHA-256
   `59d0956e3bbaed0ddf176b9bc3ffa0e9fdb401acb1e021400f0e8b99ce110ef1`，201 文件。
 
+[0.4]: https://github.com/residua-labs/Residua/releases/tag/rsd-0.4
 [0.3]: https://github.com/residua-labs/Residua/releases/tag/rsd-0.3
 [0.2]: https://github.com/residua-labs/Residua/releases/tag/rsd-0.2
 [0.1.2]: https://github.com/residua-labs/Residua/releases/tag/rsd-0.1.2

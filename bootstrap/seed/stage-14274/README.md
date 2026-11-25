@@ -1,11 +1,11 @@
 # Stage-14274 bootstrap on a wasm runtime
 
 The two Wasm files in this directory are the seed cut from the fixed point at
-`fc0fb23a3a0710436d35290149f966d18171bb01`. The public entries are `f832`
-for rsdc at word 0 and `f2268` for rsc at construction word 14274; the recipe
+`6d56d5b29ccc485253cc7ea9e7007927ebecb335`. The public entries are `f896`
+for rsdc at word 0 and `f2615` for rsc at construction word 14274; the recipe
 below reads them from `CUT.tsv`, which is the cut's record of itself. The
 seed-recut check at that head recorded the four fixed-point comparisons; the
-producer commands and their receipts are in reports/seed-recut/
+producer commands and their receipts are in reports/rel04/
 (repository-side, not in this archive). From this cut the
 wasm route compiles with the `narrow` layer as its default; the native
 route stays 64-bit.

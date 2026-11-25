@@ -1,0 +1,12 @@
+# FILE	FROM	TO  (FROM occurs exactly once in FILE; every row must make the differential report a mismatch)
+# The boundary's loops, shared by direction and type (lib/lrc/FromWire.rsd `loopFind`, `loopsPlaced`, "The boundary's loops are
+# shared"). The rows show in the image check's chain rows of instruments/lrc-host/ProgBound.rsd, where lists of several types
+# go out and come in: the loop of the other direction called, a loop called for a list of another type, and a loop called
+# under the number of the moment of the twin that lifted it.
+# Not rows: a twin that keeps the loops it lifts to itself (`loops := nr.loops` in `pubTwin` as `loops := loops`): every twin
+# then lifts its own, the values are the same and the module is larger (the LAND-LOOPS note has the bytes).
+# The loops of a twin that is not made, kept (`loops := loops` as `loops := nr.loops` where `pubTwin` gives no declaration):
+# no image has a twin that fails after it lifted a loop.
+lib/lrc/FromWire.rsd	      let key := (1 : Int) :: tyView cx.g ty	      let key := (0 : Int) :: tyView cx.g ty
+lib/lrc/FromWire.rsd	  | (f :: k) :: rest => if k == key then f else loopFind key rest	  | (f :: k) :: rest => if k.headD 0 == key.headD 0 then f else loopFind key rest
+lib/lrc/FromWire.rsd	(if f >= (liftBase : Int) then varMapFind f m :: k else f :: k)	(f :: k)

@@ -57,11 +57,13 @@ structure Iv where
 
 def ivMin : Int := -9223372036854775808
 def ivMax : Int := 9223372036854775807
+def ivSmallLo : Int := -2147483648
+def ivSmallHi : Int := 2147483647
 def ivTop : Iv := { lo := ivMin, hi := ivMax }
 -- the empty interval: no value reaches here
 def ivBot : Iv := { lo := 1, hi := 0 }
 def ivIsBot (a : Iv) : Bool := a.lo > a.hi
-def ivIsTop (a : Iv) : Bool := a.lo == ivMin && a.hi == ivMax
+def ivIsTop (a : Iv) : Bool := a.hi > ivSmallHi && a.lo < ivSmallLo && a.lo == ivMin && a.hi == ivMax
 def ivConst (v : Int) : Iv := { lo := v, hi := v }
 def ivIsConst (a : Iv) : Bool := a.lo == a.hi
 def ivBool : Iv := { lo := 0, hi := 1 }
@@ -78,10 +80,14 @@ def ivLe (a b : Iv) : Bool := ivIsBot a || (!ivIsBot b && b.lo <= a.lo && a.hi <
 -- Does x + y stay inside i64 for every pair. Written so that this arithmetic itself, which is
 -- the stage's own checked arithmetic, never leaves i64.
 def ivAddSafe (x y : Iv) : Bool :=
-  (y.hi <= 0 || x.hi <= ivMax - y.hi) && (y.lo >= 0 || x.lo >= ivMin - y.lo)
+  if x.lo >= ivSmallLo && x.hi <= ivSmallHi && y.lo >= ivSmallLo && y.hi <= ivSmallHi then true
+  else
+    (y.hi <= 0 || x.hi <= ivMax - y.hi) && (y.lo >= 0 || x.lo >= ivMin - y.lo)
 
 def ivSubSafe (x y : Iv) : Bool :=
-  (y.lo >= 0 || x.hi <= ivMax + y.lo) && (y.hi <= 0 || x.lo >= ivMin + y.hi)
+  if x.lo >= ivSmallLo && x.hi <= ivSmallHi && y.lo >= ivSmallLo && y.hi <= ivSmallHi then true
+  else
+    (y.lo >= 0 || x.hi <= ivMax + y.lo) && (y.hi <= 0 || x.lo >= ivMin + y.hi)
 
 -- 3037000499 is the largest word whose square is inside i64
 def ivMulSafe (x y : Iv) : Bool :=
@@ -104,53 +110,143 @@ def ivWCompare (le : Bool) (a b : Iv) : Iv :=
     else ivBool
   else ivBool
 
+-- Scalar operator codes as `Int` (`N.a` on `opPrim`, matching `lib/lrc/Prim.rsd`) so comparisons stay unboxed i64.
+def ipAdd : Int := 6
+def ipSub : Int := 7
+def ipMul : Int := 8
+def ipNeg : Int := 9
+def ipDiv : Int := 10
+def ipMod : Int := 11
+def ipLt : Int := 12
+def ipGt : Int := 13
+def ipEq : Int := 14
+def ipAnd : Int := 15
+def ipOr : Int := 16
+def ipNot : Int := 17
+def ipWAdd : Int := 65
+def ipWSub : Int := 66
+def ipWMul : Int := 67
+def ipWDiv : Int := 68
+def ipWMod : Int := 69
+def ipWLt : Int := 70
+def ipWLe : Int := 71
+def ipWNot : Int := 75
+def ipWShr : Int := 77
+def ipTagOf : Int := 100
+def ipStrEq : Int := 102
+def ipAddW : Int := 103
+def ipSubW : Int := 104
+def ipMulW : Int := 105
+def ipMask : Int := 106
+
 -- the result of operator p on operands in a and b, when it returns at all
-def ivPrim (p : Nat) (a b : Iv) : Iv :=
-  let two := p == primAdd || p == primSub || p == primMul || p == primDiv || p == primMod || p == primLt || p == primGt
-    || p == primEq || p == primAnd || p == primOr || p == primStrEq || p == primAddW || p == primSubW || p == primMulW
-    || (p >= primWAdd && p <= primWShr && p != primWNot)
-  let one := p == primNeg || p == primNot || p == primTagOf || p == primMask || p == primWNot
-  if !two && !one then ivTop
+def ivPrim (p : Int) (a b : Iv) (top : Iv) : Iv :=
+  let two := (p >= ipAdd && p <= ipOr && p != ipNeg) || (p >= ipStrEq && p <= ipMulW)
+    || (p >= ipWAdd && p <= ipWShr && p != ipWNot)
+  let one := p == ipNeg || p == ipNot || p == ipTagOf || p == ipMask || p == ipWNot
+  if !two && !one then top
   else if ivIsBot a || (two && ivIsBot b) then ivBot
-  else if p == primAdd || p == primAddW || p == primWAdd then (if ivAddSafe a b then { lo := a.lo + b.lo, hi := a.hi + b.hi } else ivTop)
-  else if p == primSub || p == primSubW || p == primWSub then (if ivSubSafe a b then { lo := a.lo - b.hi, hi := a.hi - b.lo } else ivTop)
-  else if p == primMul || p == primMulW || p == primWMul then
-    (if ivMulSafe a b then { lo := a.lo * b.lo, hi := a.hi * b.hi } else ivTop)
-  else if p == primNeg then (if a.lo > ivMin then { lo := 0 - a.hi, hi := 0 - a.lo } else ivTop)
-  else if p == primMod then
+  else if p == ipAdd || p == ipAddW || p == ipWAdd then (if ivAddSafe a b then { lo := a.lo + b.lo, hi := a.hi + b.hi } else top)
+  else if p == ipSub || p == ipSubW || p == ipWSub then (if ivSubSafe a b then { lo := a.lo - b.hi, hi := a.hi - b.lo } else top)
+  else if p == ipMul || p == ipMulW || p == ipWMul then
+    (if ivMulSafe a b then { lo := a.lo * b.lo, hi := a.hi * b.hi } else top)
+  else if p == ipNeg then (if a.lo >= ivSmallLo || a.lo > top.lo then { lo := 0 - a.hi, hi := 0 - a.lo } else top)
+  else if p == ipMod then
     -- the wire's modulus has the divisor's sign (lib/lrc/Emit.rsd `emMod`)
     (if b.lo > 0 then { lo := 0, hi := (if a.lo >= 0 && a.hi < b.hi - 1 then a.hi else b.hi - 1) }
-     else if b.hi < 0 then { lo := b.lo + 1, hi := 0 } else ivTop)
-  else if p == primDiv then (if a.lo >= 0 && b.lo > 0 then { lo := 0, hi := a.hi } else ivTop)
-  else if p == primWDiv || p == primWMod then
-    (if a.lo >= 0 then { lo := 0, hi := a.hi } else ivTop)
-  else if p == primWLt || p == primWLe then ivWCompare (p == primWLe) a b
-  else if p == primLt then (if a.hi < b.lo then ivConst 1 else if a.lo >= b.hi then ivConst 0 else ivBool)
-  else if p == primGt then (if a.lo > b.hi then ivConst 1 else if a.hi <= b.lo then ivConst 0 else ivBool)
-  else if p == primEq then
+     else if b.hi < 0 then { lo := b.lo + 1, hi := 0 } else top)
+  else if p == ipDiv then (if a.lo >= 0 && b.lo > 0 then { lo := 0, hi := a.hi } else top)
+  else if p == ipWDiv || p == ipWMod then
+    (if a.lo >= 0 then { lo := 0, hi := a.hi } else top)
+  else if p == ipWLt || p == ipWLe then ivWCompare (p == ipWLe) a b
+  else if p == ipLt then (if a.hi < b.lo then ivConst 1 else if a.lo >= b.hi then ivConst 0 else ivBool)
+  else if p == ipGt then (if a.lo > b.hi then ivConst 1 else if a.hi <= b.lo then ivConst 0 else ivBool)
+  else if p == ipEq then
     (if a.hi < b.lo || b.hi < a.lo then ivConst 0
      else if ivIsConst a && ivIsConst b then ivConst 1 else ivBool)
-  else if p == primAnd || p == primOr || p == primStrEq then ivBool
-  else if p == primNot then (if ivIsConst a && a.lo == 0 then ivConst 1 else if a.lo >= 1 then ivConst 0 else ivBool)
-  else if p == primTagOf then { lo := 0, hi := 65535 }
-  else ivTop
+  else if p == ipAnd || p == ipOr || p == ipStrEq then ivBool
+  else if p == ipNot then (if ivIsConst a && a.lo == 0 then ivConst 1 else if a.lo >= 1 then ivConst 0 else ivBool)
+  else if p == ipTagOf then { lo := 0, hi := 65535 }
+  else top
 
-/-! ## A map from a key to an interval (lib/AvlMap.rsd; the bounds are the node's two spare words) -/
+/-! ## A map from a key to an interval (specialized 6-field balanced tree) -/
 
-structure IvMap where
-  m : Map
+structure IvTree where
+  h : Int
+  key : Int
+  lo : Int
+  hi : Int
+  left : List IvTree
+  right : List IvTree
   deriving Inhabited
 
-def ivmEmpty : IvMap := { m := map0 0 }
+def ivt0 : IvTree := { h := 0, key := 0, lo := 0, hi := 0, left := [], right := [] }
 
-def ivmHas (t : IvMap) (k : Int) : Bool := (mapNode t.m k).tag != 0
+def ivtKid : List IvTree → IvTree
+  | [] => ivt0
+  | c :: _ => c
+
+def ivtBox (t : IvTree) : List IvTree := if t.h == 0 then [] else [t]
+
+def ivtMk (l : IvTree) (key lo hi : Int) (r : IvTree) : IvTree :=
+  { h := (if l.h > r.h then l.h else r.h) + 1, key := key, lo := lo, hi := hi, left := ivtBox l, right := ivtBox r }
+
+def ivtBal (l : IvTree) (key lo hi : Int) (r : IvTree) : IvTree :=
+  if l.h > r.h + 2 then
+    let ll := ivtKid l.left
+    let lr := ivtKid l.right
+    if ll.h >= lr.h then ivtMk ll l.key l.lo l.hi (ivtMk lr key lo hi r)
+    else ivtMk (ivtMk ll l.key l.lo l.hi (ivtKid lr.left)) lr.key lr.lo lr.hi (ivtMk (ivtKid lr.right) key lo hi r)
+  else if r.h > l.h + 2 then
+    let rl := ivtKid r.left
+    let rr := ivtKid r.right
+    if rr.h >= rl.h then ivtMk (ivtMk l key lo hi rl) r.key r.lo r.hi rr
+    else ivtMk (ivtMk l key lo hi (ivtKid rl.left)) rl.key rl.lo rl.hi (ivtMk (ivtKid rl.right) r.key r.lo r.hi rr)
+  else ivtMk l key lo hi r
+
+partial def ivtNode (m : IvTree) (k : Int) : IvTree :=
+  if m.h == 0 || k == m.key then m
+  else
+    match (if k < m.key then m.left else m.right) with
+    | [] => ivt0
+    | c :: _ => ivtNode c k
+
+partial def ivtPut (m : IvTree) (k lo hi : Int) : IvTree :=
+  if m.h == 0 then { h := 1, key := k, lo := lo, hi := hi, left := [], right := [] }
+  else if k == m.key then { m with lo := lo, hi := hi }
+  else if k < m.key then
+    match m.left with
+    | [] =>
+      let leaf : IvTree := { h := 1, key := k, lo := lo, hi := hi, left := [], right := [] }
+      if m.right.isEmpty then { m with h := 2, left := [leaf] } else { m with left := [leaf] }
+    | l :: _ =>
+      let l1 := ivtPut l k lo hi
+      if l1.h == l.h then { m with left := [l1] }
+      else ivtBal l1 m.key m.lo m.hi (ivtKid m.right)
+  else
+    match m.right with
+    | [] =>
+      let leaf : IvTree := { h := 1, key := k, lo := lo, hi := hi, left := [], right := [] }
+      if m.left.isEmpty then { m with h := 2, right := [leaf] } else { m with right := [leaf] }
+    | r :: _ =>
+      let r1 := ivtPut r k lo hi
+      if r1.h == r.h then { m with right := [r1] }
+      else ivtBal (ivtKid m.left) m.key m.lo m.hi r1
+
+structure IvMap where
+  m : IvTree
+  deriving Inhabited
+
+def ivmEmpty : IvMap := { m := ivt0 }
+
+def ivmHas (t : IvMap) (k : Int) : Bool := (ivtNode t.m k).h != 0
 
 -- the entry of k, `dflt` when there is none
 def ivmFind (t : IvMap) (k : Int) (dflt : Iv) : Iv :=
-  let r := mapNode t.m k
-  if r.tag == 0 then dflt else { lo := r.sa, hi := r.sb }
+  let r := ivtNode t.m k
+  if r.h == 0 then dflt else { lo := r.lo, hi := r.hi }
 
-def ivmSet (t : IvMap) (k : Int) (a : Iv) : IvMap := { m := mapPut t.m k 1 a.lo a.hi [] }
+def ivmSet (t : IvMap) (k : Int) (a : Iv) : IvMap := { m := ivtPut t.m k a.lo a.hi }
 
 structure IvPut where
   t : IvMap
@@ -178,10 +274,10 @@ def ivDown (v : Int) : List Int → Int
 def ivmJoin (t : IvMap) (k : Int) (a : Iv) (wide : Bool) : IvPut :=
   if ivIsBot a then { t := t, changed := false }
   else
-    let r := mapNode t.m k
-    if r.tag == 0 then { t := ivmSet t k a, changed := true }
+    let r := ivtNode t.m k
+    if r.h == 0 then { t := ivmSet t k a, changed := true }
     else
-      let old : Iv := { lo := r.sa, hi := r.sb }
+      let old : Iv := { lo := r.lo, hi := r.hi }
       if ivLe a old then { t := t, changed := false }
       else
         let lo := if a.lo < old.lo then (if wide then ivDown a.lo ivSteps else a.lo) else old.lo
@@ -191,12 +287,14 @@ def ivmJoin (t : IvMap) (k : Int) (a : Iv) (wide : Bool) : IvPut :=
 /-! ## The table (the certificate) and the walk -/
 
 -- parameter or result i of function f; position 255 marks "a call reaches f's facts"
-def rgAt (f i : Nat) : Int := ((f * 256 + i : Nat) : Int)
-def rgMark : Nat := 255
+def rgAt (f i : Int) : Int := f * 256 + i
+def rgMark : Int := 255
 
 -- scalar number n at byte `off` of the constructor
-def rgKey (i : CtorInfo) (n off : Nat) : Int :=
-  ((((i.tid * 4096 + i.cidx) * 64 + n) * 4096 + off : Nat) : Int)
+def rgKeyI (tid cidx ni oi : Int) : Int :=
+  if tid < 8192 && cidx < 256 && ni < 16 && oi < 64 then
+    ((tid * 256 + cidx) * 16 + ni) * 64 + oi
+  else 0 - 1 - (((tid * 4096 + cidx) * 64 + ni) * 4096 + oi)
 
 -- ps: parameters, for the calls that go to a function's facts (its clone, or a list function).
 -- rc: the results of the body that assumes ps. rp: the results of the body that assumes nothing.
@@ -211,7 +309,7 @@ structure RgS where
   poison : Bool
   changed : Bool
   jm : IvMap
-  used : Nat
+  used : Int
   deriving Inhabited
 
 def rgS0 : RgS :=
@@ -223,14 +321,17 @@ def rgS0 : RgS :=
 -- rw: write the new body; base: the index of the first clone.
 structure RgCx where
   nImg : Nat
+  nImgI : Int
+  nOwnHi : Int
   decls : List Decl
   -- the same declarations by function number (lib/lrc/Ir.rsd `DeclTab`)
   tab : DeclTab
   -- the call graph's components (lib/lrc/CallGraph.rsd `callScc`)
   scc : CallScc
-  self : Nat
+  self : Int
   pub : Bool
   comp : List Int
+  compId : Int := -1
   all : Bool
   cloned : List Int
   -- for each of them its place in `cloned`
@@ -238,6 +339,7 @@ structure RgCx where
   wide : Bool
   rw : Bool
   base : Nat
+  top : Iv
   deriving Inhabited
 
 -- iv: a scalar variable's interval, the whole range when absent. ck: an object variable's
@@ -247,6 +349,7 @@ structure RgEnv where
   ck : IvMap
   deriving Inhabited
 
+def rgIvWith (env : RgEnv) (y : Int) (top : Iv) : Iv := if y < 0 then top else ivmFind env.iv y top
 def rgIv (env : RgEnv) (y : Int) : Iv := if y < 0 then ivTop else ivmFind env.iv y ivTop
 
 -- the numbers of w bytes
@@ -264,78 +367,98 @@ def rgOfType (ty : Int) (a : Iv) : Iv := if ty == tyU8 then ivMeet a (rgOfWidth 
 -- `sset` of a narrow field the type uint8, uint16 or uint32)
 def rgOfStore (ty : Int) (a : Iv) : Iv := if tyWidth ty < 8 then ivMeet a (rgOfWidth (tyWidth ty)) else a
 
+def rgBindIvI (env : RgEnv) (x : Int) (ty : Int) (a : Iv) (top : Iv) : RgEnv :=
+  if !tyIsScalar ty then env
+  else
+    let a1 := rgOfType ty a
+    if a1.hi > ivSmallHi && a1.lo < ivSmallLo && a1.lo == top.lo && a1.hi == top.hi && (env.iv.m.h == 0 || !ivmHas env.iv x) then
+      env
+    else { env with iv := ivmSet env.iv x a1 }
+
 def rgBindIv (env : RgEnv) (x : Nat) (ty : Int) (a : Iv) : RgEnv :=
-  if tyIsScalar ty then { env with iv := ivmSet env.iv (x : Int) (rgOfType ty a) } else env
+  if !tyIsScalar ty then env
+  else
+    let a1 := rgOfType ty a
+    if ivIsTop a1 && (env.iv.m.h == 0 || !ivmHas env.iv (x : Int)) then env
+    else { env with iv := ivmSet env.iv (x : Int) a1 }
+
+def isOwnFnI (cx : RgCx) (f : Int) : Bool := f >= cx.nImgI && f < cx.nOwnHi
 
 -- does a call of f from the body walked go to f's facts (its clone, or a list function)
-def rgToFacts (cx : RgCx) (f : Nat) : Bool :=
-  isOwnFn cx.nImg f || ((cx.all || imContains cx.clonedAt f) && !(cx.pub && cx.comp.contains (f : Int)))
+def rgToFactsI (cx : RgCx) (f : Int) : Bool :=
+  isOwnFnI cx f || ((cx.all || itHas cx.clonedAt.m f)
+    && !(cx.pub && (sccSameCompI cx.self cx.compId cx.scc.compOf f || (!cx.comp.isEmpty && cx.comp.contains f))))
 
 -- the arguments of a call joined into f's parameters
-def rgArgs (env : RgEnv) (f : Nat) (wide : Bool) : Nat → List Int → RgS → RgS
+def rgArgs (env : RgEnv) (f : Int) (wide : Bool) : Int → List Int → RgS → RgS
   | _, [], s => s
   | i, y :: ys, s =>
     let p := ivmJoin s.ps (rgAt f i) (rgIv env y) wide
     rgArgs env f wide (i + 1) ys { s with ps := p.t, changed := s.changed || p.changed }
 
 -- the results of a call bound: x, ty, x, ty, ...
-def rgResults (t : IvMap) (f : Nat) (known : Bool) : Nat → List Int → RgEnv → RgEnv
+def rgResults (t : IvMap) (f : Int) (known : Bool) (top : Iv) : Int → List Int → RgEnv → RgEnv
   | i, x :: ty :: rest, env =>
-    rgResults t f known (i + 1) rest (rgBindIv env x.toNat ty (if known then ivmFind t (rgAt f i) ivBot else ivTop))
+    rgResults t f known top (i + 1) rest (rgBindIvI env x ty (if known then ivmFind t (rgAt f i) ivBot else top) top)
   | _, _, env => env
 
+def rgBindFapResults (t : IvMap) (f : Int) (known : Bool) (top : Iv) (n : N) (env : RgEnv) : RgEnv :=
+  let env0 := rgBindIvI env n.a n.b (if known then ivmFind t (rgAt f 0) ivBot else top) top
+  if n.ys.isEmpty then env0 else rgResults t f known top 1 n.ys env0
+
 -- the values returned joined into the results of the body walked
-def rgRets (cx : RgCx) (env : RgEnv) : Nat → List Int → RgS → RgS
+def rgRets (cx : RgCx) (env : RgEnv) : Int → List Int → RgS → RgS
   | _, [], s => s
   | i, y :: ys, s =>
-    let p := ivmJoin (if cx.pub then s.rp else s.rc) (rgAt cx.self i) (rgIv env y) cx.wide
+    let p := ivmJoin (if cx.pub then s.rp else s.rc) (rgAt cx.self i) (rgIvWith env y cx.top) cx.wide
     rgRets cx env (i + 1) ys
       (if cx.pub then { s with rp := p.t, changed := s.changed || p.changed }
        else { s with rc := p.t, changed := s.changed || p.changed })
 
-def rgJumps (env : RgEnv) (j : Nat) : Nat → List Int → IvMap → IvMap
+def rgJumps (cx : RgCx) (env : RgEnv) (j : Int) : Int → List Int → IvMap → IvMap
   | _, [], t => (ivmJoin t (rgAt j rgMark) (ivConst 0) false).t
-  | i, y :: ys, t => rgJumps env j (i + 1) ys (ivmJoin t (rgAt j i) (rgIv env y) false).t
+  | i, y :: ys, t => rgJumps cx env j (i + 1) ys (ivmJoin t (rgAt j i) (rgIvWith env y cx.top) false).t
 
-def rgJoinEnv (jm : IvMap) (j : Nat) : Nat → List Param → RgEnv → RgEnv
-  | _, [], env => env
-  | i, p :: ps, env => rgJoinEnv jm j (i + 1) ps (rgBindIv env p.x p.ty (ivmFind jm (rgAt j i) ivBot))
+def rgJoinEnvYs (jm : IvMap) (j : Int) (top : Iv) : Int → List Int → RgEnv → RgEnv
+  | i, x :: _ :: ty :: rest, env => rgJoinEnvYs jm j top (i + 1) rest (rgBindIvI env x ty (ivmFind jm (rgAt j i) ivBot) top)
+  | _, _, env => env
 
 -- the interval of an expression that is not a call
-def rgExpr (env : RgEnv) (s : RgS) (e : N) : Iv :=
+def rgExpr (cx : RgCx) (env : RgEnv) (s : RgS) (e : N) : Iv :=
   if e.op == opLit then ivConst e.a
   else if e.op == opPrim then
-    ivPrim (primOp e) (rgIv env (intAt 0 e.ys)) (rgIv env (intAt 1 e.ys))
+    ivPrim e.a (rgIvWith env (intAt 0 e.ys) cx.top) (rgIvWith env (intAt 1 e.ys) cx.top) cx.top
   else if e.op == opSProj then
-    let x := (sprojVar e : Int)
-    let of := rgOfWidth (sprojWidth e)
+    let x := intAt 0 e.ys
+    let w := sprojWidth e
+    let of := if w < 8 then rgOfWidth w else cx.top
     if s.poison || !ivmHas env.ck x then of
     else
-      let c := ivmFind env.ck x ivTop
-      ivMeet of (ivmFind s.fs (rgKey { cidx := c.hi.toNat, size := 0, ssize := 0, tid := c.lo.toNat } (sprojN e) (sprojOff e)) ivBot)
+      let c := ivmFind env.ck x cx.top
+      ivMeet of (ivmFind s.fs (rgKeyI c.lo c.hi e.a e.b) ivBot)
   else if e.op == opIsShared then ivBool
-  else ivTop
+  else cx.top
 
 -- the expression as the facts let it be written
-def rgRewrite (env : RgEnv) (e : N) (r : Iv) : N :=
+def rgRewrite (cx : RgCx) (env : RgEnv) (e : N) (r : Iv) : N :=
   if e.op != opPrim then e
   else
-    let p := primOp e
-    let a := rgIv env (intAt 0 e.ys)
-    let b := rgIv env (intAt 1 e.ys)
+    let p : Int := e.a
+    let a := rgIvWith env (intAt 0 e.ys) cx.top
+    let b := rgIvWith env (intAt 1 e.ys) cx.top
     if ivIsBot a || ivIsBot b then e
-    else if (p == primLt || p == primGt || p == primEq || p == primNot) && ivIsConst r then mkLit r.lo
-    else if p == primAdd && ivAddSafe a b then { e with a := (primAddW : Int) }
-    else if p == primSub && ivSubSafe a b then { e with a := (primSubW : Int) }
-    else if p == primMul && ivMulSafe a b then { e with a := (primMulW : Int) }
-    else if p == primMod && ivIsConst b && ivPow2 b.lo then
+    else if (p == ipLt || p == ipGt || p == ipEq || p == ipNot) && ivIsConst r then mkLit r.lo
+    else if p == ipAdd && ivAddSafe a b then { e with a := ipAddW }
+    else if p == ipSub && ivSubSafe a b then { e with a := ipSubW }
+    else if p == ipMul && ivMulSafe a b then { e with a := ipMulW }
+    else if p == ipMod && ivIsConst b && ivPow2 b.lo then
       { e with a := (primMask : Int), b := b.lo - 1, ys := [intAt 0 e.ys] }
     else e
 
 -- is e a modulus that gives back its dividend: a word that is not negative and below every divisor it
 -- can meet (the wire's modulus has the divisor's sign, lib/lrc/Emit.rsd `emMod`)
 def rgSame (env : RgEnv) (e : N) : Bool :=
-  e.op == opPrim && primOp e == primMod && intAt 0 e.ys >= 0 &&
+  e.op == opPrim && e.a == ipMod && intAt 0 e.ys >= 0 &&
     (let a := rgIv env (intAt 0 e.ys)
      let b := rgIv env (intAt 1 e.ys)
      !ivIsBot a && !ivIsBot b && a.lo >= 0 && b.lo > a.hi)
@@ -363,25 +486,86 @@ structure RgAlts where
   alts : List N
   deriving Inhabited
 
+-- Read-only fixpoint scan (`cx.rw == false`): tail-recursive over instructions and alternatives,
+-- allocating no IR nodes or child lists during `rgIterate` and `rangeAccepts`.
+mutual
+partial def rgScan (cx : RgCx) (env : RgEnv) (s : RgS) (n : N) : RgS :=
+  if n.op == opVDecl then
+    let e := vdeclExpr n
+    if e.op == opFap then
+      let fi : Int := e.a
+      let known := rgHasBody fi.toNat cx.tab
+      let facts := known && rgToFactsI cx fi
+      let s0 := if known || s.poison then s else { s with poison := true, changed := true }
+      let s1 := if facts then
+          let m := ivmJoin s0.ps (rgAt fi rgMark) (ivConst 0) false
+          rgArgs env fi cx.wide 0 e.ys { s0 with ps := m.t, changed := s0.changed || m.changed }
+        else s0
+      let env1 := rgBindFapResults (if facts then s1.rc else s1.rp) fi known cx.top n env
+      rgScan cx env1 s1 (bodyOf n)
+    else
+      let v := rgExpr cx env s e
+      let env1 := if e.op == opCtor || e.op == opReuse then
+          { env with ck := ivmSet env.ck n.a { lo := e.d, hi := e.a } }
+        else rgBindIvI env n.a n.b v cx.top
+      rgScan cx env1 s (bodyOf n)
+  else if n.op == opSSet then
+    let x := n.a
+    let s1 := if s.poison then s
+      else if !ivmHas env.ck x then { s with poison := true, changed := true }
+      else
+        let c := ivmFind env.ck x cx.top
+        let p := ivmJoin s.fs (rgKeyI c.lo c.hi n.b n.c)
+          (rgOfStore n.d (rgIvWith env (intAt 0 n.ys) cx.top)) cx.wide
+        { s with fs := p.t, changed := s.changed || p.changed }
+    rgScan cx env s1 (bodyOf n)
+  else if n.op == opCase then
+    let x := n.a
+    if tyIsScalar n.b then rgScanAlts cx env s x true (rgIvWith env x cx.top) (caseAlts n)
+    else rgScanAlts cx env s x false cx.top (caseAlts n)
+  else if n.op == opJDecl then
+    let j : Int := n.a
+    let s1 := rgScan cx env s (bodyOf n)
+    if ivmHas s1.jm (rgAt j rgMark) then
+      rgScan cx (rgJoinEnvYs s1.jm j cx.top 0 n.ys env) s1 (jdeclBody n)
+    else s1
+  else if n.op == opJmp then { s with jm := rgJumps cx env n.a 0 (jmpArgs n) s.jm }
+  else if n.op == opRet then rgRets cx env 0 (retArgs n) s
+  else if isTerminal n then s
+  else rgScan cx env s (bodyOf n)
+
+partial def rgScanAlts (cx : RgCx) (env : RgEnv) (s : RgS) (x : Int) (scalar : Bool) (v : Iv) : List N → RgS
+  | [] => s
+  | alt :: alts =>
+    let c := alt.a
+    if scalar && !altIsDefault alt && (ivIsBot v || c < v.lo || c > v.hi) then
+      rgScanAlts cx env s x scalar v alts
+    else
+      let env1 := if altIsDefault alt then env
+        else if scalar then { env with iv := ivmSet env.iv x (ivConst c) }
+        else { env with ck := ivmSet env.ck x { lo := alt.d, hi := c } }
+      rgScanAlts cx env (rgScan cx env1 s (altBody alt)) x scalar v alts
+end
+
 mutual
 partial def rgGo (cx : RgCx) (env : RgEnv) (s : RgS) (n : N) : RgR :=
   if n.op == opVDecl then
     let e := vdeclExpr n
     let x := vdeclVar n
     if e.op == opFap then
-      let f := fapFn e
-      let known := rgHasBody f cx.tab
-      let facts := known && rgToFacts cx f
+      let fi : Int := e.a
+      let known := rgHasBody fi.toNat cx.tab
+      let facts := known && rgToFactsI cx fi
       -- a function without a body here may build cells that no store shows: no field fact holds
       let s0 := if known || s.poison then s else { s with poison := true, changed := true }
       let s1 := if facts then
-          let m := ivmJoin s0.ps (rgAt f rgMark) (ivConst 0) false
-          rgArgs env f cx.wide 0 e.ys { s0 with ps := m.t, changed := s0.changed || m.changed }
+          let m := ivmJoin s0.ps (rgAt fi rgMark) (ivConst 0) false
+          rgArgs env fi cx.wide 0 e.ys { s0 with ps := m.t, changed := s0.changed || m.changed }
         else s0
-      let env1 := rgResults (if facts then s1.rc else s1.rp) f known 0 (vdeclBinds n) env
+      let env1 := rgBindFapResults (if facts then s1.rc else s1.rp) fi known cx.top n env
       let r := rgGo cx env1 s1 (bodyOf n)
-      let e1 := if cx.rw && facts && !isOwnFn cx.nImg f then
-          { e with a := ((cx.base + (imFind cx.clonedAt f).toNat : Nat) : Int) }
+      let e1 := if cx.rw && facts && !isOwnFnI cx fi then
+          { e with a := (cx.base : Int) + itFind cx.clonedAt.m fi }
         else e
       { s := r.s, node := { n with kids := [e1, r.node] } }
     else if cx.rw && rgSame env e then
@@ -390,45 +574,45 @@ partial def rgGo (cx : RgCx) (env : RgEnv) (s : RgS) (n : N) : RgR :=
       -- and a function whose parameters' facts take the masks away is worth its clone (`rgGains`)
       rgGo cx env { s with used := s.used + 2 } (replaceVar x (intAt 0 e.ys).toNat (bodyOf n))
     else
-      let v := rgExpr env s e
+      let v := rgExpr cx env s e
       let env1 := if e.op == opCtor || e.op == opReuse then
-          { env with ck := ivmSet env.ck (x : Int) { lo := ((infoOf e).tid : Int), hi := ((infoOf e).cidx : Int) } }
-        else rgBindIv env x (vdeclTy n) v
-      let e1 := if cx.rw then rgRewrite env e (rgIv env1 (x : Int)) else e
+          { env with ck := ivmSet env.ck n.a { lo := e.d, hi := e.a } }
+        else rgBindIvI env n.a n.b v cx.top
+      let e1 := if cx.rw then rgRewrite cx env e (rgIvWith env1 n.a cx.top) else e
       let r := rgGo cx env1 (if e1.op != e.op || e1.a != e.a then { s with used := s.used + 1 } else s) (bodyOf n)
       { s := r.s, node := { n with kids := [e1, r.node] } }
   else if n.op == opSSet then
-    let x := (ssetVar n : Int)
+    let x := n.a
     let s1 := if s.poison then s
       else if !ivmHas env.ck x then { s with poison := true, changed := true }
       else
-        let c := ivmFind env.ck x ivTop
-        let p := ivmJoin s.fs (rgKey { cidx := c.hi.toNat, size := 0, ssize := 0, tid := c.lo.toNat } (ssetN n) (ssetOff n))
-          (rgOfStore n.d (rgIv env (ssetArg n : Int))) cx.wide
+        let c := ivmFind env.ck x cx.top
+        let p := ivmJoin s.fs (rgKeyI c.lo c.hi n.b n.c)
+          (rgOfStore n.d (rgIvWith env (intAt 0 n.ys) cx.top)) cx.wide
         { s with fs := p.t, changed := s.changed || p.changed }
     let r := rgGo cx env s1 (bodyOf n)
     { s := r.s, node := setBody n r.node }
   else if n.op == opCase then
-    let x := (caseVar n : Int)
-    if tyIsScalar (caseTy n) then
-      let v := rgIv env x
+    let x := n.a
+    if tyIsScalar n.b then
+      let v := rgIvWith env x cx.top
       match (if cx.rw && ivIsConst v then rgPick v.lo (caseAlts n) else none) with
       | some b => rgGo cx env { s with used := s.used + 1 } b
       | none =>
         let r := rgAlts cx env s x true v (caseAlts n)
         { s := r.s, node := { n with kids := r.alts } }
     else
-      let r := rgAlts cx env s x false ivTop (caseAlts n)
+      let r := rgAlts cx env s x false cx.top (caseAlts n)
       { s := r.s, node := { n with kids := r.alts } }
   else if n.op == opJDecl then
-    let j := jdeclId n
+    let j : Int := n.a
     let b := rgGo cx env s (bodyOf n)
     if ivmHas b.s.jm (rgAt j rgMark) then
-      let v := rgGo cx (rgJoinEnv b.s.jm j 0 (jdeclParams n) env) b.s (jdeclBody n)
+      let v := rgGo cx (rgJoinEnvYs b.s.jm j cx.top 0 n.ys env) b.s (jdeclBody n)
       { s := v.s, node := { n with kids := [v.node, b.node] } }
     else { s := b.s, node := { n with kids := [jdeclBody n, b.node] } }
   else if n.op == opJmp then
-    { s := { s with jm := rgJumps env (jmpId n) 0 (jmpArgs n) s.jm }, node := n }
+    { s := { s with jm := rgJumps cx env n.a 0 (jmpArgs n) s.jm }, node := n }
   else if n.op == opRet then { s := rgRets cx env 0 (retArgs n) s, node := n }
   else if isTerminal n then { s := s, node := n }
   else
@@ -438,21 +622,21 @@ partial def rgGo (cx : RgCx) (env : RgEnv) (s : RgS) (n : N) : RgR :=
 partial def rgAlts (cx : RgCx) (env : RgEnv) (s : RgS) (x : Int) (scalar : Bool) (v : Iv) : List N → RgAlts
   | [] => { s := s, alts := [] }
   | alt :: alts =>
-    let c := ((infoOf alt).cidx : Int)
+    let c := alt.a
     if scalar && !altIsDefault alt && (ivIsBot v || c < v.lo || c > v.hi) then
       let r := rgAlts cx env s x scalar v alts
       { s := r.s, alts := alt :: r.alts }
     else
       let env1 := if altIsDefault alt then env
         else if scalar then { env with iv := ivmSet env.iv x (ivConst c) }
-        else { env with ck := ivmSet env.ck x { lo := ((infoOf alt).tid : Int), hi := c } }
+        else { env with ck := ivmSet env.ck x { lo := alt.d, hi := c } }
       let b := rgGo cx env1 s (altBody alt)
       let r := rgAlts cx env b.s x scalar v alts
       { s := r.s, alts := altSetBody alt b.node :: r.alts }
 end
 
 -- the parameters of a body: nothing known for the body that assumes nothing, ps for the other
-def rgParams (f : Nat) (pub : Bool) (ps : IvMap) : Nat → List Param → RgEnv → RgEnv
+def rgParams (f : Int) (pub : Bool) (ps : IvMap) : Int → List Param → RgEnv → RgEnv
   | _, [], env => env
   | i, p :: rest, env =>
     rgParams f pub ps (i + 1) rest (rgBindIv env p.x p.ty (if pub then ivTop else ivmFind ps (rgAt f i) ivBot))
@@ -461,12 +645,19 @@ def rgEnv0 : RgEnv := { iv := ivmEmpty, ck := ivmEmpty }
 
 -- one body walked: its state, and in `rw` its new body
 def rgBody (cx : RgCx) (groups : List (List Int)) (d : Decl) (pub : Bool) (s : RgS) : RgR :=
-  let cx1 := { cx with self := d.f, pub := pub, comp := sccOf cx.scc (d.f : Int) }
-  let r := rgGo cx1 (rgParams d.f pub s.ps 0 d.xs rgEnv0) { s with jm := ivmEmpty } d.body
-  { s := { r.s with jm := ivmEmpty }, node := r.node }
+  let df : Int := (d.f : Int)
+  let compId := if !pub then -1 else sccCompNum cx.scc df
+  let cx1 := { cx with self := df, pub := pub, comp := [], compId := compId }
+  let env0 := rgParams df pub s.ps 0 d.xs rgEnv0
+  if !cx.rw then
+    let s1 := rgScan cx1 env0 { s with jm := ivmEmpty } d.body
+    { s := { s1 with jm := ivmEmpty }, node := d.body }
+  else
+    let r := rgGo cx1 env0 { s with jm := ivmEmpty } d.body
+    { s := { r.s with jm := ivmEmpty }, node := r.node }
 
 -- does function f have facts to walk a body under: a list function, or an image function that is cloned
-def rgHasFacts (cx : RgCx) (f : Nat) : Bool := isOwnFn cx.nImg f || cx.all || imContains cx.clonedAt f
+def rgHasFactsI (cx : RgCx) (f : Int) : Bool := isOwnFnI cx f || cx.all || itHas cx.clonedAt.m f
 
 -- one round: every body that can run, each joined into the table
 def rgRound (cx : RgCx) (groups : List (List Int)) : List Decl → RgS → RgS
@@ -474,8 +665,9 @@ def rgRound (cx : RgCx) (groups : List (List Int)) : List Decl → RgS → RgS
   | d :: ds, s =>
     if d.ext then rgRound cx groups ds s
     else
-      let s1 := if isOwnFn cx.nImg d.f then s else (rgBody cx groups d true s).s
-      let s2 := if rgHasFacts cx d.f && ivmHas s1.ps (rgAt d.f rgMark) then (rgBody cx groups d false s1).s else s1
+      let df : Int := (d.f : Int)
+      let s1 := if isOwnFnI cx df then s else (rgBody cx groups d true s).s
+      let s2 := if rgHasFactsI cx df && ivmHas s1.ps (rgAt df rgMark) then (rgBody cx groups d false s1).s else s1
       rgRound cx groups ds s2
 
 -- rounds until nothing changes; `ok` is false when the limit is reached first
@@ -484,53 +676,236 @@ structure RgFix where
   ok : Bool
   deriving Inhabited
 
-def rgWidenAt : Nat := 4
+def rgWidenAt : Int := 4
 
-def rgIterate (cx : RgCx) (groups : List (List Int)) : Nat → Nat → RgS → RgFix
+def rgIterate (cx : RgCx) (groups : List (List Int)) : Nat → Int → RgS → RgFix
   | 0, _, s => { s := s, ok := false }
   | k + 1, round, s =>
     let s1 := rgRound { cx with wide := round >= rgWidenAt } groups cx.decls { s with changed := false }
     if s1.changed then rgIterate cx groups k (round + 1) s1 else { s := s1, ok := true }
 
+-- Per-declaration read summary and monotone revision stamps for `rgIterateT`:
+-- body scan k begins at `clk = 2 * k` and stamps any table growth with `2 * k + 1`, so an input X
+-- read by `(d, pub)` has changed since its last scan iff `rev(X) > lastRun(d, pub)`. `rangeAccepts`
+-- still checks the resulting certificate with an unskipped `rgRound` pass over every declaration.
+structure RgDep where
+  d : Decl
+  df : Int
+  compId : Int
+  callees : List Int
+  hasSProj : Bool
+  deriving Inhabited
+
+structure RgDepAcc where
+  seen : VSet
+  callees : List Int
+  hasSProj : Bool
+  deriving Inhabited
+
+mutual
+partial def rgDepGo (n : N) (a : RgDepAcc) : RgDepAcc :=
+  if n.op == opVDecl then
+    let e := vdeclExpr n
+    let a1 := if e.op == opFap then
+        let fi : Int := e.a
+        if fi >= 0 && !vsContainsI a.seen fi then { a with seen := vsInsertI a.seen fi, callees := fi :: a.callees }
+        else a
+      else if e.op == opSProj then { a with hasSProj := true }
+      else a
+    rgDepGo (bodyOf n) a1
+  else if n.op == opJDecl then rgDepGo (bodyOf n) (rgDepGo (jdeclBody n) a)
+  else if n.op == opCase then rgDepAlts (caseAlts n) a
+  else if isTerminal n then a
+  else rgDepGo (bodyOf n) a
+
+partial def rgDepAlts : List N → RgDepAcc → RgDepAcc
+  | [], a => a
+  | alt :: alts, a => rgDepAlts alts (rgDepGo (altBody alt) a)
+end
+
+def revRgDeps : List RgDep → List RgDep → List RgDep
+  | [], acc => acc
+  | x :: xs, acc => revRgDeps xs (x :: acc)
+
+def rgDepsGo (scc : CallScc) : List Decl → List RgDep → List RgDep
+  | [], acc => revRgDeps acc []
+  | d :: ds, acc =>
+    if d.ext then rgDepsGo scc ds acc
+    else
+      let df : Int := (d.f : Int)
+      let compId := sccCompNum scc df
+      let a := rgDepGo d.body { seen := vsEmpty, callees := [], hasSProj := false }
+      rgDepsGo scc ds ({ d := d, df := df, compId := compId, callees := a.callees, hasSProj := a.hasSProj } :: acc)
+
+def rgBodySet : List Decl → VSet → VSet
+  | [], w => w
+  | d :: ds, w => rgBodySet ds (if d.ext then w else vsInsertI w (d.f : Int))
+
+structure RgTrack where
+  s : RgS
+  clk : Int
+  psRev : ITree
+  rcRev : ITree
+  rpRev : ITree
+  fsRev : Int
+  lastPub : ITree
+  lastPriv : ITree
+  deriving Inhabited
+
+def rgTrack0 : RgTrack :=
+  { s := rgS0, clk := 2, psRev := it0, rcRev := it0, rpRev := it0, fsRev := -1, lastPub := it0, lastPriv := it0 }
+
+mutual
+partial def rgScanT (cx : RgCx) (bodies : VSet) (tMut : Int) (env : RgEnv) (tr : RgTrack) (n : N) : RgTrack :=
+  if n.op == opVDecl then
+    let e := vdeclExpr n
+    if e.op == opFap then
+      let fi : Int := e.a
+      let known := fi >= 0 && vsContainsI bodies fi
+      let facts := known && rgToFactsI cx fi
+      let poisonChg := !known && !tr.s.poison
+      let s0 := if poisonChg then { tr.s with poison := true, changed := true } else tr.s
+      let fsRev0 := if poisonChg then tMut else tr.fsRev
+      let tr1 := if facts then
+          let m := ivmJoin s0.ps (rgAt fi rgMark) (ivConst 0) false
+          let sa := rgArgs env fi cx.wide 0 e.ys { s0 with ps := m.t, changed := false }
+          let anyPs := m.changed || sa.changed
+          { tr with s := { sa with changed := s0.changed || anyPs },
+                    fsRev := fsRev0,
+                    psRev := if anyPs then itPut tr.psRev fi tMut else tr.psRev }
+        else { tr with s := s0, fsRev := fsRev0 }
+      let env1 := rgBindFapResults (if facts then tr1.s.rc else tr1.s.rp) fi known cx.top n env
+      rgScanT cx bodies tMut env1 tr1 (bodyOf n)
+    else
+      let v := rgExpr cx env tr.s e
+      let env1 := if e.op == opCtor || e.op == opReuse then
+          { env with ck := ivmSet env.ck n.a { lo := e.d, hi := e.a } }
+        else rgBindIvI env n.a n.b v cx.top
+      rgScanT cx bodies tMut env1 tr (bodyOf n)
+  else if n.op == opSSet then
+    let x := n.a
+    let tr1 := if tr.s.poison then tr
+      else if !ivmHas env.ck x then
+        { tr with s := { tr.s with poison := true, changed := true }, fsRev := tMut }
+      else
+        let c := ivmFind env.ck x cx.top
+        let p := ivmJoin tr.s.fs (rgKeyI c.lo c.hi n.b n.c)
+          (rgOfStore n.d (rgIvWith env (intAt 0 n.ys) cx.top)) cx.wide
+        if p.changed then { tr with s := { tr.s with fs := p.t, changed := true }, fsRev := tMut }
+        else tr
+    rgScanT cx bodies tMut env tr1 (bodyOf n)
+  else if n.op == opCase then
+    let x := n.a
+    if tyIsScalar n.b then rgScanAltsT cx bodies tMut env tr x true (rgIvWith env x cx.top) (caseAlts n)
+    else rgScanAltsT cx bodies tMut env tr x false cx.top (caseAlts n)
+  else if n.op == opJDecl then
+    let j : Int := n.a
+    let tr1 := rgScanT cx bodies tMut env tr (bodyOf n)
+    if ivmHas tr1.s.jm (rgAt j rgMark) then
+      rgScanT cx bodies tMut (rgJoinEnvYs tr1.s.jm j cx.top 0 n.ys env) tr1 (jdeclBody n)
+    else tr1
+  else if n.op == opJmp then { tr with s := { tr.s with jm := rgJumps cx env n.a 0 (jmpArgs n) tr.s.jm } }
+  else if n.op == opRet then
+    let sr := rgRets cx env 0 (retArgs n) { tr.s with changed := false }
+    if !sr.changed then tr
+    else if cx.pub then
+      { tr with s := { sr with changed := true }, rpRev := itPut tr.rpRev cx.self tMut }
+    else
+      { tr with s := { sr with changed := true }, rcRev := itPut tr.rcRev cx.self tMut }
+  else if isTerminal n then tr
+  else rgScanT cx bodies tMut env tr (bodyOf n)
+
+partial def rgScanAltsT (cx : RgCx) (bodies : VSet) (tMut : Int) (env : RgEnv) (tr : RgTrack) (x : Int) (scalar : Bool) (v : Iv) : List N → RgTrack
+  | [] => tr
+  | alt :: alts =>
+    let c := alt.a
+    if scalar && !altIsDefault alt && (ivIsBot v || c < v.lo || c > v.hi) then
+      rgScanAltsT cx bodies tMut env tr x scalar v alts
+    else
+      let env1 := if altIsDefault alt then env
+        else if scalar then { env with iv := ivmSet env.iv x (ivConst c) }
+        else { env with ck := ivmSet env.ck x { lo := alt.d, hi := c } }
+      rgScanAltsT cx bodies tMut env (rgScanT cx bodies tMut env1 tr (altBody alt)) x scalar v alts
+end
+
+def rgCalleesChanged (cx1 : RgCx) (bodies : VSet) (rcRev rpRev : ITree) (lastRun : Int) : List Int → Bool
+  | [] => false
+  | fi :: rest =>
+    let chg := fi >= 0 && vsContainsI bodies fi &&
+      (if rgToFactsI cx1 fi then itFind rcRev fi > lastRun else itFind rpRev fi > lastRun)
+    chg || rgCalleesChanged cx1 bodies rcRev rpRev lastRun rest
+
+def rgBodyT (cx : RgCx) (bodies : VSet) (dep : RgDep) (pub : Bool) (tr : RgTrack) : RgTrack :=
+  let cx1 := { cx with self := dep.df, pub := pub, comp := [], compId := (if pub then dep.compId else -1) }
+  let lastRun := if pub then itFind tr.lastPub dep.df else itFind tr.lastPriv dep.df
+  let need := lastRun <= 0
+    || (!pub && itFind tr.psRev dep.df > lastRun)
+    || (dep.hasSProj && tr.fsRev > lastRun)
+    || rgCalleesChanged cx1 bodies tr.rcRev tr.rpRev lastRun dep.callees
+  if !need then tr
+  else
+    let tStart := tr.clk
+    let tMut := tStart + 1
+    let tr0 := if pub then { tr with clk := tStart + 2, lastPub := itPut tr.lastPub dep.df tStart, s := { tr.s with jm := ivmEmpty } }
+               else { tr with clk := tStart + 2, lastPriv := itPut tr.lastPriv dep.df tStart, s := { tr.s with jm := ivmEmpty } }
+    let env0 := rgParams dep.df pub tr0.s.ps 0 dep.d.xs rgEnv0
+    let tr1 := rgScanT cx1 bodies tMut env0 tr0 dep.d.body
+    { tr1 with s := { tr1.s with jm := ivmEmpty } }
+
+def rgRoundT (cx : RgCx) (bodies : VSet) : List RgDep → RgTrack → RgTrack
+  | [], tr => tr
+  | dep :: deps, tr =>
+    let tr1 := if isOwnFnI cx dep.df then tr else rgBodyT cx bodies dep true tr
+    let tr2 := if rgHasFactsI cx dep.df && ivmHas tr1.s.ps (rgAt dep.df rgMark) then rgBodyT cx bodies dep false tr1 else tr1
+    rgRoundT cx bodies deps tr2
+
+def rgIterateT (cx : RgCx) (bodies : VSet) (deps : List RgDep) : Nat → Int → RgTrack → RgFix
+  | 0, _, tr => { s := tr.s, ok := false }
+  | k + 1, round, tr =>
+    let tr1 := rgRoundT { cx with wide := round >= rgWidenAt } bodies deps { tr with s := { tr.s with changed := false } }
+    if tr1.s.changed then rgIterateT cx bodies deps k (round + 1) tr1 else { s := tr1.s, ok := true }
+
 -- has f parameter facts: some scalar parameter's interval is narrower than its type's
-def rgNarrow (ps : IvMap) (f : Nat) : Nat → List Param → Bool
+def rgNarrow (ps : IvMap) (f : Int) (top : Iv) : Int → List Param → Bool
   | _, [] => false
   | i, p :: rest =>
-    (tyIsScalar p.ty && !ivLe (rgOfType p.ty ivTop) (rgOfType p.ty (ivmFind ps (rgAt f i) ivBot))) || rgNarrow ps f (i + 1) rest
+    (tyIsScalar p.ty && !ivLe (rgOfType p.ty top) (rgOfType p.ty (ivmFind ps (rgAt f i) ivBot))) || rgNarrow ps f top (i + 1) rest
 
 -- The image functions a clone pays for, first those whose own body the parameter facts change:
 -- more operators or cases are rewritten under the facts than without them.
 def rgGains (cx : RgCx) (groups : List (List Int)) (s : RgS) : List Decl → List Int
   | [] => []
   | d :: ds =>
-    if !d.ext && d.f < cx.nImg && ivmHas s.ps (rgAt d.f rgMark) && rgNarrow s.ps d.f 0 d.xs
+    let df : Int := (d.f : Int)
+    if !d.ext && df < cx.nImgI && ivmHas s.ps (rgAt df rgMark) && rgNarrow s.ps df cx.top 0 d.xs
         && (rgBody { cx with rw := true } groups d false { s with used := 0 }).s.used
              > (rgBody { cx with rw := true } groups d true { s with used := 0 }).s.used then
-      (d.f : Int) :: rgGains cx groups s ds
+      df :: rgGains cx groups s ds
     else rgGains cx groups s ds
 
 def rgCallsAny (w : VSet) : List Int → Bool
   | [] => false
-  | c :: cs => (c >= 0 && vsContains w c.toNat) || rgCallsAny w cs
+  | c :: cs => (c >= 0 && vsContainsI w c) || rgCallsAny w cs
 
 -- ... then those with parameter facts that call one of them: the facts reach it through them
 -- (`adj`: the functions each declaration calls, lib/lrc/CallGraph.rsd `CallScc`)
-def rgGrow (nImg : Nat) (ps : IvMap) (adj : Map) (w : VSet) : List Decl → List Int
+def rgGrow (nImgI : Int) (ps : IvMap) (adj : Map) (w : VSet) (top : Iv) : List Decl → List Int
   | [] => []
   | d :: ds =>
-    if !d.ext && d.f < nImg && !vsContains w d.f && ivmHas ps (rgAt d.f rgMark) && rgNarrow ps d.f 0 d.xs
-        && rgCallsAny w (mapXs adj (d.f : Int)) then (d.f : Int) :: rgGrow nImg ps adj w ds
-    else rgGrow nImg ps adj w ds
+    let df : Int := (d.f : Int)
+    if !d.ext && df < nImgI && !vsContainsI w df && ivmHas ps (rgAt df rgMark) && rgNarrow ps df top 0 d.xs
+        && rgCallsAny w (mapXs adj df) then df :: rgGrow nImgI ps adj w top ds
+    else rgGrow nImgI ps adj w top ds
 
-def rgClosure (nImg : Nat) (ps : IvMap) (adj : Map) (decls : List Decl) : Nat → VSet → VSet
+def rgClosure (nImgI : Int) (ps : IvMap) (adj : Map) (decls : List Decl) (top : Iv) : Nat → VSet → VSet
   | 0, w => w
   | k + 1, w =>
-    let more := rgGrow nImg ps adj w decls
-    if more.isEmpty then w else rgClosure nImg ps adj decls k (vsInsertArgs w more)
+    let more := rgGrow nImgI ps adj w top decls
+    if more.isEmpty then w else rgClosure nImgI ps adj decls top k (vsInsertArgs w more)
 
 def rgSorted (w : VSet) : List Decl → List Int
   | [] => []
-  | d :: ds => if vsContains w d.f then (d.f : Int) :: rgSorted w ds else rgSorted w ds
+  | d :: ds => if vsContainsI w (d.f : Int) then (d.f : Int) :: rgSorted w ds else rgSorted w ds
 
 -- each function of a list at its place in the list
 def rgPlaces : List Int → Nat → IMap → IMap
@@ -547,15 +922,20 @@ structure RgCert where
 
 def rangeCert (nImg : Nat) (decls : List Decl) : RgCert :=
   let st := callScc decls
-  let cx0 : RgCx := { nImg := nImg, decls := decls, tab := dtOfList decls, scc := st, self := 0, pub := true, comp := [], all := true, cloned := [], clonedAt := imEmpty,
-                      wide := false, rw := false, base := decls.length }
+  let top := ivTop
+  let nImgI : Int := (nImg : Int)
+  let cx0 : RgCx := { nImg := nImg, nImgI := nImgI, nOwnHi := ((nImg + nHelpers : Nat) : Int),
+                      decls := decls, tab := dtOfList decls, scc := st, self := 0, pub := true, comp := [],
+                      all := true, cloned := [], clonedAt := imEmpty, wide := false, rw := false, base := decls.length, top := top }
   if !declsDense 0 decls then { cx := cx0, groups := [], s := rgS0, ok := false }
   else
-    let first := rgIterate cx0 st.groups 96 0 rgS0
+    let bodies := rgBodySet decls vsEmpty
+    let deps := rgDepsGo st decls []
+    let first := rgIterateT cx0 bodies deps 96 0 rgTrack0
     let gains := rgGains cx0 st.groups first.s decls
-    let cloned := rgSorted (rgClosure nImg first.s.ps st.adj decls decls.length (vsInsertArgs vsEmpty gains)) decls
+    let cloned := rgSorted (rgClosure nImgI first.s.ps st.adj decls top decls.length (vsInsertArgs vsEmpty gains)) decls
     let cx1 := { cx0 with all := false, cloned := cloned, clonedAt := rgPlaces cloned 0 imEmpty }
-    let second := rgIterate cx1 st.groups 96 0 rgS0
+    let second := rgIterateT cx1 bodies deps 96 0 rgTrack0
     { cx := cx1, groups := st.groups, s := second.s, ok := first.ok && second.ok }
 
 -- The check of a certificate, apart from how it was found: one round over every body leaves the
@@ -563,13 +943,23 @@ def rangeCert (nImg : Nat) (decls : List Decl) : RgCert :=
 def rangeAccepts (c : RgCert) : Bool :=
   c.ok && !(rgRound { c.cx with wide := false } c.groups c.cx.decls { c.s with changed := false }).changed
 
-def rgNewBodies (c : RgCert) : List Decl → List Decl
-  | [] => []
-  | d :: ds =>
-    (if d.ext then d
-     else if isOwnFn c.cx.nImg d.f then
-       (if ivmHas c.s.ps (rgAt d.f rgMark) then { d with body := (rgBody { c.cx with rw := true } c.groups d false c.s).node } else d)
-     else { d with body := (rgBody { c.cx with rw := true } c.groups d true c.s).node }) :: rgNewBodies c ds
+def revRgDecls : List Decl → List Decl → List Decl
+  | [], acc => acc
+  | d :: ds, acc => revRgDecls ds (d :: acc)
+
+def rgNewBodiesGo (c : RgCert) : List Decl → List Decl → List Decl
+  | [], acc => revRgDecls acc []
+  | d :: ds, acc =>
+    let df : Int := (d.f : Int)
+    let d1 :=
+      if d.ext then d
+      else if isOwnFnI c.cx df then
+        (if ivmHas c.s.ps (rgAt df rgMark) then { d with body := (rgBody { c.cx with rw := true } c.groups d false c.s).node } else d)
+      else { d with body := (rgBody { c.cx with rw := true } c.groups d true c.s).node }
+    rgNewBodiesGo c ds (d1 :: acc)
+
+def rgNewBodies (c : RgCert) (decls : List Decl) : List Decl :=
+  rgNewBodiesGo c decls []
 
 def rgClones (c : RgCert) (all : DeclTab) : Nat → List Int → List Decl
   | _, [] => []
@@ -578,11 +968,19 @@ def rgClones (c : RgCert) (all : DeclTab) : Nat → List Int → List Decl
     | some d => { d with f := c.cx.base + i, body := (rgBody { c.cx with rw := true } c.groups d false c.s).node } :: rgClones c all (i + 1) fs
     | none => rgClones c all (i + 1) fs
 
+def revAppendDecls : List Decl → List Decl → List Decl
+  | [], tail => tail
+  | d :: ds, tail => revAppendDecls ds (d :: tail)
+
 -- The declarations with the facts used: the bodies rewritten, the clones after them. Without an
 -- accepted certificate the declarations are returned as they are.
 def rangeFacts (nImg : Nat) (decls : List Decl) : List Decl :=
   let c := rangeCert nImg decls
   if !rangeAccepts c then decls
-  else rgNewBodies c decls ++ rgClones c c.cx.tab 0 c.cx.cloned
+  else
+    let clones := rgClones c c.cx.tab 0 c.cx.cloned
+    let cSlim := { c with cx := { c.cx with decls := [] } }
+    let mainDecls := rgNewBodies cSlim decls
+    revAppendDecls (revRgDecls mainDecls []) clones
 
 end Lrc

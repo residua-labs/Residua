@@ -27,19 +27,30 @@
 -- the i32 numeric forms, the rotations, clz, popcnt, i64.extend_i32_s, the i32 loads and stores,
 -- memory.size, memory.grow, br_table, call_indirect, global.get, global.set.
 --
--- Values are i32 and i64, kept as natural numbers below 2^32 and 2^64. Memory is a sparse byte map
--- with a fixed size; an access outside it traps. Globals are a mutable value list on the store,
--- a table maps call_indirect indices to function indices. The instructions are given here as a
--- syntax tree; the byte decoder of the subset is a separate definition (the binary format,
--- spec chapter 5).
+-- Values are i32, i64 and f64 (binary64 bits), kept as natural numbers below 2^32 and 2^64. Memory
+-- is a sparse byte map with a fixed size; an access outside it traps. Globals are a mutable value
+-- list on the store, a table maps call_indirect indices to function indices. The instructions are
+-- given here as a syntax tree; the byte decoder of the subset is a separate definition (the binary
+-- format, spec chapter 5: gates/irsem/Wasm0Dec.rsd).
+--
+-- r3 (semantics/Wasm0/R3.md, FLOAT64-0 batch): adds the f64 numeric set emitted by
+-- float-spec lib/lrc/Emit.rsd (`emFloat`/`emFRound`, over shared semantics/F64.rsd and
+-- lib/Float.rsd, every NaN result canonicalized to `Lib.Float.qNan`), together with `memCopy`,
+-- `memFill` and `returnCall` named by lib/ownership/Wasm.rsd and
+-- native-cert/NativeCert/Wasm/State.lean `WasmOpAtom` (census of lib/lrc/Emit.rsd and
+-- lib/RscBase.rsd shows the stage's binary emitter does not emit those three). The flat stencil
+-- atoms `else_` and `next0` (nop/block/loop/end) in `native-cert/NativeCert/Wasm/State.lean` are
+-- the flat machine encodings of the control structure held by `Instr.ifElse`, `Instr.block`,
+-- `Instr.loop` and `Instr.nop` here, so they take no separate tree constructor.
 --
 -- The definition is a total, fueled definitional interpreter: every recursive call spends a step.
--- Check: lean semantics/Wasm0/Sem.rsd
+-- Check: cat lib/Limb.rsd lib/Vec.rsd lib/Num.rsd lib/Coll.rsd lib/Float.rsd semantics/F64.rsd semantics/Wasm0/Sem.rsd > /tmp/wasm0_r3.lean && lean /tmp/wasm0_r3.lean
 namespace Wasm0
 
 inductive Val where
   | i32 (n : Nat)
   | i64 (n : Nat)
+  | f64 (bits : Nat)
   deriving BEq, Inhabited, Repr
 
 def m32 : Nat := 4294967296
@@ -59,6 +70,19 @@ inductive BinOp where
 
 inductive RelOp where
   | eq | ne | ltS | ltU | gtS | gtU | leS | leU | geS | geU
+  deriving BEq, Inhabited, Repr
+
+-- f64 operators (spec 4.4.1 fbinop, frelop, funop; semantics/Wasm0/R3.md)
+inductive FBinOp where
+  | add | sub | mul | div | copysign
+  deriving BEq, Inhabited, Repr
+
+inductive FRelOp where
+  | eq | ne | lt | gt | le | ge
+  deriving BEq, Inhabited, Repr
+
+inductive FUnOp where
+  | neg | abs | sqrt | floor | ceil | trunc
   deriving BEq, Inhabited, Repr
 
 -- the block types the MVP allows and the emitter writes: empty (0x40), one i64 (0x7e) or one
@@ -120,6 +144,19 @@ inductive Instr where
   | memGrow
   | tryCatchAll (bt : BlockTy) (body : List Instr) (handler : List Instr)
   | throw
+  -- r3 additions (semantics/Wasm0/R3.md)
+  | f64Const (bits : Nat)
+  | f64Bin (op : FBinOp)
+  | f64Rel (op : FRelOp)
+  | f64Un (op : FUnOp)
+  | f64ConvertI64S
+  | f64ConvertI64U
+  | i64TruncSatF64U
+  | f64ReinterpretI64
+  | i64ReinterpretF64
+  | memCopy
+  | memFill
+  | returnCall (f : Nat)
   deriving Inhabited, Repr
 
 structure Func where
@@ -167,7 +204,47 @@ def writeLE (st : Store) (a v : Nat) : Nat → Store
   | 0 => st
   | w + 1 => writeLE { st with mem := (a, v % 256) :: st.mem.filter (fun p => p.1 != a) } (a + 1) (v / 256) w
 
+def writeByte (st : Store) (a b : Nat) : Store :=
+  { st with mem := (a, b) :: st.mem.filter (fun p => p.1 != a) }
+
+def writeBytes (st : Store) (a : Nat) : List Nat → Store
+  | [] => st
+  | b :: bs => writeBytes (writeByte st a b) (a + 1) bs
+
 def boolI32 (b : Bool) : Val := .i32 (if b then 1 else 0)
+
+def fBinOp (op : FBinOp) (a b : Nat) : Nat :=
+  let ua := F64.ofBits (a : Int)
+  let ub := F64.ofBits (b : Int)
+  let ur := match op with
+    | .add => Lib.Float.sum ua ub
+    | .sub => Lib.Float.Float.sub ua ub
+    | .mul => Lib.Float.Float.mul ua ub
+    | .div => Lib.Float.Float.div ua ub
+    | .copysign => F64.copysign ua ub
+  (F64.toBits ur).toNat
+
+def fRelOp (op : FRelOp) (a b : Nat) : Bool :=
+  let ua := F64.ofBits (a : Int)
+  let ub := F64.ofBits (b : Int)
+  match op with
+  | .eq => Lib.Float.Float.beq ua ub
+  | .ne => F64.ne ua ub
+  | .lt => Lib.Float.Float.decLt ua ub
+  | .gt => F64.gt ua ub
+  | .le => Lib.Float.Float.decLe ua ub
+  | .ge => F64.ge ua ub
+
+def fUnOp (op : FUnOp) (a : Nat) : Nat :=
+  let ua := F64.ofBits (a : Int)
+  let ur := match op with
+    | .neg => Lib.Float.Float.neg ua
+    | .abs => F64.abs ua
+    | .sqrt => F64.sqrt ua
+    | .floor => F64.floor ua
+    | .ceil => F64.ceil ua
+    | .trunc => F64.trunc ua
+  (F64.toBits ur).toNat
 
 -- bit helpers for the unary ops (spec 4.4.1 iunop): the bit length of a, bounded by fuel w
 def bitLenAux : Nat → Nat → Nat
@@ -291,7 +368,8 @@ def exec (m : Module) : Nat → List Instr → List Val → List Val → Store �
     | .select => match stack with
       | .i32 c :: v2 :: v1 :: s =>
         match v1, v2 with
-        | .i64 _, .i64 _ | .i32 _, .i32 _ => next ((if c != 0 then v1 else v2) :: s) locals st
+        | .i64 _, .i64 _ | .i32 _, .i32 _ | .f64 _, .f64 _ =>
+          next ((if c != 0 then v1 else v2) :: s) locals st
         | _, _ => .trap "type"
       | _ => .trap "type"
     | .i64Const v => next (.i64 (u64 v) :: stack) locals st
@@ -462,6 +540,56 @@ def exec (m : Module) : Nat → List Instr → List Val → List Val → Store �
             | .branch _ s' _ st' => next (s'.take fn.results ++ s.drop fn.params) locals st'
             | r => r
       | _ => .trap "type"
+    | .f64Const bits => next (.f64 (bits % m64) :: stack) locals st
+    | .f64Bin op => match stack with
+      | .f64 b :: .f64 a :: s => next (.f64 (fBinOp op a b) :: s) locals st
+      | _ => .trap "type"
+    | .f64Rel op => match stack with
+      | .f64 b :: .f64 a :: s => next (boolI32 (fRelOp op a b) :: s) locals st
+      | _ => .trap "type"
+    | .f64Un op => match stack with
+      | .f64 a :: s => next (.f64 (fUnOp op a) :: s) locals st
+      | _ => .trap "type"
+    | .f64ConvertI64S => match stack with
+      | .i64 a :: s =>
+        let i := s64 (a % m64)
+        next (.f64 (F64.toBits (F64.ofNatF (if i < 0 then 1 else 0) i.natAbs)).toNat :: s) locals st
+      | _ => .trap "type"
+    | .f64ConvertI64U => match stack with
+      | .i64 a :: s => next (.f64 (F64.toBits (F64.ofNatF 0 (a % m64))).toNat :: s) locals st
+      | _ => .trap "type"
+    | .i64TruncSatF64U => match stack with
+      | .f64 a :: s => next (.i64 (F64.toW (F64.ofBits (a : Int))).toNat :: s) locals st
+      | _ => .trap "type"
+    | .f64ReinterpretI64 => match stack with
+      | .i64 a :: s => next (.f64 (a % m64) :: s) locals st
+      | _ => .trap "type"
+    | .i64ReinterpretF64 => match stack with
+      | .f64 a :: s => next (.i64 (a % m64) :: s) locals st
+      | _ => .trap "type"
+    | .memCopy => match stack with
+      | .i32 n :: .i32 src :: .i32 dst :: s =>
+        if src + n > st.memBytes || dst + n > st.memBytes then .trap "out of bounds memory access"
+        else
+          let bs := (List.range n).map (fun j => readByte st (src + j))
+          next s locals (writeBytes st dst bs)
+      | _ => .trap "type"
+    | .memFill => match stack with
+      | .i32 n :: .i32 val :: .i32 dst :: s =>
+        if dst + n > st.memBytes then .trap "out of bounds memory access"
+        else next s locals (writeBytes st dst (List.replicate n (val % 256)))
+      | _ => .trap "type"
+    | .returnCall f => match m.funcs.get? f with
+      | none => .trap "call of an unknown function"
+      | some fn =>
+        if stack.length < fn.params then .trap "stack" else
+        let args := (stack.take fn.params).reverse
+        let locals0 := args ++ List.replicate fn.nlocals (.i64 0)
+        match exec m k fn.body [] locals0 st with
+        | .normal s' _ st' => .returned (s'.take fn.results) st'
+        | .returned s' st' => .returned (s'.take fn.results) st'
+        | .branch _ s' _ st' => .returned (s'.take fn.results) st'
+        | r => r
 
 -- Invoke function f with arguments (spec 4.5.5 invocation): the results, top of stack first, and the memory.
 inductive Outcome where
@@ -800,6 +928,160 @@ def modI : Module := { funcs := [⟨1, 1, 0, [.localGet 0, .i64Const 1, .bin .ad
 #guard topI64 (cv [.tryCatchAll .i64 [.throw] [.i64Const 99]] [] (params := 0)) == some 99
 #guard topI64 (cv [.tryCatchAll .i64 [.i64Const 5] [.i64Const 99]] [] (params := 0)) == some 5
 #guard isUncaught (cv [.throw] [] (params := 0))
+
+-- ===== r3 controls (semantics/Wasm0/R3.md): f64, memory.copy/fill, return_call =====
+def topF64 : Outcome → Option Nat
+  | .values (.f64 n :: _) _ => some n
+  | _ => none
+
+def b0 : Nat := 0x0000000000000000
+def bNeg0 : Nat := 0x8000000000000000
+def bHalf : Nat := 0x3FE0000000000000
+def bPreHalf : Nat := 0x3FDFFFFFFFFFFFFF
+def b1 : Nat := 0x3FF0000000000000
+def bNeg1 : Nat := 0xBFF0000000000000
+def b1p5 : Nat := 0x3FF8000000000000
+def b2 : Nat := 0x4000000000000000
+def bNeg2 : Nat := 0xC000000000000000
+def b2p5 : Nat := 0x4004000000000000
+def bNeg2p5 : Nat := 0xC004000000000000
+def b3 : Nat := 0x4008000000000000
+def bNeg3 : Nat := 0xC008000000000000
+def b4 : Nat := 0x4010000000000000
+def bSqrt2 : Nat := 0x3FF6A09E667F3BCD
+def bQNan : Nat := 0x7FF8000000000000
+def bOtherNan : Nat := 0xFFF8000000000042
+def b1e300 : Nat := 0x7E37E43C8800759C
+def b2p64 : Nat := 0x43F0000000000000
+
+-- f64.const (positive and negative)
+#guard topF64 (cv [.f64Const b1] [] (params := 0)) == some b1
+#guard trapWhy (cv [.f64Const b1, .eqz64] [] (params := 0)) == some "type"
+
+-- f64Bin: add, sub, mul, div, copysign (positive, NaN canonicalization, negative)
+#guard topF64 (cv [.f64Const b1, .f64Const b2, .f64Bin .add] [] (params := 0)) == some b3
+#guard topF64 (cv [.f64Const b1, .f64Const bOtherNan, .f64Bin .add] [] (params := 0)) == some bQNan
+#guard trapWhy (cv [.i64Const 1, .f64Const b2, .f64Bin .add] [] (params := 0)) == some "type"
+#guard topF64 (cv [.f64Const b3, .f64Const b1, .f64Bin .sub] [] (params := 0)) == some b2
+#guard trapWhy (cv [.f64Const b3, .i64Const 1, .f64Bin .sub] [] (params := 0)) == some "type"
+#guard topF64 (cv [.f64Const b1p5, .f64Const b2, .f64Bin .mul] [] (params := 0)) == some b3
+#guard trapWhy (cv [.f64Const b1p5, .i32Const 2, .f64Bin .mul] [] (params := 0)) == some "type"
+#guard topF64 (cv [.f64Const b3, .f64Const b2, .f64Bin .div] [] (params := 0)) == some b1p5
+#guard topF64 (cv [.f64Const b0, .f64Const b0, .f64Bin .div] [] (params := 0)) == some bQNan
+#guard trapWhy (cv [.i64Const 3, .f64Const b2, .f64Bin .div] [] (params := 0)) == some "type"
+#guard topF64 (cv [.f64Const b1, .f64Const bNeg2p5, .f64Bin .copysign] [] (params := 0)) == some bNeg1
+#guard topF64 (cv [.f64Const bNeg2p5, .f64Const b1, .f64Bin .copysign] [] (params := 0)) == some b2p5
+#guard trapWhy (cv [.f64Const b1, .i64Const 1, .f64Bin .copysign] [] (params := 0)) == some "type"
+
+-- f64Rel: eq, ne, lt, gt, le, ge (positive, NaN rules, negative)
+#guard topI32 (cv [.f64Const b1, .f64Const b1, .f64Rel .eq] [] (params := 0)) == some 1
+#guard topI32 (cv [.f64Const b0, .f64Const bNeg0, .f64Rel .eq] [] (params := 0)) == some 1
+#guard topI32 (cv [.f64Const bQNan, .f64Const bQNan, .f64Rel .eq] [] (params := 0)) == some 0
+#guard trapWhy (cv [.f64Const b1, .i64Const 1, .f64Rel .eq] [] (params := 0)) == some "type"
+#guard topI32 (cv [.f64Const bQNan, .f64Const bQNan, .f64Rel .ne] [] (params := 0)) == some 1
+#guard topI32 (cv [.f64Const bOtherNan, .f64Const b1, .f64Rel .ne] [] (params := 0)) == some 1
+#guard topI32 (cv [.f64Const b1, .f64Const b1, .f64Rel .ne] [] (params := 0)) == some 0
+#guard trapWhy (cv [.i64Const 1, .f64Const b1, .f64Rel .ne] [] (params := 0)) == some "type"
+#guard topI32 (cv [.f64Const b1, .f64Const b2, .f64Rel .lt] [] (params := 0)) == some 1
+#guard topI32 (cv [.f64Const bQNan, .f64Const b2, .f64Rel .lt] [] (params := 0)) == some 0
+#guard topI32 (cv [.f64Const b1, .f64Const bQNan, .f64Rel .lt] [] (params := 0)) == some 0
+#guard trapWhy (cv [.i64Const 1, .f64Const b2, .f64Rel .lt] [] (params := 0)) == some "type"
+#guard topI32 (cv [.f64Const b2, .f64Const b1, .f64Rel .gt] [] (params := 0)) == some 1
+#guard topI32 (cv [.f64Const b1, .f64Const b2, .f64Rel .gt] [] (params := 0)) == some 0
+#guard topI32 (cv [.f64Const bQNan, .f64Const b1, .f64Rel .gt] [] (params := 0)) == some 0
+#guard trapWhy (cv [.f64Const b2, .i64Const 1, .f64Rel .gt] [] (params := 0)) == some "type"
+#guard topI32 (cv [.f64Const b2, .f64Const b2, .f64Rel .le] [] (params := 0)) == some 1
+#guard topI32 (cv [.f64Const bQNan, .f64Const b2, .f64Rel .le] [] (params := 0)) == some 0
+#guard trapWhy (cv [.f64Const b2, .i64Const 2, .f64Rel .le] [] (params := 0)) == some "type"
+#guard topI32 (cv [.f64Const b2, .f64Const b1, .f64Rel .ge] [] (params := 0)) == some 1
+#guard topI32 (cv [.f64Const b1, .f64Const b2, .f64Rel .ge] [] (params := 0)) == some 0
+#guard topI32 (cv [.f64Const bQNan, .f64Const b1, .f64Rel .ge] [] (params := 0)) == some 0
+#guard trapWhy (cv [.f64Const b2, .i64Const 1, .f64Rel .ge] [] (params := 0)) == some "type"
+
+-- f64Un: neg, abs, sqrt, floor, ceil, trunc (positive and negative)
+#guard topF64 (cv [.f64Const b1, .f64Un .neg] [] (params := 0)) == some bNeg1
+#guard topF64 (cv [.f64Const bNeg2p5, .f64Un .neg] [] (params := 0)) == some b2p5
+#guard trapWhy (cv [.i64Const 1, .f64Un .neg] [] (params := 0)) == some "type"
+#guard topF64 (cv [.f64Const bNeg2p5, .f64Un .abs] [] (params := 0)) == some b2p5
+#guard topF64 (cv [.f64Const b2p5, .f64Un .abs] [] (params := 0)) == some b2p5
+#guard trapWhy (cv [.i64Const 1, .f64Un .abs] [] (params := 0)) == some "type"
+#guard topF64 (cv [.f64Const b2, .f64Un .sqrt] [] (params := 0)) == some bSqrt2
+#guard topF64 (cv [.f64Const b4, .f64Un .sqrt] [] (params := 0)) == some b2
+#guard topF64 (cv [.f64Const bNeg1, .f64Un .sqrt] [] (params := 0)) == some bQNan
+#guard trapWhy (cv [.i64Const 2, .f64Un .sqrt] [] (params := 0)) == some "type"
+#guard topF64 (cv [.f64Const bNeg2p5, .f64Un .floor] [] (params := 0)) == some bNeg3
+#guard topF64 (cv [.f64Const b2p5, .f64Un .floor] [] (params := 0)) == some b2
+#guard trapWhy (cv [.i64Const 2, .f64Un .floor] [] (params := 0)) == some "type"
+#guard topF64 (cv [.f64Const bNeg2p5, .f64Un .ceil] [] (params := 0)) == some bNeg2
+#guard topF64 (cv [.f64Const b2p5, .f64Un .ceil] [] (params := 0)) == some b3
+#guard trapWhy (cv [.i64Const 2, .f64Un .ceil] [] (params := 0)) == some "type"
+#guard topF64 (cv [.f64Const bNeg2p5, .f64Un .trunc] [] (params := 0)) == some bNeg2
+#guard topF64 (cv [.f64Const b2p5, .f64Un .trunc] [] (params := 0)) == some b2
+#guard trapWhy (cv [.i64Const 2, .f64Un .trunc] [] (params := 0)) == some "type"
+
+-- conversions and reinterprets (positive and negative)
+#guard topF64 (cv [.i64Const (-1), .f64ConvertI64S] [] (params := 0)) == some bNeg1
+#guard topF64 (cv [.i64Const 2, .f64ConvertI64S] [] (params := 0)) == some b2
+#guard trapWhy (cv [.f64Const b1, .f64ConvertI64S] [] (params := 0)) == some "type"
+#guard topF64 (cv [.i64Const (-1), .f64ConvertI64U] [] (params := 0)) == some b2p64
+#guard topF64 (cv [.i64Const 2, .f64ConvertI64U] [] (params := 0)) == some b2
+#guard trapWhy (cv [.f64Const b1, .f64ConvertI64U] [] (params := 0)) == some "type"
+#guard topI64u (cv [.f64Const bQNan, .i64TruncSatF64U] [] (params := 0)) == some 0
+#guard topI64u (cv [.f64Const bNeg1, .i64TruncSatF64U] [] (params := 0)) == some 0
+#guard topI64u (cv [.f64Const b1e300, .i64TruncSatF64U] [] (params := 0)) == some (m64 - 1)
+#guard topI64u (cv [.f64Const b2p5, .i64TruncSatF64U] [] (params := 0)) == some 2
+#guard trapWhy (cv [.i64Const 2, .i64TruncSatF64U] [] (params := 0)) == some "type"
+#guard topI64u (cv [.localGet 0, .f64ReinterpretI64, .i64ReinterpretF64] [.i64 b2p5] (params := 1)) == some b2p5
+#guard topF64 (cv [.f64Const bNeg2p5, .i64ReinterpretF64, .f64ReinterpretI64] [] (params := 0)) == some bNeg2p5
+#guard trapWhy (cv [.f64Const b1, .f64ReinterpretI64] [] (params := 0)) == some "type"
+#guard trapWhy (cv [.i64Const 1, .i64ReinterpretF64] [] (params := 0)) == some "type"
+
+-- select over two f64 operands (positive and negative)
+#guard topF64 (cv [.f64Const b1, .f64Const b2, .i32Const 1, .select] [] (params := 0)) == some b1
+#guard topF64 (cv [.f64Const b1, .f64Const b2, .i32Const 0, .select] [] (params := 0)) == some b2
+#guard trapWhy (cv [.f64Const b1, .i64Const 2, .i32Const 1, .select] [] (params := 0)) == some "type"
+
+-- memory.copy (overlapping forward src < dst, overlapping backward dst < src, out of bounds, type)
+#guard topI64u (cvm [.i32Const 0, .i64Const 0x04030201, .store 4 0,
+                     .i32Const 1, .i32Const 0, .i32Const 4, .memCopy,
+                     .i32Const 1, .load 4 false 0] [] 65536) == some 0x04030201
+#guard topI64u (cvm [.i32Const 2, .i64Const 0x04030201, .store 4 0,
+                     .i32Const 0, .i32Const 2, .i32Const 4, .memCopy,
+                     .i32Const 0, .load 4 false 0] [] 65536) == some 0x04030201
+#guard trapWhy (cvm [.i32Const 0, .i32Const 8, .i32Const 4, .memCopy] [] 10) == some "out of bounds memory access"
+#guard trapWhy (cvm [.i32Const 8, .i32Const 0, .i32Const 4, .memCopy] [] 10) == some "out of bounds memory access"
+#guard trapWhy (cvm [.i64Const 0, .i32Const 0, .i32Const 4, .memCopy] [] 65536) == some "type"
+
+-- memory.fill (val % 256 reduction, out of bounds, type)
+#guard topI64u (cvm [.i32Const 8, .i32Const 0x1AB, .i32Const 4, .memFill,
+                     .i32Const 8, .load 1 false 0] [] 65536) == some 0xAB
+#guard topI64u (cvm [.i32Const 8, .i32Const 0x1AB, .i32Const 4, .memFill,
+                     .i32Const 8, .load 4 false 0] [] 65536) == some 0xABABABAB
+#guard trapWhy (cvm [.i32Const 8, .i32Const 1, .i32Const 4, .memFill] [] 10) == some "out of bounds memory access"
+#guard trapWhy (cvm [.i64Const 8, .i32Const 1, .i32Const 4, .memFill] [] 65536) == some "type"
+
+-- return_call (equal to call, caller's following instructions not run, negative)
+def modRC : Module :=
+  { funcs := [⟨1, 1, 0, [.localGet 0, .i64Const 10, .bin .add]⟩,
+              ⟨1, 1, 0, [.localGet 0, .returnCall 0, .i64Const 99, .bin .add]⟩,
+              ⟨1, 1, 0, [.localGet 0, .call 0]⟩],
+    memBytes := 65536 }
+#guard topI64 (invoke modRC 1 [.i64 5] 100 (store0 modRC)) == some 15
+#guard topI64 (invoke modRC 1 [.i64 5] 100 (store0 modRC)) == topI64 (invoke modRC 2 [.i64 5] 100 (store0 modRC))
+#guard trapWhy (cv [.returnCall 9] [] (params := 0)) == some "call of an unknown function"
+#guard trapWhy (cv [.returnCall 0] [] (params := 1)) == some "stack"
+
+-- float-spec's `emFRound 0 1` instruction sequence run on 2.5, -2.5, 0.49999999999999994
+def emFRoundTree : List Instr :=
+  [.localGet 0, .f64ReinterpretI64, .f64Un .trunc, .f64Const b1, .localGet 0, .f64ReinterpretI64,
+   .f64Bin .copysign, .f64Bin .add, .localGet 0, .f64ReinterpretI64, .f64Un .trunc,
+   .localGet 0, .f64ReinterpretI64, .localGet 0, .f64ReinterpretI64, .f64Un .trunc,
+   .f64Bin .sub, .f64Un .abs, .f64Const bHalf, .f64Rel .ge, .select, .i64ReinterpretF64,
+   .localSet 1, .localGet 1]
+def modFRound : Module := { funcs := [⟨1, 1, 1, emFRoundTree⟩], memBytes := 65536 }
+#guard topI64u (invoke modFRound 0 [.i64 b2p5] 100 (store0 modFRound)) == some b3
+#guard topI64u (invoke modFRound 0 [.i64 bNeg2p5] 100 (store0 modFRound)) == some bNeg3
+#guard topI64u (invoke modFRound 0 [.i64 bPreHalf] 100 (store0 modFRound)) == some b0
 
 end Wasm0.Controls
 

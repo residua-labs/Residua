@@ -165,3 +165,16 @@ lib/lrc/Inline.rsd	      let g : Decl := declNormalizeIds { f := st.next, xs := 
 lib/lrc/Inline.rsd	    r.decls ++ r.st.added.reverse	    r.decls ++ r.st.added
 lib/lrc/Inline.rsd	    let r := spDecls (callScc decls) lim cap decls { next := decls.length, fresh := 0, added := [] }	    let r := spDecls (callScc decls) lim cap decls { next := decls.length + 1, fresh := 0, added := [] }
 lib/RscBase.rsd	  let tableSec := if m.kept.isEmpty then [] else wsec 4 ([1, 112, 0] ++ lebU m.kept.length)	  let tableSec := if m.kept.isEmpty then [] else wsec 4 ([1, 112, 0] ++ lebU 0)
+# FLOAT64-0 (F row), lib/lrc/Emit.rsd "Floats": a sum written as a difference, less-than as less-or-equal, the square root as the
+# absolute value, C's round without its ties, an unsigned word converted as a signed one, the truncation saturating at the signed
+# bound, the quiet NaN with its sign set. The rows of the image float64.rscm give stock Lean's values.
+lib/lrc/Emit.rsd	  if p == primFAdd then emF2 a b d [160]	  if p == primFAdd then emF2 a b d [161]
+lib/lrc/Emit.rsd	  else if p == primFLt then emFCmp a b d [99]	  else if p == primFLt then emFCmp a b d [101]
+lib/lrc/Emit.rsd	  else if p == primFSqrt then emF1 a d [159]	  else if p == primFSqrt then emF1 a d [153]
+lib/lrc/Emit.rsd	    ++ lg a ++ wfOf ++ lg a ++ wfOf ++ [157] ++ [161] ++ [153] ++ wfHalf ++ [102]	    ++ lg a ++ wfOf ++ lg a ++ wfOf ++ [157] ++ [161] ++ [153] ++ wfHalf ++ [100]
+lib/lrc/Emit.rsd	  else if p == primFOfW then lg a ++ [186] ++ wfBits ++ ls d	  else if p == primFOfW then lg a ++ [185] ++ wfBits ++ ls d
+lib/lrc/Emit.rsd	  else if p == primFToW then lg a ++ wfOf ++ [252, 7] ++ ls d	  else if p == primFToW then lg a ++ wfOf ++ [252, 6] ++ ls d
+lib/lrc/Emit.rsd	def fNanWord : Int := 9221120237041090560	def fNanWord : Int := -2251799813685248
+# Static closed constructor cells in the ground segment (lib/lrc/Emit.rsd `clEvalBody`, ASSIGN-opt-5 item 1): object fields written 8 bytes
+# wide regardless of `fw`, caught by `Sides.rsd` under `narrow` on row `closed`.
+lib/lrc/Emit.rsd	        let cell := hdr ++ emFieldBytes fw fws ++ emScalarArea (List.replicate pad 0) fields	        let cell := hdr ++ emFieldBytes 8 fws ++ emScalarArea (List.replicate pad 0) fields

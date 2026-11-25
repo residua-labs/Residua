@@ -1,0 +1,21 @@
+# FILE	FROM	TO  (FROM occurs exactly once in FILE; every row must make the differential report a mismatch)
+# A call that names a literal (lib/lrc/JoinOnce.rsd "A call that names a literal", `literalCalls`): the form of a function
+# for a literal is its body under that literal, and every call with the literal at that place calls it. The rows: the form is
+# made for another literal than the call's; a call with any literal goes to the form of 0; a comparison of two literals is
+# folded to the other answer; a call with a literal at any place goes to the form for the first place; the forms' numbers
+# begun one too high (a call of a form then reaches the function after it). The programs that meet them are
+# instruments/lrc-host/ProgLitCall.rsd and ProgLitWord.rsd (rows litcall and litword of Images.tsv).
+# Not rows, and why. They change no value: a form kept although it still calls its function (it is the function's body
+# with one test decided); a form for a function that does not call itself or is large; more forms of one function than
+# `lcPerFn`; the form's variables left as the function had them (tried: the host check and, with a compiler built so,
+# Sides.rsd on six rows). They make no form, so the call stays the function's: the literal's box made
+# without its sign rule, or the parameter bound to the number where it is a box (the test of the box is then not decided
+# and the form still calls its function); a form asked for at another place or of another kind than the call has.
+# No image has it: a literal at a place whose parameter is not of its kind (`lcForm`); the box of a number that is no
+# literal as the argument of such a call (`lcKind` asks for the literal under the box): a number that is computed reaches
+# a call through a join point or as a call's result, and was run as a row against the litcall image without a mismatch.
+lib/lrc/JoinOnce.rsd	      let d1 : Decl := { d with f := g, body := mkVDecl (m + 1) (if kind == 1 then p.ty else tyI64) (mkLit c) (if kind == 1 then body else boxed) }	      let d1 : Decl := { d with f := g, body := mkVDecl (m + 1) (if kind == 1 then p.ty else tyI64) (mkLit (c + 1)) (if kind == 1 then body else boxed) }
+lib/lrc/JoinOnce.rsd	      let g := if la.kind != 0 then lcFind [(fapFn e : Int), (la.i : Int), la.kind, la.c] ws else -1	      let g := if la.kind != 0 then lcFind [(fapFn e : Int), (la.i : Int), la.kind, 0] ws else -1
+lib/lrc/JoinOnce.rsd	def knCmpVal (p : Nat) (a b : Int) : Bool := if p == primLt then a < b else if p == primGt then a > b else a == b	def knCmpVal (p : Nat) (a b : Int) : Bool := if p == primLt then a > b else if p == primGt then a < b else a == b
+lib/lrc/JoinOnce.rsd	      let g := if la.kind != 0 then lcFind [(fapFn e : Int), (la.i : Int), la.kind, la.c] ws else -1	      let g := if la.kind != 0 then lcFind [(fapFn e : Int), 0, la.kind, la.c] ws else -1
+lib/lrc/JoinOnce.rsd	    let r := lcForms (dtOfList decls) decls.length keys.reverse { ws := [], has := vsEmpty, added := [] }	    let r := lcForms (dtOfList decls) (decls.length + 1) keys.reverse { ws := [], has := vsEmpty, added := [] }

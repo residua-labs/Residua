@@ -1,120 +1,110 @@
-# RELEASE-NOTES — Residua 0.3
+# RELEASE-NOTES — Residua 0.4
 
 [English](RELEASE-NOTES.md) | 中文
 
-0.3 版本保留自举闭合——可验证来源的编译，只用 C 编译器从提交的
-wasm 种子逐字节重建——并加入 `rsd` 构建工具、语言中的 `UInt64`、
-执行边界处的首批带类型 `ExecModel` 实例，以及 MST-NF 复合定理。
-MST-NF 是 Residua 的基础理论：它在公共仓库
+0.4 版本保留自举闭合——仅用 C 编译器即可从提交的 WebAssembly
+[seed](GLOSSARY.zh-CN.md) 逐字节重建可验证来源的编译器——并加入多模块
+`.rsd` 程序、IEEE-754 `Float`（`binary64`）、`Proc` `do` 记法与 C11 +
+Wasmtime 的 `procwt` 执行宿主、标准 `Proc` 库（`glue/std/`）、多模块
+命令行示例 `examples/app04`、体积更小且速度更快的重切 seed、Apache-2.0
+平衡映射表（`lib/AvlMap.rsd`），以及 `lean/nf-compose/` 中的多跳与递归
+复合定理。MST-NF 是 Residua 的基础理论：它在公共仓库
 [github.com/residua-labs/MST-NF](https://github.com/residua-labs/MST-NF)
 钉住提交 `4432a34`，证明由该仓持有。
 
-## 0.3 新增
+## 0.4 新增
 
-- **`rsd` 构建工具。** `rsd build` 经内容寻址存储编译程序，只重
-  编译变化部分；`rsd test` 运行端到端套件；`rsd run` 执行；
-  `rsd cache` 即存储本身。调度器 `rsd/`，存储与依赖图
-  `lib/rsd/`、`lib/Rsd.rsd`；用户文档 `docs/BUILD.md`；说明
-  `release/notes/rsd-tool.md`。
-- **语言中的 `UInt64`。** 编译器源码已使用它。
-- **套件恢复。** 0.1.1/0.1.2 随附而 0.2 遗漏的基准与测试套件按
-  当前字节恢复：`benchmarks/`、`instruments/lrc-host/`、`perf/`、
-  `ACKNOWLEDGEMENTS.md` 与 TESTING 指南。新增门禁检查拒绝再发生
-  同类静默遗漏（除非更新日志有一行声明）。
-- **执行边界的带类型 `ExecModel` 实例**
-  （`semantics/Effect/AdmissionNF.lean`）：`monitorModel` 与
-  `exec9AdmissionModel`，四条 Tier-1 定律已证——商分解、准入
-  可靠、余数全性与代表元精确。仓库侧回执：
-  `reports/effect-sem/ADMISSION-NF.md`（检查 11 条定理，公理在
-  `propext`/`Quot.sound` 内，拒绝控制 1/1）。
-- **三种表面写法。** `examples/surfaces/` 随附五个程序，各以
-  `.rsd`、`.rsj`、`.rsm` 写法打印；`docs/surfaces/` 记录
-  各剖面及三种写法解析到同一棵树的往返检查。
-- **新种子切面；wasm 路线默认 `narrow`。** 提交的种子在钉住的
-  主线头部重切；自本次切面起 wasm 路线默认以 `narrow` 层编译，
-  原生路线保持 64 位。
-- **MST-NF 复合定理**（`lean/nf-compose/`）：步骤必然性在积、
-  和、序列与分派上的复合规则，基于目录内 vendored 的钉住
-  必然性执行模型。独立审计通过
-  （`reports/nf-compose/REPORT.md`，Lean 4.14，公理仅
-  `propext`）。
-- **面向外部读者的公共文档。** `README.md` 按开源惯例排序并附
-  可复制的快速开始；`docs/` 按 Diátaxis 分类并有索引；
-  `docs/GLOSSARY.md`；`CONTRIBUTING.md`；`CODE_OF_CONDUCT.md`
-  （Contributor Covenant 2.1）；`SECURITY.md`；issue 与 PR 模板。
-  构建工具源码以其公开名随附（`rsd/`、`lib/rsd/`、`lib/Rsd.rsd`）。
-  钉定源字节的注释里仍有内部工作项和报告的名字；它们不含个人信息，
-  在下一次重切 seed 时修改。
+- **模块、`Proc` `do` 记法与 `procwt` 执行宿主。** 多模块 `.rsd` 程序通过
+  `import` 组合 `lib/`、`glue/std/` 与应用模块，以 `do { let x <- … }`
+  串联效应，并以 WebAssembly 形态运行在 C11 + Wasmtime 宿主
+  `glue/host/procwt.c`（`glue/host/proc9core.h`；wasm2c 对应宿主为
+  `glue/host/proc9.c`）上。`glue/std/` 随附 `Args`、`Files`、`Graph`、
+  `Json`、`Map`、`Proc` 与 `Str`；`lib/ProcBytes.rsd` 与 `lib/Proc9.rsd`
+  随附字节切片与 9P2000 编解码；`glue/rsd/main.rsd` 与
+  `glue/rsd/build.rsd` 将 `rsd run` 接入 `procwt`。
+- **IEEE-754 `Float`（`binary64`）。** 贯通 `rsdc`、`.rscm` 线格式
+  （`docs/EMITTER.md`）、`lambda-RC` 与 WebAssembly 发射，保留 `NaN`、
+  `±Infinity` 与 `-0.0`，并在 `instruments/lrc-host/` 下随附差分预言机与
+  变异测试套件。
+- **多模块命令行示例（`examples/app04/`）。** `Stats.rsd`、`Table.rsd` 与
+  `Main.rsd` 读取按行分隔的浮点数文件，计算 `count`、`min`、`max`、`mean`
+  与总体 `variance`，用 `String` 排版对齐的 ASCII 表格并写出文件，在格式
+  错误或 I/O 错误时以非零退出码诊断——全部 `16` 个差分输入与原版 Lean
+  `4.14.0` 完全一致。
+- **更小更快的重切 seed（`bootstrap/seed/stage-14274/`）。** `rsdc.wasm`
+  从 0.3 的 `19.9 MB` 降至 `12,519,278` B（`845b99ef…`，入口 `f896`，
+  `__heap_base` `765288`），`rsc.wasm` 从 `20.5 MB` 降至 `14,275,644` B
+  （`b52b07d1…`，入口 `f2615`，构造字 `14274`，`__heap_base` `603704`）。
+  `seed-host.c` 读取加载模块导出的 `__heap_base` 全局量并支持
+  `\0RSDC-ENTRIES\n`。干净环境重建编译器在 Linux x86-64 上耗时 `105 s`
+  （全配方 `193 s`），在 macOS arm64 上耗时 `191 s`（全配方 `337 s`）。
+- **Apache-2.0 平衡映射表（`lib/AvlMap.rsd`）。** 从 Lean `v4.36.0`
+  （`Std/Data/DTreeMap/Internal/Def.lean` 与 `Balancing.lean`）重新移植，
+  取代 0.3 中源于 OCaml `stdlib/map.ml` 的移植，使全部随附编译器与库源码
+  均采用宽松许可证。
+- **多跳与递归 MST-NF 复合定理（`lean/nf-compose/`）。**
+  `NfCompose/HopCompose.lean` 证出跨编译跳复合，
+  `NfCompose/Rec.lean` 与 `NfRec/CheckedStatus.lean` 在钉住的 `ExecModel`
+  上证出有界与良基递归复合。
 
-## 0.3 的 MST-NF 状态
+## 0.4 的 MST-NF 状态
 
 每个随附组件要么已绑定到钉住的 `ExecModel`
-（`lean/nf-compose/pinned/MSTNecessityExecModelMWE.lean`）并证出
-四条 Tier-1 定律，要么记录为缺口。
+（`lean/nf-compose/pinned/MSTNecessityExecModelMWE.lean`）并证出 Tier-1
+定律，要么记录为缺口。
 
 | 随附组件 | 状态 |
 |---|---|
-| 编译器链（`rsdc`、`rsc`） | 缺口——尚无 `ExecModel` 实例 |
-| 执行层（`semantics/Effect/`） | 实例已随附：`monitorModel`、`exec9AdmissionModel`；Tier-1 定律已证（`AdmissionNF.lean`） |
-| 语法引擎（`rsdc/profiles/`、`semantics/Syntax/`） | 缺口——尚无 `ExecModel` 实例 |
-| QFormat（`docs/QFORMAT.md`、`release/checks/qformat/`） | 缺口——尚无 `ExecModel` 实例 |
-| `rsd` 构建工具（`rsd/`、`lib/rsd/`） | 缺口——尚无 `ExecModel` 实例 |
-| NF 复合（`lean/nf-compose/`） | 框架已随附：钉住模型上的复合定理，经独立审计 |
-
-0.1 与 0.2 没有随附任何此类实例：它们的 `Monitor.lean` 引用的是
-三形式编码，并非 `ExecModel` 定义。0.3 随附首批带类型实例；上述
-缺口仅作记录，不构成发布阻塞。
-
-准入审计状态：wasm0 实例的准入审计已在开发 main 线上签发，晚于本
-发布——该实例的判定器以类型变量合一运行，对照独立的
-wasm-validate 预言机、双种子，无反签名。QFormat、rsx、scm 实例
-在较早修订通过了空洞性检查；lambda-RC 准入仍未决，正在按更正后的
-判据重建。
+| 编译器链（`rsdc`、`rsc`） | 缺口——逐跳 `ExecModel` 实例在仓库侧；多跳复合已证（`HopCompose.lean`） |
+| 执行层（`semantics/Effect/`、`glue/host/`） | 实例已随附：`monitorModel`、`exec9AdmissionModel`；Tier-1 定律已证（`AdmissionNF.lean`） |
+| 语法引擎（`rsdc/profiles/`、`semantics/Syntax/`） | 缺口——尚无随附 `ExecModel` 实例 |
+| QFormat（`docs/QFORMAT.zh-CN.md`、`release/checks/qformat/`） | 缺口——尚无随附 `ExecModel` 实例 |
+| `rsd` 构建工具（`rsd/`、`glue/rsd/`、`lib/rsd/`） | 缺口——尚无随附 `ExecModel` 实例 |
+| NF 复合（`lean/nf-compose/`） | 框架已随附：积/和/序列/分派、多跳（`HopCompose.lean`）与递归（`Rec.lean`）复合已证 |
 
 ## 本归档内容
 
-- 提交的 `rsdc`/`rsc` wasm 种子及其源码闭包（`bootstrap/seed/`
-  之下），附重建配方
-- 以 stage 宿主文件契约方式调用的 rsd 链 `rsd -> rscm -> wasm`
-  （`docs/RSD-COMMAND.md`）
-- `rsd` 构建工具（`rsd/`、`lib/rsd/`、`lib/Rsd.rsd`）
-- 按内容摘要钉住的各编译层冻结形式语义（scm、lambda-RC、wasm0）
-  规范文本；`semantics/Syntax/` 与 `semantics/Effect/`（含带类型
-  `ExecModel` 实例）
-- 语法引擎的文法轮廓（`rsdc/profiles/`）与规范
-  （`semantics/Syntax/`）；引擎本体在随附的编译器源码内
-- MST-NF 复合包（`lean/nf-compose/`，含钉住模型）及其审计报告
-  （`reports/nf-compose/REPORT.md`）
-- 基准、差分与性能套件（`benchmarks/`、`instruments/lrc-host/`、
-  `perf/`）
-- 自举文法测量所依据的语言一致性语料（`docs/LANGUAGE.md` 各表）
-- 性能记录（`docs/PERF-RECORD.tsv`，形式见
-  `docs/PERF-RECORD.md`）
-- 面向陌生读者的英文文档，及 `README` 与各 `docs/` 中文
+- 提交的 `rsdc`/`rsc` wasm 种子及其 `54` 成员源码闭包
+  （`bootstrap/seed/stage-14274/`），附重建配方
+- rsd 编译链 `rsd -> rscm -> wasm`（`docs/RSD-COMMAND.md`）
+- `Proc` 执行宿主（`glue/host/`）、标准 `Proc` 模块
+  （`lib/ProcBytes.rsd`、`lib/Proc9.rsd`、`glue/std/`）及多模块命令行程序
+  `examples/app04/`
+- `rsd` 构建工具（`rsd/`、`glue/rsd/`、`lib/rsd/`、`lib/Rsd.rsd`）
+- 按内容摘要钉住的各编译层冻结形式语义（scm、lambda-RC、wasm0），以及
+  `semantics/Syntax/` 与 `semantics/Effect/`
+- MST-NF 复合包（`lean/nf-compose/`，含 `HopCompose.lean`、`Rec.lean` 与
+  `NfRec/CheckedStatus.lean`）及其审计报告（`reports/nf-compose/REPORT.md`）
+- 基准、差分与性能套件（`benchmarks/`、`instruments/lrc-host/`、`perf/`）
+- 语言一致性语料（`docs/LANGUAGE.md`）与性能记录
+  （`docs/PERF-RECORD.tsv`、`docs/PERF-RECORD.md`）
+- 英文文档，以及 `README`、`CHANGELOG` 与成对 `docs/` 页面的中文
   `.zh-CN.md` 镜像
-- 逐目标发布说明（`release/notes/`）、可运行的一致性检查
-  （`release/checks/`）与 vendored 许可证文本
+- 发布说明（`release/notes/`）、可运行一致性检查（`release/checks/`）、
+  面向读者的 `release/GAPS.tsv`、溯源表（`release/PROVENANCE.tsv`）、
+  第三方声明（`release/NOTICES.md`、`NOTICE`）与 vendored 许可证文本
   （`release/licenses/`）
 
 ## 验证
 
-`docs/VERIFY-RELEASE.md` 即协议：种子摘要、归档摘要，然后在干净
-的 Linux x86-64 或 macOS arm64 账户上跑完整种子配方——配方重建
-的编译器映像必须与提交的种子逐字节一致
-（`seed_roundtrip=2/2`）。归档的宿主回执随附于 `release/`。
+`docs/VERIFY-RELEASE.md` 为验证协议：核对种子摘要与归档摘要，在干净的
+Linux x86-64 或 macOS arm64 环境中运行种子配方并核对重建编译器与提交种子
+逐字节一致（`cmp` 核对 `rsdc.wasm` 与 `rsc.wasm` 并校验
+`REBUILT-SHA256SUMS`），最后编译并在 `procwt` 上运行 `examples/app04`。
 
-## 0.3 的既定限制
+## 0.4 的既定限制
 
-仅单模块程序（无 `import`）；无 I/O 执行层（执行边界语义规定宿
-主契约，语言本身无副作用）；无证明检查（R-CIC 内核不在本版）；
-4 GiB 地址空间；无结果发布/查询入口；无可导入标准库。自举
-`.rsd` 文法拒绝 `theorem`、`axiom`、`class`、`abbrev`、
-`variable`、`opaque`、`by` 与 `import` 作为源码构造。
+独立 `.rmod` 编译尚未覆盖 `Float` 及逐模块 `Proc` `do` 反糖化
+（`release/GAPS.tsv`；多模块构建按拓扑序拼接源码模块）；`procwt` 通过进程内
+9P2000 响应器提供命令行参数、时钟与本地文件 I/O（`release/GAPS.tsv` `G01`），
+不含网络与子进程派生；`rsd` 原生编译工作器闭包的一部分留在仓库侧
+（`release/GAPS.tsv` `G06`）；无证明检查（R-CIC 内核不在本版）；`4 GiB`
+WebAssembly 线性内存地址空间；无结果发布/查询入口。自举 `.rsd` 文法拒绝
+`theorem`、`axiom`、`class`、`abbrev`、`variable`、`opaque` 与 `by`。
 
-## 0.3 之后
+## 0.4 之后
 
-1. R-CIC 内核 + agent 入口的发布/查询入口——陌生人首次能找到、
-   检查并复用他人结果的位置。
-2. 编程完备性：模块、真实程序、执行层、64 位寻址、应用套件。
+1. R-CIC 内核与结果的发布/查询入口——供外部读者查找、检查并复用他人结果。
+2. 覆盖完整语言的独立 `.rmod` 编译、64 位寻址、更广的宿主能力与应用套件。
 3. 执行的廉价确认：wasm0 -> AIR -> zk。
-4. 外部语义的通用连接器（K/KORE、Lean/Rocq 导入）。
+4. 外部语义连接器（K/KORE、Lean/Rocq 导入）。

@@ -1,0 +1,225 @@
+-- provenance: ours (searched: rsd/build.rsd)
+import rsd.BuildAssembly
+-- glue/rsd/build.rsd — build `rsd`, the front-door command: the rsd
+-- dispatcher (rsd/sha256.rsd + common.rsd + shell.rsd) with the `run`
+-- verb entry of glue/rsd/main.rsd. Same recipe as rsd/build.rsd
+-- (concat → `lean -c` → `leanc` → strip); the only difference is the entry
+-- point: shell.rsd's `def main` line is dropped and main.rsd's appended.
+-- Usage: `RSD_HOME=<repo> lean --run glue/rsd/build.rsd` (or pass `-- --home <repo>`);
+-- env RSD_BUILD chooses the output dir (default $HOME/.cache/rsd/build).
+
+namespace RsdGlue
+
+def rsdMods : List String := [
+  "rsd/sha256.rsd", "rsd/common.rsd", "rsd/shell.rsd"]
+
+def entrySrc : String := "glue/rsd/main.rsd"
+
+-- Per-module concat edit, same rule as rsd/build.rsd cutMod.
+def cutMod (root m : String) : IO (List String) := do
+  if m == "lib/rt/Reuse.rsd" then return []
+  let source ← IO.FS.readFile s!"{root}/{m}"
+  let reuse ← if m == "lib/rt/V1.rsd" then
+    IO.FS.readFile s!"{root}/lib/rt/Reuse.rsd" else pure ""
+  return Rsd.BuildAssembly.assemble
+    { modulePath := m, source := source, reuseSource := reuse }
+
+-- The dispatcher's own `def main` is replaced by the `run`-verb entry, so
+-- the shell module's top-level main line is dropped at concat time.
+def dropMain (ls : List String) : List String :=
+  ls.filter (fun l => !(l.startsWith "def main "))
+
+def findLeanRoot (root : String) : IO (Option String) := do
+  match ← IO.getEnv "RSD_LEANROOT" with
+  | some r => return some r
+  | none => pure ()
+  let exe ← IO.appPath
+  let leanExe := if exe.fileName == some "lean" then exe.toString else "lean"
+  let r ← IO.Process.output
+    { cmd := "sh", args := #["-c", s!"'{leanExe}' --print-prefix 2>/dev/null || lean --print-prefix 2>/dev/null || true"],
+      cwd := some root }
+  match r.stdout.trim with
+  | "" => return none
+  | p => return some p
+
+def toolchainPin : String := "leanprover/lean4:v4.14.0"
+def toolchainPinVer : String := "4.14.0"
+
+def leanVersionOf (leanBin : String) : IO String := do
+  let r ← IO.Process.output { cmd := "sh", args := #["-c", s!"'{leanBin}' --version 2>/dev/null || true"] }
+  let ws := (r.stdout.trim.splitOn "version ").getD 1 ""
+  pure ((ws.splitOn ",").headD "").trim
+
+def toolchainGate (leanRoot : String) : IO Bool := do
+  let leanBin := if leanRoot == "" then "lean" else s!"{leanRoot}/bin/lean"
+  let v ← leanVersionOf leanBin
+  if v == toolchainPinVer then
+    IO.eprintln s!"[toolchain] lean {v} ({if leanRoot == "" then "PATH" else leanRoot}; pin {toolchainPin})"
+    return true
+  IO.eprintln s!"[toolchain_mismatch] have={if v == "" then "none" else v} want={toolchainPinVer} ({toolchainPin})"
+  return false
+
+def findHome0 : IO (Option String) := do
+  match ← IO.getEnv "RSD_HOME" with
+  | some h => return some h
+  | none => pure ()
+  let mut d ← IO.appPath
+  for _ in [0:8] do
+    match d.parent with
+    | none => return none
+    | some p => d := p
+    if (← System.FilePath.pathExists s!"{d}/lib") && (← System.FilePath.pathExists s!"{d}/rsc/rsc.rsd") then
+      return some d.toString
+  return none
+
+def shaInputs (root : String) (files : List String) : IO String := do
+  let paths := files.map (fun f =>
+    if f.startsWith "/" then f else s!"{root}/{f}")
+  let quoted := String.intercalate " " (paths.map (fun p => s!"'{p}'"))
+  let r ← IO.Process.output
+    { cmd := "sh", args := #["-c", s!"cat {quoted} | shasum -a 256 | cut -d' ' -f1"] }
+  if r.exitCode != 0 then
+    IO.eprintln s!"rsd build: shasum failed: {r.stderr.trim}"
+    return ""
+  return r.stdout.trim
+
+def leanBuild (leanRoot bin gen : String) : IO Bool := do
+  let leanBin := if leanRoot == "" then "lean" else s!"{leanRoot}/bin/lean"
+  let leancBin := if leanRoot == "" then "leanc" else s!"{leanRoot}/bin/leanc"
+  let genName := (System.FilePath.mk gen).fileName.getD gen
+  let bdir := (System.FilePath.mk gen).parent.map (fun x => x.toString)
+  let r1 ← IO.Process.output
+    { cmd := "nice", args := #["-n", "15", leanBin, "-M", "6144", "-c", s!"{genName.dropRight 5}.c", genName],
+      cwd := bdir }
+  if r1.exitCode != 0 then
+    IO.eprintln s!"rsd build: lean -c failed for {gen}\n{r1.stderr.trim}{r1.stdout.trim}"
+    return false
+  let stripFlag := if System.Platform.getIsOSX () then "-Wl,-dead_strip" else "-Wl,--gc-sections"
+  let largs := if leanRoot == "" then #["-O3", "-DNDEBUG", stripFlag]
+    else #["-O3", "-DNDEBUG", stripFlag, s!"-L{leanRoot}/lib"]
+  let ccEnv : Array (String × Option String) :=
+    if (← IO.getEnv "RSD_NO_APPLE_LD").isSome then #[] else #[("LEAN_CC", some "/usr/bin/clang")]
+  let r2 ← IO.Process.output
+    { cmd := "nice", args := #["-n", "15", leancBin] ++ largs ++ #[s!"{gen.dropRight 5}.c", "-o", s!"{bin}.tmp"],
+      env := ccEnv }
+  if r2.exitCode != 0 then
+    IO.eprintln s!"rsd build: leanc failed for {gen}\n{r2.stderr.trim}"
+    try IO.FS.removeFile s!"{bin}.tmp" catch _ => pure ()
+    return false
+  let rs ← IO.Process.output { cmd := "strip", args := #[s!"{bin}.tmp"] }
+  if rs.exitCode != 0 then
+    IO.eprintln s!"rsd build: strip failed for {gen}\n{rs.stderr.trim}"
+    try IO.FS.removeFile s!"{bin}.tmp" catch _ => pure ()
+    return false
+  let r3 ← IO.Process.output { cmd := "mv", args := #[s!"{bin}.tmp", bin] }
+  return r3.exitCode == 0
+
+def execOk (p : String) : IO Bool := do
+  let r ← IO.Process.output { cmd := "sh", args := #["-c", s!"test -x '{p}'"] }
+  return r.exitCode == 0
+
+def linkAs (target link : String) : IO Unit := do
+  let _ ← IO.Process.output { cmd := "ln", args := #["-sfn", target, link] }
+  pure ()
+
+-- wasmtime C API discovery, copied from rsd/build.rsd (probe order:
+-- WASMTIME_INC/LIB, pkg-config, /opt/homebrew, /usr/local).
+def probeWasmtimeDirs : IO (String × String) := do
+  let mut found : String × String := ("", "")
+  for (i, l) in [("/opt/homebrew/include", "/opt/homebrew/lib"),
+                  ("/usr/local/include", "/usr/local/lib")] do
+    if found.1 == "" then
+      if ← System.FilePath.pathExists s!"{i}/wasmtime.h" then
+        found := (i, l)
+  return found
+
+def findWasmtime : IO (String × String) := do
+  let wtInc0 ← IO.getEnv "WASMTIME_INC"
+  let wtLib0 ← IO.getEnv "WASMTIME_LIB"
+  match wtInc0, wtLib0 with
+  | some i, some l => return (i, l)
+  | _, _ => do
+    let pc ← IO.Process.output
+      { cmd := "sh",
+        args := #["-c", "command -v pkg-config >/dev/null 2>&1 && pkg-config --variable=includedir wasmtime && pkg-config --variable=libdir wasmtime || true"] }
+    let pcil := pc.stdout.trim.splitOn "\n"
+    if pcil.length == 2 then
+      return (wtInc0.getD (pcil.getD 0 ""), wtLib0.getD (pcil.getD 1 ""))
+    let (i, l) ← probeWasmtimeDirs
+    return (wtInc0.getD i, wtLib0.getD l)
+
+-- glue/host/procwt.c + proc9core.h against the wasmtime C library; named
+-- procwt-<sha12> over the sources and the wasmtime parts it links, with a
+-- `procwt` symlink beside it (same recipe as rsd/build.rsd rsd-host).
+def buildProcwt (root build _leanRoot : String) : IO Bool := do
+  let (wtInc, wtLib) ← findWasmtime
+  if wtInc == "" || !(← System.FilePath.pathExists s!"{wtInc}/wasmtime.h") then
+    IO.eprintln "[host] no procwt (wasmtime.h not found; set WASMTIME_INC/WASMTIME_LIB)"
+    return false
+  let cand ← IO.Process.output
+    { cmd := "sh",
+      args := #["-c", s!"ls '{wtLib}'/libwasmtime.a '{wtLib}'/libwasmtime.dylib '{wtLib}'/libwasmtime.so 2>/dev/null | head -1"] }
+  let wtlib := cand.stdout.trim
+  if wtlib == "" then
+    IO.eprintln s!"[host] no procwt (no libwasmtime under {wtLib})"
+    return false
+  let hdrF := s!"{wtInc}/wasmtime.h"
+  let hsha ← shaInputs root
+    ["glue/host/procwt.c", "glue/host/proc9core.h", hdrF, wtlib]
+  if hsha == "" then return false
+  let pbin := s!"{build}/procwt-{hsha.take 12}"
+  if !(← execOk pbin) then
+    let wtlink := if wtlib.endsWith ".a" then wtlib else s!"-L{wtLib} -lwasmtime"
+    let ldl := if System.Platform.getIsOSX () then "" else " -ldl"
+    let ccBin := (← IO.getEnv "CC").getD "cc"
+    let r ← IO.Process.output
+      { cmd := "sh",
+        args := #["-c", s!"{ccBin} -O2 -I'{wtInc}' '{root}/glue/host/procwt.c' {wtlink} -lpthread -lm{ldl} -o '{pbin}.tmp' && mv '{pbin}.tmp' '{pbin}'"] }
+    if r.exitCode != 0 then
+      IO.eprintln s!"rsd build: procwt build failed\n{r.stderr.trim}"
+      try IO.FS.removeFile s!"{pbin}.tmp" catch _ => pure ()
+      return false
+  linkAs ((System.FilePath.mk pbin).fileName.getD pbin) s!"{build}/procwt"
+  IO.eprintln s!"[host] procwt-{hsha.take 12} (wasmtime C API: {wtlib})"
+  return true
+
+end RsdGlue
+
+def main (argv : List String) : IO UInt32 := do
+  let homeEnv ← IO.getEnv "RSD_HOME"
+  let homeArg := match argv with
+    | "--home" :: h :: _ => h
+    | _ => homeEnv.getD ""
+  let home ← if homeArg != "" then pure (some homeArg) else RsdGlue.findHome0
+  match home with
+  | none =>
+    IO.eprintln "rsd build: no repo home (set --home or RSD_HOME)"
+    return 2
+  | some root => do
+    let homeE := (← IO.getEnv "HOME").getD "."
+    let build0 := (← IO.getEnv "RSD_BUILD").getD s!"{homeE}/.cache/rsd/build"
+    IO.FS.createDirAll build0
+    let build := (← IO.FS.realPath build0).toString
+    let genOnly := (← IO.getEnv "RSD_GEN").isSome || argv.elem "--gen" || argv.elem "gen"
+    let leanRoot := (← RsdGlue.findLeanRoot root).getD ""
+    if !genOnly then
+      if !(← RsdGlue.toolchainGate leanRoot) then return 1
+    let sha ← RsdGlue.shaInputs root (RsdGlue.rsdMods ++ ["rsd/BuildAssembly.rsd", RsdGlue.entrySrc, "glue/rsd/build.rsd"])
+    if sha == "" then return 1
+    let bin := s!"{build}/rsd-{sha.take 12}"
+    if !(← RsdGlue.execOk bin) then
+      let gen := s!"{build}/rsd-{sha.take 12}.lean"
+      let mut body := ""
+      for m in RsdGlue.rsdMods do
+        let ls ← RsdGlue.cutMod root m
+        let ls := if m == "rsd/shell.rsd" then RsdGlue.dropMain ls else ls
+        body := body ++ String.intercalate "\n" ls ++ "\n"
+      body := body ++ String.intercalate "\n" (← RsdGlue.cutMod root RsdGlue.entrySrc) ++ "\n"
+      IO.FS.writeFile gen body
+      if !genOnly then
+        if !(← RsdGlue.leanBuild leanRoot bin gen) then return 1
+      IO.println bin
+    RsdGlue.linkAs ((System.FilePath.mk bin).fileName.getD bin) s!"{build}/rsd"
+    let _ ← RsdGlue.buildProcwt root build leanRoot
+    IO.println bin
+    return 0

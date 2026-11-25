@@ -1,0 +1,63 @@
+/-! FLOAT64-0: the reference of the F operators (instruments/lrc-host/Interp.rsd "Floats", exact arithmetic on
+natural numbers) against stock Lean 4.14's Float (instruments/lrc-host/Float64Oracle.rsd `leanOp`): every operator
+on the boundary set, each pair of it for an operator of two operands, and on generated words. The interpreter's
+`prim` is what is called, so the arms of the operators are part of what is compared. Stock Lean only.
+closure_claim = 0. -/
+namespace Lrc.Host
+
+-- the reference's word for the operator on a (and b); a Float result with every NaN as the one quiet NaN
+def floatRef (tag : Nat) (a b : UInt64) : Option UInt64 :=
+  let args : List V :=
+    if F64.binaryTags.contains tag then [.int (F64.signed a), .int (F64.signed b)] else [.int (F64.signed a)]
+  match (prim tag args).run { nImg := 0, counted := false, narrow := false } with
+  | .ok (.int n, _) =>
+    let u := wordNat n
+    some (if F64.tagResultIsFloat tag && fIsNaN u then fNaN else u).toUInt64
+  | _ => none
+
+-- 4,000 generated pairs: xorshift64 words, shaped so that subnormals, close exponents and the top of the
+-- exponent range are met (instruments/lrc-host/Float64Oracle.rsd `shaped`)
+def float64Generated : List (UInt64 × UInt64) := Id.run do
+  let mut out : List (UInt64 × UInt64) := []
+  let mut r : UInt64 := 0x243F6A8885A308D3
+  for k in [0:4000] do
+    r := F64.nextRandom r
+    let a := F64.shaped r k
+    r := F64.nextRandom r
+    let b := F64.shaped r (k / 4)
+    out := (a, b) :: out
+  return out
+
+def float64Pairs : List (UInt64 × UInt64) := Id.run do
+  let mut out := float64Generated
+  for a in F64.edges do
+    for b in F64.edges do
+      out := (a, b) :: out
+  return out
+
+def float64Ones : List UInt64 := F64.edges ++ F64.intEdges ++ float64Generated.map (·.1)
+
+-- the number of comparisons and the number of them that differ
+def checkFloat64 : IO (Nat × Nat) := do
+  let mut compared := 0
+  let mut differ := 0
+  for tag in F64.binaryTags do
+    for (a, b) in float64Pairs do
+      compared := compared + 1
+      let got := floatRef tag a b
+      let want := F64.leanOp tag a b
+      if got != some want then
+        differ := differ + 1
+        if differ <= 20 then IO.println s!"float64 DIFFERS tag={tag} a={a} b={b} reference={got} lean={want}"
+  for tag in F64.unaryTags do
+    for a in float64Ones do
+      compared := compared + 1
+      let got := floatRef tag a a
+      let want := F64.leanOp tag a a
+      if got != some want then
+        differ := differ + 1
+        if differ <= 20 then IO.println s!"float64 DIFFERS tag={tag} a={a} reference={got} lean={want}"
+  IO.println s!"float64 compared={compared} differ={differ}"
+  return (compared, differ)
+
+end Lrc.Host

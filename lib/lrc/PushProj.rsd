@@ -10,6 +10,15 @@ structure PushR where
   alts : List N
   deriving Inhabited
 
+def revNodes : List N → List N → List N
+  | [], acc => acc
+  | x :: xs, acc => revNodes xs (x :: acc)
+
+partial def ppNeedsFlat (n : N) : Bool :=
+  if n.op == opCase || n.op == opJDecl then true
+  else if isTerminal n then false
+  else ppNeedsFlat (bodyOf n)
+
 -- PushProj:22: the alternatives that read x receive the projection b in front of their body
 def pushIntoAlts (b : N) (x : Nat) : List N → List VSet → List N
   | alt :: alts, s :: ss =>
@@ -36,22 +45,39 @@ partial def pushProjs (bsRev : List N) (alts : List N) (altsF : List VSet) (ctx 
       else pushProjs rest alts altsF (b :: ctx) (collectFreeIndices b ctxF)
     else if b.op == opVDecl && v.op == opIsShared then
       pushProjs rest alts altsF (b :: ctx) (collectFreeIndices b ctxF)
-    else { bs := rest.reverse ++ (b :: ctx), alts := alts }
+    else { bs := revNodes rest (b :: ctx), alts := alts }
 
 def altsFree : List N → List VSet
   | [] => []
   | alt :: alts => freeIndices (altBody alt) :: altsFree alts
 
+partial def ppWillPush (bsRev : List N) (ctxF : VSet) : Bool :=
+  match bsRev with
+  | [] => false
+  | b :: rest =>
+    let v := vdeclExpr b
+    if b.op == opVDecl && (v.op == opProj || v.op == opSProj) then
+      if !vsContains ctxF (vdeclVar b) then true
+      else ppWillPush rest (collectFreeIndices b ctxF)
+    else if v.op == opIsShared && b.op == opVDecl then
+      ppWillPush rest (collectFreeIndices b ctxF)
+    else false
+
 mutual
 -- PushProj:39 FnBody.pushProj
 partial def pushProjBody (b : N) : N :=
-  let f := flatten b
-  let bs := pushProjJPs f.bs
-  if f.term.op == opCase then
-    let alts := caseAlts f.term
-    let r := pushProjs bs.reverse alts (altsFree alts) [] (vsInsert vsEmpty (caseVar f.term))
-    reshape r.bs { f.term with kids := pushProjAlts r.alts }
-  else reshape bs f.term
+  if !ppNeedsFlat b then b
+  else
+    let f := flatten b
+    let bs := pushProjJPs f.bs
+    if f.term.op == opCase then
+      let alts := caseAlts f.term
+      let bsRev := revNodes bs []
+      let ctxF0 := vsInsert vsEmpty (caseVar f.term)
+      let r := if ppWillPush bsRev ctxF0 then pushProjs bsRev alts (altsFree alts) [] ctxF0
+               else { bs := bs, alts := alts }
+      reshape r.bs { f.term with kids := pushProjAlts r.alts }
+    else reshape bs f.term
 -- Basic:382 modifyJPs bs pushProj
 partial def pushProjJPs : List N → List N
   | [] => []

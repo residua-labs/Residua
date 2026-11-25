@@ -147,6 +147,7 @@ structure Em where
   -- the bytes of an object field: 8, or 4 ("The width of an object field" below)
   fw : Nat := 8
   addr64 : Bool := false
+  closed : IMap := imEmpty
   deriving Inhabited
 
 /-! ## Counting (EmitC:279 emitInc, EmitC:287 emitDec; lean.h `lean_inc_ref_n`, `lean_dec_ref`) -/
@@ -878,23 +879,36 @@ literal that no longer fits there is built where it is evaluated.
 The pool is one list: for each literal its address, its number of bytes, its bytes. -/
 
 structure LitPool where
-  pool : List Int
+  chunksRev : List (List Int)
   next : Int
   deriving Inhabited
 
 -- the bytes of a literal's object, a multiple of 8
 def litObjBytes (n : Nat) : Nat := 8 * ((33 + n + 7) / 8)
 
-def lpTake : Nat → List Int → List Int
-  | 0, _ => []
-  | _, [] => []
-  | k + 1, x :: xs => x :: lpTake k xs
+def lpTakeGo : Nat → List Int → List Int → List Int
+  | 0, _, acc => reverse acc
+  | _, [], acc => reverse acc
+  | k + 1, x :: xs, acc => lpTakeGo k xs (x :: acc)
+
+def lpTake (k : Nat) (xs : List Int) : List Int :=
+  lpTakeGo k xs []
 
 -- the address of the literal bs in the pool, 0 when it is not there
 partial def lpFind (bs : List Int) : List Int → Int
   | addr :: n :: rest =>
     if n.toNat == bs.length && lpTake n.toNat rest == bs then addr else lpFind bs (rest.drop n.toNat)
   | _ => 0
+
+def lpChunkAddr (bs : List Int) (len : Int) : List Int → Int
+  | addr :: n :: rest => if n == len && rest == bs then addr else 0
+  | _ => 0
+
+def lpFindChunks (bs : List Int) (len : Int) : List (List Int) → Int
+  | [] => 0
+  | c :: cs =>
+    let a := lpChunkAddr bs len c
+    if a != 0 then a else lpFindChunks bs len cs
 
 -- What a literal is found by: a string by its bytes; a constant cell (lib/lrc/Ir.rsd `mkLitObj`)
 -- by 256 + its tag and then the bytes of its scalar area. No byte is above 255, so the first
@@ -908,8 +922,9 @@ def lpCellBytes (key : List Int) : Nat :=
 
 def lpAdd (p : LitPool) (bs : List Int) : LitPool :=
   let size : Int := (lpCellBytes bs : Nat)
-  if lpFind bs p.pool != 0 || p.next + size > profile.heapAt then p
-  else { pool := p.pool ++ [p.next, (bs.length : Nat)] ++ bs, next := p.next + size }
+  let len : Int := (bs.length : Nat)
+  if lpFindChunks bs len p.chunksRev != 0 || p.next + size > profile.heapAt then p
+  else { chunksRev := (p.next :: len :: bs) :: p.chunksRev, next := p.next + size }
 
 mutual
 partial def lpGo (p : LitPool) (n : N) : LitPool :=
@@ -929,9 +944,13 @@ def lpDecls (p : LitPool) : List Decl → LitPool
   | [] => p
   | d :: ds => lpDecls (if d.ext then p else lpGo p d.body) ds
 
+def lpCatRev : List (List Int) → List Int → List Int
+  | [], acc => acc
+  | c :: cs, acc => lpCatRev cs (c ++ acc)
+
 -- the pool of a module's literals
 def litPool (decls : List Decl) : List Int :=
-  (lpDecls { pool := [], next := profile.memoAt } decls).pool
+  lpCatRev (lpDecls { chunksRev := [], next := profile.memoAt } decls).chunksRev []
 
 -- the k low bytes of v, the lowest first
 def lpWord : Nat → Nat → List Int
@@ -954,12 +973,224 @@ def litCell (key : List Int) : List Int :=
   let size := lpCellBytes key
   [0, 0, 0, 0] ++ lpWord 2 size ++ [0, intAt 0 key - 256] ++ bs ++ List.replicate (size - 8 - bs.length) 0
 
+partial def litDataRev : List Int → List (List Int) → List (List Int)
+  | _ :: n :: rest, acc =>
+    let len := n.toNat
+    let key := lpTake len rest
+    let obj := if litKeyIsObj key then litCell key else litObject key
+    litDataRev (rest.drop len) (obj :: acc)
+  | _, acc => acc
+
 -- the pool's objects in the order of their addresses: the module's data from `profile.memoAt`
-partial def litData : List Int → List Int
-  | _ :: n :: rest =>
-    let key := lpTake n.toNat rest
-    (if litKeyIsObj key then litCell key else litObject key) ++ litData (rest.drop n.toNat)
-  | _ => []
+def litData (pool : List Int) : List Int :=
+  lpCatRev (litDataRev pool []) []
+
+/-! ## Closed constructor objects in the module's static ground segment (`65536 .. __heap_base`) -/
+
+def emWordInv : List Int → List Int
+  | [] => []
+  | b :: bs => (255 - b) :: emWordInv bs
+
+def emWordBytes (k : Nat) (v : Int) : List Int :=
+  if v >= 0 then lpWord k v.toNat else emWordInv (lpWord k (-(v + 1)).toNat)
+
+def emPutBytes : List Int → Nat → List Int → List Int
+  | img, _, [] => img
+  | [], _, _ => []
+  | _ :: img, 0, b :: bs => b :: emPutBytes img 0 bs
+  | x :: img, off + 1, bs => x :: emPutBytes img off bs
+
+def emScalarArea (img : List Int) : List Int → List Int
+  | off :: ty :: v :: rest => emScalarArea (emPutBytes img off.toNat (emWordBytes (tyWidth ty) v)) rest
+  | _ => img
+
+def emFieldBytes (fw : Nat) : List Int → List Int
+  | [] => []
+  | w :: ws => emWordBytes fw w ++ emFieldBytes fw ws
+
+mutual
+partial def clRefsGo (n : N) (s : VSet) : VSet :=
+  if n.op == opVDecl then
+    let e := vdeclExpr n
+    clRefsGo (bodyOf n) (if fapClosed e then vsInsert s (fapFn e) else s)
+  else if n.op == opJDecl then clRefsGo (bodyOf n) (clRefsGo (jdeclBody n) s)
+  else if n.op == opCase then clRefsAlts (caseAlts n) s
+  else if isTerminal n then s
+  else clRefsGo (bodyOf n) s
+partial def clRefsAlts : List N → VSet → VSet
+  | [], s => s
+  | alt :: alts, s => clRefsAlts alts (clRefsGo (altBody alt) s)
+end
+
+def clRefsDecls : List Decl → VSet → VSet
+  | [], s => s
+  | d :: ds, s => clRefsDecls ds (if d.ext then s else clRefsGo d.body s)
+
+structure ClGround where
+  ok : Bool
+  fn : Nat
+  pool : GroundPool
+  addrs : IMap
+
+structure ClStrR where
+  addr : Int
+  pool : GroundPool
+  overflow : LitPool
+
+def clStrAddr (lits : List Int) (bs : List Int) (p : GroundPool) (ov : LitPool) : ClStrR :=
+  let a := lpFind bs lits
+  if a != 0 then { addr := a, pool := p, overflow := ov }
+  else
+    let len : Int := (bs.length : Nat)
+    let a2 := lpFindChunks bs len ov.chunksRev
+    if a2 != 0 then { addr := a2, pool := p, overflow := ov }
+    else
+      let obj := litObject bs
+      let sz : Int := (obj.length : Nat)
+      let addr := p.next
+      { addr := addr,
+        pool := { p with next := addr + sz, chunks := obj :: p.chunks, objects := p.objects + 1 },
+        overflow := { chunksRev := (addr :: len :: bs) :: ov.chunksRev, next := addr + sz } }
+
+structure ClArgWordsR where
+  ok : Bool
+  ws : List Int
+
+def clArgWords (env : LTree) : List Int → ClArgWordsR
+  | [] => { ok := true, ws := [] }
+  | y :: ys =>
+    let r := clArgWords env ys
+    if !r.ok then r
+    else if y < 0 then { ok := true, ws := 1 :: r.ws }
+    else
+      let d := ltFind env y
+      if intAt 0 d == 2 then { ok := true, ws := intAt 1 d :: r.ws }
+      else { ok := false, ws := [] }
+
+structure ClEvalR where
+  ok : Bool
+  pool : GroundPool
+  overflow : LitPool
+  addr : Int
+
+structure ClFlushR where
+  ok : Bool
+  env : LTree
+  pool : GroundPool
+  overflow : LitPool
+
+def clFlushCell (fail : ClEvalR) (fw : Nat) (env : LTree) (hasCtor : Bool) (cvar : Int)
+    (info : CtorInfo) (fws fields : List Int) (p : GroundPool) (ov : LitPool) : ClFlushR :=
+  if !hasCtor then { ok := true, env := env, pool := p, overflow := ov }
+  else
+      let s : Nat := 8 * ((8 + fw * info.size + info.ssize + 7) / 8)
+      let addr := p.next
+      if s >= 65536 || (fw == 4 && addr + (s : Int) > 4294967296) then
+        { ok := false, env := env, pool := fail.pool, overflow := fail.overflow }
+      else
+        let hdr := [0, 0, 0, 0] ++ lpWord 2 s ++ [(info.size : Int), (info.cidx : Int)]
+        let pad := s - 8 - fw * info.size
+        let cell := hdr ++ emFieldBytes fw fws ++ emScalarArea (List.replicate pad 0) fields
+        { ok := true,
+          env := ltPut env cvar [2, addr],
+          pool := { p with next := addr + (s : Int), chunks := cell :: p.chunks, objects := p.objects + 1 },
+          overflow := ov }
+
+partial def clEvalBody (fail : ClEvalR) (fw : Nat) (lits : List Int) (addrs : IMap) (env : LTree)
+    (hasCtor : Bool) (cvar : Int) (info : CtorInfo) (fws fields : List Int)
+    (p : GroundPool) (ov : LitPool) (n : N) : ClEvalR :=
+  if n.op == opMData || n.op == opInc || n.op == opDec then
+    clEvalBody fail fw lits addrs env hasCtor cvar info fws fields p ov (bodyOf n)
+  else if n.op == opVDecl then
+    let e := vdeclExpr n
+    if !n.ys.isEmpty then fail
+    else if e.op == opLit then
+      clEvalBody fail fw lits addrs (ltPut env n.a [1, e.a]) hasCtor cvar info fws fields p ov (bodyOf n)
+    else if e.op == opCtor && (infoOf e).isScalar then
+      let cidx := (infoOf e).cidx
+      if fw == 4 && 2 * cidx + 1 >= 4294967296 then fail
+      else
+        let w : Int := ((2 * cidx + 1 : Nat) : Int)
+        clEvalBody fail fw lits addrs (ltPut env n.a [2, w]) hasCtor cvar info fws fields p ov (bodyOf n)
+    else if e.op == opPrim && (primOp e == primBox || primOp e == primBoxS) then
+      let u := ltFind env (intAt 0 e.ys)
+      if intAt 0 u != 1 then fail
+      else
+        let w : Int := 2 * intAt 1 u + 1
+        clEvalBody fail fw lits addrs (ltPut env n.a [2, w]) hasCtor cvar info fws fields p ov (bodyOf n)
+    else if e.op == opLitStr && !isLitObj e then
+      let bs := litBytes e
+      if bs.isEmpty && e.s == "" then
+        clEvalBody fail fw lits addrs (ltPut env n.a [2, profile.emptyStr]) hasCtor cvar info fws fields p ov (bodyOf n)
+      else if !bs.isEmpty && bs.length <= litMax then
+        let sr := clStrAddr lits bs p ov
+        if fw == 4 && sr.addr >= 4294967296 then fail
+        else clEvalBody fail fw lits addrs (ltPut env n.a [2, sr.addr]) hasCtor cvar info fws fields sr.pool sr.overflow (bodyOf n)
+      else fail
+    else if fapClosed e then
+      let ca := imFind addrs (fapFn e)
+      if ca < 0 || (fw == 4 && ca >= 4294967296) then fail
+      else clEvalBody fail fw lits addrs (ltPut env n.a [2, ca]) hasCtor cvar info fws fields p ov (bodyOf n)
+    else if e.op == opCtor && (infoOf e).isRef then
+      let fl := clFlushCell fail fw env hasCtor cvar info fws fields p ov
+      if !fl.ok then fail
+      else
+        let ci := infoOf e
+        let aw := clArgWords fl.env e.ys
+        if !aw.ok || aw.ws.length != ci.size then fail
+        else clEvalBody fail fw lits addrs fl.env true n.a ci aw.ws [] fl.pool fl.overflow (bodyOf n)
+    else fail
+  else if n.op == opSSet then
+    if !hasCtor || n.a != cvar then fail
+    else
+      let u := ltFind env ((ssetArg n : Nat) : Int)
+      if intAt 0 u != 1 then fail
+      else
+        let fields2 := fields ++ [((ssetOff n : Nat) : Int), n.d, intAt 1 u]
+        clEvalBody fail fw lits addrs env hasCtor cvar info fws fields2 p ov (bodyOf n)
+  else if n.op == opRet then
+    let fl := clFlushCell fail fw env hasCtor cvar info fws fields p ov
+    if !fl.ok then fail
+    else
+      match retArgs n with
+      | [rv] =>
+        let d := ltFind fl.env rv
+        if intAt 0 d != 2 then fail
+        else { ok := true, pool := fl.pool, overflow := fl.overflow, addr := intAt 1 d }
+      | _ => fail
+  else fail
+
+def clGroundGo (nImg fw : Nat) (lits : List Int) (refs : VSet) : List Decl → GroundPool → LitPool → IMap → ClGround
+  | [], p, _, addrs => { ok := true, fn := 0, pool := p, addrs := addrs }
+  | d :: ds, p, ov, addrs =>
+    if !vsContains refs d.f then clGroundGo nImg fw lits refs ds p ov addrs
+    else if d.ext || d.f < nImg + nHelpers || !d.xs.isEmpty then { ok := false, fn := d.f, pool := p, addrs := addrs }
+    else
+      let fail : ClEvalR := { ok := false, pool := p, overflow := ov, addr := 0 }
+      let r := clEvalBody fail fw lits addrs lt0 false (-1) { cidx := 0, size := 0, ssize := 0, tid := 0 } [] [] p ov d.body
+      if !r.ok then { ok := false, fn := d.f, pool := p, addrs := addrs }
+      else clGroundGo nImg fw lits refs ds r.pool r.overflow (imInsert addrs d.f r.addr.toNat)
+
+def clGroundRefs (nImg fw : Nat) (lits : List Int) (refs : VSet) (decls : List Decl) : ClGround :=
+  if vsIsEmpty refs then { ok := true, fn := 0, pool := {}, addrs := imEmpty }
+  else clGroundGo nImg fw lits refs decls {} { chunksRev := [], next := profile.heapAt } imEmpty
+
+def clGround (nImg fw : Nat) (lits : List Int) (decls : List Decl) : ClGround :=
+  clGroundRefs nImg fw lits (clRefsDecls decls vsEmpty) decls
+
+def clRevDecls : List Decl → List Decl → List Decl
+  | [], acc => acc
+  | d :: ds, acc => clRevDecls ds (d :: acc)
+
+def clDropClosedRev (nMin : Nat) (refs : VSet) : List Decl → List Decl
+  | [] => []
+  | d :: ds =>
+    if !d.ext && d.f >= nMin && (vsContains refs d.f || declIsClosed d) then clDropClosedRev nMin refs ds
+    else d :: ds
+
+def clTrimTailV (nMin : Nat) (refs : VSet) (decls : List Decl) : List Decl :=
+  if vsIsEmpty refs then decls
+  else clRevDecls (clDropClosedRev nMin refs (clRevDecls decls [])) []
 
 -- A constant cell into local d: its persistent object, or a cell built here when the pool had no
 -- room for it.
@@ -1012,6 +1243,51 @@ def emArrCall (em : Em) (p : Nat) (imm : Int) (ys : List Int) (d : Nat) : List I
   else if p == primArrSlice then lg 0 ++ lg a ++ lg b ++ lg c ++ callFn (arrFnSlice em.heap) ++ failed
   else wIsArr em.addr64 a ++ wIf ++ lg 0 ++ lg a ++ callFn (arrFnToList em.heap) ++ failed ++ wElse ++ lg a ++ ls d ++ wEnd
 
+/-! ### Floats (FLOAT64-0, docs/EMITTER.md F row)
+
+A Float is the i64 local of its bits. An operator reinterprets its operands as f64 (0xBF), applies the wasm 1.0
+instruction, and reinterprets the result (0xBD) or extends a comparison's i32. An engine and a C compiler remove
+the pairs of reinterpretations between two operators. -/
+
+def wfOf : List Int := [191]
+def wfBits : List Int := [189]
+-- f64.const 1.0 and 0.5
+def wfOne : List Int := [68, 0, 0, 0, 0, 0, 0, 240, 63]
+def wfHalf : List Int := [68, 0, 0, 0, 0, 0, 0, 224, 63]
+-- the one quiet NaN, 0x7FF8000000000000
+def fNanWord : Int := 9221120237041090560
+
+def emF2 (a b d : Nat) (op : List Int) : List Int := lg a ++ wfOf ++ lg b ++ wfOf ++ op ++ wfBits ++ ls d
+def emFCmp (a b d : Nat) (op : List Int) : List Int := lg a ++ wfOf ++ lg b ++ wfOf ++ op ++ wExtend ++ ls d
+def emF1 (a d : Nat) (op : List Int) : List Int := lg a ++ wfOf ++ op ++ wfBits ++ ls d
+-- C's round: t = trunc x; t + copysign(1, x) when |x - t| >= 0.5, else t. An infinity and a NaN come back as they
+-- are (the difference is a NaN, and the test is false).
+def emFRound (a d : Nat) : List Int :=
+  lg a ++ wfOf ++ [157] ++ wfOne ++ lg a ++ wfOf ++ [166] ++ [160]
+    ++ lg a ++ wfOf ++ [157]
+    ++ lg a ++ wfOf ++ lg a ++ wfOf ++ [157] ++ [161] ++ [153] ++ wfHalf ++ [102]
+    ++ wSelect ++ wfBits ++ ls d
+
+-- an F operator (lib/lrc/Prim.rsd `primFAdd` to `primFBits`) on the locals a (and b) into local d
+def emFloat (p a b d : Nat) : List Int :=
+  if p == primFAdd then emF2 a b d [160]
+  else if p == primFSub then emF2 a b d [161]
+  else if p == primFMul then emF2 a b d [162]
+  else if p == primFDiv then emF2 a b d [163]
+  else if p == primFLt then emFCmp a b d [99]
+  else if p == primFLe then emFCmp a b d [101]
+  else if p == primFEq then emFCmp a b d [97]
+  else if p == primFNeg then emF1 a d [154]
+  else if p == primFAbs then emF1 a d [153]
+  else if p == primFSqrt then emF1 a d [159]
+  else if p == primFFloor then emF1 a d [156]
+  else if p == primFCeil then emF1 a d [155]
+  else if p == primFRound then emFRound a d
+  else if p == primFOfW then lg a ++ [186] ++ wfBits ++ ls d
+  else if p == primFOfI then lg a ++ [185] ++ wfBits ++ ls d
+  else if p == primFToW then lg a ++ wfOf ++ [252, 7] ++ ls d
+  else i64Const fNanWord ++ lg a ++ lg a ++ wfOf ++ lg a ++ wfOf ++ [98] ++ wSelect ++ ls d
+
 -- primitive p on argument locals into local d; `imm` is the node's first immediate
 def emPrim (em : Em) (p : Nat) (imm : Int) (ys : List Int) (d : Nat) : Code :=
   let a := loc1 (intAt 0 ys).toNat
@@ -1033,6 +1309,7 @@ def emPrim (em : Em) (p : Nat) (imm : Int) (ys : List Int) (d : Nat) : Code :=
   else if p == primWNot then codeOk (lg a ++ i64Const (-1) ++ wXor ++ ls d)
   else if p == primWShl then codeOk (lg a ++ lg b ++ wShl ++ ls d)
   else if p == primWShr then codeOk (lg a ++ lg b ++ wShrU ++ ls d)
+  else if p >= primFAdd && p <= primFBits then codeOk (emFloat p a b d)
   else if p == primMask then codeOk (lg a ++ i64Const imm ++ wAnd ++ ls d)
   else if p == primAdd then codeOk (emAddSub em.addr64 em.conv 124 true a b d)
   else if p == primSub then codeOk (emAddSub em.addr64 em.conv 125 false a b d)
@@ -1116,7 +1393,10 @@ def emExpr (em : Em) (binds : List Int) (e : N) : Code :=
     codeOk (lg (loc1 (sprojVar e)) ++ wasmAddr em.addr64
       ++ scRead em.fw (sprojWidth e) (8 + em.fw * sprojN e + sprojOff e)
       ++ ls z)
-  else if e.op == opFap then codeOk (emCall em (fapFn e) (fapSame e) (fapDepth e) e.ys ++ (if em.conv == 0 then emResults em.addr64 0 binds else emPops binds))
+  else if e.op == opFap then
+    let ca := imFind em.closed (fapFn e)
+    if ca >= 0 then codeOk (i64Const ca ++ ls z)
+    else codeOk (emCall em (fapFn e) (fapSame e) (fapDepth e) e.ys ++ (if em.conv == 0 then emResults em.addr64 0 binds else emPops binds))
   else if e.op == opPrim then emPrim em (primOp e) e.b e.ys z
   else if e.op == opIsShared then codeOk (emIsShared em.addr64 (loc1 (isSharedVar e)) ++ ls z)
   else codeFail
@@ -1255,12 +1535,12 @@ partial def emBody (em : Em) (labels : List Lbl) (n : N) : Code :=
       let em2 := { em with self := d.f, params := ps.xs, fuel := s, inl := true, rets := binds }
       let c := emBody em2 ({ j := -2, ps := [] } :: { j := -3, ps := [] } :: labels) b
       let r := emBody em labels k
+      let inlRest := wBlock ++ (wLoop ++ (c.code ++ (wEnd ++ (wUnreachable ++ (wEnd ++ r.code)))))
       { ok := c.ok && r.ok,
         code := lg em.fuel ++ (if fapSame e then [] else i64Const (1 + fapDepth e : Nat) ++ wSub) ++ ls s
           ++ emArgs e.ys ++ emSetParams ps.xs
           ++ lg s ++ wEqz ++ wIf ++ emRefuse em.addr64 em.conv profile.tagFuel profile.detNone ++ wEnd
-          ++ wBlock ++ wLoop ++ c.code ++ wEnd ++ wUnreachable ++ wEnd
-          ++ r.code }
+          ++ inlRest }
     else if emTestCase n then
       let two := emTwo (caseAlts k)
       let a := emBody em (lblAnon :: labels) two.one
@@ -1273,29 +1553,29 @@ partial def emBody (em : Em) (labels : List Lbl) (n : N) : Code :=
   else if n.op == opJDecl then
     let b := emBody em ({ j := (jdeclId n : Int), ps := jdeclParams n } :: labels) (bodyOf n)
     let v := emBody em labels (jdeclBody n)
-    { ok := b.ok && v.ok, code := wBlock ++ b.code ++ wEnd ++ v.code }
+    { ok := b.ok && v.ok, code := wBlock ++ (b.code ++ (wEnd ++ v.code)) }
   else if n.op == opSet then
     let r := emBody em labels (bodyOf n)
     -- the field's index in a variable: the address is the object's, plus the index times a field's bytes
     if setIsAt n then
-      { r with code := lg (loc1 (setVar n)) ++ lg (loc1 (setAtVar n)) ++ i64Const (fldShift em.fw) ++ wShl ++ wAdd ++ wasmAddr em.addr64
-                         ++ emArg (setArg n) ++ fldStore em.fw 8 ++ r.code }
+      { r with code := (lg (loc1 (setVar n)) ++ lg (loc1 (setAtVar n)) ++ i64Const (fldShift em.fw) ++ wShl ++ wAdd ++ wasmAddr em.addr64
+                         ++ emArg (setArg n) ++ fldStore em.fw 8) ++ r.code }
     else
-    { r with code := lg (loc1 (setVar n)) ++ wasmAddr em.addr64 ++ emArg (setArg n) ++ fldStore em.fw (8 + em.fw * setIdx n) ++ r.code }
+    { r with code := (lg (loc1 (setVar n)) ++ wasmAddr em.addr64 ++ emArg (setArg n) ++ fldStore em.fw (8 + em.fw * setIdx n)) ++ r.code }
   else if n.op == opSetTag then
     let r := emBody em labels (bodyOf n)
-    { r with code := lg (loc1 n.a.toNat) ++ wasmAddr em.addr64 ++ i64Const n.b ++ wStore8 7 ++ r.code }
+    { r with code := (lg (loc1 n.a.toNat) ++ wasmAddr em.addr64 ++ i64Const n.b ++ wStore8 7) ++ r.code }
   else if n.op == opSSet then
     let r := emBody em labels (bodyOf n)
     let pos : Nat := 8 + em.fw * ssetN n + ssetOff n
     let store := scWrite em.fw (tyWidth n.d) pos
-    { r with code := lg (loc1 (ssetVar n)) ++ wasmAddr em.addr64 ++ lg (loc1 (ssetArg n)) ++ store ++ r.code }
+    { r with code := (lg (loc1 (ssetVar n)) ++ wasmAddr em.addr64 ++ lg (loc1 (ssetArg n)) ++ store) ++ r.code }
   else if n.op == opInc then
     let r := emBody em labels (bodyOf n)
-    { r with code := emInc em (rcVar n) (rcN n) (rcCheck n) ++ r.code }
+    { r with code := (if rcPersistent n then [] else emInc em (rcVar n) (rcN n) (rcCheck n)) ++ r.code }
   else if n.op == opDec then
     let r := emBody em labels (bodyOf n)
-    { r with code := emDec em (rcVar n) (rcCheck n) ++ r.code }
+    { r with code := (if rcPersistent n then [] else emDec em (rcVar n) (rcCheck n)) ++ r.code }
   else if n.op == opDel then
     let r := emBody em labels (bodyOf n)
     -- with the stage's heap the cell goes back on its size's list here, as lean.h's
@@ -1316,11 +1596,11 @@ partial def emBody (em : Em) (labels : List Lbl) (n : N) : Code :=
         let first := (infoOf (kidAt 0 alts0)).isScalar
         let a := emBody em (lblAnon :: labels) (altBody (kidAt (if first then 1 else 0) alts0))
         let b := emBody em (lblAnon :: labels) (altBody (kidAt (if first then 0 else 1) alts0))
-        { ok := a.ok && b.ok, code := lg x ++ i64Const 1 ++ wAnd ++ wEqz ++ wIf ++ a.code ++ wElse ++ b.code ++ wEnd }
+        { ok := a.ok && b.ok, code := (lg x ++ i64Const 1 ++ wAnd ++ wEqz ++ wIf) ++ (a.code ++ (wElse ++ (b.code ++ wEnd))) }
       else if !anyDefault alts0 && scalarAlts alts0 == 0 then
         -- every constructor has fields: the value is a pointer, its tag is the header's byte
         let alts := emAlts em labels em.t1 alts0
-        { alts with code := lg x ++ wasmAddr em.addr64 ++ wLoad8 7 ++ ls em.t1 ++ alts.code }
+        { alts with code := (lg x ++ wasmAddr em.addr64 ++ wLoad8 7 ++ ls em.t1) ++ alts.code }
       else
       let alts := emAlts em labels em.t1 alts0
       { alts with code := emTag em.addr64 x em.t1 ++ alts.code }
@@ -1346,7 +1626,7 @@ partial def emAlts (em : Em) (labels : List Lbl) (t : Nat) : List N → Code
     else
       let a := emBody em (lblAnon :: labels) (altBody alt)
       let r := emAlts em (lblAnon :: labels) t alts
-      { ok := a.ok && r.ok, code := lg t ++ i64Const alt.a ++ wEq ++ wIf ++ a.code ++ wElse ++ r.code ++ wEnd }
+      { ok := a.ok && r.ok, code := (lg t ++ i64Const alt.a ++ wEq ++ wIf) ++ (a.code ++ (wElse ++ (r.code ++ wEnd))) }
 end
 
 /-! ## Functions -/
@@ -1400,6 +1680,7 @@ partial def inlGo (self nps : Nat) (n : N) (w : InlW) : InlW :=
       -- the test of `emBody` for a jump to the function's start
       if fapFn e == self && fapDepth e == 0 && k.op == opRet && retsBinds (liveBinds (vdeclBinds n)) (retArgs k) && e.ys.length == nps then
         { w with loop := true }
+      else if fapClosed e then inlGo self nps k w
       else if fapCold e then inlGo self nps k { w with cold := (fapFn e : Int) :: w.cold }
       else inlGo self nps k { w with calls := (fapFn e : Int) :: w.calls }
     else inlGo self nps k w
@@ -1421,6 +1702,7 @@ structure InlC where
   cnt : IMap
   loops : IMap
   cold : IMap
+  callsRev : List (List Int)
 
 def inlCount (self : Nat) : List Int → IMap → IMap
   | [], c => c
@@ -1435,11 +1717,13 @@ def inlColds : List Int → IMap → IMap
 def inlCounts : List Decl → InlC → InlC
   | [], c => c
   | d :: ds, c =>
-    if d.ext then inlCounts ds c
+    if d.ext then inlCounts ds { c with callsRev := [] :: c.callsRev }
     else
       let w := inlWalk d
-      inlCounts ds { cnt := inlCount d.f w.calls c.cnt, loops := (if w.loop then imInsert c.loops d.f 1 else c.loops),
-                     cold := inlColds w.cold c.cold }
+      inlCounts ds { cnt := inlCount d.f w.calls c.cnt,
+                     loops := (if w.loop then imInsert c.loops d.f 1 else c.loops),
+                     cold := inlColds w.cold c.cold,
+                     callsRev := w.calls :: c.callsRev }
 
 -- the largest function that is written at its call, in variables and join points
 def inlLimit : Nat := 256
@@ -1475,29 +1759,40 @@ def inlRegions (nImg : Nat) (c : InlC) (tab : DeclTab) : List Int → InlR → I
   | f :: fs, r =>
     match dtFind tab f.toNat with
     | some d =>
-      if inlIs nImg c d && !imContains r.reg d.f then
-        -- the region: one local for the callee's fuel, then one for each of its indices
-        inlRegions nImg c tab fs { next := r.next + inlVars d + 1, reg := imInsert r.reg d.f r.next }
+      if !d.ext && !isOwnFn nImg d.f && imFind c.cnt d.f == 1 && imContains c.loops d.f && !imContains r.reg d.f then
+        let nv := inlVars d
+        if nv <= inlLimit then
+          -- the region: one local for the callee's fuel, then one for each of its indices
+          inlRegions nImg c tab fs { next := r.next + nv + 1, reg := imInsert r.reg d.f r.next }
+        else inlRegions nImg c tab fs r
       else inlRegions nImg c tab fs r
     | none => inlRegions nImg c tab fs r
 
-def inlTable (nImg : Nat) (c : InlC) (tab : DeclTab) : List Decl → Inl → Inl
-  | [], t => t
-  | g :: gs, t =>
+def inlTable (nImg : Nat) (c : InlC) (tab : DeclTab) : List Decl → List (List Int) → Inl → Inl
+  | [], _, t => t
+  | g :: gs, cs, t =>
+    let calls := cs.headD []
+    let csRest := cs.drop 1
     -- one level: what a function that is itself written at its call calls stays a call
-    if g.ext || inlIs nImg c g then inlTable nImg c tab gs t
+    if g.ext || inlIs nImg c g then inlTable nImg c tab gs csRest t
     else
       let first := declMaxIndex g + 4
-      let r := inlRegions nImg c tab (inlWalk g).calls { next := first, reg := t.reg }
-      inlTable nImg c tab gs { t with reg := r.reg, extra := (if r.next > first then imInsert t.extra g.f (r.next - first) else t.extra) }
+      let r := inlRegions nImg c tab calls { next := first, reg := t.reg }
+      inlTable nImg c tab gs csRest { t with reg := r.reg, extra := (if r.next > first then imInsert t.extra g.f (r.next - first) else t.extra) }
+
+def inlKeepBodies (reg : IMap) : List Decl → List Decl
+  | [] => []
+  | d :: ds =>
+    (if imContains reg d.f then d else { d with body := mkUnreachable }) :: inlKeepBodies reg ds
 
 -- (conv 0, the runtime's way of ending a function, has its results in the result block: nothing is written in place)
 def inlOf (conv nImg : Nat) (decls : List Decl) : Inl :=
   if conv == 0 then inlNone
   else
     let tab := dtOfList decls
-    let c := inlCounts decls { cnt := imEmpty, loops := imEmpty, cold := imEmpty }
-    inlTable nImg c tab decls { tab := tab, reg := imEmpty, extra := imEmpty, cold := c.cold }
+    let c := inlCounts decls { cnt := imEmpty, loops := imEmpty, cold := imEmpty, callsRev := [] }
+    let res := inlTable nImg c tab decls c.callsRev.reverse { tab := tab, reg := imEmpty, extra := imEmpty, cold := c.cold }
+    { res with tab := dtOfList (inlKeepBodies res.reg decls) }
 
 mutual
 -- the functions a body calls as parts (lib/lrc/Ir.rsd `fapApart`)
@@ -1536,21 +1831,30 @@ def emDeadFn (conv : Nat) (d : Decl) : WFn :=
   { params := emI64s (2 + d.xs.length), results := (if conv == 0 then [vtI64] else emI64s (liveCount d.rets)), locals := [],
     code := wUnreachable ++ [opEnd] }
 
-def emDeclI (inl : Inl) (fnBase nImg heap conv : Nat) (lits : List Int) (d : Decl) (fw : Nat) (addr64 : Bool) : Code :=
-  let nvars := declMaxIndex d
+def emDeclWithMaxG (inl : Inl) (fnBase nImg heap conv : Nat) (lits : List Int) (closed : IMap) (d : Decl) (nvars fw : Nat) (addr64 : Bool) : Code :=
   let em : Em := { self := d.f, fnBase := fnBase, params := d.xs, nImg := nImg, heap := heap, conv := conv, lits := lits, t0 := nvars + 2, t1 := nvars + 3,
-                   fw := fw, addr64 := addr64, inlTab := inl.tab, inlAt := inl.reg }
+                   fw := fw, addr64 := addr64, closed := closed, inlTab := inl.tab, inlAt := inl.reg }
   let b := emBody em [{ j := -2, ps := [] }] d.body
   let entry := if isOwnFn nImg d.f then [] else if conv == 0 && !addr64 then fuelPrologue
     else lg 1 ++ wEqz ++ wIf ++ emRefuse addr64 conv profile.tagFuel profile.detNone ++ wEnd
+  let post := wEnd ++ ((if conv == 0 then i64Const 0 else wUnreachable) ++ wEnd)
   -- every path of the loop returns, jumps to its start or refuses; what follows it is never run
-  { ok := b.ok, code := entry ++ wLoop ++ b.code ++ wEnd ++ (if conv == 0 then i64Const 0 else wUnreachable) ++ [opEnd] }
+  { ok := b.ok, code := (entry ++ wLoop) ++ (b.code ++ post) }
+
+def emDeclWithMax (inl : Inl) (fnBase nImg heap conv : Nat) (lits : List Int) (d : Decl) (nvars fw : Nat) (addr64 : Bool) : Code :=
+  emDeclWithMaxG inl fnBase nImg heap conv lits imEmpty d nvars fw addr64
+
+def emDeclI (inl : Inl) (fnBase nImg heap conv : Nat) (lits : List Int) (d : Decl) (fw : Nat) (addr64 : Bool) : Code :=
+  emDeclWithMax inl fnBase nImg heap conv lits d (declMaxIndex d) fw addr64
+
+def emWFnOfCode (inl : Inl) (conv : Nat) (d : Decl) (nvars : Nat) (code : List Int) : WFn :=
+  let extra := imFind inl.extra d.f
+  { params := emI64s (2 + d.xs.length), results := (if conv == 0 then [vtI64] else emI64s (liveCount d.rets)),
+    locals := emI64s (nvars - d.xs.length + 2 + (if extra < 0 then 0 else extra.toNat)), code := code }
 
 def emDeclFnI (inl : Inl) (fnBase nImg heap conv : Nat) (lits : List Int) (d : Decl) (fw : Nat) (addr64 : Bool) : WFn :=
   let nvars := declMaxIndex d
-  let extra := imFind inl.extra d.f
-  { params := emI64s (2 + d.xs.length), results := (if conv == 0 then [vtI64] else emI64s (liveCount d.rets)),
-    locals := emI64s (nvars - d.xs.length + 2 + (if extra < 0 then 0 else extra.toNat)), code := (emDeclI inl fnBase nImg heap conv lits d fw addr64).code }
+  emWFnOfCode inl conv d nvars (emDeclWithMax inl fnBase nImg heap conv lits d nvars fw addr64).code
 
 -- a declaration by itself: every call in it is a call (gates/irsem/Hop.rsd writes one function at a time)
 def emDecl (fnBase nImg heap conv : Nat) (lits : List Int) (d : Decl) (fw : Nat := 8) : Code :=
@@ -1621,19 +1925,36 @@ def pubStore (addr64 : Bool) (tmp : Nat) : Nat → List Int
   | 0 => []
   | k + 1 => ls tmp ++ blkSetAt addr64 (profile.resAt + 8 * (k : Int)) (lg tmp) ++ pubStore addr64 tmp k
 
-def emPublic (addr64 : Bool) (fnBase heap conv f : Nat) (sg : SigR) (ps : List Param) : WFn :=
+def emPublicG (addr64 : Bool) (staticEnd : Int) (fnBase heap conv f : Nat) (sg : SigR) (ps : List Param) : WFn :=
   let words := flatWords sg.params
   let st := 2 + words
   let args := pubArgs 2 sg.params
   let call := lg 0 ++ lg 1 ++ (if args.isEmpty then i64Const 1 else args) ++ callFn (fnBase + f)
   -- with convention 1 the entry is where a refusal is caught: its status is in the block
-  let run := if conv == 0 then call
+  let run0 := if conv == 0 then call
     else wTryI64 ++ call ++ pubStore addr64 (st + 1) (liveCount sg.result) ++ i64Const 0 ++ wCatchAll ++ blkGetAt addr64 offStatus ++ wEnd
+  let run :=
+    if staticEnd <= profile.heapAt then run0
+    else
+      lg 1 ++ wEqz ++ wIfI64
+        ++ blkSetAt addr64 offStatus (i64Const profile.tagFuel) ++ blkSetAt addr64 offDetail (i64Const (abiDetailBase + profile.detNone)) ++ i64Const profile.tagFuel
+      ++ wElse
+        ++ blkGetAt addr64 offLimit ++ i64Const staticEnd ++ wLtU ++ wIfI64
+          ++ blkSetAt addr64 offStatus (i64Const profile.tagCapacity) ++ blkSetAt addr64 offDetail (i64Const (abiDetailBase + profile.detGrow)) ++ i64Const profile.tagCapacity
+        ++ wElse
+          ++ blkGetAt addr64 offBump ++ i64Const staticEnd ++ wLtU
+          ++ wIf ++ blkSetAt addr64 offBump (i64Const staticEnd) ++ wEnd
+          ++ run0
+        ++ wEnd
+      ++ wEnd
   { params := emI64s (2 + words), results := [vtI64], locals := [vtI64, vtI64],
     code := run ++ ls st
       ++ pubDrops addr64 heap (st + 1) 2 (flatTs sg.params) ps
       ++ lg st ++ wEqz ++ wIf ++ catRev (pubMoves addr64 0 0 sg.result) [] ++ wEnd
       ++ lg st ++ [opEnd] }
+
+def emPublic (addr64 : Bool) (fnBase heap conv f : Nat) (sg : SigR) (ps : List Param) : WFn :=
+  emPublicG addr64 profile.heapAt fnBase heap conv f sg ps
 
 -- a function the stage does not hold (a reserved form, or a helper of one): its entry refuses
 -- with the capacity status and the representation detail, as the present emitter refuses a list
@@ -1643,6 +1964,13 @@ def emRefusing (addr64 : Bool) (words : Nat) : WFn :=
     code := emRefuse addr64 0 profile.tagCapacity detRepr ++ i64Const 0 ++ [opEnd] }
 
 -- the parameters of the declaration at place `t`, or `xs` when there is none
+def declXsTab (xs : List Param) (self t : Nat) (tab : DeclTab) : List Param :=
+  if t == self then xs
+  else
+    match dtFind tab t with
+    | some d => d.xs
+    | none => xs
+
 def declXs (xs : List Param) (t : Nat) (all : List Decl) : List Param :=
   match declAt t all with
   | some d => d.xs
@@ -1682,33 +2010,71 @@ def sigWords (g : Dg) (sig : List Int) : Nat :=
   let sg := fwSigB g sig
   if sg.ok then flatWords sg.params else sigCount sig
 
+def pubMapOf : List Int → ITree → ITree
+  | a :: b :: rest, t => pubMapOf rest (if itHas t a then t else itPut t a b)
+  | _, t => t
+
+def pubPair (pubMap : ITree) (f : Nat) : List Int :=
+  let hit := itFind pubMap (f : Int)
+  if hit >= 0 then [(f : Int), hit] else []
+
+def emitFnsGoMG (inl : Inl) (tab : DeclTab) (g : Dg) (sigs : List (List Int)) (sigIdx : Nat) (sigsTail : List (List Int)) (rtBase n heap conv : Nat) (lits : List Int) (closed : IMap) (staticEnd : Int) (pubsAll : List Int) (pubMap : ITree) (hasPubMap : Bool) (fw : Nat) (addr64 : Bool) : List Decl → List WFn → List WFn → EmitR
+  | [], pubAcc, intAcc => { ok := true, fn := 0, publics := pubAcc.reverse, internals := intAcc.reverse }
+  | d :: ds, pubAcc, intAcc =>
+    let isNextSig := d.f == sigIdx
+    let nextSigIdx := if isNextSig then sigIdx + 1 else sigIdx
+    let nextSigsTail := if isNextSig then sigsTail.drop 1 else sigsTail
+    if d.ext then
+      let sig := if isNextSig then sigsTail.headD [] else sigOf sigs d.f
+      emitFnsGoMG inl tab g sigs nextSigIdx nextSigsTail rtBase n heap conv lits closed staticEnd pubsAll pubMap hasPubMap fw addr64 ds
+        (emRefusing addr64 (sigWords g sig) :: pubAcc) (emRefusing addr64 0 :: intAcc)
+    else if d.f >= n && (imContains closed d.f || inlDead inl n d) then
+      emitFnsGoMG inl tab g sigs nextSigIdx nextSigsTail rtBase n heap conv lits closed staticEnd pubsAll pubMap hasPubMap fw addr64 ds
+        pubAcc (emDeadFn conv d :: intAcc)
+    else
+      let nvars := declMaxIndex d
+      let c := emDeclWithMaxG inl (rtBase + n) n heap conv lits closed d nvars fw addr64
+      if !c.ok then { ok := false, fn := d.f, publics := [], internals := [] }
+      else if d.f >= n then
+        let intFn := emWFnOfCode inl conv d nvars c.code
+        emitFnsGoMG inl tab g sigs nextSigIdx nextSigsTail rtBase n heap conv lits closed staticEnd pubsAll pubMap hasPubMap fw addr64 ds pubAcc (intFn :: intAcc)
+      else
+        let sig := if isNextSig then sigsTail.headD [] else sigOf sigs d.f
+        -- a sum in the signature: the boundary's words are not the stage's (lib/lrc/FromWire.rsd
+        -- `tyHasSumWord`); the function is there for the image's own calls, its public entry refuses
+        if sigHasSumWord g (sigCount sig) (sigParams sig) then
+          let intFn := emWFnOfCode inl conv d nvars c.code
+          emitFnsGoMG inl tab g sigs nextSigIdx nextSigsTail rtBase n heap conv lits closed staticEnd pubsAll pubMap hasPubMap fw addr64 ds
+            (emRefusing addr64 0 :: pubAcc) (intFn :: intAcc)
+        else
+        -- the entry runs the function's boundary twin when it has one (lib/lrc/FromWire.rsd "The boundary"):
+        -- the entry and the twin have the boundary's words, and the twin its own borrowed parameters. A function
+        -- without a twin has the same words inside the stage as at the boundary.
+        let pubs := if hasPubMap then pubPair pubMap d.f else pubsAll
+        let t := pubEntry pubs d.f
+        let intFn := emWFnOfCode inl conv d nvars c.code
+        emitFnsGoMG inl tab g sigs nextSigIdx nextSigsTail rtBase n heap conv lits closed staticEnd pubsAll pubMap hasPubMap fw addr64 ds
+          (emPublicG addr64 staticEnd (rtBase + n) heap conv t (fwSigB g sig) (declXsTab d.xs d.f t tab) :: pubAcc) (intFn :: intAcc)
+
+def emitFnsGoM (inl : Inl) (tab : DeclTab) (g : Dg) (sigs : List (List Int)) (sigIdx : Nat) (sigsTail : List (List Int)) (rtBase n heap conv : Nat) (lits : List Int) (pubsAll : List Int) (pubMap : ITree) (hasPubMap : Bool) (fw : Nat) (addr64 : Bool) (ds : List Decl) (pubAcc intAcc : List WFn) : EmitR :=
+  emitFnsGoMG inl tab g sigs sigIdx sigsTail rtBase n heap conv lits imEmpty profile.heapAt pubsAll pubMap hasPubMap fw addr64 ds pubAcc intAcc
+
+def emitFnsGo (inl : Inl) (tab : DeclTab) (g : Dg) (sigs : List (List Int)) (sigIdx : Nat) (sigsTail : List (List Int)) (rtBase n heap conv : Nat) (lits : List Int) (pubs : List Int) (fw : Nat) (addr64 : Bool) (ds : List Decl) (pubAcc intAcc : List WFn) : EmitR :=
+  emitFnsGoM inl tab g sigs sigIdx sigsTail rtBase n heap conv lits pubs (pubMapOf pubs it0) true fw addr64 ds pubAcc intAcc
+
 -- The image's functions: n public entries, then the internal functions in the image's order, the
 -- stage's own list functions (index n and up, no entry) after them. `pubs` gives the boundary
 -- twins (pairs: function, twin's place), `all` is the whole list of declarations.
 -- `rtBase` is the number of runtime functions before them in the module; `heap` is `Em.heap`, `fw` is `Em.fw`.
-def emitFnsI (inl : Inl) (g : Dg) (sigs : List (List Int)) (rtBase n heap conv : Nat) (lits : List Int) (pubs : List Int) (all : List Decl) (fw : Nat) (addr64 : Bool) : List Decl → EmitR
-  | [] => { ok := true, fn := 0, publics := [], internals := [] }
-  | d :: ds =>
-    let r := emitFnsI inl g sigs rtBase n heap conv lits pubs all fw addr64 ds
-    if !r.ok then r
-    else if d.ext then
-      { r with publics := emRefusing addr64 (sigWords g (sigOf sigs d.f)) :: r.publics, internals := emRefusing addr64 0 :: r.internals }
-    else
-      let c := emDeclI inl (rtBase + n) n heap conv lits d fw addr64
-      if !c.ok then { ok := false, fn := d.f, publics := [], internals := [] }
-      else if d.f >= n then
-        { r with internals := (if inlDead inl n d then emDeadFn conv d else emDeclFnI inl (rtBase + n) n heap conv lits d fw addr64) :: r.internals }
-      -- a sum in the signature: the boundary's words are not the stage's (lib/lrc/FromWire.rsd
-      -- `tyHasSumWord`); the function is there for the image's own calls, its public entry refuses
-      else if sigHasSumWord g (sigCount (sigOf sigs d.f)) (sigParams (sigOf sigs d.f)) then
-        { r with publics := emRefusing addr64 0 :: r.publics, internals := emDeclFnI inl (rtBase + n) n heap conv lits d fw addr64 :: r.internals }
-      else
-        -- the entry runs the function's boundary twin when it has one (lib/lrc/FromWire.rsd "The boundary"):
-        -- the entry and the twin have the boundary's words, and the twin its own borrowed parameters. A function
-        -- without a twin has the same words inside the stage as at the boundary.
-        let t := pubEntry pubs d.f
-        { r with publics := emPublic addr64 (rtBase + n) heap conv t (fwSigB g (sigOf sigs d.f)) (declXs d.xs t all) :: r.publics,
-                 internals := emDeclFnI inl (rtBase + n) n heap conv lits d fw addr64 :: r.internals }
+def emitFnsStreamG (inl : Inl) (tab : DeclTab) (g : Dg) (sigs : List (List Int)) (rtBase n heap conv : Nat) (lits : List Int) (closed : IMap) (staticEnd : Int) (pubMap : ITree) (fw : Nat) (addr64 : Bool) (ds : List Decl) : EmitR :=
+  emitFnsGoMG inl tab g sigs 0 sigs rtBase n heap conv lits closed staticEnd [] pubMap true fw addr64 ds [] []
+
+def emitFnsStream (inl : Inl) (tab : DeclTab) (g : Dg) (sigs : List (List Int)) (rtBase n heap conv : Nat) (lits : List Int) (pubMap : ITree) (fw : Nat) (addr64 : Bool) (ds : List Decl) : EmitR :=
+  emitFnsStreamG inl tab g sigs rtBase n heap conv lits imEmpty profile.heapAt pubMap fw addr64 ds
+
+def emitFnsI (inl : Inl) (g : Dg) (sigs : List (List Int)) (rtBase n heap conv : Nat) (lits : List Int) (pubs : List Int) (all : List Decl) (fw : Nat) (addr64 : Bool) (ds : List Decl) : EmitR :=
+  let tab := if conv == 0 then dtOfList (inlKeepBodies imEmpty all) else inl.tab
+  emitFnsGoM inl tab g sigs 0 sigs rtBase n heap conv lits pubs (pubMapOf pubs it0) true fw addr64 ds [] []
 
 -- (`all` gives the table of the functions that are written at their one call, "A function with one caller")
 def emitFnsFor (g : Dg) (sigs : List (List Int)) (rtBase n heap conv : Nat) (lits : List Int) (pubs : List Int) (all : List Decl) (fw : Nat) (addr64 : Bool) (ds : List Decl) : EmitR :=
@@ -1716,5 +2082,50 @@ def emitFnsFor (g : Dg) (sigs : List (List Int)) (rtBase n heap conv : Nat) (lit
 def emitFns (g : Dg) (sigs : List (List Int)) (rtBase n heap conv : Nat) (lits : List Int) (pubs : List Int) (all : List Decl) (fw : Nat) (ds : List Decl) : EmitR :=
   emitFnsFor g sigs rtBase n heap conv lits pubs all fw false ds
 
+structure EmitOneR where
+  ok : Bool
+  fn : Nat
+  nextSigIdx : Nat
+  nextSigsTail : List (List Int)
+  pub : List WFn
+  intFn : WFn
+
+def emitOneDeclG (inl : Inl) (tab : DeclTab) (g : Dg) (sigs : List (List Int))
+    (sigIdx : Nat) (sigsTail : List (List Int)) (rtBase n heap conv : Nat)
+    (lits : List Int) (closed : IMap) (staticEnd : Int) (pubMap : ITree) (fw : Nat) (addr64 : Bool) (d : Decl) : EmitOneR :=
+  let isNextSig := d.f == sigIdx
+  let nextSigIdx := if isNextSig then sigIdx + 1 else sigIdx
+  let nextSigsTail := if isNextSig then sigsTail.drop 1 else sigsTail
+  let emptyFn : WFn := { params := [], results := [], locals := [], code := [] }
+  if d.ext then
+    let sig := if isNextSig then sigsTail.headD [] else sigOf sigs d.f
+    { ok := true, fn := 0, nextSigIdx := nextSigIdx, nextSigsTail := nextSigsTail,
+      pub := [emRefusing addr64 (sigWords g sig)], intFn := emRefusing addr64 0 }
+  else if d.f >= n && (imContains closed d.f || inlDead inl n d) then
+    { ok := true, fn := 0, nextSigIdx := nextSigIdx, nextSigsTail := nextSigsTail,
+      pub := [], intFn := emDeadFn conv d }
+  else
+    let nvars := declMaxIndex d
+    let c := emDeclWithMaxG inl (rtBase + n) n heap conv lits closed d nvars fw addr64
+    if !c.ok then
+      { ok := false, fn := d.f, nextSigIdx := nextSigIdx, nextSigsTail := nextSigsTail, pub := [], intFn := emptyFn }
+    else if d.f >= n then
+      { ok := true, fn := 0, nextSigIdx := nextSigIdx, nextSigsTail := nextSigsTail,
+        pub := [], intFn := emWFnOfCode inl conv d nvars c.code }
+    else
+      let sig := if isNextSig then sigsTail.headD [] else sigOf sigs d.f
+      if sigHasSumWord g (sigCount sig) (sigParams sig) then
+        { ok := true, fn := 0, nextSigIdx := nextSigIdx, nextSigsTail := nextSigsTail,
+          pub := [emRefusing addr64 0], intFn := emWFnOfCode inl conv d nvars c.code }
+      else
+        let twinFn := pubEntry (pubPair pubMap d.f) d.f
+        { ok := true, fn := 0, nextSigIdx := nextSigIdx, nextSigsTail := nextSigsTail,
+          pub := [emPublicG addr64 staticEnd (rtBase + n) heap conv twinFn (fwSigB g sig) (declXsTab d.xs d.f twinFn tab)],
+          intFn := emWFnOfCode inl conv d nvars c.code }
+
+def emitOneDecl (inl : Inl) (tab : DeclTab) (g : Dg) (sigs : List (List Int))
+    (sigIdx : Nat) (sigsTail : List (List Int)) (rtBase n heap conv : Nat)
+    (lits : List Int) (pubMap : ITree) (fw : Nat) (addr64 : Bool) (d : Decl) : EmitOneR :=
+  emitOneDeclG inl tab g sigs sigIdx sigsTail rtBase n heap conv lits imEmpty profile.heapAt pubMap fw addr64 d
 
 end Lrc

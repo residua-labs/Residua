@@ -32,17 +32,34 @@ partial def sinkProjs (bsRev : List N) (alts : List N) (altsF : List VSet) (ctx 
       else sinkProjs rest alts altsF (b :: ctx) (collectFreeIndices b ctxF)
     else if b.op == opVDecl && b.ys.isEmpty && (v.op == opIsShared || v.op == opPrim) then
       sinkProjs rest alts altsF (b :: ctx) (collectFreeIndices b ctxF)
-    else { bs := rest.reverse ++ (b :: ctx), alts := alts }
+    else { bs := revNodes rest (b :: ctx), alts := alts }
+
+partial def spWillSink (bsRev : List N) (ctxF : VSet) : Bool :=
+  match bsRev with
+  | [] => false
+  | b :: rest =>
+    let v := vdeclExpr b
+    if b.op == opVDecl && b.ys.isEmpty && (v.op == opProj || v.op == opSProj || v.op == opLit) then
+      if !vsContains ctxF (vdeclVar b) then true
+      else spWillSink rest (collectFreeIndices b ctxF)
+    else if b.op == opVDecl && b.ys.isEmpty && (v.op == opIsShared || v.op == opPrim) then
+      spWillSink rest (collectFreeIndices b ctxF)
+    else false
 
 mutual
 partial def sinkProjBody (b : N) : N :=
-  let f := flatten b
-  let bs := sinkProjJPs f.bs
-  if f.term.op == opCase then
-    let alts := caseAlts f.term
-    let r := sinkProjs bs.reverse alts (altsFree alts) [] (vsInsert vsEmpty (caseVar f.term))
-    reshape r.bs { f.term with kids := sinkProjAlts r.alts }
-  else reshape bs f.term
+  if !ppNeedsFlat b then b
+  else
+    let f := flatten b
+    let bs := sinkProjJPs f.bs
+    if f.term.op == opCase then
+      let alts := caseAlts f.term
+      let bsRev := revNodes bs []
+      let ctxF0 := vsInsert vsEmpty (caseVar f.term)
+      let r := if spWillSink bsRev ctxF0 then sinkProjs bsRev alts (altsFree alts) [] ctxF0
+               else { bs := bs, alts := alts }
+      reshape r.bs { f.term with kids := sinkProjAlts r.alts }
+    else reshape bs f.term
 partial def sinkProjJPs : List N → List N
   | [] => []
   | b :: bs => (if b.op == opJDecl then jdeclSetBody b (sinkProjBody (jdeclBody b)) else b) :: sinkProjJPs bs
@@ -79,9 +96,6 @@ partial def sjReadOnlyAlts : List N → Bool
   | alt :: alts => sjReadOnly (altBody alt) && sjReadOnlyAlts alts
 end
 
-def sjIsRead (n : N) : Bool :=
-  n.op == opVDecl && n.ys.isEmpty && ((vdeclExpr n).op == opProj || (vdeclExpr n).op == opSProj || (vdeclExpr n).op == opLit)
-
 structure SjR where
   moved : Bool
   node : N
@@ -91,11 +105,13 @@ structure SjR where
 -- below when one takes it, past the reads in between that do not use it
 partial def sjPush (r : N) (rest : N) : SjR :=
   let x := vdeclVar r
-  if rest.op == opJDecl then
+  if rest.op == opJDecl && sjReadOnly (bodyOf rest) then
     if !vsContains (freeIndices (bodyOf rest)) x && sjReadOnly (bodyOf rest) then
       { moved := true, node := { rest with kids := [{ r with kids := [vdeclExpr r, jdeclBody rest] }, bodyOf rest] } }
     else { moved := false, node := { r with kids := [vdeclExpr r, rest] } }
-  else if sjIsRead rest && !vsContains (collectFreeIndices { rest with kids := [vdeclExpr rest, mkUnreachable] } vsEmpty) x then
+  else if rest.op == opVDecl && rest.ys.isEmpty
+      && ((vdeclExpr rest).op == opProj || (vdeclExpr rest).op == opSProj || (vdeclExpr rest).op == opLit)
+      && !exprHasVar (vdeclExpr rest) x then
     let inner := sjPush r (bodyOf rest)
     if inner.moved then { moved := true, node := { rest with kids := [vdeclExpr rest, inner.node] } }
     else { moved := false, node := { r with kids := [vdeclExpr r, rest] } }
@@ -105,7 +121,9 @@ mutual
 partial def sjGo (n : N) : N :=
   if n.op == opVDecl then
     let rest := sjGo (bodyOf n)
-    if sjIsRead n then (sjPush n rest).node else { n with kids := [vdeclExpr n, rest] }
+    let e := vdeclExpr n
+    if n.ys.isEmpty && (e.op == opProj || e.op == opSProj || e.op == opLit) then (sjPush n rest).node
+    else { n with kids := [e, rest] }
   else if n.op == opJDecl then { n with kids := [sjGo (jdeclBody n), sjGo (bodyOf n)] }
   else if n.op == opCase then { n with kids := sjAlts (caseAlts n) }
   else if isTerminal n then n
@@ -115,11 +133,17 @@ partial def sjAlts : List N → List N
   | alt :: alts => altSetBody alt (sjGo (altBody alt)) :: sjAlts alts
 end
 
-def declSinkProj (d : Decl) : Decl :=
-  if d.ext then d else declNormalizeIds { d with body := sinkProjBody (sjGo d.body) }
+def revSpDecls : List Decl → List Decl → List Decl
+  | [], acc => acc
+  | d :: ds, acc => revSpDecls ds (d :: acc)
 
-def sinkProj : List Decl → List Decl
-  | [] => []
-  | d :: ds => declSinkProj d :: sinkProj ds
+def sinkProjGo : List Decl → List Decl → List Decl
+  | [], acc => revSpDecls acc []
+  | d :: ds, acc =>
+    let d1 := if d.ext || declIsClosed d then d else declNormalizeIds { d with body := sinkProjBody (sjGo d.body) }
+    sinkProjGo ds (d1 :: acc)
+
+def sinkProj (decls : List Decl) : List Decl :=
+  sinkProjGo decls []
 
 end Lrc

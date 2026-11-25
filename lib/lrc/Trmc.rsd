@@ -272,7 +272,7 @@ def tcDecl (d : Decl) (g : Nat) (val : Bool) (same : Bool) : TcPair :=
 -- (the recursive append, lib/lrc/FromWire.rsd `declAppRec`) has the plain form only: nothing calls it for a value
 -- from inside, and a call from outside stays a call of f.
 def tcApplies (nImg : Nat) (d : Decl) : Bool :=
-  !d.ext && d.rets.length == 1 && tyIsObj (intAt 0 d.rets) && tcAny d.f d.xs.length d.body
+  !d.ext && !declIsClosed d && d.rets.length == 1 && tyIsObj (intAt 0 d.rets) && tcAny d.f d.xs.length d.body
     && !(isOwnFn nImg d.f && tcSelfValue d.f d.xs.length d.body)
 
 -- `pairs`: f, g, f, g, ... for every function f whose form g also serves calls for a value
@@ -301,34 +301,44 @@ def tcFormOf (f : Int) : List Int → Int
   | a :: g :: rest => if a == f then g else tcFormOf f rest
   | _ => -1
 
+def tcPairTree : List Int → ITree → ITree
+  | a :: g :: rest, t => tcPairTree rest (if itHas t a then t else itPut t a g)
+  | _, t => t
+
 mutual
 -- A call of a function that has a form goes to the form, with no destination. A call of the
 -- function itself in tail position stays: it is a jump to its start already. `mv` is a fresh
 -- variable for the index.
-partial def tcDirect (pairs : List Int) (self np mv : Nat) (n : N) : N :=
+partial def tcDirectM (pairMap : ITree) (self np mv : Nat) (n : N) : N :=
   if n.op == opVDecl then
     let e := vdeclExpr n
     let k := bodyOf n
-    let g := if e.op == opFap && n.ys.isEmpty then tcFormOf (fapFn e : Int) pairs else -1
+    let g := if e.op == opFap && n.ys.isEmpty then itFind pairMap (fapFn e : Int) else -1
     let selfTail := fapFn e == self && fapDepth e == 0 && k.op == opRet && retArgs k == [n.a] && e.ys.length == np
     if g >= 0 && !selfTail then
       mkVDecl mv tyI64 (mkLit (-1))
-        { n with kids := [{ e with a := g, ys := e.ys ++ [argIrr, (mv : Int), argIrr] }, tcDirect pairs self np mv k] }
-    else { n with kids := [e, tcDirect pairs self np mv k] }
-  else if n.op == opJDecl then { n with kids := [tcDirect pairs self np mv (jdeclBody n), tcDirect pairs self np mv (bodyOf n)] }
-  else if n.op == opCase then { n with kids := tcDirectAlts pairs self np mv (caseAlts n) }
+        { n with kids := [{ e with a := g, ys := e.ys ++ [argIrr, (mv : Int), argIrr] }, tcDirectM pairMap self np mv k] }
+    else { n with kids := [e, tcDirectM pairMap self np mv k] }
+  else if n.op == opJDecl then { n with kids := [tcDirectM pairMap self np mv (jdeclBody n), tcDirectM pairMap self np mv (bodyOf n)] }
+  else if n.op == opCase then { n with kids := tcDirectAltsM pairMap self np mv (caseAlts n) }
   else if isTerminal n then n
-  else setBody n (tcDirect pairs self np mv (bodyOf n))
-partial def tcDirectAlts (pairs : List Int) (self np mv : Nat) : List N → List N
+  else setBody n (tcDirectM pairMap self np mv (bodyOf n))
+partial def tcDirectAltsM (pairMap : ITree) (self np mv : Nat) : List N → List N
   | [] => []
-  | alt :: alts => altSetBody alt (tcDirect pairs self np mv (altBody alt)) :: tcDirectAlts pairs self np mv alts
+  | alt :: alts => altSetBody alt (tcDirectM pairMap self np mv (altBody alt)) :: tcDirectAltsM pairMap self np mv alts
 end
 
-def tcDirectAll (pairs : List Int) : List Decl → List Decl
+def tcDirect (pairs : List Int) (self np mv : Nat) (n : N) : N :=
+  tcDirectM (tcPairTree pairs it0) self np mv n
+
+def tcDirectAllM (pairMap : ITree) : List Decl → List Decl
   | [] => []
   | d :: ds =>
-    (if d.ext then d else declNormalizeIds { d with body := tcDirect pairs d.f d.xs.length (declMaxIndex d + 1) d.body })
-      :: tcDirectAll pairs ds
+    (if d.ext || declIsClosed d then d else declNormalizeIds { d with body := tcDirectM pairMap d.f d.xs.length (declMaxIndex d + 1) d.body })
+      :: tcDirectAllM pairMap ds
+
+def tcDirectAll (pairs : List Int) (ds : List Decl) : List Decl :=
+  tcDirectAllM (tcPairTree pairs it0) ds
 
 -- The declarations are numbered 0, 1, ... in their order (lib/lrc/Emit.rsd `emitFns` relies on
 -- it too); the new functions follow them. `nImg` is the number of the image's functions.

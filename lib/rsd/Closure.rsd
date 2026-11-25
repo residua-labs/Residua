@@ -1,5 +1,5 @@
 -- Rsd REF-Q closure assembly, extracted from RefQRun (a33b217).
--- Injectable q-checked read follows swe/raisin resolveClosureVia.
+-- Injectable q-checked read follows resolveClosureVia.
 -- Host glue; this IO transport is not part of the self-compiled rsc bundle.
 -- Concatenate after AvlMap.rsd and rsd/refq.rsd. closure_claim = 0.
 namespace Lib.Rsd.RefQRun

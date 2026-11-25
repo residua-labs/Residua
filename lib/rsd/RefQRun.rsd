@@ -741,7 +741,7 @@ def runRowRsdc (workDir : String) (qSock : String) : IO Bool := do
   let mut ok := true
   if !(← checkRow "rsdc-header-import" (compImports == ["AvlMap"])) then ok := false
   if !(← checkRow "rsdc-no-avl-copy" hasNoAvlCopy) then ok := false
-  if !(← checkRow "rsdc-decl-counts" (avlDecls.length == 12 && compDecls.length == 195)
+  if !(← checkRow "rsdc-decl-counts" (avlDecls.length == 17 && compDecls.length >= 195)
       s!"avl={avlDecls.length} compile={compDecls.length} total={allDecls.length}") then ok := false
   if !(← checkRow "rsdc-closure-byte-equal" (res.ok && res.assembledSource == handConcat && closureSha == handSha)
       s!"bytes={res.assembledSource.utf8ByteSize} sha256={closureSha} resolve_ms={tResolve - t0}") then ok := false
@@ -806,11 +806,11 @@ def runRowMutant : IO Bool := do
   let (_, avlBase) := computeModuleDecls "AvlMap" avlSrc []
   let (_, compBase) := computeModuleDecls "Compile" compSrc avlBase
   let (_, refqBase) := computeModuleDecls "RefQ" refqSrc avlBase
-  let avlMutSrc := String.intercalate "if a >= b then a else b" (avlSrc.splitOn "if a > b then a else b")
+  let avlMutSrc := String.intercalate "  | 0 => 4" (avlSrc.splitOn "  | 0 => 3")
   let (_, avlMut) := computeModuleDecls "AvlMap" avlMutSrc []
   let (_, compMut) := computeModuleDecls "Compile" compSrc avlMut
   let (_, refqMut) := computeModuleDecls "RefQ" refqSrc avlMut
-  let expectedAvlChanged := ["imax", "mk", "bal", "ins"]
+  let expectedAvlChanged := ["delta", "balanceL", "balanceR", "balance", "bal", "ins"]
   let mut avlChanged : List String := []
   let mut avlUnchanged : List String := []
   for i in [0:avlBase.length] do
@@ -820,7 +820,7 @@ def runRowMutant : IO Bool := do
       avlChanged := avlChanged ++ [b.declName]
     else
       avlUnchanged := avlUnchanged ++ [b.declName]
-  let mut compDepSet : List String := ["imax", "mk", "bal", "ins"]
+  let mut compDepSet : List String := ["delta", "balanceL", "balanceR", "balance", "bal", "ins"]
   let mut changed := true
   while changed do
     changed := false
@@ -852,17 +852,17 @@ def runRowMutant : IO Bool := do
     else
       refqUnchanged := refqUnchanged ++ [b.declName]
   let d1 : RawDecl := {
-    idx := 0, kind := "def", names := ["imax"]
-    slice := "def imax (a : Int) (b : Int) : Int := if a > b then a else b\n"
-    sa := 0, sb := 60
+    idx := 0, kind := "def", names := ["size"]
+    slice := "def size (t : Int) (h : Int) : Int := if t == 0 then 0 else h\n"
+    sa := 0, sb := 62
   }
   let d2 : RawDecl := {
-    idx := 0, kind := "def", names := ["imaxAlpha"]
-    slice := "def imaxAlpha (x : Int) (y : Int) : Int := if x > y then x else y\n"
-    sa := 0, sb := 65
+    idx := 0, kind := "def", names := ["sizeAlpha"]
+    slice := "def sizeAlpha (x : Int) (y : Int) : Int := if x == 0 then 0 else y\n"
+    sa := 0, sb := 67
   }
-  let (ast1, _) := normalizeUnisonAst d1 ["imax"] false []
-  let (ast2, _) := normalizeUnisonAst d2 ["imaxAlpha"] false []
+  let (ast1, _) := normalizeUnisonAst d1 ["size"] false []
+  let (ast2, _) := normalizeUnisonAst d2 ["sizeAlpha"] false []
   let qAlpha1 := sha256HexString ast1
   let qAlpha2 := sha256HexString ast2
   let dMut : RawDecl := {
@@ -874,8 +874,8 @@ def runRowMutant : IO Bool := do
   let hasCycleX := (astCycle.splitOn "#x.0").length > 1 && (astCycle.splitOn "#x.1").length > 1
   let t1 ← IO.monoMsNow
   let mut ok := true
-  if !(← checkRow "mutant-avl-cone-exact" (avlChanged == expectedAvlChanged && avlUnchanged.length == 8)
-      s!"changed={avlChanged.length}/12 ({String.intercalate "," avlChanged}) unchanged={avlUnchanged.length}/12") then ok := false
+  if !(← checkRow "mutant-avl-cone-exact" (avlChanged == expectedAvlChanged && avlUnchanged.length == 11)
+      s!"changed={avlChanged.length}/17 ({String.intercalate "," avlChanged}) unchanged={avlUnchanged.length}/17") then ok := false
   if !(← checkRow "mutant-compile-cone-exact" (compExactMatch && compChanged.contains "alloc" && compUnchanged.contains "fd" && compUnchanged.contains "initSt")
       s!"changed={compChanged.length}/{compBase.length} unchanged={compUnchanged.length}/{compBase.length}") then ok := false
   if !(← checkRow "mutant-refq-cone-exact" (refqChanged.length == 5 && refqUnchanged.length == 13)

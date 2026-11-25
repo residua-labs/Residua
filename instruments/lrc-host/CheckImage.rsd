@@ -198,6 +198,8 @@ structure ImageRow where
   path : String
   kinds : String
   entry : Nat
+  -- the function that takes the entry's results, of a row whose ENTRY is `a>b`
+  entry2 : Option Nat := none
   args : List Int
   -- the entry's value as instruments/lrc-host/Interp.rsd `showV` prints it
   value : String
@@ -208,7 +210,9 @@ def readImageRows (listPath : String) : IO (List ImageRow) := do
   for line in (← IO.FS.readFile listPath).splitOn "\n" do
     match line.splitOn "\t" with
     | [name, path, kinds, entry, args, value] =>
-      rows := rows ++ [{ name, path, kinds, entry := entry.toNat!, args := (if args.isEmpty then [] else (args.splitOn ",").map (·.toInt!)), value := value }]
+      let es := entry.splitOn ">"
+      rows := rows ++ [{ name, path, kinds, entry := (es.getD 0 "0").toNat!, entry2 := (if es.length == 2 then some (es.getD 1 "0").toNat! else none),
+                         args := (if args.isEmpty then [] else (args.splitOn ",").map (·.toInt!)), value := value }]
     | _ => pure ()
   return rows
 
@@ -271,7 +275,7 @@ def checkImages (env : Lean.Environment) (rows : List ImageRow) (quick : Bool :=
       -- a row's value is what leaves through the entry: the entry's boundary twin runs when it has one
       -- (lib/lrc/FromWire.rsd "The boundary")
       let ent := Lrc.pubEntry im.pubs r.entry
-      let init := runEntry im.decls ent r.args 1000000000 false im.n
+      let init := runEntry im.decls ent r.args 1000000000 false im.n (next := r.entry2.map (Lrc.pubEntry im.pubs ·))
       facts := { facts with translated := some (ranOf init) }
       if !valueIs init r.value then seen := seen ++ [s!"as translated: {init.show}"]
       -- The image laid out as one class, which is how an image is laid out when its classes say
@@ -286,32 +290,33 @@ def checkImages (env : Lean.Environment) (rows : List ImageRow) (quick : Bool :=
         facts := { facts with oneGate := some e }
         seen := seen ++ [s!"as one class not admitted: {refusalText e}"]
       | .ok (.ok one) =>
-        let o := runEntry (Lrc.pipelineWith Lrc.pipelineDefault one.n one.decls) (Lrc.pubEntry one.pubs r.entry) r.args 1000000000 true one.n
+        let o := runEntry (Lrc.pipelineWith Lrc.pipelineDefault one.n one.decls) (Lrc.pubEntry one.pubs r.entry) r.args 1000000000 true one.n (next := r.entry2.map (Lrc.pubEntry one.pubs ·))
         facts := { facts with one := some (ranOf o) }
         if !valueIs o r.value || o.leaked != 0 then seen := seen ++ [s!"as one class: {o.show}"]
         IO.println s!"check image={r.name} one_class: status={o.status} allocations={o.allocs} leaked={o.leaked} peak_bytes={o.peakBytes}"
       -- the pipeline without inlining (0), with the inlining before the passes (1), after them (2, the
       -- default), and the default without repeated calls as common subexpressions (2 + 4), without
       -- tail recursion modulo cons (2 + 8), without byte fields (2 + 16), with constant cells (2 + 32), and so
-      -- on through the options of lib/lrc/Pipeline.rsd `pipelineWith`; the last five: without a second form for
+      -- on through the options of lib/lrc/Pipeline.rsd `pipelineWith`; the last six: without a second form for
       -- counting functions, without merged cases, with the code after a reset written twice everywhere and
-      -- written once everywhere (and that without the count-ups sunk), and without the splitting of a function that
-      -- calls itself (the default has it). The quick run takes the default and the one copy everywhere, and that without the
+      -- written once everywhere (and that without the count-ups sunk), without the splitting of a function that
+      -- calls itself (the default has it), and without the forms for a call that names a literal (2 + 262144).
+      -- The quick run takes the default and the one copy everywhere, and that without the
       -- count-ups sunk (2 + 128 + 32768): by default few resets get the one copy, with the option every reset
       -- of every row does, and without the sinking the read in front of a reset is the one the code after it
       -- uses (Lean's own shape), not a second read made for the count.
-      for inl in (if quick then [Lrc.pipelineDefault, Lrc.pipelineDefault + 32768, Lrc.pipelineDefault + 128 + 32768]
-                  else [0, 1, 2, 6, 10, 18, 34, 66, 130, 258, 514, 1026, 4098, 8194, 16386, 32770, 32898, 131074]) do
+      for inl in (if quick then [Lrc.pipelineDefault, Lrc.pipelineDefault + 32, Lrc.pipelineDefault + 32768, Lrc.pipelineDefault + 128 + 32768]
+                  else [0, 1, 2, 6, 10, 18, 34, 66, 130, 258, 514, 1026, 4098, 8194, 16386, 32770, 32898, 131074, 262146]) do
         let piped := Lrc.pipelineWith inl im.n im.decls
-        let own := runEntry piped ent r.args 1000000000 true im.n
+        let own := runEntry piped ent r.args 1000000000 true im.n (next := r.entry2.map (Lrc.pubEntry im.pubs ·))
         if !valueIs own r.value || own.leaked != 0 then
           seen := seen ++ [s!"after the stage's pipeline (inlining {inl}): {own.show}"]
         -- the wire's fuel: at every small budget the pipeline's IR ends as the translated IR does
         let mut fuel : List (ImageVerdict.Ran × ImageVerdict.Ran) := []
         let mut fuelBad := 0
         for fu in (if quick then [1, 2, 3, 5, 8, 12] else fuelBudgets) do
-          let a := runEntry im.decls ent r.args fu false im.n
-          let b := runEntry piped ent r.args fu true im.n
+          let a := runEntry im.decls ent r.args fu false im.n (next := r.entry2.map (Lrc.pubEntry im.pubs ·))
+          let b := runEntry piped ent r.args fu true im.n (next := r.entry2.map (Lrc.pubEntry im.pubs ·))
           fuel := fuel ++ [(ranOf a, ranOf b)]
           if a.status != b.status || a.text != b.text then
             fuelBad := fuelBad + 1
@@ -321,7 +326,7 @@ def checkImages (env : Lean.Environment) (rows : List ImageRow) (quick : Bool :=
       -- the integer operations as the image wrote them: the same value, so each short form agrees with its function here
       match imageAdmit bytes r.kinds false true with
       | .ok (.ok plain) =>
-        let o := runEntry (Lrc.pipelineWith Lrc.pipelineDefault plain.n plain.decls) (Lrc.pubEntry plain.pubs r.entry) r.args 1000000000 true plain.n
+        let o := runEntry (Lrc.pipelineWith Lrc.pipelineDefault plain.n plain.decls) (Lrc.pubEntry plain.pubs r.entry) r.args 1000000000 true plain.n (next := r.entry2.map (Lrc.pubEntry plain.pubs ·))
         facts := { facts with plain := some (ranOf o) }
         if !valueIs o r.value || o.leaked != 0 then seen := seen ++ [s!"with the integer operations as written: {o.show}"]
         IO.println s!"check image={r.name} plain_ints: status={o.status} allocations={o.allocs} steps={o.steps} leaked={o.leaked}"
@@ -331,7 +336,7 @@ def checkImages (env : Lean.Environment) (rows : List ImageRow) (quick : Bool :=
       match imageAdmit bytes r.kinds false false true with
       | .ok (.ok nar) =>
         -- (the pipeline's option 2048 is the layer's: lib/lrc/Pipeline.rsd)
-        let o := runEntry (Lrc.pipelineWith (Lrc.pipelineDefault + 2048) nar.n nar.decls) (Lrc.pubEntry nar.pubs r.entry) r.args 1000000000 true nar.n true
+        let o := runEntry (Lrc.pipelineWith (Lrc.pipelineDefault + 2048) nar.n nar.decls) (Lrc.pubEntry nar.pubs r.entry) r.args 1000000000 true nar.n true (next := r.entry2.map (Lrc.pubEntry nar.pubs ·))
         facts := { facts with narrow := some (ranOf o), narrowPeak := o.peakBytes, narrowAllocs := o.allocs, peakWant := peaks.lookup r.name }
         if !ImageVerdict.cleanNarrow r.value (ranOf o) then seen := seen ++ [s!"under the narrow bounds: {o.show}"]
         match peaks.lookup r.name with
@@ -364,7 +369,7 @@ def checkImages (env : Lean.Environment) (rows : List ImageRow) (quick : Bool :=
           facts := { facts with leanLost := true }
           seen := seen ++ [s!"Lean's result does not come back: {e}"]
         | .ok final =>
-          let o := runEntry (final ++ im.decls.filter (·.ext)) ent r.args 1000000000 true im.n
+          let o := runEntry (final ++ im.decls.filter (·.ext)) ent r.args 1000000000 true im.n (next := r.entry2.map (Lrc.pubEntry im.pubs ·))
           facts := { facts with lean := some (ranOf o) }
           if !valueIs o r.value || o.leaked != 0 then seen := seen ++ [s!"after Lean's pipeline: {o.show}"]
           IO.println s!"check image={r.name} bodies={bodies} translated={init.status} allocations={init.allocs} lean_form=yes after_lean: allocations={o.allocs} frees={o.frees} incs={o.incs} decs={o.decs} leaked={o.leaked}"

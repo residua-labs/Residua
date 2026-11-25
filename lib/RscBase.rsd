@@ -73,7 +73,7 @@ structure Profile where
 
 def profile : Profile := {
   fnMin := 1
-  fnMax := 4096
+  fnMax := 1048576
   arityMax := 64
   fieldMax := 4096
   skipFuel := 64
@@ -82,7 +82,7 @@ def profile : Profile := {
   i64Bytes := 8
   lowerMul := 4
   lowerAdd := 8
-  places := 4
+  places := 7
   flushChunk := 200
   flushBatch := 4096
   rtFns := 14
@@ -232,9 +232,13 @@ def layersOff : Layers := { arr := false, reg := false, tail := false, qbe := fa
 def runtimeCountWithLayers (lay : Layers) : Nat :=
   if lay.rc && lay.reuse then profile.rtFns + 3 else profile.rtFns
 
--- REUSE r2 default entry: only bit 10 is added. `all` stays its explicit
--- switch word; `off` still starts from layersOff.
-def layersDefault : Layers := { layersOff with rc := true, borrow := true, dropSpec := true, reuse := true }
+-- Construction word 14274 (`reg,facts,rc,borrow,drop,reuse,alloc,ctor`) is the
+-- default entry; the pre-stage reuse default (word 1920) stays reachable as
+-- `layersPreStage` / `prestage`. `all` stays its explicit switch word; `off`
+-- still starts from layersOff.
+def layersPreStage : Layers := { layersOff with rc := true, borrow := true, dropSpec := true, reuse := true }
+
+def layersDefault : Layers := { layersOff with reg := true, facts := true, rc := true, borrow := true, dropSpec := true, reuse := true, alloc := true, ctor := true }
 
 
 def layersOn : Layers := { arr := true, reg := true, tail := true, qbe := true, cte := true, fuse := true, facts := true, rc := true, borrow := true, dropSpec := true }
@@ -292,6 +296,8 @@ def addLayer (lay : Layers) (n : String) : Option Layers :=
   else if n == "addr64" then some { lay with addr64 := true }
   else if n == "all" then some layersOn
   else if n == "off" then some layersOff
+  else if n == "prestage" then some layersPreStage
+  else if n == "default" then some layersDefault
   else none
 
 def parseGo (lay : Layers) : List String → Option Layers
@@ -304,8 +310,14 @@ def parseGo (lay : Layers) : List String → Option Layers
 def layerNames (s : String) : List String :=
   s.split (fun c => c == ',' || c == ' ' || c == '+')
 
+def hasNonEmpty : List String → Bool
+  | [] => false
+  | n :: ns => if n == "" then hasNonEmpty ns else true
+
 def parseLayers (s : String) : Option Layers :=
-  match parseGo layersDefault (layerNames s) with
+  let ns := layerNames s
+  let init := if hasNonEmpty ns then layersPreStage else layersDefault
+  match parseGo init ns with
   | none => none
   | some lay => if (layerConflict lay).isEmpty then some lay else none
 
@@ -317,7 +329,7 @@ def badLayerGo (lay : Layers) : List String → String
     | some next => badLayerGo next ns
 
 def badLayer (ns : List String) : String :=
-  badLayerGo layersDefault ns
+  badLayerGo (if hasNonEmpty ns then layersPreStage else layersDefault) ns
 
 
 
@@ -458,16 +470,18 @@ structure WMod where
 def typeOf (f : WFn) : List Int :=
   96 :: lebU f.params.length ++ f.params ++ lebU f.results.length ++ f.results
 
-def typesOf : List WFn → List Int
-  | [] => []
-  | f :: fs => typeOf f ++ typesOf fs
+def typesOf (fs : List WFn) (acc : List Int := []) : List Int :=
+  match fs with
+  | [] => reverse acc
+  | f :: rest => typesOf rest (revAppend (typeOf f) acc)
 
 def encodeTypes (fs : List WFn) : List Int :=
   lebU fs.length ++ typesOf fs
 
-def funcIdxs : Nat → List WFn → List Int
-  | _, [] => []
-  | i, _ :: fs => lebU i ++ funcIdxs (i + 1) fs
+def funcIdxs (i : Nat) (fs : List WFn) (acc : List Int := []) : List Int :=
+  match fs with
+  | [] => reverse acc
+  | _ :: rest => funcIdxs (i + 1) rest (revAppend (lebU i) acc)
 
 def encodeFuncs (fs : List WFn) : List Int :=
   lebU fs.length ++ funcIdxs 0 fs
@@ -481,30 +495,41 @@ def exportMem : List Int :=
 def exportOne (e : WEx) : List Int :=
   lebU e.name.length ++ e.name ++ [0] ++ lebU e.idx
 
-def exportsOf : List WEx → List Int
-  | [] => []
-  | e :: es => exportOne e ++ exportsOf es
+def exportsOf (es : List WEx) (acc : List Int := []) : List Int :=
+  match es with
+  | [] => reverse acc
+  | e :: rest => exportsOf rest (revAppend (exportOne e) acc)
 
 def encodeExports (es : List WEx) : List Int :=
   lebU (es.length + 1) ++ exportsOf es ++ exportMem
 
-def localGroups : List Int → List Int
-  | [] => []
-  | t :: ts => lebU 1 ++ [t] ++ localGroups ts
+def localGroups (ts : List Int) (acc : List Int := []) : List Int :=
+  match ts with
+  | [] => reverse acc
+  | t :: rest => localGroups rest (t :: 1 :: acc)
 
 def encodeLocals (ts : List Int) : List Int :=
   lebU ts.length ++ localGroups ts
 
-def encodeCode (f : WFn) : List Int :=
-  let body := encodeLocals f.locals ++ f.code
-  lebU body.length ++ body
+def revWFns : List WFn → List WFn → List WFn
+  | [], acc => acc
+  | f :: fs, acc => revWFns fs (f :: acc)
 
-def codesOf : List WFn → List Int
-  | [] => []
-  | f :: fs => encodeCode f ++ codesOf fs
+def codesOf : List WFn → Int → List Int → List Int
+  | [], bytes, tail => bytes :: tail
+  | f :: fs, bytes, tail =>
+    let locals := f.locals
+    let code := f.code
+    let locBytes := encodeLocals locals
+    let codeLen := code.length
+    let bodyLen := locBytes.length + codeLen
+    let szBytes := lebU bodyLen
+    let fnBytes : Int := ((szBytes.length + bodyLen : Nat) : Int)
+    codesOf fs (bytes + fnBytes) (szBytes ++ (locBytes ++ (code ++ tail)))
 
 def encodeCodes (fs : List WFn) : List Int :=
-  lebU fs.length ++ codesOf fs
+  let cntBytes := lebU fs.length
+  cntBytes ++ (codesOf (revWFns fs []) 0 []).drop 1
 
 -- `section` is a Lean keyword, so the wasm section is `wsec`.
 def wsec (id : Nat) (payload : List Int) : List Int :=
@@ -574,35 +599,190 @@ def groundData (p : GroundPool) (addr64 : Bool) : List Int :=
     wsec 11 ([3] ++ objectInitialPayload addr64 ++ [0] ++ addrConst addr64 profile.heapAt
       ++ [11] ++ lebU data.length ++ data)
 
-def tagEntries (ty : Nat) : Nat → List Int
-  | 0 => []
-  | k + 1 => 0 :: lebU ty ++ tagEntries ty k
+def encodeDataSec (p : GroundPool) (lowData : List Int) (addr64 : Bool) : List Int :=
+  if lowData.isEmpty then groundData p addr64
+  else if p.chunks.isEmpty then
+    wsec 11 ([3] ++ objectInitialPayload addr64 ++ [0] ++ addrConst addr64 profile.memoAt
+      ++ [11] ++ (lebU lowData.length ++ lowData))
+  else
+    let gdata := groundDataBytes p.chunks []
+    wsec 11 ([4] ++ objectInitialPayload addr64
+      ++ [0] ++ addrConst addr64 profile.memoAt ++ [11] ++ lebU lowData.length ++ lowData
+      ++ [0] ++ addrConst addr64 profile.heapAt ++ [11] ++ lebU gdata.length ++ gdata)
 
-def lebUs : List Nat → List Int
-  | [] => []
-  | n :: ns => lebU n ++ lebUs ns
+def tagEntries (ty : Nat) (n : Nat) (acc : List Int := []) : List Int :=
+  match n with
+  | 0 => reverse acc
+  | k + 1 => tagEntries ty k (revAppend (0 :: lebU ty) acc)
+
+def lebUs (ns : List Nat) (acc : List Int := []) : List Int :=
+  match ns with
+  | [] => reverse acc
+  | n :: rest => lebUs rest (revAppend (lebU n) acc)
 
 def encode (m : WMod) : List Int :=
   let p := groundPoolOf m.ground
-  let types := if m.tags == 0 then encodeTypes m.fns else lebU (m.fns.length + 1) ++ typesOf m.fns ++ [96, 0, 0]
-  let tagSec := if m.tags == 0 then [] else wsec 13 (lebU m.tags ++ tagEntries m.fns.length m.tags)
+  let addr64 := m.addr64
+  let exps := m.exps
+  let tags := m.tags
+  let lowData := m.lowData
   -- the table section (id 4): one table, funcref (112), limits with a minimum only; the element section (id 9):
   -- one active segment of table 0 at `i32.const 0`, the functions by number
   let tableSec := if m.kept.isEmpty then [] else wsec 4 ([1, 112, 0] ++ lebU m.kept.length)
   let elemSec := if m.kept.isEmpty then [] else wsec 9 ([1, 0, 65, 0, 11] ++ lebU m.kept.length ++ lebUs m.kept)
-  finish (puts (puts (puts (puts (puts (puts (puts (puts (puts (puts (puts [] magic)
-    (wsec 1 types))
-    (wsec 3 (encodeFuncs m.fns)))
-    tableSec)
-    (groundMemory p m.addr64))
-    tagSec)
-    (groundGlobals p m.addr64))
-    (wsec 7 (groundExports p m.exps)))
-    elemSec)
-    (wsec 10 (encodeCodes m.fns)))
-    (if m.lowData.isEmpty then groundData p m.addr64
-     else wsec 11 ([3] ++ objectInitialPayload m.addr64 ++ [0] ++ addrConst m.addr64 profile.memoAt
-       ++ [11] ++ lebU m.lowData.length ++ m.lowData)))
+  let fns := m.fns
+  let nFns := fns.length
+  let types := if tags == 0 then lebU nFns ++ typesOf fns else lebU (nFns + 1) ++ (typesOf fns ++ [96, 0, 0])
+  let funcSec := wsec 3 (lebU nFns ++ funcIdxs 0 fns)
+  let tagSec := if tags == 0 then [] else wsec 13 (lebU tags ++ tagEntries nFns tags)
+  let dataSec := encodeDataSec p lowData addr64
+  let cntBytes := lebU nFns
+  let codeAcc := codesOf (revWFns fns []) 0 dataSec
+  let codeBytes := codeAcc.headD 0
+  let codeSecAndData := 10 :: (lebU (cntBytes.length + codeBytes.toNat) ++ (cntBytes ++ codeAcc.drop 1))
+  magic
+    ++ (wsec 1 types
+    ++ (funcSec
+    ++ (tableSec
+    ++ (groundMemory p addr64
+    ++ (tagSec
+    ++ (groundGlobals p addr64
+    ++ (wsec 7 (groundExports p exps)
+    ++ (elemSec
+    ++ codeSecAndData))))))))
+
+-- Chunk-framed UInt32 packing for `compilePacked`: each non-empty chunk starts with its exact byte
+-- count followed by 4-byte little-endian UInt32 words, built with `cons` (`revU32`) so `List UInt32`
+-- stays 24-byte scalar-head cells (`6.0 B/byte`) both inside the stage and across `pubTwin`.
+structure WFnP where
+  params : List Int
+  results : List Int
+  byteLen : Int
+  packedRev : List UInt32
+
+structure WModP where
+  fns : List WFnP
+  exps : List WEx
+  ground : List GroundPool := []
+  tags : Nat := 0
+  lowData : List Int := []
+  addr64 : Bool := false
+  kept : List Nat := []
+
+structure CodePackR where
+  bytes : Int
+  words : List UInt32
+
+def u32Byte (b : Int) : UInt32 :=
+  let r : UInt32 := if b >= 128 then 128 else 0
+  let b := if b >= 128 then b - 128 else b
+  let r := if b >= 64 then r + 64 else r
+  let b := if b >= 64 then b - 64 else b
+  let r := if b >= 32 then r + 32 else r
+  let b := if b >= 32 then b - 32 else b
+  let r := if b >= 16 then r + 16 else r
+  let b := if b >= 16 then b - 16 else b
+  let r := if b >= 8 then r + 8 else r
+  let b := if b >= 8 then b - 8 else b
+  let r := if b >= 4 then r + 4 else r
+  let b := if b >= 4 then b - 4 else b
+  let r := if b >= 2 then r + 2 else r
+  let b := if b >= 2 then b - 2 else b
+  if b >= 1 then r + 1 else r
+
+def pack4 (b0 b1 b2 b3 : Int) : UInt32 :=
+  u32Byte b0 + 256 * (u32Byte b1 + 256 * (u32Byte b2 + 256 * u32Byte b3))
+
+def u32Nat (n : Nat) : UInt32 :=
+  let b0 : Int := ((n % 256 : Nat) : Int)
+  let n1 := n / 256
+  let b1 : Int := ((n1 % 256 : Nat) : Int)
+  let n2 := n1 / 256
+  let b2 : Int := ((n2 % 256 : Nat) : Int)
+  let n3 := n2 / 256
+  let b3 : Int := ((n3 % 256 : Nat) : Int)
+  pack4 b0 b1 b2 b3
+
+def revU32 : List UInt32 → List UInt32 → List UInt32
+  | [], tail => tail
+  | w :: ws, tail => revU32 ws (w :: tail)
+
+def packWords4Go : List Int → List UInt32 → List UInt32
+  | [], acc => acc
+  | b0 :: b1 :: b2 :: b3 :: rest, acc => packWords4Go rest (pack4 b0 b1 b2 b3 :: acc)
+  | [b0, b1, b2], acc => pack4 b0 b1 b2 0 :: acc
+  | [b0, b1], acc => pack4 b0 b1 0 0 :: acc
+  | [b0], acc => u32Byte b0 :: acc
+
+def packChunkU32 (bs : List Int) (tail : List UInt32) : List UInt32 :=
+  let len := bs.length
+  if len == 0 then tail
+  else revU32 (packWords4Go bs [u32Nat len]) tail
+
+def packWFn (f : WFn) : WFnP :=
+  let params := f.params
+  let results := f.results
+  let locBytes := encodeLocals f.locals
+  let code := f.code
+  let bodyLen := locBytes.length + code.length
+  let szBytes := lebU bodyLen
+  let fnBytes := szBytes.length + bodyLen
+  let packedRev := if fnBytes == 0 then []
+    else packWords4Go (szBytes ++ (locBytes ++ code)) [u32Nat fnBytes]
+  { params := params, results := results, byteLen := ((fnBytes : Nat) : Int), packedRev := packedRev }
+
+def revWFnsP : List WFnP → List WFnP → List WFnP
+  | [], acc => acc
+  | f :: fs, acc => revWFnsP fs (f :: acc)
+
+def typeOfP (f : WFnP) : List Int :=
+  96 :: lebU f.params.length ++ f.params ++ lebU f.results.length ++ f.results
+
+def typesOfP (fs : List WFnP) (acc : List Int := []) : List Int :=
+  match fs with
+  | [] => reverse acc
+  | f :: rest => typesOfP rest (revAppend (typeOfP f) acc)
+
+def funcIdxsP (i : Nat) (fs : List WFnP) (acc : List Int := []) : List Int :=
+  match fs with
+  | [] => reverse acc
+  | _ :: rest => funcIdxsP (i + 1) rest (revAppend (lebU i) acc)
+
+def codesOfPacked : List WFnP → Int → List UInt32 → CodePackR
+  | [], bytes, tail => { bytes := bytes, words := tail }
+  | f :: fs, bytes, tail =>
+    codesOfPacked fs (bytes + f.byteLen) (revU32 f.packedRev tail)
+
+def encodePacked (m : WModP) : List UInt32 :=
+  let p := groundPoolOf m.ground
+  let addr64 := m.addr64
+  let exps := m.exps
+  let tags := m.tags
+  let lowData := m.lowData
+  let kept := m.kept
+  let tableSec := if kept.isEmpty then [] else wsec 4 ([1, 112, 0] ++ lebU kept.length)
+  let elemSec := if kept.isEmpty then [] else wsec 9 ([1, 0, 65, 0, 11] ++ lebU kept.length ++ lebUs kept)
+  let fns := m.fns
+  let nFns := fns.length
+  let types := if tags == 0 then lebU nFns ++ typesOfP fns else lebU (nFns + 1) ++ (typesOfP fns ++ [96, 0, 0])
+  let funcSec := wsec 3 (lebU nFns ++ funcIdxsP 0 fns)
+  let tagSec := if tags == 0 then [] else wsec 13 (lebU tags ++ tagEntries nFns tags)
+  let dataSec := encodeDataSec p lowData addr64
+  let preSec :=
+    magic
+      ++ (wsec 1 types
+      ++ (funcSec
+      ++ (tableSec
+      ++ (groundMemory p addr64
+      ++ (tagSec
+      ++ (groundGlobals p addr64
+      ++ (wsec 7 (groundExports p exps)
+      ++ elemSec)))))))
+  let cntBytes := lebU nFns
+  let tail0 := packChunkU32 dataSec []
+  let codeRes := codesOfPacked (revWFnsP fns []) 0 tail0
+  let codeHdr := 10 :: (lebU (cntBytes.length + codeRes.bytes.toNat) ++ cntBytes)
+  packChunkU32 preSec (packChunkU32 codeHdr codeRes.words)
 
 -- "main"
 def nameMain : List Int := [109, 97, 105, 110]
@@ -739,24 +919,26 @@ def eatAll : List Int → List Int → Rd
   | _, [] => rdFail profile.cTrunc []
   | w :: ws, b :: bs => if b == w then eatAll ws bs else rdFail profile.cHeader bs
 
-def skipBytes : Nat → List Int → Rd
-  | 0, rest => rdOk 0 rest
-  | _, [] => rdFail profile.cTrunc []
-  | k + 1, _ :: bs =>
-    let r := skipBytes k bs
-    if r.ok != profile.cOk then r else rdOk (r.n + 1) r.rest
+def skipBytesGo : Nat → Int → List Int → Rd
+  | 0, total, rest => rdOk total rest
+  | _, _, [] => rdFail profile.cTrunc []
+  | k + 1, total, _ :: bs => skipBytesGo k total bs
+
+def skipBytes (k : Nat) (rest : List Int) : Rd :=
+  skipBytesGo k (k : Int) rest
 
 -- Bytes of one unsigned leb at the head of `rest`; same fuel and refusals
 -- as `readLebGo`. Returns the span, so callers do not measure `List.length`
 -- of the remaining input (that walk made compile time quadratic).
-def lebSpanGo : Nat → List Int → Rd
-  | _, [] => rdFail profile.cTrunc []
-  | 0, rest => rdFail profile.cTrunc rest
-  | k + 1, b :: bs =>
-    if b < 128 then rdOk 1 bs
-    else
-      let s := lebSpanGo k bs
-      if s.ok != profile.cOk then s else rdOk (s.n + 1) s.rest
+def lebSpanAcc : Nat → Int → List Int → Rd
+  | _, _, [] => rdFail profile.cTrunc []
+  | 0, _, rest => rdFail profile.cTrunc rest
+  | k + 1, acc, b :: bs =>
+    if b < 128 then rdOk (acc + 1) bs
+    else lebSpanAcc k (acc + 1) bs
+
+def lebSpanGo (fuel : Nat) (rest : List Int) : Rd :=
+  lebSpanAcc fuel 0 rest
 
 def lebSpan (rest : List Int) : Rd :=
   lebSpanGo profile.lebUFuel rest
@@ -765,16 +947,17 @@ def lebSpan (rest : List Int) : Rd :=
 -- `n` is the whole leaf's byte count (tag, leb, payload).
 def skipName : List Int → Rd
   | [] => rdFail profile.cTrunc []
-  | 1 :: bs =>
-    let n := readLeb bs
-    if n.ok != profile.cOk then rdFail n.ok n.rest
-    else if n.n < 0 then rdFail profile.cBody n.rest
+  | 1 :: b :: bs =>
+    if b >= 0 && b < 128 then skipBytesGo b.toNat (b + 2) bs
     else
-      let sp := lebSpan bs
-      if sp.ok != profile.cOk then rdFail sp.ok sp.rest
+      let n := readLeb (b :: bs)
+      if n.ok != profile.cOk then rdFail n.ok n.rest
+      else if n.n < 0 then rdFail profile.cBody n.rest
       else
-        let r := skipBytes n.n.toNat n.rest
-        if r.ok != profile.cOk then r else rdOk (sp.n + r.n + 1) r.rest
+        let sp := lebSpan (b :: bs)
+        if sp.ok != profile.cOk then rdFail sp.ok sp.rest
+        else skipBytesGo n.n.toNat (sp.n + n.n + 1) n.rest
+  | 1 :: [] => rdFail profile.cTrunc []
   | _ :: bs => rdFail profile.cBody bs
 
 structure Bytes where
@@ -856,6 +1039,11 @@ def pushBytes : List Int → List Int → List Int
   | [], acc => acc
   | b :: bs, acc => pushBytes bs (b :: acc)
 
+def pushN : Nat → List Int → List Int → List Int
+  | 0, _, acc => acc
+  | k + 1, b :: bs, acc => pushN k bs (b :: acc)
+  | _, [], acc => acc
+
 -- An explicit parser work stack, rather than source call-stack depth. A
 -- group frame describes its remaining children without allocating n tasks.
 -- The depth is metadata for old v2 node records, never an admission limit.
@@ -879,7 +1067,7 @@ def readTyIter (g : Dg) (fuel : Nat) (work : List TyWork) (acc : List Int)
           let nm := if w.kind == 2 then skipName rest else rdOk 0 rest
           if nm.ok != profile.cOk then tyFail nm.ok nm.rest
           else
-            let a := if w.kind == 2 then pushBytes (takeBytes nm.n.toNat 0 [] rest).bs acc else acc
+            let a := if w.kind == 2 then pushN nm.n.toNat rest acc else acc
             readTyIter g k ({ kind := 0, n := 0, depth := w.depth + 1 } ::
               { w with n := m, depth := w.depth + 1 } :: ws)
               a (span + nm.n) need nm.rest
@@ -926,9 +1114,49 @@ def readTyIter (g : Dg) (fuel : Nat) (work : List TyWork) (acc : List Int)
               if sp.ok != profile.cOk then tyFail sp.ok sp.rest
               else
                 readTyIter g k ({ kind := (if t == 6 then 1 else 2), n := r.n.toNat, depth := w.depth + 1 } :: ws)
-                  (pushBytes (takeBytes sp.n.toNat 0 [] bs).bs (t :: acc))
+                  (pushN sp.n.toNat bs (t :: acc))
                   (span + 1 + sp.n) nd r.rest
           else tyFail profile.cType bs
+
+def skipTyIter (g : Dg) (fuel : Nat) (work : List Nat) (rest : List Int) : Rd :=
+  match fuel with
+  | 0 => rdFail profile.cType rest
+  | k + 1 =>
+    match work with
+    | [] => rdOk 0 rest
+    | w :: ws =>
+      if w >= 2 then
+        match (w - 2) / 2 with
+        | 0 => skipTyIter g k ws rest
+        | _ + 1 =>
+          let nm := if w % 2 == 1 then skipName rest else rdOk 0 rest
+          if nm.ok != profile.cOk then rdFail nm.ok nm.rest
+          else skipTyIter g k (0 :: (w - 2) :: ws) nm.rest
+      else
+        match rest with
+        | [] => rdFail profile.cTrunc []
+        | 54 :: bs =>
+          let r := readLeb bs
+          if !g.on then rdFail profile.cType bs
+          else if r.ok != profile.cOk then rdFail r.ok r.rest
+          else if r.n < 0 then rdFail profile.cRef r.rest
+          else
+            match dgAt g r.n.toNat with
+            | [] => rdFail profile.cRef r.rest
+            | 0 :: _ :: _ :: _ :: _ => skipTyIter g k ws r.rest
+            | _ => rdFail profile.cRefKind r.rest
+        | 11 :: _ :: bs => skipTyIter g k ws bs
+        | 10 :: _ :: _ :: bs => skipTyIter g k (0 :: ws) bs
+        | t :: bs =>
+          if t == 0 || t == 1 || t == 2 || t == 3 then skipTyIter g k ws bs
+          else if t == 4 || t == 8 || t == 9 then skipTyIter g k (0 :: ws) bs
+          else if t == 5 then skipTyIter g k (0 :: 0 :: ws) bs
+          else if t == 6 || t == 7 then
+            let r := readLeb bs
+            if r.ok != profile.cOk then rdFail r.ok r.rest
+            else if r.n < 0 then rdFail profile.cType r.rest
+            else skipTyIter g k (((if t == 6 then 2 else 3) + 2 * r.n.toNat) :: ws) r.rest
+          else rdFail profile.cType bs
 
 -- One pass returns both bytes and span. This bound counts parser steps;
 -- it imposes no depth-64 refusal and does not measure the remaining stream.
@@ -936,8 +1164,7 @@ def readTy (rest : List Int) : Ty :=
   readTyIter dgNone profile.v2Fuel [{ kind := 0, n := 0, depth := 1 }] [] 0 0 rest
 
 def skipTy (rest : List Int) : Rd :=
-  let t := readTy rest
-  if t.ok != profile.cOk then rdFail t.ok t.rest else rdOk 0 t.rest
+  skipTyIter dgNone profile.v2Fuel [0] rest
 
 def envTy : List (List Int) → Nat → List Int
   | [], _ => []
@@ -1000,8 +1227,7 @@ def tyView (g : Dg) (ty : List Int) : List Int :=
   | _ => ty
 
 def skipTyD (g : Dg) (rest : List Int) : Rd :=
-  let t := readTyD g rest
-  if t.ok != profile.cOk then rdFail t.ok t.rest else rdOk 0 t.rest
+  skipTyIter g profile.v2Fuel [0] rest
 
 -- The fuel `readTyGo` spends on a plain type: kind 0 one type, 1 a run of
 -- `n` types, 2 a run of `n` named fields. Same refusals as `readTyGo`.
@@ -1085,7 +1311,7 @@ def tpRun (g : Dg) (named : Bool) : Nat → List Int → List Int → Tn
     let nm := if named then skipName rest else rdOk 0 rest
     if nm.ok != profile.cOk then tnFail nm.ok nm.rest
     else
-      let acc2 := if named then pushBytes (takeBytes nm.n.toNat 0 [] rest).bs acc else acc
+      let acc2 := if named then pushN nm.n.toNat rest acc else acc
       let a := tpOne g acc2 nm.rest
       if a.ok != profile.cOk then a
       else
@@ -1116,7 +1342,7 @@ def tyNode (g : Dg) (rest : List Int) : Tn :=
       else if r.n < 0 then tnFail profile.cType r.rest
       else
         let sp := lebSpan bs
-        let a := tpRun g (t == 7) r.n.toNat (pushBytes (takeBytes sp.n.toNat 0 [] bs).bs [t]) r.rest
+        let a := tpRun g (t == 7) r.n.toNat (pushN sp.n.toNat bs [t]) r.rest
         if a.ok != profile.cOk then a else { a with need := 1 + a.need }
     else tnFail profile.cType bs
 
@@ -2082,6 +2308,15 @@ def rdLeaf (r : Rd) : Rd := if r.ok != profile.cOk then r else rdOk 1 r.rest
 def wBinary (tag : Int) : Bool :=
   (tag >= 65 && tag <= 74) || tag == 76 || tag == 77
 
+-- FLOAT64-0, docs/EMITTER.md F row: a Float is a w64 and its operators are the tags 78 to 94, on the word's bits
+-- as a binary64. Tags 78 to 84 have two children, 85 to 94 one.
+def fBinary (tag : Int) : Bool := tag >= 78 && tag <= 84
+def fUnary (tag : Int) : Bool := tag >= 85 && tag <= 94
+-- The operators of a word of either row, by their number of children. A tag below both rows (most of an image)
+-- costs one comparison here: the walks of lib/lrc/FromWire.rsd ask this at every node.
+def wfBinary (tag : Int) : Bool := tag >= 65 && (wBinary tag || fBinary tag)
+def wfUnary (tag : Int) : Bool := tag >= 75 && (tag == 75 || fUnary tag)
+
 -- Present lowering uses the same walk with the W row disabled, including in code it skips.
 def skipEWith (g : Dg) (word64 : Bool) (fuel : Nat) (kind : Nat) (n : Nat) (rest : List Int) : Rd :=
   match fuel with
@@ -2153,8 +2388,8 @@ def skipEWith (g : Dg) (word64 : Bool) (fuel : Nat) (kind : Nat) (n : Nat) (rest
         else if tag == 51 then let t := skipTyD g bs; if t.ok != profile.cOk then t else rdUp (skipEWith g word64 k 2 4 t.rest)
         else if tag == 52 then let r := readLeb bs; if r.ok != profile.cOk then r else rdUp (skipEWith g word64 k 1 0 r.rest)
         else if word64 && tag == 64 then rdLeaf (skipBytes 8 bs)
-        else if word64 && tag == 75 then rdUp (skipEWith g word64 k 2 1 bs)
-        else if word64 && wBinary tag then rdUp (skipEWith g word64 k 2 2 bs)
+        else if word64 && wfUnary tag then rdUp (skipEWith g word64 k 2 1 bs)
+        else if word64 && wfBinary tag then rdUp (skipEWith g word64 k 2 2 bs)
         else rdFail (profile.cUnsup + tag) bs
 
 def skipEGo (g : Dg) (fuel kind n : Nat) (rest : List Int) : Rd :=

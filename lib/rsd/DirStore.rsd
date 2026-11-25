@@ -1,4 +1,4 @@
--- Per-entry durable store (RAISIN-OPT-1). The NF memo folds
+-- Per-entry durable store. The NF memo folds
 -- (lib/FnNF.rsd) persist one file per trace key under <dir>/e/<key-hex>,
 -- not one whole-store file: a lookup is a stat and a read of the asked
 -- keys only, a write is tmp+rename of the units that missed, and no

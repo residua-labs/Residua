@@ -1,0 +1,14 @@
+-- provenance: ours (searched: lib/Proc9.rsd, glue/std/)
+-- glue/std/Args.rsd — command-line arguments for glue tools.
+-- The env device serves an `args` file: one UTF-8 entry per argument,
+-- NUL-terminated (lib/Proc9.rsd argBytesP). Ported usage: read it, split
+-- on NUL.
+
+import Lib.Proc
+import Lib.Proc9
+import Lib.ProcBytes
+import Glue.Std.Str
+
+-- Returns the raw NUL-joined bytes; the caller splits with sSplitNul
+-- (Proc res is flat `List Int`, `List Bs` cannot cross a bind).
+def argvP (u : Nat) : Proc := argBytesP u

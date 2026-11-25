@@ -1,0 +1,339 @@
+-- provenance: ours (searched: examples/, lib/, glue/)
+-- examples/app04/Stats.rsd — streaming Float statistics over line-delimited numbers.
+
+structure Summary where
+  ok : Bool
+  errLine : Nat
+  errText : String
+  count : Nat
+  min : Float
+  max : Float
+  mean : Float
+  variance : Float
+  deriving Inhabited
+
+structure ParseNum where
+  ok : Bool
+  val : Float
+  deriving Inhabited
+
+structure DigitScan where
+  mant : Nat
+  sigDigits : Nat
+  totalDigits : Nat
+  expAdj : Int
+  rest : List Char
+  deriving Inhabited
+
+structure ExpScan where
+  ok : Bool
+  expVal : Int
+  deriving Inhabited
+
+structure LineSplit where
+  lineRev : List Char
+  rest : List Char
+  deriving Inhabited
+
+structure AccState where
+  count : Nat
+  min : Float
+  max : Float
+  mean : Float
+  m2 : Float
+  sawNaN : Bool
+  posInf : Nat
+  negInf : Nat
+  allNegZero : Bool
+  deriving Inhabited
+
+def statsNanF (u : Nat) : Float := 0.0 / 0.0
+def statsPosInfF (u : Nat) : Float := 1.0 / 0.0
+def statsNegInfF (u : Nat) : Float := (-1.0) / 0.0
+def statsNegZeroF (u : Nat) : Float := -0.0
+
+def statsIsNegZero (x : Float) : Bool :=
+  if x == 0.0 then
+    if (1.0 / x) < 0.0 then true else false
+  else false
+
+def statsIsPosInf (x : Float) : Bool := x == statsPosInfF 0
+def statsIsNegInf (x : Float) : Bool := x == statsNegInfF 0
+
+partial def statsRevChars : List Char -> List Char -> List Char
+  | [], acc => acc
+  | c :: cs, acc => statsRevChars cs (c :: acc)
+
+partial def statsBytesToCharsRev : List Int -> List Char -> List Char
+  | [], acc => acc
+  | b :: bs, acc => statsBytesToCharsRev bs (Char.ofNat (Int.toNat b) :: acc)
+
+def statsBytesToChars (bs : List Int) : List Char :=
+  statsRevChars (statsBytesToCharsRev bs []) []
+
+def statsIsHws (c : Char) : Bool :=
+  let n : Nat := c.toNat;
+  n == 32 || n == 9 || n == 13
+
+partial def statsTrimLeft : List Char -> List Char
+  | [] => []
+  | c :: cs => if statsIsHws c then statsTrimLeft cs else c :: cs
+
+def statsTrimBoth (cs : List Char) : List Char :=
+  let l : List Char := statsTrimLeft cs;
+  statsRevChars (statsTrimLeft (statsRevChars l [])) []
+
+def statsLowerCode (c : Char) : Nat :=
+  let n : Nat := c.toNat;
+  if n >= 65 then
+    if n <= 90 then n + 32 else n
+  else n
+
+partial def statsMatchCodes : List Char -> List Nat -> Bool
+  | [], [] => true
+  | c :: cs, k :: ks =>
+    if statsLowerCode c == k then statsMatchCodes cs ks else false
+  | _, _ => false
+
+def statsIsDigitCode (n : Nat) : Bool :=
+  if n >= 48 then
+    if n <= 57 then true else false
+  else false
+
+partial def statsScanIntDigits : List Char -> Nat -> Nat -> Nat -> Int -> DigitScan
+  | [], mant, sig, tot, adj =>
+    { mant := mant, sigDigits := sig, totalDigits := tot, expAdj := adj, rest := [] : DigitScan }
+  | c :: cs, mant, sig, tot, adj =>
+    let n : Nat := c.toNat;
+    if statsIsDigitCode n then
+      let d : Nat := n - 48;
+      if mant == 0 && d == 0 then
+        statsScanIntDigits cs 0 0 (tot + 1) adj
+      else if sig < 18 then
+        statsScanIntDigits cs (mant * 10 + d) (sig + 1) (tot + 1) adj
+      else
+        statsScanIntDigits cs mant sig (tot + 1) (adj + 1)
+    else
+      { mant := mant, sigDigits := sig, totalDigits := tot, expAdj := adj, rest := c :: cs : DigitScan }
+
+partial def statsScanFracDigits : List Char -> Nat -> Nat -> Nat -> Int -> DigitScan
+  | [], mant, sig, tot, adj =>
+    { mant := mant, sigDigits := sig, totalDigits := tot, expAdj := adj, rest := [] : DigitScan }
+  | c :: cs, mant, sig, tot, adj =>
+    let n : Nat := c.toNat;
+    if statsIsDigitCode n then
+      let d : Nat := n - 48;
+      if mant == 0 && d == 0 then
+        statsScanFracDigits cs 0 0 (tot + 1) (adj - 1)
+      else if sig < 18 then
+        statsScanFracDigits cs (mant * 10 + d) (sig + 1) (tot + 1) (adj - 1)
+      else
+        statsScanFracDigits cs mant sig (tot + 1) adj
+    else
+      { mant := mant, sigDigits := sig, totalDigits := tot, expAdj := adj, rest := c :: cs : DigitScan }
+
+partial def statsScanExpDigits : List Char -> Nat -> Nat -> ExpScan
+  | [], acc, cnt =>
+    if cnt == 0 then { ok := false, expVal := 0 : ExpScan }
+    else { ok := true, expVal := Int.ofNat acc : ExpScan }
+  | c :: cs, acc, cnt =>
+    let n : Nat := c.toNat;
+    if statsIsDigitCode n then
+      let acc2 : Nat := if acc < 10000 then acc * 10 + (n - 48) else 10000;
+      statsScanExpDigits cs acc2 (cnt + 1)
+    else
+      { ok := false, expVal := 0 : ExpScan }
+
+def statsParseExp : List Char -> ExpScan
+  | [] => { ok := true, expVal := 0 : ExpScan }
+  | c :: cs =>
+    let n : Nat := c.toNat;
+    if n == 101 || n == 69 then
+      match cs with
+      | [] => { ok := false, expVal := 0 : ExpScan }
+      | s :: rest =>
+        let sn : Nat := s.toNat;
+        if sn == 45 then
+          let r : ExpScan := statsScanExpDigits rest 0 0;
+          { ok := r.ok, expVal := 0 - r.expVal : ExpScan }
+        else if sn == 43 then
+          statsScanExpDigits rest 0 0
+        else
+          statsScanExpDigits (s :: rest) 0 0
+    else
+      { ok := false, expVal := 0 : ExpScan }
+
+def statsPow10Small : Nat -> Float
+  | 0 => 1.0
+  | 1 => 10.0
+  | 2 => 100.0
+  | 3 => 1000.0
+  | 4 => 10000.0
+  | 5 => 100000.0
+  | 6 => 1000000.0
+  | 7 => 10000000.0
+  | 8 => 100000000.0
+  | 9 => 1000000000.0
+  | 10 => 10000000000.0
+  | 11 => 100000000000.0
+  | 12 => 1000000000000.0
+  | 13 => 10000000000000.0
+  | 14 => 100000000000000.0
+  | _ => 1000000000000000.0
+
+partial def statsMulPow10 (v : Float) (e : Nat) : Float :=
+  if e == 0 then v
+  else if e >= 15 then statsMulPow10 (v * 1000000000000000.0) (e - 15)
+  else v * statsPow10Small e
+
+partial def statsDivPow10 (v : Float) (e : Nat) : Float :=
+  if e == 0 then v
+  else if e >= 15 then statsDivPow10 (v / 1000000000000000.0) (e - 15)
+  else v / statsPow10Small e
+
+def statsScale10 (mant : Nat) (exp10 : Int) (neg : Bool) : Float :=
+  if mant == 0 then
+    if neg then statsNegZeroF 0 else 0.0
+  else
+    let base : Float := Float.ofNat mant;
+    let mag : Float :=
+      if exp10 > 400 then statsPosInfF 0
+      else if exp10 < -400 then 0.0
+      else if exp10 >= 0 then statsMulPow10 base (Int.toNat exp10)
+      else statsDivPow10 base (Int.toNat (0 - exp10));
+    if neg then -mag else mag
+
+def statsParseUnsigned (neg : Bool) (cs : List Char) : ParseNum :=
+  if statsMatchCodes cs [110, 97, 110] then
+    { ok := true, val := statsNanF 0 : ParseNum }
+  else if statsMatchCodes cs [105, 110, 102] ||
+          statsMatchCodes cs [105, 110, 102, 105, 110, 105, 116, 121] then
+    { ok := true, val := if neg then statsNegInfF 0 else statsPosInfF 0 : ParseNum }
+  else
+    let dInt : DigitScan := statsScanIntDigits cs 0 0 0 0;
+    let dAll : DigitScan :=
+      match dInt.rest with
+      | [] => dInt
+      | c :: afterDot =>
+        if c.toNat == 46 then
+          statsScanFracDigits afterDot dInt.mant dInt.sigDigits dInt.totalDigits dInt.expAdj
+        else dInt;
+    if dAll.totalDigits == 0 then
+      { ok := false, val := 0.0 : ParseNum }
+    else
+      let ex : ExpScan := statsParseExp dAll.rest;
+      if !ex.ok then
+        { ok := false, val := 0.0 : ParseNum }
+      else
+        { ok := true, val := statsScale10 dAll.mant (dAll.expAdj + ex.expVal) neg : ParseNum }
+
+def statsParseLine (raw : List Char) : ParseNum :=
+  let cs : List Char := statsTrimBoth raw;
+  match cs with
+  | [] => { ok := false, val := 0.0 : ParseNum }
+  | c :: rest =>
+    let n : Nat := c.toNat;
+    if n == 45 then statsParseUnsigned true rest
+    else if n == 43 then statsParseUnsigned false rest
+    else statsParseUnsigned false cs
+
+def statsMinF (a b : Float) : Float :=
+  let bothZero : Bool := a == 0.0 && b == 0.0;
+  let bNegZ : Bool := statsIsNegZero b;
+  if b < a then b
+  else if a < b then a
+  else if bothZero && bNegZ then b
+  else a
+
+def statsMaxF (a b : Float) : Float :=
+  let bothZero : Bool := a == 0.0 && b == 0.0;
+  let aNegZ : Bool := statsIsNegZero a;
+  let bNegZ : Bool := statsIsNegZero b;
+  if a < b then b
+  else if b < a then a
+  else if bothZero && aNegZ && !bNegZ then b
+  else a
+
+def statsStepAcc (st : AccState) (x : Float) : AccState :=
+  let cnt2 : Nat := st.count + 1;
+  if Float.isNaN x then
+    { st with count := cnt2, sawNaN := true, allNegZero := false }
+  else
+    let min2 : Float := if st.count == 0 then x else statsMinF st.min x;
+    let max2 : Float := if st.count == 0 then x else statsMaxF st.max x;
+    let negZ2 : Bool := if st.count == 0 then statsIsNegZero x else (st.allNegZero && statsIsNegZero x);
+    if statsIsPosInf x then
+      { st with count := cnt2, min := min2, max := max2, posInf := st.posInf + 1, allNegZero := false }
+    else if statsIsNegInf x then
+      { st with count := cnt2, min := min2, max := max2, negInf := st.negInf + 1, allNegZero := false }
+    else
+      let finPrev : Nat := st.count - st.posInf - st.negInf;
+      let finNow : Nat := finPrev + 1;
+      let delta : Float := x - st.mean;
+      let mean2 : Float := st.mean + delta / Float.ofNat finNow;
+      let delta2 : Float := x - mean2;
+      let m2Next : Float := st.m2 + delta * delta2;
+      { count := cnt2, min := min2, max := max2, mean := mean2, m2 := m2Next,
+        sawNaN := st.sawNaN, posInf := st.posInf, negInf := st.negInf, allNegZero := negZ2 : AccState }
+
+def statsFinish (st : AccState) : Summary :=
+  let nan : Float := statsNanF 0;
+  if st.count == 0 || st.sawNaN then
+    { ok := true, errLine := 0, errText := "", count := st.count,
+      min := nan, max := nan, mean := nan, variance := nan : Summary }
+  else if st.posInf > 0 && st.negInf > 0 then
+    { ok := true, errLine := 0, errText := "", count := st.count,
+      min := st.min, max := st.max, mean := nan, variance := nan : Summary }
+  else if st.posInf > 0 then
+    { ok := true, errLine := 0, errText := "", count := st.count,
+      min := st.min, max := st.max, mean := statsPosInfF 0, variance := nan : Summary }
+  else if st.negInf > 0 then
+    { ok := true, errLine := 0, errText := "", count := st.count,
+      min := st.min, max := st.max, mean := statsNegInfF 0, variance := nan : Summary }
+  else
+    let meanOut : Float := if st.allNegZero then statsNegZeroF 0 else st.mean;
+    let varOut : Float := st.m2 / Float.ofNat st.count;
+    { ok := true, errLine := 0, errText := "", count := st.count,
+      min := st.min, max := st.max, mean := meanOut, variance := varOut : Summary }
+
+partial def statsTakeLine : List Char -> List Char -> LineSplit
+  | [], acc =>
+    let clean : List Char :=
+      match acc with
+      | c :: rest => if c.toNat == 13 then rest else acc
+      | [] => [];
+    { lineRev := clean, rest := [] : LineSplit }
+  | c :: cs, acc =>
+    if c.toNat == 10 then
+      let clean : List Char :=
+        match acc with
+        | r :: rest => if r.toNat == 13 then rest else acc
+        | [] => [];
+      { lineRev := clean, rest := cs : LineSplit }
+    else
+      statsTakeLine cs (c :: acc)
+
+partial def statsScanLines : List Char -> Nat -> AccState -> Summary
+  | [], _, st => statsFinish st
+  | cs, lineNo, st =>
+    let sp : LineSplit := statsTakeLine cs [];
+    let lineChars : List Char := statsRevChars sp.lineRev [];
+    let p : ParseNum := statsParseLine lineChars;
+    if !p.ok then
+      { ok := false, errLine := lineNo, errText := String.mk lineChars,
+        count := st.count, min := 0.0, max := 0.0, mean := 0.0, variance := 0.0 : Summary }
+    else
+      statsScanLines sp.rest (lineNo + 1) (statsStepAcc st p.val)
+
+def statsInitAcc (u : Nat) : AccState :=
+  { count := 0, min := 0.0, max := 0.0, mean := 0.0, m2 := 0.0,
+    sawNaN := false, posInf := 0, negInf := 0, allNegZero := false : AccState }
+
+def summarizeChars (cs : List Char) : Summary :=
+  statsScanLines cs 1 (statsInitAcc 0)
+
+def summarizeText (s : String) : Summary :=
+  summarizeChars s.toList
+
+def summarizeBytes (bs : List Int) : Summary :=
+  summarizeChars (statsBytesToChars bs)

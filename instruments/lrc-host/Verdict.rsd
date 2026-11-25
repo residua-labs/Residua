@@ -1,5 +1,5 @@
 -- LRC host check: the verdict of one run of the checks (stock Lean only). closure_claim = 0.
--- An NF instance  a checker's verdict surface). The run hands
+-- An NF instance (a checker's verdict surface). The run hands
 -- over one tally for each check: what the check is, what a difference in it means, how many things
 -- it was given, how many differ. `q` sums the tallies by cause, so the order and the split of the
 -- checks do not change the class. `admit` gives the first cause with a difference; and it gives

@@ -60,16 +60,23 @@ namespace Lrc
 structure Oc where
   -- an object's parent in the tree of its class; a root holds minus the size of its tree, and
   -- an object that is absent is a root of size 1
-  par : Map
+  par : ITree
   -- for a root, in the node's list: the kinds of constructor of the class (`clk*`)
-  kinds : Map
+  kinds : LTree
   -- for a root, in the node's list: the tags of the node constructors of the class
-  tags : Map
+  tags : LTree
   -- for a root, in the node's list: pairs key, class of the field
-  flds : Map
+  flds : LTree
   -- the next unused object number
   next : Nat
   bad : Bool
+  -- the forest of `arrClassesOf`: a class may hold cells of both shapes (`ocKindsBad`, `ocTailRound`)
+  arr : Bool := false
+  -- In that forest, the variables bound to a constant (the empty list, a constructor without a field). Such a
+  -- variable holds no object, and is one class with nothing: the translation writes one empty list for every
+  -- field of a record that has none, and joined through it a list of lists and a list of numbers would be one
+  -- class, and with them their elements.
+  consts : VTree
   deriving Inhabited
 
 def ockNode : Int := 1
@@ -78,25 +85,40 @@ def ockCellObject : Int := 3
 def ockBox : Int := 4
 def ockSum : Int := 8
 def ockPlainProj : Int := 16
+-- an array object may be in the class (`OcCx.arr`, `arrClassesOf`): something of it was made by a push, a write at an
+-- index, the array of a list or a slice (lib/lrc/FromWire.rsd "Arrays")
+def ockArray : Int := 32
 
 -- variable x of function f; result i of function f; the objects made up for fields come after.
+-- Common indices pack below 2^23 (keeping `layKey` below 2^31) and 2^31 (avoiding native GMP bignums).
 -- A function with more variables than `ocVarSpan` leaves nothing to conclude (`ocDecls`).
 def ocVarSpan : Nat := 16777216
-def ocVar (f x : Nat) : Nat := f * ocVarSpan + x
-def ocRetId (f i : Nat) : Nat := 17592186044416 + f * 64 + i
-def ocFirstFresh : Nat := 35184372088832
+def ocVar (f x : Nat) : Nat :=
+  let fi : Int := (f : Int)
+  let xi : Int := (x : Int)
+  if fi < 32768 && xi < 128 then (fi * 128 + xi).toNat
+  else if fi < 32768 && xi < 16384 then (8388608 + fi * 16384 + xi).toNat
+  else (2147483648 + fi * 16777216 + xi).toNat
+def ocRetId (f i : Nat) : Nat :=
+  let fi : Int := (f : Int)
+  let ii : Int := (i : Int)
+  if fi < 262144 && ii < 64 then (545259520 + fi * 64 + ii).toNat
+  else (35184372088832 + fi * 4096 + ii).toNat
+def ocFirstFresh : Nat := 4194304
 
-def oc0 : Oc := { par := map0 0, kinds := map0 0, tags := map0 0, flds := map0 0, next := ocFirstFresh, bad := false }
+def oc0 : Oc := { par := it0, kinds := lt0, tags := lt0, flds := lt0, next := ocFirstFresh, bad := false, consts := vt0 }
 
-partial def ocFind (c : Oc) (x : Nat) : Nat :=
-  let p := mapVal c.par (x : Int)
-  if p < 0 then x else ocFind c p.toNat
+partial def ocFindI (par : ITree) (x : Int) : Int :=
+  let p := itFind par x
+  if p < 0 then x else ocFindI par p
+
+def ocFind (c : Oc) (x : Nat) : Nat := (ocFindI c.par (x : Int)).toNat
 
 def ocSize (c : Oc) (r : Nat) : Nat :=
-  let p := mapVal c.par (r : Int)
+  let p := itFind c.par (r : Int)
   if p < -1 then (0 - p).toNat else 1
 
-def ocListOf (m : Map) (r : Nat) : List Int := mapXs m (r : Int)
+def ocListOf (m : LTree) (r : Nat) : List Int := ltFind m (r : Int)
 
 def ocUnionList : List Int → List Int → List Int
   | [], ys => ys
@@ -106,8 +128,11 @@ def ocFldFind (key : Int) : List Int → Int
   | k :: id :: rest => if k == key then id else ocFldFind key rest
   | _ => -1
 
-def ocKindsBad (ks : List Int) : Bool :=
-  (ks.contains ockSum && ks.contains ockPlainProj) || (ks.contains ockCellScalar && ks.contains ockCellObject)
+-- `arr`: where arrays are sought a class may hold cells of both shapes: after "Layout" the fields of a node are
+-- told apart by their number alone, and two constructors of a type may hold a list of each shape at one number.
+-- The walk then needs no shape but for the tail of a cell, and takes either field for it (`ocTailRound`).
+def ocKindsBad (ks : List Int) (arr : Bool := false) : Bool :=
+  (ks.contains ockSum && ks.contains ockPlainProj) || (!arr && ks.contains ockCellScalar && ks.contains ockCellObject)
 
 structure OcMerge where
   flds : List Int
@@ -129,19 +154,21 @@ partial def ocUnionGo (c : Oc) : List Int → Oc
     let ra := ocFind c a.toNat
     let rb := ocFind c b.toNat
     if ra == rb then ocUnionGo c rest
+    else if c.arr && (vtHas c.consts a || vtHas c.consts b) then ocUnionGo c rest
     else
       let big := if ocSize c ra >= ocSize c rb then ra else rb
       let small := if big == ra then rb else ra
       let size : Int := ((ocSize c ra + ocSize c rb : Nat) : Int)
-      let par := mapPut (mapPut c.par (small : Int) (big : Int) 0 0 []) (big : Int) (0 - size) 0 0 []
+      let bigI : Int := (big : Int)
+      let par := itPut (itPut c.par (small : Int) bigI) bigI (0 - size)
       let ks := ocUnionList (ocListOf c.kinds small) (ocListOf c.kinds big)
       let ts := ocUnionList (ocListOf c.tags small) (ocListOf c.tags big)
       let m := ocMergeFlds (ocListOf c.flds small) { flds := ocListOf c.flds big, work := [] }
       ocUnionGo { c with par := par,
-                         kinds := mapPut c.kinds (big : Int) 1 0 0 ks,
-                         tags := mapPut c.tags (big : Int) 1 0 0 ts,
-                         flds := mapPut c.flds (big : Int) 1 0 0 m.flds,
-                         bad := c.bad || ocKindsBad ks } (m.work ++ rest)
+                         kinds := ltPut c.kinds bigI ks,
+                         tags := ltPut c.tags bigI ts,
+                         flds := ltPut c.flds bigI m.flds,
+                         bad := c.bad || ocKindsBad ks c.arr } (m.work ++ rest)
   | _ => c
 
 def ocUnion (c : Oc) (a b : Nat) : Oc := ocUnionGo c [(a : Int), (b : Int)]
@@ -157,17 +184,19 @@ def ocField (c : Oc) (x : Nat) (key : Nat) : OcR :=
   let fs := ocListOf c.flds r
   let got := ocFldFind (key : Int) fs
   if got >= 0 then { c := c, id := got.toNat }
-  else { c := { c with flds := mapPut c.flds (r : Int) 1 0 0 ((key : Int) :: (c.next : Int) :: fs), next := c.next + 1 }, id := c.next }
+  else
+    let next1 := if c.next + 1 == 8388608 then 562036736 else c.next + 1
+    { c := { c with flds := ltPut c.flds (r : Int) ((key : Int) :: (c.next : Int) :: fs), next := next1 }, id := c.next }
 
 def ocAddKind (c : Oc) (x : Nat) (k : Int) : Oc :=
   let r := ocFind c x
   let ks := ocListOf c.kinds r
-  if ks.contains k then c else { c with kinds := mapPut c.kinds (r : Int) 1 0 0 (k :: ks), bad := c.bad || ocKindsBad (k :: ks) }
+  if ks.contains k then c else { c with kinds := ltPut c.kinds (r : Int) (k :: ks), bad := c.bad || ocKindsBad (k :: ks) c.arr }
 
 def ocAddTag (c : Oc) (x : Nat) (t : Int) : Oc :=
   let r := ocFind c x
   let ts := ocListOf c.tags r
-  if ts.contains t then c else { c with tags := mapPut c.tags (r : Int) 1 0 0 (t :: ts) }
+  if ts.contains t then c else { c with tags := ltPut c.tags (r : Int) (t :: ts) }
 
 /-! ## The walk -/
 
@@ -188,6 +217,8 @@ structure OcS where
   later : List (List Int)
   -- the nodes with a list of children whose tag is known: pairs node (as an object), tag
   lists : List Int
+  -- where arrays are sought: pairs, the cells asked of a list (`primArrToList`) and the list
+  forced : List Int := []
   deriving Inhabited
 
 structure OcCx where
@@ -197,6 +228,10 @@ structure OcCx where
   -- an object field is four bytes (rsc's layer `narrow`): every list cell is the cell of an object head
   -- (lib/lrc/FromWire.rsd "A scalar head where an object field is four bytes")
   narrow : Bool := false
+  -- Arrays are sought (`arrClassesOf`), not the constructors of a class. Then the cells asked of a list are no array
+  -- and not the list's class (only their elements are the list's); what makes an array marks its class
+  -- (`ockArray`); and the stage's functions of a number are followed as any function is.
+  arr : Bool := false
   deriving Inhabited
 
 -- the object fields of constructor x and their arguments
@@ -226,7 +261,19 @@ def ocNodeNew (self x : Nat) (e : N) (c : Oc) : Oc :=
     let l := intAt 7 e.ys
     if l < 0 then f.c else ocUnion f.c f.id (ocVar self l.toNat)
 
+-- The object "Layout" made of a node (lib/lrc/FromWire.rsd `layInfo`: type 1, the constructor is the node's tag),
+-- where arrays are sought: its fields are apart by tag, as a node's children are before "Layout". Two tags of a
+-- class may hold a number and a list at one place, and told apart by the place alone the two would be one class.
+def ocNodeObj (self x : Nat) (t : Int) : Nat → List Int → Oc → Oc
+  | _, [], c => c
+  | fi, y :: ys, c =>
+    if y < 0 then ocNodeObj self x t (fi + 1) ys c
+    else
+      let f := ocField c x (ocNodeKey t fi)
+      ocNodeObj self x t (fi + 1) ys (ocUnion f.c f.id (ocVar self y.toNat))
+
 def ocCtor (self x : Nat) (i : CtorInfo) (ys : List Int) (c : Oc) : Oc :=
+  if c.arr && i.tid == 1 && i.isRef then ocNodeObj self x (i.cidx : Int) 0 ys (ocAddTag (ocAddKind c x ockNode) x (i.cidx : Int)) else
   let isCell := (i.tid == 2 || i.tid == 3) && i.isRef
   let kind : Int := if isCell then (if i.size == 1 then ockCellScalar else ockCellObject) else if i.tid >= 4096 then ockSum else ockBox
   -- nil and the other constants of a list or a sum say nothing about the class's cells
@@ -263,7 +310,10 @@ def ocJpParams (j : Int) : List N → List Param
 def ocCall (cx : OcCx) (n e : N) (c : Oc) : Oc :=
   let f := fapFn e
   let x := ocVar cx.self (vdeclVar n)
-  if isOwnFn cx.nImg f then
+  -- Where arrays are sought the stage's functions of a number (9 to 13, 16 to 19) are followed as any function: a
+  -- magnitude's word goes through them. The equality of two lists (8) and the length of a list in either form
+  -- (14, 15) give a word and keep nothing, and are called for lists of every type: they join nothing.
+  if isOwnFn cx.nImg f && !(cx.arr && f - cx.nImg >= 9 && f - cx.nImg != 14 && f - cx.nImg != 15) then
     -- the stage's list functions (lib/lrc/FromWire.rsd `helperDecls`): len; drop k xs; rev xs acc; app a b;
     -- the equality of two lists, whose result is a word
     let k := f - cx.nImg
@@ -295,6 +345,11 @@ def ocMinus : List Int → List Int → List Int
   | [], _ => []
   | t :: ts, out => if out.contains t then ocMinus ts out else t :: ocMinus ts out
 
+-- an expression whose object is new and holds no object of the image: a literal, the box of a scalar, a refusal
+def ocFresh (e : N) : Bool :=
+  e.op == opLit || e.op == opLitStr || e.op == opBox
+    || (e.op == opPrim && (primOp e == primBox || primOp e == primBoxS || primOp e == primFail))
+
 mutual
 -- sums: the constructor of each sum whose alternative is being walked; jps: the join points in scope;
 -- known, excl: for a node variable, the tag of the alternative walked, and the tags the
@@ -304,9 +359,14 @@ partial def ocGo (cx : OcCx) (rets : List Int) (sums known excl : List Int) (jps
     let e := vdeclExpr n
     let x := ocVar cx.self (vdeclVar n)
     let s1 : OcS :=
-      if e.op == opCtor then { s with c := ocCtor cx.self x (infoOf e) e.ys s.c }
+      if cx.arr && e.op == opCtor && !(infoOf e).isRef then { s with c := { s.c with consts := vtIns s.c.consts (x : Int) } }
+      else if e.op == opCtor then { s with c := ocCtor cx.self x (infoOf e) e.ys s.c }
       else if e.op == opPrim && primOp e == primNodeNew then
         { s with c := ocNodeNew cx.self x e s.c, lists := (if e.c < 0 then (x : Int) :: e.b :: s.lists else s.lists) }
+      else if cx.arr && e.op == opProj && e.d > 0 then
+        -- a read of a node's object with the tag "Layout" read it under (lib/lrc/FromWire.rsd `layTagged`)
+        let ft := ocField s.c (ocVar cx.self (projVar e)) (ocNodeKey (e.d - 1) (projIdx e))
+        { s with c := ocUnion ft.c x ft.id }
       else if e.op == opProj then
         let y := ocVar cx.self (projVar e)
         let k := ocSumOf (projVar e : Int) sums
@@ -322,10 +382,16 @@ partial def ocGo (cx : OcCx) (rets : List Int) (sums known excl : List Int) (jps
         -- With narrow fields the cell of a scalar element is the cell of an object head too; its head is no object
         -- of the image, so only the tail is joined.
         let cell : CtorInfo := if e.b == 0 && !cx.narrow then { cidx := 1, size := 1, ssize := 8, tid := 2 } else { cidx := 1, size := 2, ssize := 0, tid := 3 }
-        { s with c := ocCtor cx.self x cell (if e.b != 0 then [v, intAt 0 e.ys] else if cx.narrow then [argIrr, intAt 0 e.ys] else [intAt 0 e.ys]) s.c }
+        let cp := ocCtor cx.self x cell (if e.b != 0 then [v, intAt 0 e.ys] else if cx.narrow then [argIrr, intAt 0 e.ys] else [intAt 0 e.ys]) s.c
+        { s with c := if cx.arr then ocAddKind cp x ockArray else cp }
       else if e.op == opPrim && (primOp e == primArrOfList || primOp e == primArrToList || primOp e == primArrSlice) then
-        -- the same elements, or some of them, in another form: the argument's class
-        (if intAt 0 e.ys < 0 then s else { s with c := ocUnion s.c x (ocVar cx.self (intAt 0 e.ys).toNat) })
+        -- the same elements, or some of them, in another form: the argument's class. Where arrays are sought the
+        -- cells of a list are apart from it (`ocForcedRound` joins their elements), and the other two make an array.
+        (if intAt 0 e.ys < 0 then s
+         else if cx.arr && primOp e == primArrToList then { s with forced := (x : Int) :: (ocVar cx.self (intAt 0 e.ys).toNat : Int) :: s.forced }
+         else
+           let c1 := ocUnion s.c x (ocVar cx.self (intAt 0 e.ys).toNat)
+           { s with c := if cx.arr then ocAddKind c1 x ockArray else c1 })
       else if e.op == opPrim && primOp e == primArrGet && e.b != 0 && intAt 0 e.ys >= 0 then
         -- an element that is an object: the class of the head of the list's cells
         let y := ocVar cx.self (intAt 0 e.ys).toNat
@@ -342,6 +408,10 @@ partial def ocGo (cx : OcCx) (rets : List Int) (sums known excl : List Int) (jps
           { s with c := ocUnion f.c x f.id,
                    lists := (if primOp e == primNodeKids then (ocVar cx.self h.toNat : Int) :: k :: s.lists else s.lists) }
         else { s with later := ((ocVar cx.self h.toNat : Int) :: i :: (x : Int) :: ocTagsFor h excl) :: s.later }
+      -- Where arrays are sought, an object from an expression this walk does not follow (a closure, a reset, a
+      -- primitive that is not named above) may be anything: its class is marked. A box of a scalar and a literal
+      -- are fresh and hold no list.
+      else if cx.arr && tyIsObj (vdeclTy n) && !ocFresh e then { s with c := ocAddKind s.c x ockArray }
       else s
     ocGo cx rets sums known excl jps s1 (bodyOf n)
   else if n.op == opJDecl then
@@ -351,6 +421,8 @@ partial def ocGo (cx : OcCx) (rets : List Int) (sums known excl : List Int) (jps
   else if n.op == opRet then { s with c := ocRets cx.self 0 n.ys rets s.c }
   else if n.op == opJmp then { s with c := ocArgs cx.self cx.self n.ys (ocJpParams n.a jps) s.c }
   else if isTerminal n then s
+  -- a write into an object's field is no form of a translated image: where arrays are sought nothing is concluded
+  else if cx.arr && n.op == opSet then { s with c := { s.c with bad := true } }
   else ocGo cx rets sums known excl jps s (bodyOf n)
 -- `tested`: the node tags the case's constructor alternatives test
 partial def ocAlts (cx : OcCx) (rets : List Int) (sums known excl : List Int) (jps : List N) (x : Int) (tested : List Int) : List N → OcS → OcS
@@ -360,15 +432,20 @@ partial def ocAlts (cx : OcCx) (rets : List Int) (sums known excl : List Int) (j
     let sums1 := if alt.op == opAltCtor && info.tid >= 4096 then x :: (info.cidx : Int) :: sums else sums
     let known1 := if alt.op == opAltCtor && info.tid == 1 then x :: (info.cidx : Int) :: known else known
     let excl1 := if alt.op == opAltDefault && !tested.isEmpty then ocPairs x tested ++ excl else excl
-    ocAlts cx rets sums known excl jps x tested alts (ocGo cx rets sums1 known1 excl1 jps s (altBody alt))
+    -- where arrays are sought, the alternative of a list cell says the shape of its list's cells (the cells asked
+    -- of a list have no constructor in sight otherwise)
+    let s0 := if cx.arr && x >= 0 && alt.op == opAltCtor && (info.tid == 2 || info.tid == 3) && info.isRef then
+        { s with c := ocAddKind s.c (ocVar cx.self x.toNat) (if info.size == 1 then ockCellScalar else ockCellObject) }
+      else s
+    ocAlts cx rets sums known excl jps x tested alts (ocGo cx rets sums1 known1 excl1 jps s0 (altBody alt))
 end
 
-def ocDecls (nImg : Nat) (all : DeclTab) (narrow : Bool) : List Decl → OcS → OcS
+def ocDecls (nImg : Nat) (all : DeclTab) (narrow arr : Bool) : List Decl → OcS → OcS
   | [], s => s
   | d :: ds, s =>
-    ocDecls nImg all narrow ds (if d.ext then s
+    ocDecls nImg all narrow arr ds (if d.ext then s
       else if declMaxIndex d >= ocVarSpan then { s with c := { s.c with bad := true } }
-      else ocGo { nImg := nImg, decls := all, self := d.f, narrow := narrow } d.rets [] [] [] [] s d.body)
+      else ocGo { nImg := nImg, decls := all, self := d.f, narrow := narrow, arr := arr } d.rets [] [] [] [] s d.body)
 
 structure OcT where
   c : Oc
@@ -379,8 +456,9 @@ structure OcT where
 def ocTailRound : List Int → OcT → OcT
   | y :: fi :: x :: rest, t =>
     let ks := ocListOf t.c.kinds (ocFind t.c y.toNat)
-    let tail : Int := if ks.contains ockCellScalar then 0 else if ks.contains ockCellObject then 1 else -1
-    if fi == tail && ocFind t.c x.toNat != ocFind t.c y.toNat then ocTailRound rest { c := ocUnion t.c x.toNat y.toNat, changed := true }
+    -- a class of cells of both shapes (`Oc.arr`): either field may be a tail, and both are joined
+    let isTail := (fi == 0 && ks.contains ockCellScalar) || (fi == 1 && ks.contains ockCellObject)
+    if isTail && ocFind t.c x.toNat != ocFind t.c y.toNat then ocTailRound rest { c := ocUnion t.c x.toNat y.toNat, changed := true }
     else ocTailRound rest t
   | _, t => t
 
@@ -434,16 +512,82 @@ def ocListLater : List (List Int) → OcT → OcT
       | _ => ocListLater rest a
   | _ :: rest, a => ocListLater rest a
 
+-- One round over the cells asked of a list (`OcS.forced`: pairs cells, list), where arrays are sought. The cells
+-- have the shape of the list's cells, whichever of the two classes says it; and the head of a cell of objects
+-- (field 0) is an element of the list. Where neither class says a shape, a field 0 that both have is joined: for
+-- cells of scalars that is the tail, and the join then only leaves more lists to ask.
+def ocForcedRound : List Int → OcT → OcT
+  | x1 :: x0 :: rest, t =>
+    let k1 := ocListOf t.c.kinds (ocFind t.c x1.toNat)
+    let k0 := ocListOf t.c.kinds (ocFind t.c x0.toNat)
+    let obj := k1.contains ockCellObject || k0.contains ockCellObject
+    let sca := k1.contains ockCellScalar || k0.contains ockCellScalar
+    let t1 : OcT := if obj && !k1.contains ockCellObject then { c := ocAddKind t.c x1.toNat ockCellObject, changed := true }
+      else if sca && !k1.contains ockCellScalar then { c := ocAddKind t.c x1.toNat ockCellScalar, changed := true } else t
+    let t2 : OcT := if obj && !k0.contains ockCellObject then { c := ocAddKind t1.c x0.toNat ockCellObject, changed := true }
+      else if sca && !k0.contains ockCellScalar then { c := ocAddKind t1.c x0.toNat ockCellScalar, changed := true } else t1
+    let f1 := ocFldFind 0 (ocListOf t2.c.flds (ocFind t2.c x1.toNat))
+    let f0 := ocFldFind 0 (ocListOf t2.c.flds (ocFind t2.c x0.toNat))
+    let t3 : OcT :=
+      if obj then
+        let a := ocField t2.c x1.toNat 0
+        let b := ocField a.c x0.toNat 0
+        if ocFind b.c a.id != ocFind b.c b.id then { c := ocUnion b.c a.id b.id, changed := true } else { t2 with c := b.c }
+      else if !sca && f1 >= 0 && f0 >= 0 && ocFind t2.c f1.toNat != ocFind t2.c f0.toNat then
+        { c := ocUnion t2.c f1.toNat f0.toNat, changed := true }
+      else t2
+    ocForcedRound rest t3
+  | _, t => t
+
+-- One round over the projections by index alone, where arrays are sought: a read of a node's object that names
+-- no tag (a class "Layout" merged) is a read of that place under every tag of the class.
+def ocNodeProjTags (y fi x : Nat) : List Int → OcT → OcT
+  | [], t => t
+  | tag :: tags, t =>
+    let f := ocField t.c y (ocNodeKey tag fi)
+    if ocFind f.c x != ocFind f.c f.id then ocNodeProjTags y fi x tags { c := ocUnion f.c x f.id, changed := true }
+    else ocNodeProjTags y fi x tags { t with c := f.c }
+
+def ocNodeProjRound : List Int → OcT → OcT
+  | y :: fi :: x :: rest, t =>
+    let r := ocFind t.c y.toNat
+    if (ocListOf t.c.kinds r).contains ockNode then ocNodeProjRound rest (ocNodeProjTags y.toNat fi.toNat x.toNat (ocListOf t.c.tags r) t)
+    else ocNodeProjRound rest t
+  | _, t => t
+
 -- the waiting reads, the tails and the lists of children, until none changes anything
-partial def ocSettle (later : List (List Int)) (lists : List Int) (projs : List Int) (c : Oc) : Oc :=
+partial def ocSettle (later : List (List Int)) (lists : List Int) (projs : List Int) (c : Oc) (forced : List Int := []) : Oc :=
   let a := ocLaterRound later { c := ocTails projs c, changed := false }
-  let b := ocListLater later (ocListRound lists a)
-  if b.changed then ocSettle later lists projs b.c else b.c
+  let b0 := ocForcedRound forced (ocListLater later (ocListRound lists a))
+  let b := if c.arr then ocNodeProjRound projs b0 else b0
+  if b.changed then ocSettle later lists projs b.c forced else b.c
 
 -- the classes of the image's objects; `bad` when nothing may be concluded from them
 def classesOf (nImg : Nat) (decls : List Decl) (narrow : Bool := false) : Oc :=
-  let s := ocDecls nImg (dtOfList decls) narrow decls { c := oc0, projs := [], later := [], lists := [] }
+  let s := ocDecls nImg (dtOfList decls) narrow false decls { c := oc0, projs := [], later := [], lists := [] }
   ocSettle s.later s.lists s.projs s.c
+
+/-! ## Which lists may be arrays
+
+In an image that builds arrays (lib/lrc/FromWire.rsd "Arrays") a list is cells or one array object, and whatever
+takes a list apart first asks for its cells. Most lists of such an image are never arrays, and to ask costs more
+than its test: the primitive takes its argument owned, so a parameter whose list is taken apart is owned, and so
+is every structure the list is read from (lib/lrc/Borrow.rsd).
+
+The same walk finds where an array can arrive (`OcCx.arr`). A class is marked (`ockArray`) where one of its
+objects is made by a push, a write at an index, the array of a list or a slice; an object flows as the classes
+say (an argument and its parameter, a field and what is stored in it, a result and what is returned). The cells
+asked of a list are not the list's class: they are cells, and only their elements are the list's. An object from
+an expression the walk does not follow marks its class. A list whose class is not marked is cells wherever it
+stands: by induction on a run, the first array to arrive in an unmarked class would have been made into it or
+have flowed into it, and both mark it. `bad` says nothing may be concluded, as for the classes. -/
+
+def arrClassesOf (nImg : Nat) (decls : List Decl) (narrow : Bool := false) : Oc :=
+  let s := ocDecls nImg (dtOfList decls) narrow true decls { c := { oc0 with arr := true }, projs := [], later := [], lists := [] }
+  ocSettle s.later s.lists s.projs s.c s.forced
+
+-- may variable x of function f hold an array object
+def ocMayArr (c : Oc) (f x : Nat) : Bool := c.bad || (ocListOf c.kinds (ocFind c (ocVar f x))).contains ockArray
 
 -- the tags a node held by variable x of function f may have: the ones built into its class
 def ocTagsOf (c : Oc) (f x : Nat) : List Int := ocListOf c.tags (ocFind c (ocVar f x))

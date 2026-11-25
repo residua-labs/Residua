@@ -34,12 +34,12 @@ lib/lrc/FromWire.rsd	(mkPrim primArrSlice shape 0 [(a : Int), from1, intAt 0 sv.
 lib/lrc/FromWire.rsd	    let t5 := mkVDecl inr tyI64 (mkPrim primLt 0 0 [(ix : Int), (sz : Int)]) (mkIfW inr some1 none1)	    let t5 := mkVDecl inr tyI64 (mkPrim primLt 0 0 [(ix : Int), (sz : Int)]) (mkIfW inr some1 some1)
 lib/lrc/FromWire.rsd	    let some1 := mkVDecl e1 ety (mkPrim primArrGet ((shape : Nat) : Int) 0 [lw, (ix : Int)]) (mkVDecl one1 tyI64 (mkLit 1) (mkJmp je [(one1 : Int), (e1 : Int)]))	    let some1 := mkVDecl e1 ety (mkPrim primArrGet ((shape : Nat) : Int) 0 [lw, (z : Int)]) (mkVDecl one1 tyI64 (mkLit 1) (mkJmp je [(one1 : Int), (e1 : Int)]))
 lib/lrc/FromWire.rsd	    let cells := mkCase dr tyTObj [mkAltCtor nilInfo none2, mkAltCtor (consInfo cshape) some2]	    let cells := mkCase dr tyTObj [mkAltCtor nilInfo none2, mkAltCtor (consInfo cshape) none2]
-lib/lrc/FromWire.rsd	  if !sg.ok || !sgB.ok || (!boundNeeds cx.g cx.arr sg.rty && sg.params == sgB.params) then []	  if !sg.ok || !sgB.ok || (boundNeeds cx.g cx.arr sg.rty && sg.params == sgB.params) then []
+lib/lrc/FromWire.rsd	  if !sg.ok || !sgB.ok || (!boundNeeds cx.g cx.arr sg.rty && sg.params == sgB.params && !unboundAny cx.g sgB.ptys) then	  if !sg.ok || !sgB.ok || (boundNeeds cx.g cx.arr sg.rty && sg.params == sgB.params && !unboundAny cx.g sgB.ptys) then
 lib/lrc/FromWire.rsd	      if magField g ty >= 0 then true	      if magField g ty >= 0 then false
 lib/lrc/FromWire.rsd	    | 4 :: elem => !isHeapNode g elem && (arr || boundNeeds g arr elem)	    | 4 :: elem => !isHeapNode g elem && boundNeeds g arr elem
 lib/lrc/FromWire.rsd	      let done := mkVDecl nl tyTObj (mkCtor nilInfo []) (mkVDecl back tyTObj (mkFap (hRev cx.n shapeB) [(pacc : Int), (nl : Int)]) (mkRet [(back : Int)]))	      let done := mkVDecl nl tyTObj (mkCtor nilInfo []) (mkVDecl back tyTObj (mkFap (hRev cx.n shapeB) [(pacc : Int), (nl : Int)]) (mkRet [(pacc : Int)]))
 lib/lrc/FromWire.rsd	        { ok := ws.length == 1, next := next + 3, ws := [(next : Int), ((next + 2 : Nat) : Int)],	        { ok := ws.length == 1, next := next + 3, ws := [(next : Int), ((next + 1 : Nat) : Int)],
-lib/lrc/Classes.rsd	        { s with c := ocCtor cx.self x cell (if e.b != 0 then [v, intAt 0 e.ys] else if cx.narrow then [argIrr, intAt 0 e.ys] else [intAt 0 e.ys]) s.c }	        s
-lib/lrc/Classes.rsd	        (if intAt 0 e.ys < 0 then s else { s with c := ocUnion s.c x (ocVar cx.self (intAt 0 e.ys).toNat) })	        s
+lib/lrc/Classes.rsd	        let cp := ocCtor cx.self x cell (if e.b != 0 then [v, intAt 0 e.ys] else if cx.narrow then [argIrr, intAt 0 e.ys] else [intAt 0 e.ys]) s.c	        let cp := s.c
+lib/lrc/Classes.rsd	           let c1 := ocUnion s.c x (ocVar cx.self (intAt 0 e.ys).toNat)	           let c1 := s.c
 lib/lrc/Prim.rsd	  (p == primArrPush && (i == 0 || i == 1)) || (p == primArrSet && (i == 0 || i == 2))	  (p == primArrPush && (i == 1)) || (p == primArrSet && (i == 0 || i == 2))
 lib/lrc/Prim.rsd	    || (p == primArrOfList && i == 0) || (p == primArrToList && i == 0)	    || (p == primArrOfList && i == 0)

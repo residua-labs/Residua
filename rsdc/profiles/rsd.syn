@@ -33,6 +33,7 @@ lexical
   token tacIntros intros @reject-prefix=intros[A-Za-z_0-9.?!'\x80-\xff]
   token tacConv conv @reject-prefix=conv[A-Za-z_0-9.?!'\x80-\xff]
   token convLhs lhs @reject-prefix=lhs[A-Za-z_0-9.?!'\x80-\xff]
+  token convRhs rhs @reject-prefix=rhs[A-Za-z_0-9.?!'\x80-\xff]
   token tactic [^()\[\]{}\x20\t\n\r\x22\x27]+
   token hex [0-9a-fA-F]+
   token quoted " @string-literal @incomplete=61
@@ -219,6 +220,9 @@ grammar
   TyO50 := TyOE50 @tree=$0 @template=$0
   TyC50 := TyE50 '∈ TyC50 @tree=(6,35,$0,$2) @template=$0\s∈\s$2
   TyO50 := TyE50 '∈ TyO50 @tree=(6,35,$0,$2) @template=$0\s∈\s$2
+  TyC50 := TyE50 '∉ TyC50 @tree=(7,4,(6,35,$0,$2),0) @template=¬\s$0\s∈\s$2
+  TyO50 := TyE50 '∉ TyO50 @tree=(7,4,(6,35,$0,$2),0) @template=¬\s$0\s∈\s$2
+  # canonical print ¬ a ∈ b reparses to the same tree.
   TyE50 := TyC55 @tree=$0 @template=$0
   TyOE50 := TyO55 @tree=$0 @template=$0
   TyE50 := TyC55 '= TyC55 @tree=(6,24,$0,$2) @template=$0\s=\s$2
@@ -247,6 +251,9 @@ grammar
   TyO55 := TyC55 '||| TyO58 @tree=(6,20,$0,$2) @template=$0\s|||\s$2
   TyC55 := TyC55 '>>= TyC58 @tree=(6,30,$0,$2) @template=$0\s>>=\s$2
   TyO55 := TyC55 '>>= TyO58 @tree=(6,30,$0,$2) @template=$0\s>>=\s$2
+  TyC55 := TyC55 '=<< TyC58 @tree=(6,30,$2,$0) @template=$0\s=<<\s$2
+  TyO55 := TyC55 '=<< TyO58 @tree=(6,30,$2,$0) @template=$0\s=<<\s$2
+  # x >>= f, so the tree keeps the stock >>= tag with operands swapped.
   TyC58 := TyC60 @tree=$0 @template=$0
   TyO58 := TyO60 @tree=$0 @template=$0
   TyC58 := TyC58 '^^^ TyC60 @tree=(6,21,$0,$2) @template=$0\s^^^\s$2
@@ -261,12 +268,18 @@ grammar
   TyOB60 := TyB60 '&&& TyO65 @tree=(6,19,$0,$2) @template=$0\s&&&\s$2
   TyB60 := TyB60 '*> TyC65 @tree=(6,32,$0,$2) @template=$0\s*>\s$2
   TyOB60 := TyB60 '*> TyO65 @tree=(6,32,$0,$2) @template=$0\s*>\s$2
+  # Control/Applicative SeqLeft, infixl:60 (Basic.lean / Control.lean).
+  TyB60 := TyB60 '<* TyC65 @tree=(6,41,$0,$2) @template=$0\s<*\s$2
+  TyOB60 := TyB60 '<* TyO65 @tree=(6,41,$0,$2) @template=$0\s<*\s$2
   TyC65 := TyC67 @tree=$0 @template=$0
   TyO65 := TyO67 @tree=$0 @template=$0
   TyC65 := TyC65 '+ TyC67 @tree=(6,1,$0,$2) @template=$0\s+\s$2
   TyO65 := TyC65 '+ TyO67 @tree=(6,1,$0,$2) @template=$0\s+\s$2
   TyC65 := TyC65 '- TyC67 @tree=(6,2,$0,$2) @template=$0\s-\s$2
   TyO65 := TyC65 '- TyO67 @tree=(6,2,$0,$2) @template=$0\s-\s$2
+  # Init/Set/Setoid? set-union notation, infixl:65.
+  TyC65 := TyC65 '∪ TyC67 @tree=(6,40,$0,$2) @template=$0\s∪\s$2
+  TyO65 := TyC65 '∪ TyO67 @tree=(6,40,$0,$2) @template=$0\s∪\s$2
   TyC65 := TyC65 '++ TyC67 @tree=(6,14,$0,$2) @template=$0\s++\s$2
   TyO65 := TyC65 '++ TyO67 @tree=(6,14,$0,$2) @template=$0\s++\s$2
   TyC67 := TyC70 @tree=$0 @template=$0
@@ -313,6 +326,9 @@ grammar
   TyO100 := '~~~ TyO100 @tree=(7,3,$1,0) @template=~~~$1
   TyC100 := TyC110 '<$> TyC100 @tree=(6,31,$0,$2) @template=$0\s<\$>\s$2
   TyO100 := TyC110 '<$> TyO100 @tree=(6,31,$0,$2) @template=$0\s<\$>\s$2
+  # Functor map-flip, infixl:100.
+  TyC100 := TyC110 '<&> TyC100 @tree=(6,39,$0,$2) @template=$0\s<&>\s$2
+  TyO100 := TyC110 '<&> TyO100 @tree=(6,39,$0,$2) @template=$0\s<&>\s$2
   TyC110 := TyApp @tree=$0 @template=$0
   TyO110 := Control @tree=$0 @template=$0
   TyO110 := TyApp 'fun LambdaGroups '=> Expr @tree=(5,$0,(12,(32,$2,$4,0),-1,0),0) @template=$0\sfun\s$2\s=>\n${4:2} @layout=1:continuation
@@ -864,6 +880,9 @@ grammar
   QIdent := 'refine @tree=(163,(12,(58,s0,e0,0),-1,0),0,0) @template=$0
   QIdent := 'rcases @tree=(163,(12,(58,s0,e0,0),-1,0),0,0) @template=$0
   QIdent := 'obtain @tree=(163,(12,(58,s0,e0,0),-1,0),0,0) @template=$0
+  QIdent := 'revert @tree=(163,(12,(58,s0,e0,0),-1,0),0,0) @template=$0
+  QIdent := 'rintro @tree=(163,(12,(58,s0,e0,0),-1,0),0,0) @template=$0
+  QIdent := 'infer_instance @tree=(163,(12,(58,s0,e0,0),-1,0),0,0) @template=$0
   QIdent := 'decreasing_tactic @tree=(163,(12,(58,s0,e0,0),-1,0),0,0) @template=$0
   QIdent := 'simp_arith @tree=(163,(12,(58,s0,e0,0),-1,0),0,0) @template=$0
   QIdent := 'by_cases @tree=(163,(12,(58,s0,e0,0),-1,0),0,0) @template=$0
@@ -1311,7 +1330,9 @@ grammar
   TmDbgTraceMsg := NotationErrorTerm @tree=$0 @template=$0
   GenDoNonExpr := 'dbg_trace TmDbgTraceMsg @tree=(217,(12,(599,-1,0,0),(12,$1,-1,0),0),0,0) @template=dbg_trace\s$1
   GenDoNonExpr := 'do GenDoFallback @tree=(218,(12,$1,-1,0),0,0) @template=do\n${1:2}
-  GenDoNonExpr := 'while GenDoBeforeDo 'do GenDoFallback @tree=(219,(12,$1,(12,$3,-1,0),0),0,0) @template=while\s$1\sdo\n${3:2}
+  GenDoWhileCond := GenDoIdent ': GenDoBeforeDo @tree=(201,(12,$0,(12,$2,-1,0),0),0,0) @template=$0\s:\s$2
+  GenDoWhileCond := GenDoBeforeDo @tree=$0 @template=$0
+  GenDoNonExpr := 'while GenDoWhileCond 'do GenDoFallback @tree=(219,(12,$1,(12,$3,-1,0),0),0,0) @template=while\s$1\sdo\n${3:2}
   GenDoNonExpr := 'repeat GenDoFallback @tree=(220,(12,$1,-1,0),0,0) @template=repeat\n${1:2}
   # Do.lean:227-247: term-level macros retain their own pre-macro kinds.
   # Only high-precedence forms can occur as application arguments.
@@ -1492,6 +1513,13 @@ grammar
   TacUnreserved := 'refine @tree=(1,s0,e0,0) @template=$0
   TacUnreserved := 'rcases @tree=(1,s0,e0,0) @template=$0
   TacUnreserved := 'obtain @tree=(1,s0,e0,0) @template=$0
+  TacUnreserved := 'revert @tree=(1,s0,e0,0) @template=$0
+  TacUnreserved := 'rintro @tree=(1,s0,e0,0) @template=$0
+  TacUnreserved := 'infer_instance @tree=(1,s0,e0,0) @template=$0
+  TacUnreserved := 'exfalso @tree=(1,s0,e0,0) @template=$0
+  TacUnreserved := 'subst_vars @tree=(1,s0,e0,0) @template=$0
+  TacUnreserved := 'clear @tree=(1,s0,e0,0) @template=$0
+  TacUnreserved := 'dsimp @tree=(1,s0,e0,0) @template=$0
   TacUnreserved := 'decreasing_tactic @tree=(1,s0,e0,0) @template=$0
   TacUnreserved := 'simp_arith @tree=(1,s0,e0,0) @template=$0
   TacUnreserved := 'by_cases @tree=(1,s0,e0,0) @template=$0
@@ -1646,6 +1674,23 @@ grammar
   TacLead := 'if TacBinderIdent ': Expr 'then TacBranchRhs 'else TacBranchRhs @tree=(542,(12,$1,(12,$3,(12,$5,(12,$7,-1,0),0),0),0),0,0) @template=if\s$1\s:\s$3\sthen\n${5:2}else\n${7:2}
   TacLead := 'omega TacConfig @tree=(541,(12,$1,-1,0),0,0) @template=omega$1
   TacLead := 'decide @tree=(511,-1,0,0) @template=decide
+  # Lean/Elab/Tactic/Basic: infer_instance, revert and rintro have no
+  # reference trees (parseSrc refuses every `by` block), so each takes a
+  # distinct anonymous-cell arity under the generic tactic tag565, the
+  # convention show/refine/let/funext/match/conv/intros already use.
+  TacLead := 'infer_instance @tree=(565,(12,(599,-1,0,0),(12,(599,-1,0,0),(12,(599,-1,0,0),-1,0),0),0),0,0) @template=infer_instance
+  TacLead := 'revert TacMaxTerms @tree=(565,(12,(599,-1,0,0),(12,(599,-1,0,0),(12,(599,-1,0,0),(12,(599,-1,0,0),(12,(599,-1,0,0),(12,$1,-1,0),0),0),0),0),0),0,0) @template=revert$1
+  TacLead := 'rintro TacRintroPatsOpt @tree=(565,(12,(599,-1,0,0),(12,(599,-1,0,0),(12,(599,-1,0,0),(12,(599,-1,0,0),(12,(599,-1,0,0),(12,(599,-1,0,0),(12,(599,-1,0,0),(12,$1,-1,0),0),0),0),0),0),0),0),0,0) @template=rintro$1
+  TacLead := 'exfalso @tree=(565,(12,(599,-1,0,0),-1,0),0,0) @template=exfalso
+  TacLead := 'subst_vars @tree=(565,(12,(599,-1,0,0),(12,(599,-1,0,0),-1,0),0),0,0) @template=subst_vars
+  TacLead := 'clear TacMaxTerms @tree=(565,(12,(599,-1,0,0),(12,(599,-1,0,0),(12,(599,-1,0,0),(12,(599,-1,0,0),(12,(599,-1,0,0),(12,(599,-1,0,0),(12,(599,-1,0,0),(12,(599,-1,0,0),(12,$1,-1,0),0),0),0),0),0),0),0),0),0,0) @template=clear$1
+  TacLead := 'repeat' TacSeq @tree=(565,(12,(599,-1,0,0),(12,(599,-1,0,0),(12,(599,-1,0,0),(12,(599,-1,0,0),(12,(599,-1,0,0),(12,(599,-1,0,0),(12,(599,-1,0,0),(12,(599,-1,0,0),(12,$1,-1,0),0),0),0),0),0),0),0),0),0,0) @template=repeat'\n${1:2}
+  TacLead := 'dsimp TacOnlyOpt TacSimpArgsOpt TacLocationOpt @tree=(565,(12,(599,-1,0,0),(12,(599,-1,0,0),(12,(599,-1,0,0),(12,(599,-1,0,0),(12,$1,(12,$2,(12,$3,-1,0),0),0),0),0),0),0),0,0) @template=dsimp$1$2$3
+  TacRintroPatsOpt := TacRintroPats @tree=$0 @template=$0
+  TacRintroPatsOpt := eps @tree=-1 @template=
+  TacRintroPats := TacRcasesPat TacRintroPatsTail @tree=(12,$0,$1,0) @template=\s$0$1 @boundary=0:col-gt
+  TacRintroPatsTail := TacRintroPats @tree=$0 @template=$0
+  TacRintroPatsTail := eps @tree=-1 @template=
   # Init/Tactics.lean:931: syntax "trivial" : tactic (a non-reserved leading word, as decide).
   TacLead := 'trivial @tree=(565,-1,0,0) @template=trivial
   TacLead := 'assumption @tree=(565,(12,-1,-1,0),0,0) @template=assumption
@@ -1682,6 +1727,7 @@ grammar
   ConvTactic := ConvLead @tree=$0 @template=$0
   ConvTactic := ConvTactic '<;> ConvLead @tree=(508,(12,$0,(12,$2,-1,0),0),0,0) @template=$0\s<;>\s$2
   ConvLead := convLhs @tree=(565,(12,(599,-1,0,0),(12,(599,-1,0,0),(12,(599,-1,0,0),(12,(599,-1,0,0),(12,(599,-1,0,0),(12,(599,-1,0,0),(12,(599,-1,0,0),(12,(599,-1,0,0),(12,-1,-1,0),0),0),0),0),0),0),0),0),0,0) @template=lhs
+  ConvLead := convRhs @tree=(565,(12,(599,-1,0,0),(12,(599,-1,0,0),(12,(599,-1,0,0),(12,(599,-1,0,0),(12,(599,-1,0,0),(12,(599,-1,0,0),(12,(599,-1,0,0),(12,(599,-1,0,0),(12,-1,-1,0),0),0),0),0),0),0),0),0),0,0) @template=rhs
   ConvLead := 'rw TacConfig TacRwRules TacLocationOpt @tree=(523,(12,$1,(12,$2,(12,$3,-1,0),0),0),0,0) @template=rw$1\s$2$3
   ConvLead := 'simp TacConfig TacDischargerOpt TacOnlyOpt TacSimpArgsOpt TacLocationOpt @tree=(505,(12,$1,(12,$2,(12,$3,(12,$4,(12,$5,-1,0),0),0),0),0),0,0) @template=simp$1$2$3$4$5
   ConvLead := 'unfold TacIdentList TacLocationOpt @tree=(529,(12,$1,(12,$2,-1,0),0),0,0) @template=unfold$1$2
@@ -1794,6 +1840,8 @@ grammar
   # on both sides; its right operand consumes another membership.
   C50 := E50 '∈ C50 @tree=(6,35,$0,$2) @template=$0\s∈\s$2
   O50 := E50 '∈ O50 @tree=(6,35,$0,$2) @template=$0\s∈\s$2
+  C50 := E50 '∉ C50 @tree=(7,4,(6,35,$0,$2),0) @template=¬\s$0\s∈\s$2
+  O50 := E50 '∉ O50 @tree=(7,4,(6,35,$0,$2),0) @template=¬\s$0\s∈\s$2
   E50 := C55 @tree=$0 @template=$0
   OE50 := O55 @tree=$0 @template=$0
   # Stock Init/Notation.lean:312: equality is nonassociative at 50.
@@ -1823,6 +1871,8 @@ grammar
   O55 := C55 '||| O58 @tree=(6,20,$0,$2) @template=$0\s|||\s$2
   C55 := C55 '>>= C58 @tree=(6,30,$0,$2) @template=$0\s>>=\s$2
   O55 := C55 '>>= O58 @tree=(6,30,$0,$2) @template=$0\s>>=\s$2
+  C55 := C55 '=<< C58 @tree=(6,30,$2,$0) @template=$0\s=<<\s$2
+  O55 := C55 '=<< O58 @tree=(6,30,$2,$0) @template=$0\s=<<\s$2
   C58 := C60 @tree=$0 @template=$0
   O58 := O60 @tree=$0 @template=$0
   C58 := C58 '^^^ C60 @tree=(6,21,$0,$2) @template=$0\s^^^\s$2
@@ -1837,12 +1887,16 @@ grammar
   OB60 := B60 '&&& O65 @tree=(6,19,$0,$2) @template=$0\s&&&\s$2
   B60 := B60 '*> C65 @tree=(6,32,$0,$2) @template=$0\s*>\s$2
   OB60 := B60 '*> O65 @tree=(6,32,$0,$2) @template=$0\s*>\s$2
+  B60 := B60 '<* C65 @tree=(6,41,$0,$2) @template=$0\s<*\s$2
+  OB60 := B60 '<* O65 @tree=(6,41,$0,$2) @template=$0\s<*\s$2
   C65 := C67 @tree=$0 @template=$0
   O65 := O67 @tree=$0 @template=$0
   C65 := C65 '+ C67 @tree=(6,1,$0,$2) @template=$0\s+\s$2
   O65 := C65 '+ O67 @tree=(6,1,$0,$2) @template=$0\s+\s$2
   C65 := C65 '- C67 @tree=(6,2,$0,$2) @template=$0\s-\s$2
   O65 := C65 '- O67 @tree=(6,2,$0,$2) @template=$0\s-\s$2
+  C65 := C65 '∪ C67 @tree=(6,40,$0,$2) @template=$0\s∪\s$2
+  O65 := C65 '∪ O67 @tree=(6,40,$0,$2) @template=$0\s∪\s$2
   C65 := C65 '++ C67 @tree=(6,14,$0,$2) @template=$0\s++\s$2
   O65 := C65 '++ O67 @tree=(6,14,$0,$2) @template=$0\s++\s$2
   C67 := C70 @tree=$0 @template=$0
@@ -1882,6 +1936,8 @@ grammar
   O100 := '~~~ O100 @tree=(7,3,$1,0) @template=~~~$1
   C100 := C110 '<$> C100 @tree=(6,31,$0,$2) @template=$0\s<\$>\s$2
   O100 := C110 '<$> O100 @tree=(6,31,$0,$2) @template=$0\s<\$>\s$2
+  C100 := C110 '<&> C100 @tree=(6,39,$0,$2) @template=$0\s<&>\s$2
+  O100 := C110 '<&> O100 @tree=(6,39,$0,$2) @template=$0\s<&>\s$2
   C110 := App @tree=$0 @template=$0
   O110 := Control @tree=$0 @template=$0
   O110 := App TmFun @tree=(5,$0,(12,$1,-1,0),0) @template=$0\s$1 @scoped-layout=1:argument @boundary=1:ws
@@ -1934,10 +1990,53 @@ grammar
   NotationBinderPred := '∈ Expr @tree=(407,(12,$1,-1,0),0,0) @template=∈\s$1
   NotationBinderPred := '< Expr @tree=(525,(12,(599,-1,0,0),(12,$1,-1,0),0),0,0) @template=<\s$1
   Control := '∀ NotationBinderIdent NotationBinderPred ', Expr @tree=(406,(12,$1,(12,$2,(12,$4,-1,0),0),0),0,0) @template=∀\s$1\s$2,\s$4
+  # Init/NotationExtra.lean:85-86: 'Σ'/'Σ'' explicit binders lower to
+  # 'Sigma'/'PSigma' fun application. parseSrc refuses the head scalar
+  # (identLetter excludes U+03A3, Compile.rsd:818) so no reference tree
+  # exists and tag-1 cannot carry the scalar either; an app head built
+  # as the tag4 atom parses but its canonical print '_ <arg>' only
+  # round-trips in Expr positions, not inside a signature paren. The
+  # profile therefore keeps the desugared fun body itself: the tag32
+  # tree is identical to TmFun's, the stock 'fun b => e' print re-reads
+  # to the same node, and 'Σ'/'Σ'' share that tree by design here.
+  # Stock's explicitBinder is narrower than LambdaGroups: oracle tests
+  # show '⟨x,y⟩' patterns, '{x : T}'/'[x : T]' binders, parenthesized
+  # names without a type and '(x : T := v)' defaults are all refused.
+  SigmaGroups := Name SigmaTail @tree=(22,(12,$0,-1,0),-1,$1) @template=$0\s$1
+  SigmaGroups := '( Names ': Type ') SigmaTail @tree=(22,$1,$3,$5) @template=($1\s:\s$3)\s$5
+  SigmaTail := SigmaGroups @tree=$0 @template=$0
+  SigmaTail := eps @tree=-1 @template=
+  Control := 'Σ SigmaGroups ', Expr @tree=(32,$1,$3,0) @template=fun\s$1\s=>\s$3
+  Control := 'Σ' SigmaGroups ', Expr @tree=(32,$1,$3,0) @template=fun\s$1\s=>\s$3
+  # Init/NotationExtra.lean:82 'e matches p | q' desugars to
+  # 'match e with | p | q => true | _ => false'. parseSrc treats
+  # 'matches' as a plain identifier (x matches p = x applied to
+  # matches, p), so single-pattern sources produce app trees while
+  # the profile gives the tag31 match shape (ref differ, tolerated).
+  # The scrutinee binds at C110 (application-tight), matching the
+  # stock precedence where 'x + y matches 3' groups as
+  # 'x + (y matches 3)'; chaining 'x matches p matches q' is refused
+  # because a C110 scrutinee cannot derive an O110 matches result.
+  # Clause patterns likewise sit at C110 so a pattern cannot contain
+  # a nested matches; the clause-list nodes mirror TmClauseList
+  # ((24,pats,rhs,next) cells over (0,pats,rhs) clauses, hole rhs).
+  MatchesClause := C110 @tree=(0,(12,$0,-1,0),(4,0,0,0),0) @template=$0
+  MatchesPats := MatchesClause MatchesPatsTail @tree=(24,x0,y0,$1) @template=$0$1
+  MatchesPatsTail := '| MatchesPats @tree=$1 @template=|\s$1
+  MatchesPatsTail := eps @tree=-1 @template=
+  O110 := C110 'matches MatchesPats @tree=(31,(12,$0,-1,0),$2,0) @template=$0\smatches\s$2
   # Init/GetElem.lean:74,115. ! has no withoutPosition around the index;
   # the plain form clears position only in the bracketed index helper.
   Proj := Proj '[ Expr '] '! @tree=(411,(12,$0,(12,$2,-1,0),0),0,0) @template=$0[$2]! @boundary=1:no-ws,4:no-ws
   TermArg := TermArg '[ Expr '] '! @tree=(411,(12,$0,(12,$2,-1,0),0),0,0) @template=$0[$2]! @boundary=1:no-ws,4:no-ws
+  # Init/GetElem.lean: 'e[i]'h' and 'e[i]'(p)' attach a named or
+  # parenthesized index proof to the getElem result. No reference tree
+  # exists (parseSrc never reaches the apostrophe); slot1 of tag411
+  # carries the proof where the bang form stores zero.
+  NamedProof := '' Name @tree=$1 @template='$1 @boundary=1:no-ws
+  NamedProof := '' '( Expr ') @tree=$2 @template='($2) @boundary=1:no-ws
+  Proj := Proj '[ NotationIndex '] NamedProof @tree=(411,(12,$0,(12,$2,(12,$4,-1,0),0),0),0,0) @template=$0[$2]'$4 @boundary=1:no-ws,4:no-ws
+  TermArg := TermArg '[ NotationIndex '] NamedProof @tree=(411,(12,$0,(12,$2,(12,$4,-1,0),0),0),0,0) @template=$0[$2]'$4 @boundary=1:no-ws,4:no-ws
   Proj := Proj '[ NotationIndex '] @tree=(412,(12,$0,(12,$2,-1,0),0),0,0) @template=$0[$2] @boundary=1:no-ws
   TermArg := TermArg '[ NotationIndex '] @tree=(412,(12,$0,(12,$2,-1,0),0),0,0) @template=$0[$2] @boundary=1:no-ws
   NotationIndex := Expr @tree=$0 @template=$0 @layout-clear

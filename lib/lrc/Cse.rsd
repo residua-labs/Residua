@@ -56,6 +56,98 @@ def csSubst (m : IMap) : List Int → List Int → IMap
   | x :: xs, y :: ys => csSubst (if x >= 0 && y >= 0 then imInsert m x.toNat y.toNat else m) xs ys
   | _, _ => m
 
+structure NTree where
+  tag : Int
+  key : Int
+  vals : List N
+  left : List NTree
+  right : List NTree
+  deriving Inhabited
+
+def nt0 : NTree := { tag := 0, key := 0, vals := [], left := [], right := [] }
+
+def ntKid : List NTree → NTree
+  | [] => nt0
+  | c :: _ => c
+
+def ntBox (t : NTree) : List NTree := if t.tag == 0 then [] else [t]
+
+def ntMk (l : NTree) (key : Int) (vs : List N) (r : NTree) : NTree :=
+  { tag := (if l.tag > r.tag then l.tag else r.tag) + 1, key := key, vals := vs, left := ntBox l, right := ntBox r }
+
+def ntBal (l : NTree) (key : Int) (vs : List N) (r : NTree) : NTree :=
+  if l.tag > r.tag + 2 then
+    let ll := ntKid l.left
+    let lr := ntKid l.right
+    if ll.tag >= lr.tag then ntMk ll l.key l.vals (ntMk lr key vs r)
+    else ntMk (ntMk ll l.key l.vals (ntKid lr.left)) lr.key lr.vals (ntMk (ntKid lr.right) key vs r)
+  else if r.tag > l.tag + 2 then
+    let rl := ntKid r.left
+    let rr := ntKid r.right
+    if rr.tag >= rl.tag then ntMk (ntMk l key vs rl) r.key r.vals rr
+    else ntMk (ntMk l key vs (ntKid rl.left)) rl.key rl.vals (ntMk (ntKid rl.right) r.key r.vals rr)
+  else ntMk l key vs r
+
+partial def ntFind (t : NTree) (k : Int) : List N :=
+  if t.tag == 0 then []
+  else if k == t.key then t.vals
+  else
+    match (if k < t.key then t.left else t.right) with
+    | [] => []
+    | c :: _ => ntFind c k
+
+partial def ntPut (t : NTree) (k : Int) (vs : List N) : NTree :=
+  if t.tag == 0 then { tag := 1, key := k, vals := vs, left := [], right := [] }
+  else if k == t.key then { t with vals := vs }
+  else if k < t.key then
+    match t.left with
+    | [] =>
+      let leaf : NTree := { tag := 1, key := k, vals := vs, left := [], right := [] }
+      if t.right.isEmpty then { t with tag := 2, left := [leaf] } else { t with left := [leaf] }
+    | l :: _ =>
+      let l1 := ntPut l k vs
+      if l1.tag == l.tag then { t with left := [l1] }
+      else ntBal l1 t.key t.vals (ntKid t.right)
+  else
+    match t.right with
+    | [] =>
+      let leaf : NTree := { tag := 1, key := k, vals := vs, left := [], right := [] }
+      if t.left.isEmpty then { t with tag := 2, right := [leaf] } else { t with right := [leaf] }
+    | r :: _ =>
+      let r1 := ntPut r k vs
+      if r1.tag == r.tag then { t with right := [r1] }
+      else ntBal (ntKid t.left) t.key t.vals r1
+
+structure CsAvail where
+  defs : NTree
+  byHash : NTree
+  cells : List N
+  deriving Inhabited
+
+def csAvail0 : CsAvail := { defs := nt0, byHash := nt0, cells := [] }
+
+def csClip (x : Int) : Int :=
+  let m := x % 1073741789
+  if m < 0 then m + 1073741789 else m
+
+def csHashArgs : List Int → Int → Int
+  | [], h => h
+  | y :: ys, h => csHashArgs ys (csClip (h * 131 + y + 17))
+
+def csHash (e : N) : Int :=
+  let h0 := csClip ((e.op : Int) * 257 + csClip e.a * 17 + csClip e.b * 31 + (e.c : Int) * 7 + csClip e.d * 3)
+  csHashArgs e.ys h0
+
+def csAddDef (defs : NTree) (p : N) : NTree :=
+  if p.ys.isEmpty then ntPut defs p.a [vdeclExpr p] else defs
+
+def csAddKey (av : CsAvail) (p : N) : CsAvail :=
+  let h := csHash (vdeclExpr p)
+  { av with defs := csAddDef av.defs p, byHash := ntPut av.byHash h (p :: ntFind av.byHash h) }
+
+def csAddCell (av : CsAvail) (p : N) : CsAvail :=
+  { av with defs := csAddDef av.defs p, cells := p :: av.cells }
+
 /-! ## A constructor rebuilt from the object it was matched from (DiscrM.lean:107) -/
 
 -- the constructors a `case` has fixed on this path: x, tid, cidx, size, ssize, the nearest first
@@ -69,12 +161,13 @@ def csBindFact (x : Int) (i : CtorInfo) (facts : List Int) : List Int :=
   x :: (i.tid : Int) :: (i.cidx : Int) :: (i.size : Int) :: (i.ssize : Int) :: facts
 
 -- the expression the path bound to v, `unreachable` when it holds none
-def csDef (v : Int) : List N → N
+def csDef (v : Int) (avail : CsAvail) : N :=
+  match ntFind avail.defs v with
+  | e :: _ => e
   | [] => mkUnreachable
-  | p :: ps => if p.a == v && p.ys.isEmpty then vdeclExpr p else csDef v ps
 
 -- are the object fields, from index i on, x's own fields of the same indices
-def csFieldsOf (x : Int) (avail : List N) : Nat → List Int → Bool
+def csFieldsOf (x : Int) (avail : CsAvail) : Nat → List Int → Bool
   | _, [] => true
   | i, y :: ys =>
     let d := csDef y avail
@@ -88,7 +181,7 @@ structure CsRun where
   rest : N
   deriving Inhabited
 
-partial def csRun (y x : Int) (avail : List N) (m : IMap) (n : N) : CsRun :=
+partial def csRun (y x : Int) (avail : CsAvail) (m : IMap) (n : N) : CsRun :=
   if n.op == opSSet && n.a == y then
     let d := csDef (renIdx m (intAt 0 n.ys)) avail
     let r := csRun y x avail m (bodyOf n)
@@ -97,7 +190,7 @@ partial def csRun (y x : Int) (avail : List N) (m : IMap) (n : N) : CsRun :=
   else { ok := true, bytes := 0, rest := n }
 
 -- the object whose field the new cell's first field is, -1 for none; `next` follows the `ctor`
-def csDiscr (e : N) (next : N) (avail : List N) (m : IMap) : Int :=
+def csDiscr (e : N) (next : N) (avail : CsAvail) (m : IMap) : Int :=
   let d0 := csDef (intAt 0 e.ys) avail
   let d1 := csDef (renIdx m (intAt 0 next.ys)) avail
   if !e.ys.isEmpty then (if d0.op == opProj then intAt 0 d0.ys else -1)
@@ -120,12 +213,12 @@ they do with a literal of the IR (deriv's `d "x" x`, written twice in its source
 in `avail` with its scalars as the second kid: only closed cells stand there with fields. -/
 
 -- the expression the path bound to v is a closed value
-def csClosed (v : Int) (avail : List N) : Bool :=
+def csClosed (v : Int) (avail : CsAvail) : Bool :=
   let d := csDef v avail
   d.op == opLit || d.op == opLitStr || d.op == opCtor
     || (d.op == opPrim && (primOp d == primBox || primOp d == primBoxS) && (csDef (intAt 0 d.ys) avail).op == opLit)
 
-def csAllClosed (avail : List N) : List Int → Bool
+def csAllClosed (avail : CsAvail) : List Int → Bool
   | [] => true
   | y :: ys => csClosed y avail && csAllClosed avail ys
 
@@ -137,7 +230,7 @@ structure CsLitRun where
   rest : N
   deriving Inhabited
 
-partial def csLitRun (x : Int) (avail : List N) (m : IMap) (n : N) : CsLitRun :=
+partial def csLitRun (x : Int) (avail : CsAvail) (m : IMap) (n : N) : CsLitRun :=
   if n.op == opSSet && n.a == x then
     let v := renIdx m (intAt 0 n.ys)
     let r := csLitRun x avail m (bodyOf n)
@@ -168,7 +261,7 @@ def csFindCell (e : N) (ty : Int) (key : List Int) : List N → Int
 mutual
 -- `avail`: the bindings above on this path, the nearest first (CSE:18 State.map); `m`: the
 -- substitution (State.subst); `facts`: the constructors the path's cases have fixed
-partial def csGo (calls : Bool) (facts : List Int) (avail : List N) (m : IMap) (n : N) : N :=
+partial def csGo (calls : Bool) (facts : List Int) (avail : CsAvail) (m : IMap) (n : N) : N :=
   if n.op == opVDecl then
     let e := renExpr m (vdeclExpr n)
     let info := infoOf e
@@ -179,14 +272,14 @@ partial def csGo (calls : Bool) (facts : List Int) (avail : List N) (m : IMap) (
     else if e.op == opCtor && info.isRef && n.ys.isEmpty && csAllClosed avail e.ys then
       let lr := csLitRun n.a avail m (bodyOf n)
       if lr.ok && !csWrites n.a lr.rest then
-        let y := csFindCell e n.b lr.key avail
+        let y := csFindCell e n.b lr.key avail.cells
         if y >= 0 then csGo calls facts avail (imInsert m n.a.toNat y.toNat) lr.rest
-        else { n with kids := [e, csGo calls facts ({ n with kids := [e, { n0 opLit with ys := lr.key }] } :: avail) m (bodyOf n)] }
+        else { n with kids := [e, csGo calls facts (csAddCell avail { n with kids := [e, { n0 opLit with ys := lr.key }] }) m (bodyOf n)] }
       else { n with kids := [e, csGo calls facts avail m (bodyOf n)] }
     else if csKey calls e then
-      match csFind e (csTypes (vdeclBinds n)) avail with
+      match csFind e (csTypes (vdeclBinds n)) (ntFind avail.byHash (csHash e)) with
       | some p => csGo calls facts avail (csSubst m (csVars (vdeclBinds n)) (csVars (vdeclBinds p))) (bodyOf n)
-      | none => { n with kids := [e, csGo calls facts ({ n with kids := [e, mkUnreachable] } :: avail) m (bodyOf n)] }
+      | none => { n with kids := [e, csGo calls facts (csAddKey avail { n with kids := [e, mkUnreachable] }) m (bodyOf n)] }
     else { n with kids := [e, csGo calls facts avail m (bodyOf n)] }
   else if n.op == opJDecl then
     { n with kids := [csGo calls facts avail m (jdeclBody n), csGo calls facts avail m (bodyOf n)] }
@@ -197,7 +290,7 @@ partial def csGo (calls : Bool) (facts : List Int) (avail : List N) (m : IMap) (
   else if n.op == opUnreachable then n
   else setBody (renIns m n) (csGo calls facts avail m (bodyOf n))
 -- x: the case's subject; obj: it is an object, so an alternative fixes its constructor
-partial def csAlts (calls : Bool) (facts : List Int) (avail : List N) (m : IMap) (x : Int) (obj : Bool) : List N → List N
+partial def csAlts (calls : Bool) (facts : List Int) (avail : CsAvail) (m : IMap) (x : Int) (obj : Bool) : List N → List N
   | [] => []
   | alt :: alts =>
     let facts2 := if obj && !altIsDefault alt then csBindFact x (infoOf alt) facts else facts
@@ -206,15 +299,22 @@ end
 
 -- CSE:104 Decl.cse
 def declCse (calls : Bool) (d : Decl) : Decl :=
-  if d.ext then d else { d with body := csGo calls [] [] imEmpty d.body }
+  if d.ext || declIsClosed d then d else { d with body := csGo calls [] csAvail0 imEmpty d.body }
+
+def revCseDecls : List Decl → List Decl → List Decl
+  | [], acc => acc
+  | d :: ds, acc => revCseDecls ds (d :: acc)
+
+def cseGo (calls : Bool) : List Decl → List Decl → List Decl
+  | [], acc => revCseDecls acc []
+  | d :: ds, acc => cseGo calls ds (declCse calls d :: acc)
 
 -- `calls`: a second call of a function with the same arguments takes the first one's results.
 -- That is the pass as Lean has it. It can change how much a program allocates by more than a
 -- constant: `node (bottomUp k) (bottomUp k)` builds one subtree and shares it (binarytrees: 4406
 -- allocations become 455 at depth 6). The value is the same; a table that compares allocators
 -- must say which way it ran.
-def cse (calls : Bool) : List Decl → List Decl
-  | [] => []
-  | d :: ds => declCse calls d :: cse calls ds
+def cse (calls : Bool) (decls : List Decl) : List Decl :=
+  cseGo calls decls []
 
 end Lrc

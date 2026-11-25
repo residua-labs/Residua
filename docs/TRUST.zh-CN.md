@@ -1,29 +1,28 @@
-# TRUST — 使用 0.3 时你必须信任什么
+# TRUST — 使用 0.4 时你必须信任什么
 
 [English](TRUST.md) | 中文
 
-Residua 的主张是：使用结果无需信任其产出方。0.3 对编译交付了这
-一点，而以下正是 0.3 的用户仍然要信任的，一条不多：
+Residua 的主张是：使用结果无需信任其产出方。0.4 对编译交付了这
+一点，而以下正是 0.4 的用户仍然要信任的，一条不多：
 
-- 提交的[种子](GLOSSARY.zh-CN.md)字节（两个 wasm 模块）。0.3 中的缓解：种子能从源码把
-  编译器重建到逐字节不动点，已发布的摘要让任何人都能核验，且已有
-  独立一方从裸归档复现了它。尚未有：对照一个独立构建的编译器做
-  多样双重编译。
-- 用来运行种子和编译器的 C 编译器与 wasm 运行时——它们在 0.3 的
+- 提交的[种子](GLOSSARY.zh-CN.md)字节（两个 wasm 模块）。0.4 中的缓解：种子能从源码把
+  编译器重建到逐字节不动点，已发布的摘要让任何人都能核验，且我们
+  已在 Linux x86-64 与 macOS arm64 上逐字节重建了它。尚未有：由
+  独立一方的复现，以及对照一个独立构建的编译器做多样双重编译。
+- 用来运行种子和编译器的 C 编译器与 wasm 运行时——它们在 0.4 的
   信任基之内。设计会把运行的代码移到对照 ISA 语义逐个证明的机器码
-  stencil 上；0.3 中该工作是部分的，未被使用。
-- 宿主：操作系统、硬件，以及种子配方实际调用的工具——`env`、
-  `bash`、`uname`、`date`、`sed`、`grep`、`printf`、`xargs`、
-  `cmp`、`sha256sum`、`curl`、`tar`、`cat`、`cp`、`rm`、`mkdir`、
-  `tee`、`test`、`stat`、`basename`（均为 coreutils 类工具）、C
-  工具链（`cc` = GCC 加 GNU binutils，或 macOS 上的 clang），以及
-  钉住的、由用户下载的工具：wasmtime v50.0.1（引擎及
-  `wasmtime.h`/`libwasmtime.a`）与 binaryen version_133 的
-  `wasm-opt`。`git` 是可选的：没有检出时配方改为按成员清单摘要
-  核验源码。
+  stencil 上；0.4 中该工作是部分的，未被使用。
+- 宿主：操作系统、硬件，以及 0.4 快速上手实际调用的工具——C11
+  编译器（`cc`）、POSIX `sh`、`awk`、`curl`、`tar`（含 `xz`）、
+  `sha256sum` 或 `shasum -a 256`、`cmp`、`grep`、`uname`、
+  `cp`、`mkdir`、`cat`、`printf`——以及钉住的、由用户下载的
+  工具：wasmtime v50.0.1 的 C 库（`wasmtime.h`/`libwasmtime.a`）
+  与 binaryen version_133 的 `wasm-opt`。运行编译出的 Proc 程序
+  的 C 宿主 `glue/host/procwt.c` 也由同一个 `cc` 构建。
 - 形式语义文件是定义；其意义由内容地址固定，并由 Lean 的内核
-  检查。Lean 用于检查语义和充当 oracle；构建和运行 0.3 不需要
+  检查。Lean 用于检查语义和充当 oracle；构建和运行 0.4 不需要
   Lean。
 
-0.3 不声称：编译器被端到端证明正确；证明检查（R-CIC）不属于
-0.3。
+0.4 不声称：编译器被端到端证明正确——任何已发布的 wasm 工件都
+不携带对其源码的精化证明。编译器以差分运行测试，语义与组合定理由
+Lean 的内核检查。证明检查（R-CIC）不属于 0.4。

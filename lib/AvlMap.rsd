@@ -1,4 +1,6 @@
--- Persistent AVL map, OCaml's Map (Stephen Adams, 1993).
+-- Persistent size-bounded balanced map; balancing ported from Lean v4.36.0
+-- Std/Data/DTreeMap/Internal/Def.lean and Balancing.lean (Copyright (c) 2024
+-- Lean FRO, LLC; Apache-2.0; author Markus Himmel).
 -- Referenced by q via Trellis declaration closure (import AvlMap).
 -- closure_claim = 0.
 
@@ -40,41 +42,110 @@ def box : Nat -> Map -> List Map
   | 0, m => if m.tag == 0 then [] else [m]
   | n + 1, m => box n m
 
-def imax : Nat -> Int -> Int -> Int
-  | 0, a, b => if a > b then a else b
-  | n + 1, a, b => imax 0 a b
+def delta : Nat -> Int
+  | 0 => 3
+  | n + 1 => delta n
 
-def mapH : Nat -> Map -> Int
+def ratio : Nat -> Int
+  | 0 => 2
+  | n + 1 => ratio n
+
+def size : Nat -> Map -> Int
   | 0, m => if m.tag == 0 then 0 else m.h
-  | n + 1, m => mapH 0 m
+  | _ + 1, m => size 0 m
+
+def mkSz : Nat -> Int -> Map -> Int -> Int -> Int -> Int -> List Int -> Map -> Map
+  | 0, sz, l, k, v, sa, sb, xs, r =>
+    { tag := 1, key := k, val := v, h := sz, sa := sa, sb := sb, extra := xs, left := box 0 l, right := box 0 r : Map }
+  | n + 1, sz, l, k, v, sa, sb, xs, r => mkSz n sz l k v sa sb xs r
 
 def mk : Nat -> Map -> Int -> Int -> Int -> Int -> List Int -> Map -> Map
   | 0, l, k, v, sa, sb, xs, r =>
-    { tag := 1, key := k, val := v, h := imax 0 (mapH 0 l) (mapH 0 r) + 1, sa := sa, sb := sb, extra := xs, left := box 0 l, right := box 0 r : Map }
+    mkSz 0 (1 + size 0 l + size 0 r) l k v sa sb xs r
   | n + 1, l, k, v, sa, sb, xs, r => mk n l k v sa sb xs r
 
-def bal : Nat -> Map -> Int -> Int -> Int -> Int -> List Int -> Map -> Map
+def balanceL : Nat -> Map -> Int -> Int -> Int -> Int -> List Int -> Map -> Map
   | 0, l, k, v, sa, sb, xs, r =>
-    let hl : Int := mapH 0 l;
-    let hr : Int := mapH 0 r;
-    if hl > hr + 2 then
-      let ll : Map := kid 0 (l.left);
-      let lr : Map := kid 0 (l.right);
-      if mapH 0 ll >= mapH 0 lr then mk 0 ll l.key l.val l.sa l.sb l.extra (mk 0 lr k v sa sb xs r)
+    if r.tag == 0 then
+      if l.tag == 0 then mkSz 0 1 (map0 0) k v sa sb xs (map0 0)
       else
-        let lrl : Map := kid 0 (lr.left);
-        let lrr : Map := kid 0 (lr.right);
-        mk 0 (mk 0 ll l.key l.val l.sa l.sb l.extra lrl) lr.key lr.val lr.sa lr.sb lr.extra (mk 0 lrr k v sa sb xs r)
-    else if hr > hl + 2 then
-      let rl : Map := kid 0 (r.left);
-      let rr : Map := kid 0 (r.right);
-      if mapH 0 rr >= mapH 0 rl then mk 0 (mk 0 l k v sa sb xs rl) r.key r.val r.sa r.sb r.extra rr
+        let ll : Map := kid 0 (l.left);
+        let lr : Map := kid 0 (l.right);
+        if ll.tag == 0 && lr.tag == 0 then mkSz 0 2 l k v sa sb xs (map0 0)
+        else if ll.tag == 0 then
+          mkSz 0 3 (mkSz 0 1 (map0 0) l.key l.val l.sa l.sb l.extra (map0 0)) lr.key lr.val lr.sa lr.sb lr.extra (mkSz 0 1 (map0 0) k v sa sb xs (map0 0))
+        else if lr.tag == 0 then
+          mkSz 0 3 ll l.key l.val l.sa l.sb l.extra (mkSz 0 1 (map0 0) k v sa sb xs (map0 0))
+        else
+          mkSz 0 (1 + l.h) ll l.key l.val l.sa l.sb l.extra (mkSz 0 (1 + lr.h) lr k v sa sb xs (map0 0))
+    else if l.tag == 0 then
+      mkSz 0 (1 + r.h) (map0 0) k v sa sb xs r
+    else
+      let rs : Int := r.h;
+      let ls : Int := l.h;
+      if delta 0 * rs < ls then
+        let ll : Map := kid 0 (l.left);
+        let lr : Map := kid 0 (l.right);
+        if ll.tag != 0 && lr.tag != 0 then
+          let lls : Int := ll.h;
+          let lrs : Int := lr.h;
+          if lrs < ratio 0 * lls then
+            mkSz 0 (1 + ls + rs) ll l.key l.val l.sa l.sb l.extra (mkSz 0 (1 + rs + lrs) lr k v sa sb xs r)
+          else
+            let lrl : Map := kid 0 (lr.left);
+            let lrr : Map := kid 0 (lr.right);
+            mkSz 0 (1 + ls + rs) (mkSz 0 (1 + lls + size 0 lrl) ll l.key l.val l.sa l.sb l.extra lrl) lr.key lr.val lr.sa lr.sb lr.extra (mkSz 0 (1 + rs + size 0 lrr) lrr k v sa sb xs r)
+        else mkSz 0 (1 + ls + rs) l k v sa sb xs r
+      else mkSz 0 (1 + ls + rs) l k v sa sb xs r
+  | _ + 1, l, k, v, sa, sb, xs, r => balanceL 0 l k v sa sb xs r
+
+def balanceR : Nat -> Map -> Int -> Int -> Int -> Int -> List Int -> Map -> Map
+  | 0, l, k, v, sa, sb, xs, r =>
+    if l.tag == 0 then
+      if r.tag == 0 then mkSz 0 1 (map0 0) k v sa sb xs (map0 0)
       else
-        let rll : Map := kid 0 (rl.left);
-        let rlr : Map := kid 0 (rl.right);
-        mk 0 (mk 0 l k v sa sb xs rll) rl.key rl.val rl.sa rl.sb rl.extra (mk 0 rlr r.key r.val r.sa r.sb r.extra rr)
-    else mk 0 l k v sa sb xs r
-  | n + 1, l, k, v, sa, sb, xs, r => bal 0 l k v sa sb xs r
+        let rl : Map := kid 0 (r.left);
+        let rr : Map := kid 0 (r.right);
+        if rl.tag == 0 && rr.tag == 0 then mkSz 0 2 (map0 0) k v sa sb xs r
+        else if rl.tag == 0 then
+          mkSz 0 3 (mkSz 0 1 (map0 0) k v sa sb xs (map0 0)) r.key r.val r.sa r.sb r.extra rr
+        else if rr.tag == 0 then
+          mkSz 0 3 (mkSz 0 1 (map0 0) k v sa sb xs (map0 0)) rl.key rl.val rl.sa rl.sb rl.extra (mkSz 0 1 (map0 0) r.key r.val r.sa r.sb r.extra (map0 0))
+        else
+          mkSz 0 (1 + r.h) (mkSz 0 (1 + rl.h) (map0 0) k v sa sb xs rl) r.key r.val r.sa r.sb r.extra rr
+    else if r.tag == 0 then
+      mkSz 0 (1 + l.h) l k v sa sb xs (map0 0)
+    else
+      let ls : Int := l.h;
+      let rs : Int := r.h;
+      if delta 0 * ls < rs then
+        let rl : Map := kid 0 (r.left);
+        let rr : Map := kid 0 (r.right);
+        if rl.tag != 0 && rr.tag != 0 then
+          let rls : Int := rl.h;
+          let rrs : Int := rr.h;
+          if rls < ratio 0 * rrs then
+            mkSz 0 (1 + ls + rs) (mkSz 0 (1 + ls + rls) l k v sa sb xs rl) r.key r.val r.sa r.sb r.extra rr
+          else
+            let rll : Map := kid 0 (rl.left);
+            let rlr : Map := kid 0 (rl.right);
+            mkSz 0 (1 + ls + rs) (mkSz 0 (1 + ls + size 0 rll) l k v sa sb xs rll) rl.key rl.val rl.sa rl.sb rl.extra (mkSz 0 (1 + rrs + size 0 rlr) rlr r.key r.val r.sa r.sb r.extra rr)
+        else mkSz 0 (1 + ls + rs) l k v sa sb xs r
+      else mkSz 0 (1 + ls + rs) l k v sa sb xs r
+  | _ + 1, l, k, v, sa, sb, xs, r => balanceR 0 l k v sa sb xs r
+
+def balance : Nat -> Map -> Int -> Int -> Int -> Int -> List Int -> Map -> Map
+  | 0, l, k, v, sa, sb, xs, r =>
+    if l.tag == 0 then balanceR 0 l k v sa sb xs r
+    else if r.tag == 0 then balanceL 0 l k v sa sb xs r
+    else if delta 0 * l.h < r.h then balanceR 0 l k v sa sb xs r
+    else if delta 0 * r.h < l.h then balanceL 0 l k v sa sb xs r
+    else mkSz 0 (1 + l.h + r.h) l k v sa sb xs r
+  | _ + 1, l, k, v, sa, sb, xs, r => balance 0 l k v sa sb xs r
+
+def bal : Nat -> Map -> Int -> Int -> Int -> Int -> List Int -> Map -> Map
+  | 0, l, k, v, sa, sb, xs, r => balance 0 l k v sa sb xs r
+  | _ + 1, l, k, v, sa, sb, xs, r => bal 0 l k v sa sb xs r
 
 def get : Map -> Int -> MR
 
@@ -99,22 +170,22 @@ def ins : Map -> Int -> Int -> Int -> Int -> List Int -> MR
 
   | { tag := tag, key := key, val := oldVal, h := h, sa := oldSa, sb := oldSb, extra := extra, left := left, right := right }, k, v, sa, sb, xs =>
     let m : Map := { tag := tag, key := key, val := oldVal, h := h, sa := oldSa, sb := oldSb, extra := extra, left := left, right := right };
-    if m.tag == 0 then { m := mk 0 (map0 0) k v sa sb xs (map0 0), v := v, steps := 1, xs := xs, hit := map0 0 : MR }
-    else if k == m.key then { m := mk 0 (kid 0 (m.left)) k v sa sb xs (kid 0 (m.right)), v := v, steps := 1, xs := xs, hit := m : MR }
+    if m.tag == 0 then { m := mkSz 0 1 (map0 0) k v sa sb xs (map0 0), v := v, steps := 1, xs := xs, hit := map0 0 : MR }
+    else if k == m.key then { m := mkSz 0 m.h (kid 0 (m.left)) k v sa sb xs (kid 0 (m.right)), v := v, steps := 1, xs := xs, hit := m : MR }
     else if k < m.key then
       match left with
       | [] =>
-        let child : Map := mk 0 (map0 0) k v sa sb xs (map0 0);
-        { m := bal 0 child m.key m.val m.sa m.sb m.extra (kid 0 (m.right)), v := v, steps := 2, xs := xs, hit := map0 0 : MR }
+        let child : Map := mkSz 0 1 (map0 0) k v sa sb xs (map0 0);
+        { m := balanceL 0 child m.key m.val m.sa m.sb m.extra (kid 0 (m.right)), v := v, steps := 2, xs := xs, hit := map0 0 : MR }
       | child :: _ =>
         let a : MR := ins child k v sa sb xs;
-        { m := bal 0 a.m m.key m.val m.sa m.sb m.extra (kid 0 (m.right)), v := v, steps := a.steps + 1, xs := xs, hit := map0 0 : MR }
+        { m := balanceL 0 a.m m.key m.val m.sa m.sb m.extra (kid 0 (m.right)), v := v, steps := a.steps + 1, xs := xs, hit := map0 0 : MR }
     else
       match right with
       | [] =>
-        let child : Map := mk 0 (map0 0) k v sa sb xs (map0 0);
-        { m := bal 0 (kid 0 (m.left)) m.key m.val m.sa m.sb m.extra child, v := v, steps := 2, xs := xs, hit := map0 0 : MR }
+        let child : Map := mkSz 0 1 (map0 0) k v sa sb xs (map0 0);
+        { m := balanceR 0 (kid 0 (m.left)) m.key m.val m.sa m.sb m.extra child, v := v, steps := 2, xs := xs, hit := map0 0 : MR }
       | child :: _ =>
         let a : MR := ins child k v sa sb xs;
-        { m := bal 0 (kid 0 (m.left)) m.key m.val m.sa m.sb m.extra a.m, v := v, steps := a.steps + 1, xs := xs, hit := map0 0 : MR }
+        { m := balanceR 0 (kid 0 (m.left)) m.key m.val m.sa m.sb m.extra a.m, v := v, steps := a.steps + 1, xs := xs, hit := map0 0 : MR }
 -- avl end

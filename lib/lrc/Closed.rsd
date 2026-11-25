@@ -1,30 +1,18 @@
--- LRC: constant cells. A constructor without object fields whose scalars are all literals is one
--- persistent object in the module's data instead of a cell built at every evaluation.
+-- LRC: closed constructor terms (Lean 4.14 `extract_closed`, Lean/Compiler/ClosedTermCache.lean:19,
+-- Lean/Compiler/IR/EmitC.lean:686-738).
 -- closure_claim = 0.
 --
--- Lean does this for every closed term: its compiler makes the term a constant (the names are kept
--- by Lean/Compiler/ClosedTermCache.lean), which the module's initialiser builds once and marks
--- persistent (EmitC:692 emitDeclInit, `lean_mark_persistent` at EmitC:688). Here the
--- cell's bytes are known when the program is compiled, so it needs no initialiser: it stands in
--- the data as a string literal does (lib/lrc/Emit.rsd "String literals as persistent objects"),
--- with count 0, which no dup or drop changes and no release reaches.
+-- Every closed constructor term (lists and inductive/structure constructors whose object fields are
+-- closed values and whose scalar stores are literals, with no later write to the cell) is lifted
+-- bottom-up into a deduplicated 0-parameter declaration keyed by canonical content `q`, and replaced
+-- at its binding by `mkFapClosed`. Intermediate dead bindings are erased immediately while keeping
+-- fuel guards (`opMData`) in place.
 --
--- What it removes: the allocation and the stores of the cell, and its 16 or more bytes for
--- every evaluation that stays live (deriv's `val 0`, `val 1`, `val (-1)`: a leaf of the result is
--- then a pointer to one shared cell).
---
--- A cell is taken when
---   * its constructor has no object field and a scalar area (`ctor` with no argument);
---   * the `sset`s that follow the `ctor` directly all store literals;
---   * nothing later writes to it (no `set`, `sset` or `setTag` on its variable).
--- The result is a literal of the IR (lib/lrc/Ir.rsd `mkLitObj`), so every pass treats it as it
--- treats a string literal: a value without arguments that cannot refuse.
---
--- A persistent cell is never unique: where the program would have updated the fresh cell in
--- place, it now builds a new one (lean.h `lean_is_exclusive` is false for a count of 0). It runs
--- after the byte fields are laid out (lib/lrc/Pack.rsd) and before the common subexpressions, so
--- that two calls that pass the same constant are one call.
+-- At emission (lib/lrc/Emit.rsd), each lifted closed constructor declaration becomes a static
+-- immortal object (`m_rc = 0`) in the module's data segment (`GroundPool`, `65536 .. __heap_base`),
+-- and `mkFapClosed` emits a constant load of its static address.
 import Lib.Lrc.FreeVars
+import Lib.Lrc.ElimDead
 
 namespace Lrc
 
@@ -108,8 +96,615 @@ partial def clAlts (lits : List Int) : List N → List N
   | alt :: alts => altSetBody alt (clGo lits (altBody alt)) :: clAlts lits alts
 end
 
-def closedCells : List Decl → List Decl
+/-! ## Module-wide closed constructor cache (`ClosedTermCache.lean:19`) -/
+
+def clCellMax : Nat := 4096
+def clChunkMax : Nat := 64
+def clTmpBase : Nat := 100000000
+
+def clKeyCmp : List Int → List Int → Int
+  | [], [] => 0
+  | [], _ :: _ => -1
+  | _ :: _, [] => 1
+  | a :: as, b :: bs => if a < b then -1 else if a > b then 1 else clKeyCmp as bs
+
+structure ClKeyTree where
+  tag : Int
+  key : List Int
+  val : Int
+  left : List ClKeyTree
+  right : List ClKeyTree
+  deriving Inhabited
+
+def ckt0 : ClKeyTree := { tag := 0, key := [], val := -1, left := [], right := [] }
+
+def cktKid : List ClKeyTree → ClKeyTree
+  | [] => ckt0
+  | c :: _ => c
+
+def cktBox (t : ClKeyTree) : List ClKeyTree := if t.tag == 0 then [] else [t]
+
+def cktMk (l : ClKeyTree) (key : List Int) (val : Int) (r : ClKeyTree) : ClKeyTree :=
+  { tag := (if l.tag > r.tag then l.tag else r.tag) + 1, key := key, val := val, left := cktBox l, right := cktBox r }
+
+def cktBal (l : ClKeyTree) (key : List Int) (val : Int) (r : ClKeyTree) : ClKeyTree :=
+  if l.tag > r.tag + 2 then
+    let ll := cktKid l.left
+    let lr := cktKid l.right
+    if ll.tag >= lr.tag then cktMk ll l.key l.val (cktMk lr key val r)
+    else cktMk (cktMk ll l.key l.val (cktKid lr.left)) lr.key lr.val (cktMk (cktKid lr.right) key val r)
+  else if r.tag > l.tag + 2 then
+    let rl := cktKid r.left
+    let rr := cktKid r.right
+    if rr.tag >= rl.tag then cktMk (cktMk l key val rl) r.key r.val rr
+    else cktMk (cktMk l key val (cktKid rl.left)) rl.key rl.val (cktMk (cktKid rl.right) r.key r.val rr)
+  else cktMk l key val r
+
+partial def cktFind (t : ClKeyTree) (k : List Int) : Int :=
+  if t.tag == 0 then -1
+  else
+    let c := clKeyCmp k t.key
+    if c == 0 then t.val
+    else
+      match (if c < 0 then t.left else t.right) with
+      | [] => -1
+      | sub :: _ => cktFind sub k
+
+partial def cktPut (t : ClKeyTree) (k : List Int) (v : Int) : ClKeyTree :=
+  if t.tag == 0 then { tag := 1, key := k, val := v, left := [], right := [] }
+  else
+    let c := clKeyCmp k t.key
+    if c == 0 then { t with val := v }
+    else if c < 0 then
+      match t.left with
+      | [] =>
+        let leaf : ClKeyTree := { tag := 1, key := k, val := v, left := [], right := [] }
+        if t.right.isEmpty then { t with tag := 2, left := [leaf] } else { t with left := [leaf] }
+      | l :: _ =>
+        let l1 := cktPut l k v
+        if l1.tag == l.tag then { t with left := [l1] }
+        else cktBal l1 t.key t.val (cktKid t.right)
+    else
+      match t.right with
+      | [] =>
+        let leaf : ClKeyTree := { tag := 1, key := k, val := v, left := [], right := [] }
+        if t.left.isEmpty then { t with tag := 2, right := [leaf] } else { t with right := [leaf] }
+      | r :: _ =>
+        let r1 := cktPut r k v
+        if r1.tag == r.tag then { t with right := [r1] }
+        else cktBal (cktKid t.left) t.key t.val r1
+
+mutual
+-- O(B) per-declaration write count on each variable (`set`, `sset`, `setTag`)
+partial def clWriteCounts (n : N) (t : ITree) : ITree :=
+  if n.op == opVDecl then clWriteCounts (bodyOf n) t
+  else if n.op == opJDecl then clWriteCounts (bodyOf n) (clWriteCounts (jdeclBody n) t)
+  else if n.op == opCase then clWriteCountsAlts (caseAlts n) t
+  else if isTerminal n then t
+  else
+    let t1 :=
+      if (n.op == opSet || n.op == opSSet || n.op == opSetTag) && n.a >= 0 then
+        let prev := itFind t n.a
+        itPut t n.a ((if prev < 0 then 0 else prev) + 1)
+      else t
+    clWriteCounts (bodyOf n) t1
+partial def clWriteCountsAlts : List N → ITree → ITree
+  | [], t => t
+  | alt :: alts, t => clWriteCountsAlts alts (clWriteCounts (altBody alt) t)
+end
+
+def clTotalWrites (t : ITree) (x : Int) : Nat :=
+  let c := itFind t x
+  if c < 0 then 0 else c.toNat
+
+structure ClEnvRun where
+  ok : Bool
+  cnt : Nat
+  fields : List Int
+  rest : N
+  deriving Inhabited
+
+partial def clEnvRun (x : Int) (env : LTree) (n : N) : ClEnvRun :=
+  if n.op == opSSet && n.a == x then
+    let y : Int := ((ssetArg n : Nat) : Int)
+    let d := ltFind env y
+    let r := clEnvRun x env (bodyOf n)
+    { ok := r.ok && intAt 0 d == 1,
+      cnt := r.cnt + 1,
+      fields := ((ssetOff n : Nat) : Int) :: n.d :: intAt 1 d :: r.fields,
+      rest := r.rest }
+  else { ok := true, cnt := 0, fields := [], rest := n }
+
+structure ClArgsR where
+  ok : Bool
+  vals : List (List Int)
+  deriving Inhabited
+
+def clObjArgs (env : LTree) : List Int → ClArgsR
+  | [] => { ok := true, vals := [] }
+  | y :: ys =>
+    let r := clObjArgs env ys
+    if !r.ok then r
+    else if y < 0 then { ok := true, vals := [2, 0] :: r.vals }
+    else
+      let d := ltFind env y
+      let k := intAt 0 d
+      if k >= 2 && k <= 7 then { ok := true, vals := d :: r.vals }
+      else { ok := false, vals := [] }
+
+def clEncodeArgs : List (List Int) → List Int
   | [] => []
-  | d :: ds => (if d.ext then d else { d with body := clGo [] d.body }) :: closedCells ds
+  | d :: ds => ((d.length : Nat) : Int) :: (d ++ clEncodeArgs ds)
+
+def clFieldWidths : List Int → List Int
+  | off :: ty :: _ :: rest => off :: ((tyWidth ty : Nat) : Int) :: clFieldWidths rest
+  | _ => []
+
+structure ClBuildArgsR where
+  next : Nat
+  vars : List Int
+  wrap : List N
+  deriving Inhabited
+
+-- Each `wrap` entry is a `vdecl` shell with placeholder body `mkUnreachable`, stitched top-down by `clWrapList`.
+def clWrapList : List N → N → N
+  | [], tail => tail
+  | w :: ws, tail => { w with kids := [vdeclExpr w, clWrapList ws tail] }
+
+def clBuildArgs (next : Nat) : List (List Int) → ClBuildArgsR
+  | [] => { next := next, vars := [], wrap := [] }
+  | d :: ds =>
+    let k := intAt 0 d
+    if k == 2 then
+      let v := next
+      let r := clBuildArgs (next + 1) ds
+      { next := r.next, vars := (v : Int) :: r.vars,
+        wrap := mkVDecl v tyTObj (mkCtor { cidx := (intAt 1 d).toNat, size := 0, ssize := 0, tid := 0 } []) mkUnreachable :: r.wrap }
+    else if k == 3 then
+      let u := next
+      let v := next + 1
+      let r := clBuildArgs (next + 2) ds
+      { next := r.next, vars := (v : Int) :: r.vars,
+        wrap := mkVDecl u tyI64 (mkLit (intAt 1 d)) mkUnreachable
+          :: mkVDecl v tyTObj (mkPrim primBox 0 0 [(u : Int)]) mkUnreachable :: r.wrap }
+    else if k == 4 then
+      let u := next
+      let v := next + 1
+      let r := clBuildArgs (next + 2) ds
+      { next := r.next, vars := (v : Int) :: r.vars,
+        wrap := mkVDecl u tyI64 (mkLit (intAt 1 d)) mkUnreachable
+          :: mkVDecl v tyTObj (mkPrim primBoxS 0 0 [(u : Int)]) mkUnreachable :: r.wrap }
+    else if k == 5 then
+      let v := next
+      let r := clBuildArgs (next + 1) ds
+      { next := r.next, vars := (v : Int) :: r.vars,
+        wrap := mkVDecl v tyObj (mkLitStr "") mkUnreachable :: r.wrap }
+    else if k == 6 then
+      let v := next
+      let r := clBuildArgs (next + 1) ds
+      { next := r.next, vars := (v : Int) :: r.vars,
+        wrap := mkVDecl v tyObj (mkLitBytes (d.drop 1)) mkUnreachable :: r.wrap }
+    else
+      let v := next
+      let r := clBuildArgs (next + 1) ds
+      { next := r.next, vars := (v : Int) :: r.vars,
+        wrap := mkVDecl v tyObj (mkFapClosed (intAt 1 d).toNat) mkUnreachable :: r.wrap }
+
+structure ClCell where
+  cid : Nat
+  info : CtorInfo
+  args : List (List Int)
+  fields : List Int
+  deriving Inhabited
+
+partial def clDecodeArgs (xs : List Int) : List (List Int) :=
+  match xs with
+  | [] => []
+  | len :: rest =>
+    let n := len.toNat
+    rest.take n :: clDecodeArgs (rest.drop n)
+
+def clPackCell (c : ClCell) : List Int :=
+  [(c.info.cidx : Int), (c.info.size : Int), (c.info.ssize : Int), (c.info.tid : Int), (c.fields.length : Int)]
+    ++ c.fields ++ clEncodeArgs c.args
+
+def clUnpackCell (cid : Nat) (raw : List Int) : ClCell :=
+  let flen := (intAt 4 raw).toNat
+  let r5 := raw.drop 5
+  { cid := cid,
+    info := { cidx := (intAt 0 raw).toNat, size := (intAt 1 raw).toNat, ssize := (intAt 2 raw).toNat, tid := (intAt 3 raw).toNat },
+    fields := r5.take flen,
+    args := clDecodeArgs (r5.drop flen) }
+
+-- MST-NF accounting (`ASSIGN-opt-5.md`):
+-- `raw` = candidate `vdecl`s inspected; `extracted` (`a`) = closed constructor terms extracted;
+-- `sigma` = unique interned closed constructor cells; `rho*` = named reasons left in place.
+structure ClPool where
+  cache : ClKeyTree
+  cellsRev : List ClCell
+  cellMap : LTree
+  raw : Nat := 0
+  extracted : Nat := 0
+  sigma : Nat := 0
+  rhoAlreadyStatic : Nat := 0
+  rhoOpenVar : Nat := 0
+  rhoHasCall : Nat := 0
+  rhoHasPrim : Nat := 0
+  rhoMutated : Nat := 0
+  rhoOversize : Nat := 0
+  deriving Inhabited
+
+structure ClInternR where
+  fn : Nat
+  pool : ClPool
+  deriving Inhabited
+
+def clIntern (info : CtorInfo) (args : List (List Int)) (img fields : List Int) (p : ClPool) : ClInternR :=
+  let q : List Int :=
+    [(info.cidx : Int), (info.size : Int), (info.ssize : Int), (args.length : Int)]
+      ++ clEncodeArgs args ++ [-1, (img.length : Int)] ++ img ++ (-2 :: clFieldWidths fields)
+  let hit := cktFind p.cache q
+  if hit >= 0 then
+    { fn := hit.toNat, pool := { p with extracted := p.extracted + 1 } }
+  else
+    let cid := p.sigma
+    let tag := clTmpBase + cid
+    let cell : ClCell := { cid := cid, info := info, args := args, fields := fields }
+    { fn := tag,
+      pool := { p with cache := cktPut p.cache q (tag : Int),
+                       cellsRev := cell :: p.cellsRev,
+                       cellMap := ltPut p.cellMap (cid : Int) (clPackCell cell),
+                       extracted := p.extracted + 1,
+                       sigma := cid + 1 } }
+
+structure ClWalkR where
+  node : N
+  pool : ClPool
+  changed : Bool
+  deriving Inhabited
+
+structure ClAltsR where
+  alts : List N
+  pool : ClPool
+  changed : Bool
+  deriving Inhabited
+
+def clBoxFits (narrow : Bool) (v : Int) : Bool :=
+  v >= 0 && (!narrow || v < 2147483648)
+
+def clBoxSFits (narrow : Bool) (v : Int) : Bool :=
+  if narrow then v > -1073741824 && v < 1073741824
+  else v >= -4611686018427387904 && v < 4611686018427387904
+
+mutual
+partial def clWalk (narrow : Bool) (writes : ITree) (env : LTree) (n : N) (p0 : ClPool) : ClWalkR :=
+  if n.op == opVDecl then
+    let e := vdeclExpr n
+    let p := { p0 with raw := p0.raw + 1 }
+    if !n.ys.isEmpty then
+      let p1 := if e.op == opFap then { p with rhoHasCall := p.rhoHasCall + 1 } else { p with rhoOpenVar := p.rhoOpenVar + 1 }
+      let r := clWalk narrow writes env (bodyOf n) p1
+      { node := { n with kids := [e, r.node] }, pool := r.pool, changed := r.changed }
+    else if e.op == opLit then
+      let r := clWalk narrow writes (ltPut env n.a [1, e.a]) (bodyOf n) { p with rhoAlreadyStatic := p.rhoAlreadyStatic + 1 }
+      { node := { n with kids := [e, r.node] }, pool := r.pool, changed := r.changed }
+    else if e.op == opCtor && (infoOf e).isScalar then
+      let cidx := (infoOf e).cidx
+      let env2 := if !narrow || 2 * cidx + 1 < 4294967296 then ltPut env n.a [2, (cidx : Int)] else env
+      let r := clWalk narrow writes env2 (bodyOf n) { p with rhoAlreadyStatic := p.rhoAlreadyStatic + 1 }
+      { node := { n with kids := [e, r.node] }, pool := r.pool, changed := r.changed }
+    else if e.op == opPrim && primOp e == primBox then
+      let u := ltFind env (intAt 0 e.ys)
+      let v := intAt 1 u
+      let ok := intAt 0 u == 1 && clBoxFits narrow v
+      let env2 := if ok then ltPut env n.a [3, v] else env
+      let p1 := if ok then { p with rhoAlreadyStatic := p.rhoAlreadyStatic + 1 } else { p with rhoOpenVar := p.rhoOpenVar + 1 }
+      let r := clWalk narrow writes env2 (bodyOf n) p1
+      { node := { n with kids := [e, r.node] }, pool := r.pool, changed := r.changed }
+    else if e.op == opPrim && primOp e == primBoxS then
+      let u := ltFind env (intAt 0 e.ys)
+      let v := intAt 1 u
+      let ok := intAt 0 u == 1 && clBoxSFits narrow v
+      let env2 := if ok then ltPut env n.a [4, v] else env
+      let p1 := if ok then { p with rhoAlreadyStatic := p.rhoAlreadyStatic + 1 } else { p with rhoOpenVar := p.rhoOpenVar + 1 }
+      let r := clWalk narrow writes env2 (bodyOf n) p1
+      { node := { n with kids := [e, r.node] }, pool := r.pool, changed := r.changed }
+    else if e.op == opLitStr && !isLitObj e then
+      let bs := litBytes e
+      let env2 :=
+        if bs.isEmpty && e.s == "" then ltPut env n.a [5]
+        else if !bs.isEmpty && bs.length <= litMax then ltPut env n.a (6 :: bs)
+        else env
+      let r := clWalk narrow writes env2 (bodyOf n) { p with rhoAlreadyStatic := p.rhoAlreadyStatic + 1 }
+      { node := { n with kids := [e, r.node] }, pool := r.pool, changed := r.changed }
+    else if e.op == opPrim && primOp e == primArrToList then
+      let u := ltFind env (intAt 0 e.ys)
+      let uk := intAt 0 u
+      if uk == 2 || uk == 7 then
+        let rep := if uk == 2 then mkCtor { cidx := (intAt 1 u).toNat, size := 0, ssize := 0, tid := 0 } [] else mkFapClosed (intAt 1 u).toNat
+        let r := clWalk narrow writes (ltPut env n.a u) (bodyOf n) { p with rhoAlreadyStatic := p.rhoAlreadyStatic + 1 }
+        { node := { n with kids := [rep, r.node] }, pool := r.pool, changed := true }
+      else
+        let r := clWalk narrow writes env (bodyOf n) { p with rhoHasPrim := p.rhoHasPrim + 1 }
+        { node := { n with kids := [e, r.node] }, pool := r.pool, changed := r.changed }
+    else if e.op == opCtor && (infoOf e).isRef then
+      let info := infoOf e
+      let ar := clObjArgs env e.ys
+      let sr := clEnvRun n.a env (bodyOf n)
+      if !ar.ok || !sr.ok then
+        let r := clWalk narrow writes env (bodyOf n) { p with rhoOpenVar := p.rhoOpenVar + 1 }
+        { node := { n with kids := [e, r.node] }, pool := r.pool, changed := r.changed }
+      else if clTotalWrites writes n.a != sr.cnt then
+        let r := clWalk narrow writes env (bodyOf n) { p with rhoMutated := p.rhoMutated + 1 }
+        { node := { n with kids := [e, r.node] }, pool := r.pool, changed := r.changed }
+      else if 8 + 8 * info.size + info.ssize > clCellMax || e.ys.length != info.size then
+        let r := clWalk narrow writes env (bodyOf n) { p with rhoOversize := p.rhoOversize + 1 }
+        { node := { n with kids := [e, r.node] }, pool := r.pool, changed := r.changed }
+      else
+        let img := clImage (List.replicate info.ssize 0) sr.fields
+        let it := clIntern info ar.vals img sr.fields p
+        let r := clWalk narrow writes (ltPut env n.a [7, (it.fn : Int)]) sr.rest it.pool
+        { node := { n with kids := [mkFapClosed it.fn, r.node] }, pool := r.pool, changed := true }
+    else if e.op == opFap then
+      let env2 := if fapClosed e then ltPut env n.a [7, e.a] else env
+      let p1 := if fapClosed e then { p with rhoAlreadyStatic := p.rhoAlreadyStatic + 1 } else { p with rhoHasCall := p.rhoHasCall + 1 }
+      let r := clWalk narrow writes env2 (bodyOf n) p1
+      { node := { n with kids := [e, r.node] }, pool := r.pool, changed := r.changed }
+    else if e.op == opPrim then
+      let r := clWalk narrow writes env (bodyOf n) { p with rhoHasPrim := p.rhoHasPrim + 1 }
+      { node := { n with kids := [e, r.node] }, pool := r.pool, changed := r.changed }
+    else
+      let r := clWalk narrow writes env (bodyOf n) { p with rhoOpenVar := p.rhoOpenVar + 1 }
+      { node := { n with kids := [e, r.node] }, pool := r.pool, changed := r.changed }
+  else if n.op == opJDecl then
+    let rj := clWalk narrow writes env (jdeclBody n) p0
+    let rb := clWalk narrow writes env (bodyOf n) rj.pool
+    { node := { n with kids := [rj.node, rb.node] }, pool := rb.pool, changed := rj.changed || rb.changed }
+  else if n.op == opCase then
+    let ra := clWalkAlts narrow writes env (caseAlts n) p0
+    { node := { n with kids := ra.alts }, pool := ra.pool, changed := ra.changed }
+  else if isTerminal n then { node := n, pool := p0, changed := false }
+  else
+    let rb := clWalk narrow writes env (bodyOf n) p0
+    { node := setBody n rb.node, pool := rb.pool, changed := rb.changed }
+
+partial def clWalkAlts (narrow : Bool) (writes : ITree) (env : LTree) : List N → ClPool → ClAltsR
+  | [], p => { alts := [], pool := p, changed := false }
+  | alt :: alts, p =>
+    let r1 := clWalk narrow writes env (altBody alt) p
+    let r2 := clWalkAlts narrow writes env alts r1.pool
+    { alts := altSetBody alt r1.node :: r2.alts, pool := r2.pool, changed := r1.changed || r2.changed }
+end
+
+mutual
+partial def clTmpRefsGo (n : N) (s : VSet) : VSet :=
+  if n.op == opVDecl then
+    let e := vdeclExpr n
+    let s1 :=
+      if fapClosed e && fapFn e >= clTmpBase then vsInsert s (fapFn e - clTmpBase)
+      else s
+    clTmpRefsGo (bodyOf n) s1
+  else if n.op == opJDecl then clTmpRefsGo (bodyOf n) (clTmpRefsGo (jdeclBody n) s)
+  else if n.op == opCase then clTmpRefsAlts (caseAlts n) s
+  else if isTerminal n then s
+  else clTmpRefsGo (bodyOf n) s
+partial def clTmpRefsAlts : List N → VSet → VSet
+  | [], s => s
+  | alt :: alts, s => clTmpRefsAlts alts (clTmpRefsGo (altBody alt) s)
+end
+
+def clTmpRefsDecls : List Decl → VSet → VSet
+  | [], s => s
+  | d :: ds, s => clTmpRefsDecls ds (if d.ext then s else clTmpRefsGo d.body s)
+
+def clBumpIntCnt : List (List Int) → IMap → IMap
+  | [], m => m
+  | d :: ds, m =>
+    let m1 :=
+      if intAt 0 d == 7 && (intAt 1 d).toNat >= clTmpBase then
+        let ch := (intAt 1 d).toNat - clTmpBase
+        let prev := imFind m ch
+        imInsert m ch ((if prev < 0 then 0 else prev.toNat) + 1)
+      else m
+    clBumpIntCnt ds m1
+
+structure ClReachR where
+  live : VSet
+  intCnt : IMap
+  cells : List ClCell
+  deriving Inhabited
+
+-- Walk `cellsRev` (parents strictly precede children): propagate reachability and count internal parent references.
+def clReachGo : List ClCell → VSet → IMap → List ClCell → ClReachR
+  | [], live, intCnt, acc => { live := live, intCnt := intCnt, cells := acc }
+  | c :: cs, live, intCnt, acc =>
+    if vsContains live c.cid || imFind intCnt c.cid > 0 then
+      clReachGo cs (vsInsert live c.cid) (clBumpIntCnt c.args intCnt) (c :: acc)
+    else
+      clReachGo cs live intCnt acc
+
+structure ClChunkChildR where
+  sz : Nat
+  inlined : VSet
+  deriving Inhabited
+
+def clChooseChildren (extSet : VSet) (intCnt subSize : IMap) : List (List Int) → Nat → VSet → ClChunkChildR
+  | [], sz, inl => { sz := sz, inlined := inl }
+  | d :: ds, sz, inl =>
+    if intAt 0 d == 7 && (intAt 1 d).toNat >= clTmpBase then
+      let ch := (intAt 1 d).toNat - clTmpBase
+      if !vsContains extSet ch && imFind intCnt ch == 1 then
+        let chSzI := imFind subSize ch
+        let chSz := if chSzI <= 0 then 1 else chSzI.toNat
+        if sz + chSz <= clChunkMax then
+          clChooseChildren extSet intCnt subSize ds (sz + chSz) (vsInsert inl ch)
+        else
+          clChooseChildren extSet intCnt subSize ds sz inl
+      else
+        clChooseChildren extSet intCnt subSize ds sz inl
+    else
+      clChooseChildren extSet intCnt subSize ds sz inl
+
+structure ClPlanR where
+  inlined : VSet
+  subSize : IMap
+  deriving Inhabited
+
+-- Bottom-up over `cells` (`cid` increasing: children precede parents)
+def clPlanChunks (extSet : VSet) (intCnt : IMap) : List ClCell → VSet → IMap → ClPlanR
+  | [], inl, subSize => { inlined := inl, subSize := subSize }
+  | c :: cs, inl, subSize =>
+    let r := clChooseChildren extSet intCnt subSize c.args 1 inl
+    clPlanChunks extSet intCnt cs r.inlined (imInsert subSize c.cid r.sz)
+
+structure ClEmitR where
+  next : Nat
+  var : Nat
+  stmtsRev : List N
+  deriving Inhabited
+
+structure ClEmitArgsR where
+  next : Nat
+  varsRev : List Int
+  stmtsRev : List N
+  deriving Inhabited
+
+def clEmitSSets (c size : Nat) : List Int → Nat → List N → ClEmitR
+  | off :: ty :: val :: rest, next, stmtsRev =>
+    let u := next
+    let s1 := mkVDecl u tyI64 (mkLit val) mkUnreachable
+    let s2 := mkSSet c size off.toNat u ty mkUnreachable
+    clEmitSSets c size rest (u + 1) (s2 :: s1 :: stmtsRev)
+  | _, next, stmtsRev => { next := next, var := c, stmtsRev := stmtsRev }
+
+mutual
+partial def clEmitCell (inlined : VSet) (cellMap : LTree) (declFn : IMap) (cid next : Nat) (stmtsRev : List N) : ClEmitR :=
+  let cell := clUnpackCell cid (ltFind cellMap (cid : Int))
+  let ar := clEmitArgs inlined cellMap declFn cell.args next [] stmtsRev
+  let c := ar.next
+  let sCtor := mkVDecl c tyObj (mkCtor cell.info ar.varsRev.reverse) mkUnreachable
+  clEmitSSets c cell.info.size cell.fields (c + 1) (sCtor :: ar.stmtsRev)
+
+partial def clEmitArgs (inlined : VSet) (cellMap : LTree) (declFn : IMap) :
+    List (List Int) → Nat → List Int → List N → ClEmitArgsR
+  | [], next, varsRev, stmtsRev => { next := next, varsRev := varsRev, stmtsRev := stmtsRev }
+  | d :: ds, next, varsRev, stmtsRev =>
+    let k := intAt 0 d
+    if k == 2 then
+      let v := next
+      let s1 := mkVDecl v tyTObj (mkCtor { cidx := (intAt 1 d).toNat, size := 0, ssize := 0, tid := 0 } []) mkUnreachable
+      clEmitArgs inlined cellMap declFn ds (v + 1) ((v : Int) :: varsRev) (s1 :: stmtsRev)
+    else if k == 3 then
+      let u := next
+      let v := next + 1
+      let s1 := mkVDecl u tyI64 (mkLit (intAt 1 d)) mkUnreachable
+      let s2 := mkVDecl v tyTObj (mkPrim primBox 0 0 [(u : Int)]) mkUnreachable
+      clEmitArgs inlined cellMap declFn ds (v + 1) ((v : Int) :: varsRev) (s2 :: s1 :: stmtsRev)
+    else if k == 4 then
+      let u := next
+      let v := next + 1
+      let s1 := mkVDecl u tyI64 (mkLit (intAt 1 d)) mkUnreachable
+      let s2 := mkVDecl v tyTObj (mkPrim primBoxS 0 0 [(u : Int)]) mkUnreachable
+      clEmitArgs inlined cellMap declFn ds (v + 1) ((v : Int) :: varsRev) (s2 :: s1 :: stmtsRev)
+    else if k == 5 then
+      let v := next
+      let s1 := mkVDecl v tyObj (mkLitStr "") mkUnreachable
+      clEmitArgs inlined cellMap declFn ds (v + 1) ((v : Int) :: varsRev) (s1 :: stmtsRev)
+    else if k == 6 then
+      let v := next
+      let s1 := mkVDecl v tyObj (mkLitBytes (d.drop 1)) mkUnreachable
+      clEmitArgs inlined cellMap declFn ds (v + 1) ((v : Int) :: varsRev) (s1 :: stmtsRev)
+    else
+      let ch := (intAt 1 d).toNat - clTmpBase
+      if vsContains inlined ch then
+        let sub := clEmitCell inlined cellMap declFn ch next stmtsRev
+        clEmitArgs inlined cellMap declFn ds sub.next ((sub.var : Int) :: varsRev) sub.stmtsRev
+      else
+        let fnI := imFind declFn ch
+        let fn := if fnI < 0 then 0 else fnI.toNat
+        let v := next
+        let s1 := mkVDecl v tyObj (mkFapClosed fn) mkUnreachable
+        clEmitArgs inlined cellMap declFn ds (v + 1) ((v : Int) :: varsRev) (s1 :: stmtsRev)
+end
+
+structure ClEmitDeclsR where
+  declFn : IMap
+  addedRev : List Decl
+  deriving Inhabited
+
+def clEmitDeclsGo (inlined : VSet) (cellMap : LTree) : List ClCell → Nat → IMap → List Decl → ClEmitDeclsR
+  | [], _, declFn, acc => { declFn := declFn, addedRev := acc }
+  | c :: cs, nextFn, declFn, acc =>
+    if vsContains inlined c.cid then
+      clEmitDeclsGo inlined cellMap cs nextFn declFn acc
+    else
+      let r := clEmitCell inlined cellMap declFn c.cid 1 []
+      let body := mkClosedMark (reshapeRev r.stmtsRev (mkRet [(r.var : Int)]))
+      let d : Decl := { f := nextFn, xs := [], rets := [tyObj], body := body, ext := false }
+      clEmitDeclsGo inlined cellMap cs (nextFn + 1) (imInsert declFn c.cid nextFn) (d :: acc)
+
+mutual
+partial def clRemapGo (declFn : IMap) (n : N) : N :=
+  if n.op == opVDecl then
+    let e := vdeclExpr n
+    let e1 :=
+      if fapClosed e && fapFn e >= clTmpBase then
+        let fnI := imFind declFn (fapFn e - clTmpBase)
+        if fnI >= 0 then mkFapClosed fnI.toNat else e
+      else e
+    { n with kids := [e1, clRemapGo declFn (bodyOf n)] }
+  else if n.op == opJDecl then { n with kids := [clRemapGo declFn (jdeclBody n), clRemapGo declFn (bodyOf n)] }
+  else if n.op == opCase then { n with kids := clRemapAlts declFn (caseAlts n) }
+  else if isTerminal n then n
+  else setBody n (clRemapGo declFn (bodyOf n))
+partial def clRemapAlts (declFn : IMap) : List N → List N
+  | [] => []
+  | alt :: alts => altSetBody alt (clRemapGo declFn (altBody alt)) :: clRemapAlts declFn alts
+end
+
+def clRemapDeclsGo (declFn : IMap) : List Decl → List Decl → List Decl
+  | [], acc => acc.reverse
+  | (d :: ds), acc =>
+    let d1 := if d.ext then d else { d with body := clRemapGo declFn d.body }
+    clRemapDeclsGo declFn ds (d1 :: acc)
+
+structure ClRes where
+  decls : List Decl
+  pool : ClPool
+  deriving Inhabited
+
+def clFinalize (realDecls : List Decl) (p : ClPool) : ClRes :=
+  if p.cellsRev.isEmpty then { decls := realDecls, pool := p }
+  else
+    let extSet := clTmpRefsDecls realDecls vsEmpty
+    if vsIsEmpty extSet then { decls := realDecls, pool := { p with sigma := 0 } }
+    else
+      let reach := clReachGo p.cellsRev extSet imEmpty []
+      let plan := clPlanChunks extSet reach.intCnt reach.cells vsEmpty imEmpty
+      let em := clEmitDeclsGo plan.inlined p.cellMap reach.cells realDecls.length imEmpty []
+      let real2 := clRemapDeclsGo em.declFn realDecls []
+      { decls := real2 ++ em.addedRev.reverse, pool := { p with sigma := reach.cells.length } }
+
+def clDeclsGo (narrow : Bool) (nImg : Nat) : List Decl → ClPool → List Decl → ClRes
+  | [], p, acc => clFinalize acc.reverse p
+  | d :: ds, p, acc =>
+    if d.ext || (nImg > 0 && isOwnFn nImg d.f) then
+      clDeclsGo narrow nImg ds p (d :: acc)
+    else
+      let writes := clWriteCounts d.body it0
+      let r := clWalk narrow writes lt0 d.body p
+      let d2 := if r.changed then { d with body := elimDeadBody true r.node } else d
+      clDeclsGo narrow nImg ds r.pool (d2 :: acc)
+
+def closedCellsRun (narrow : Bool) (nImg : Nat) (decls : List Decl) : ClRes :=
+  let p0 : ClPool := { cache := ckt0, cellsRev := [], cellMap := lt0 }
+  if !declsDense 0 decls then { decls := decls, pool := p0 }
+  else clDeclsGo narrow nImg decls p0 []
+
+def closedCellsWith (narrow : Bool) (nImg : Nat) (decls : List Decl) : List Decl :=
+  (closedCellsRun narrow nImg decls).decls
+
+def closedCells (decls : List Decl) : List Decl :=
+  closedCellsWith false 0 decls
 
 end Lrc

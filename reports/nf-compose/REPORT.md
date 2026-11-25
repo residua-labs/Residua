@@ -17,7 +17,7 @@ sequences and dispatch.
   pinned model and the `NfCompose` theorem sources are the exact bytes
   the check ran on.
 - Axioms: `propext` only, inside the repository's permitted axiom set.
-- The build passed on an independent host, exit code 0;
+- The build passed on an independent host, exit code `0`;
   verified at commit `57a1c7d0b17158041b811c2fcb1592bf73f8e4d2` on the
   development main line and audited at `85135fd8b6`.
 

@@ -17,8 +17,8 @@
 # The widths' way from the image: the widths of a signature in reverse; a result's width taken from the first parameter; a
 # function given the widths of the function after it.
 # Not a row: a width that is lost on the way (a list of widths left empty, a result's width read past the list). The
-# field is then a word and every value is right; what shows it is the node's size (reports/backend-opt-fable/LAND-PACKW.md).
-# (Until reports/backend-opt-fable/LAND-PACK32.md the pass kept fields of two and four bytes words without `narrow`; it
+# field is then a word and every value is right; what shows it is the node's size (the LAND-PACKW revision).
+# (Until the LAND-PACK32 revision the pass kept fields of two and four bytes words without `narrow`; it
 # lays them out in both layouts now, and the rows below hold for both.)
 # Not a row: the scalar image of a constant cell with a narrow field (lib/lrc/Closed.rsd `clImage`). The interpreter reads a
 # constant cell's fields and not its bytes, and no module of the sample is compiled with constant cells.

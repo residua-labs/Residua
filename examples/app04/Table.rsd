@@ -1,0 +1,152 @@
+-- provenance: ours (searched: examples/, lib/, glue/)
+-- examples/app04/Table.rsd — String formatting for Float summary tables and diagnostics.
+
+import Stats
+
+structure SciVal where
+  scaled : Nat
+  exp10 : Int
+  deriving Inhabited
+
+partial def tblRepChar : Nat -> Char -> List Char
+  | 0, _ => []
+  | k + 1, c => c :: tblRepChar k c
+
+def tblRepeat (n : Nat) (c : Char) : String :=
+  String.mk (tblRepChar n c)
+
+def tblMaxNat (a b : Nat) : Nat :=
+  if a < b then b else a
+
+def tblPadLeft (w : Nat) (ch : Char) (s : String) : String :=
+  let len : Nat := s.length;
+  if len >= w then s else tblRepeat (w - len) ch ++ s
+
+def tblPadRight (w : Nat) (ch : Char) (s : String) : String :=
+  let len : Nat := s.length;
+  if len >= w then s else s ++ tblRepeat (w - len) ch
+
+partial def tblSciDown : Nat -> Float -> Int -> SciVal
+  | 0, cur, ex => { scaled := (Float.toUInt64 (Float.round (cur * 1000000.0))).toNat, exp10 := ex : SciVal }
+  | k + 1, cur, ex =>
+    if cur >= 10000000000.0 then tblSciDown k (cur / 10000000000.0) (ex + 10)
+    else if cur >= 10.0 then tblSciDown k (cur / 10.0) (ex + 1)
+    else { scaled := (Float.toUInt64 (Float.round (cur * 1000000.0))).toNat, exp10 := ex : SciVal }
+
+partial def tblSciUp : Nat -> Float -> Int -> SciVal
+  | 0, cur, ex => { scaled := (Float.toUInt64 (Float.round (cur * 1000000.0))).toNat, exp10 := ex : SciVal }
+  | k + 1, cur, ex =>
+    if cur < 0.0000000001 then tblSciUp k (cur * 10000000000.0) (ex - 10)
+    else if cur < 1.0 then tblSciUp k (cur * 10.0) (ex - 1)
+    else { scaled := (Float.toUInt64 (Float.round (cur * 1000000.0))).toNat, exp10 := ex : SciVal }
+
+def formatFloatSci (signStr : String) (sv0 : SciVal) : String :=
+  let sv : SciVal :=
+    if sv0.scaled >= 10000000 then { scaled := 1000000, exp10 := sv0.exp10 + 1 : SciVal }
+    else sv0;
+  let expSign : String := if sv.exp10 < 0 then "-" else "+";
+  let expMag : Nat := if sv.exp10 < 0 then Int.toNat (0 - sv.exp10) else Int.toNat sv.exp10;
+  signStr ++ toString (sv.scaled / 1000000) ++ "." ++
+    tblPadLeft 6 (Char.ofNat 48) (toString (sv.scaled % 1000000)) ++
+    "e" ++ expSign ++ tblPadLeft 2 (Char.ofNat 48) (toString expMag)
+
+def formatFloatFixed (signStr : String) (ax : Float) : String :=
+  let scaled : Nat := (Float.toUInt64 (Float.round (ax * 1000000.0))).toNat;
+  let whole : Nat := scaled / 1000000;
+  let frac : Nat := scaled % 1000000;
+  signStr ++ toString whole ++ "." ++ tblPadLeft 6 (Char.ofNat 48) (toString frac)
+
+def formatFloatFinite (x : Float) : String :=
+  let negZ : Bool := statsIsNegZero x;
+  let neg : Bool := if x < 0.0 then true else negZ;
+  let signStr : String := if neg then "-" else "";
+  let ax : Float := Float.abs x;
+  let isZero : Bool := ax == 0.0;
+  if isZero then
+    signStr ++ "0.000000"
+  else if ax >= 0.0001 && ax < 1000000000000.0 then
+    formatFloatFixed signStr ax
+  else if ax >= 1000000000000.0 then
+    formatFloatSci signStr (tblSciDown 400 ax 0)
+  else
+    formatFloatSci signStr (tblSciUp 400 ax 0)
+
+def formatFloat (x : Float) : String :=
+  let isNan : Bool := Float.isNaN x;
+  let isPosInf : Bool := statsIsPosInf x;
+  let isNegInf : Bool := statsIsNegInf x;
+  if isNan then "NaN"
+  else if isPosInf then "inf"
+  else if isNegInf then "-inf"
+  else formatFloatFinite x
+
+def tblRow (wKey wVal : Nat) (k v : String) : String :=
+  let sp : Char := Char.ofNat 32;
+  "| " ++ tblPadRight wKey sp k ++ " | " ++ tblPadLeft wVal sp v ++ " |\n"
+
+def tblRule (wKey wVal : Nat) : String :=
+  let dash : Char := Char.ofNat 45;
+  "+-" ++ tblRepeat wKey dash ++ "-+-" ++ tblRepeat wVal dash ++ "-+\n"
+
+def renderTable (s : Summary) : String :=
+  let cStr : String := toString s.count;
+  let minStr : String := formatFloat s.min;
+  let maxStr : String := formatFloat s.max;
+  let meanStr : String := formatFloat s.mean;
+  let varStr : String := formatFloat s.variance;
+  let wKey : Nat := 8;
+  let w1 : Nat := tblMaxNat 14 cStr.length;
+  let w2 : Nat := tblMaxNat w1 minStr.length;
+  let w3 : Nat := tblMaxNat w2 maxStr.length;
+  let w4 : Nat := tblMaxNat w3 meanStr.length;
+  let wVal : Nat := tblMaxNat w4 varStr.length;
+  let rule : String := tblRule wKey wVal;
+  rule ++
+  tblRow wKey wVal "metric" "value" ++
+  rule ++
+  tblRow wKey wVal "count" cStr ++
+  tblRow wKey wVal "min" minStr ++
+  tblRow wKey wVal "max" maxStr ++
+  tblRow wKey wVal "mean" meanStr ++
+  tblRow wKey wVal "variance" varStr ++
+  rule
+
+partial def tblLowerChars : List Char -> List Char
+  | [] => []
+  | c :: cs => Char.ofNat (statsLowerCode c) :: tblLowerChars cs
+
+partial def tblHasPrefix : List Char -> List Char -> Bool
+  | [], _ => true
+  | _ :: _, [] => false
+  | p :: ps, x :: xs =>
+    if p.toNat == x.toNat then tblHasPrefix ps xs else false
+
+partial def tblContainsChars : List Char -> List Char -> Bool
+  | pat, [] =>
+    match pat with
+    | [] => true
+    | _ :: _ => false
+  | pat, x :: xs =>
+    if tblHasPrefix pat (x :: xs) then true else tblContainsChars pat xs
+
+def tblContainsSub (hay needle : String) : Bool :=
+  tblContainsChars needle.toList hay.toList
+
+def classifyIoError (raw : String) : String :=
+  let low : String := String.mk (tblLowerChars raw.toList);
+  if tblContainsSub low "permission" || tblContainsSub low "eacces" || tblContainsSub low "eperm" then
+    "permission_denied"
+  else if tblContainsSub low "no_such_file" || tblContainsSub low "no such file" ||
+          tblContainsSub low "not found" || tblContainsSub low "does not exist" ||
+          tblContainsSub low "enoent" then
+    "no_such_file"
+  else low
+
+def renderUsageError (u : Nat) : String :=
+  "error: usage: app04 <input-file> <output-file>\n"
+
+def renderParseError (lineNo : Nat) (badText : String) : String :=
+  "error: line " ++ toString lineNo ++ ": malformed number '" ++ badText ++ "'\n"
+
+def renderIoError (op path rawReason : String) : String :=
+  "error: " ++ op ++ " " ++ path ++ ": " ++ classifyIoError rawReason ++ "\n"

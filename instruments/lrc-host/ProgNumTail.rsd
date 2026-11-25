@@ -1,0 +1,50 @@
+-- micro program for a list of numbers read from its node as the whole body of a function (lib/lrc/FromWire.rsd
+-- "Numbers in nodes", `trTail`): the read stands in tail position. Taken apart as a `let` there, it was a read of
+-- the node's f8 as the wire's list and a call of the image's `unpack`, and one such read made every read of the
+-- node's class a call of `unpack` that builds the list again. The values of the row are any translation's; the
+-- cells the run allocates are the direct form's (instruments/lrc-host/Peaks.tsv).
+structure T where
+  n : Nat
+  js : List Int
+  ns : List Nat
+  kids : List T
+
+-- the whole body is the read
+def jsOf (t : T) : List Int := t.js
+
+def nsOf (t : T) : List Nat := t.ns
+
+def leaf (k : Nat) : T :=
+  { n := k, js := [Int.ofNat k, 0 - Int.ofNat k * 3, 7], ns := [k, k + k], kids := [] : T }
+
+def node (a b : T) : T :=
+  { n := a.n + b.n + 1, js := (Int.ofNat a.n - Int.ofNat b.n) :: a.js, ns := b.ns, kids := [a, b] : T }
+
+def build : Nat → Nat → T
+  | 0, k => leaf k
+  | d + 1, k => node (build d (2 * k)) (build d (2 * k + 1))
+
+def sumI : List Int → Int
+  | [] => 0
+  | x :: xs => x + sumI xs
+
+def sumN : List Nat → Nat
+  | [] => 0
+  | x :: xs => x + sumN xs
+
+-- the lists read through the two functions, and read where they stand
+def walk : Nat → T → Int
+  | 0, _ => 0
+  | m + 1, t =>
+    match t.kids with
+    | [] => sumI (jsOf t) + Int.ofNat (sumN (nsOf t)) + Int.ofNat t.js.length
+    | a :: rest =>
+      match rest with
+      | [] => sumI (jsOf t) + walk m a
+      | b :: _ => sumI (jsOf t) + Int.ofNat (sumN (nsOf t)) + Int.ofNat t.js.length + walk m a - walk m b
+
+def numTail (d : Nat) : List Int :=
+  [walk (d + 2) (build d 1), walk 3 (build d 5), sumI (jsOf (build 2 9)), Int.ofNat (sumN (nsOf (build 1 3)))]
+
+-- the entry of the row: no argument
+def tailAt4 : List Int := numTail 4

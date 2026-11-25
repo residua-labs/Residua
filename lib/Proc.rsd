@@ -27,31 +27,42 @@ structure Cont where
   code : Int
   is : List Int
   bs : List (List Int)
+  cs : List (List (List Int))
+
+def revCGo : List Cont -> List Cont -> List Cont
+  | [], acc => acc
+  | k :: rest, acc => revCGo rest (k :: acc)
+
+def revC (xs : List Cont) : List Cont := revCGo xs []
 
 structure Proc where
   tag : Int
   res : List Int
   req : List Int
   rep : List Int
-  conts : List Cont
+  -- contsF holds consumable frames oldest-first; contsB holds bound frames
+  -- newest-first. qNorm reverses contsB into contsF once the front runs
+  -- out, so a frame crosses the reverse at most once and bind stays O(1).
+  contsF : List Cont
+  contsB : List Cont
 
 def pure (r : List Int) : Proc :=
-  { tag := 0, res := r, req := [], rep := [], conts := [] : Proc }
+  { tag := 0, res := r, req := [], rep := [], contsF := [], contsB := [] : Proc }
 
 def request (t : List Int) : Proc :=
-  { tag := 1, res := [], req := t, rep := [], conts := [] : Proc }
+  { tag := 1, res := [], req := t, rep := [], contsF := [], contsB := [] : Proc }
 
 -- bind queues the continuation. done lifts to a resume so the queued frame
--- sees the carried bytes; await/resume append at the end of the frame list.
+-- sees the carried bytes; await/resume cons onto contsB in O(1).
 def bind (m : Proc) (k : Cont) : Proc :=
-  if m.tag == 0 then { tag := 2, res := [], req := [], rep := m.res, conts := [k] : Proc }
-  else { tag := m.tag, res := m.res, req := m.req, rep := m.rep, conts := m.conts ++ [k] : Proc }
+  if m.tag == 0 then { tag := 2, res := [], req := [], rep := m.res, contsF := [], contsB := [k] : Proc }
+  else { tag := m.tag, res := m.res, req := m.req, rep := m.rep, contsF := m.contsF, contsB := k :: m.contsB : Proc }
 
 -- Mutant of bind: queues the continuation at the FRONT of the frame list, so
 -- later binds run before earlier ones. procGate checks they disagree.
 def bindM (m : Proc) (k : Cont) : Proc :=
-  if m.tag == 0 then { tag := 2, res := [], req := [], rep := m.res, conts := [k] : Proc }
-  else { tag := m.tag, res := m.res, req := m.req, rep := m.rep, conts := [k] ++ m.conts : Proc }
+  if m.tag == 0 then { tag := 2, res := [], req := [], rep := m.res, contsF := [], contsB := [k] : Proc }
+  else { tag := m.tag, res := m.res, req := m.req, rep := m.rep, contsF := k :: m.contsF, contsB := m.contsB : Proc }
 
 def nthP : List Int -> Int -> Int
   | [], _ => 0
@@ -61,7 +72,7 @@ def nthB : List (List Int) -> Int -> List Int
   | [], _ => []
   | x :: xs, i => if i == 0 then x else nthB xs (i - 1)
 
-def cont0 (u : Nat) : Cont := { code := -1, is := [], bs := [] : Cont }
+def cont0 (u : Nat) : Cont := { code := -1, is := [], bs := [], cs := [] : Cont }
 
 def nthC : List Cont -> Int -> Cont
   | [], _ => cont0 0
@@ -78,6 +89,12 @@ def pnI (xs : List Int) (i : Int) : Int := nthP xs i
 def pnB (xs : List (List Int)) (i : Int) : List Int := nthB xs i
 def pnC (xs : List Cont) (i : Int) : Cont := nthC xs i
 
+def nthQ : List (List (List Int)) -> Int -> List (List Int)
+  | [], _ => []
+  | x :: xs, i => if i == 0 then x else nthQ xs (i - 1)
+
+def pnQ (xs : List (List (List Int))) (i : Int) : List (List Int) := nthQ xs i
+
 -- Table lookup: each entry is [reqBytes, repBytes]. Returns [rep] on hit, []
 -- on miss so an empty R-message is not confused with a miss.
 def findR : List (List (List Int)) -> List Int -> List (List Int)
@@ -85,12 +102,17 @@ def findR : List (List (List Int)) -> List Int -> List (List Int)
   | e :: tab, q =>
     if eqB (nthB e 0) q then [nthB e 1] else findR tab q
 
-def missP (u : Nat) : Proc := { tag := 9, res := [113, 109, 105, 115, 115], req := [], rep := [], conts := [] : Proc }
+def missP (u : Nat) : Proc := { tag := 9, res := [113, 109, 105, 115, 115], req := [], rep := [], contsF := [], contsB := [] : Proc }
 
 def contsNil : Nat -> List Cont -> Bool
   | 0, [] => true
   | 0, _ => false
   | n + 1, xs => contsNil n xs
+
+-- qNorm moves bound frames into the consumable front once it runs out; a
+-- frame crosses the reverse at most once.
+def qNorm (p : Proc) : Proc :=
+  if contsNil 400 p.contsF then { tag := p.tag, res := p.res, req := p.req, rep := p.rep, contsF := revC p.contsB, contsB := [] : Proc } else p
 
 -- pSeq appends queued frames to a result Proc's outer frame list; used by the
 -- generated __drive after __apply produces the next Proc. A finished result
@@ -99,19 +121,28 @@ def contsNil : Nat -> List Cont -> Bool
 def pSeq (p : Proc) (ks : List Cont) : Proc :=
     if p.tag == 0 then
       if contsNil 400 ks then p
-      else { tag := 2, res := [], req := [], rep := p.res, conts := ks : Proc }
-    else { tag := p.tag, res := p.res, req := p.req, rep := p.rep, conts := p.conts ++ ks : Proc }
+      else { tag := 2, res := [], req := [], rep := p.res, contsF := ks, contsB := [] : Proc }
+    else { tag := p.tag, res := p.res, req := p.req, rep := p.rep, contsF := p.contsF ++ revC p.contsB ++ ks, contsB := [] : Proc }
+
+-- pSeqQ is pSeq with the leftover queue still split as (rf, rb), so the
+-- library drivers keep the live tail pointer instead of materialising it.
+def pSeqQ (p : Proc) (rf rb : List Cont) : Proc :=
+    if p.tag == 0 then
+      if contsNil 400 rf && contsNil 400 rb then p
+      else { tag := 2, res := [], req := [], rep := p.res, contsF := rf, contsB := rb : Proc }
+    else { tag := p.tag, res := p.res, req := p.req, rep := p.rep, contsF := p.contsF ++ revC p.contsB ++ rf, contsB := rb : Proc }
 
 -- Accessors used by generated apply/drive bodies (dot-field names are not
 -- reusable spans in the pool, so generated code calls these instead).
 def cCode (k : Cont) : Int := k.code
 def cIs (k : Cont) : List Int := k.is
 def cBs (k : Cont) : List (List Int) := k.bs
+def cCs (k : Cont) : List (List (List Int)) := k.cs
 def pTag (p : Proc) : Int := p.tag
 def pRes (p : Proc) : List Int := p.res
 def pReq (p : Proc) : List Int := p.req
 def pRep (p : Proc) : List Int := p.rep
-def pConts (p : Proc) : List Cont := p.conts
+def pConts (p : Proc) : List Cont := p.contsF ++ revC p.contsB
 
 -- pNat/pBool decode env slots that hold Nat/Bool captures; iNat lifts a
 -- captured Nat into the Int `is` slot.
@@ -139,12 +170,12 @@ def drive (n : Nat) (p : Proc) (tab : List (List (List Int))) : Proc := missP 0
 def procGate : Int :=
     let t : List Int := [1, 2, 3];
     let m : Proc := request t;
-    let k1 : Cont := { code := 1, is := [], bs := [] : Cont };
-    let k2 : Cont := { code := 2, is := [], bs := [] : Cont };
+    let k1 : Cont := { code := 1, is := [], bs := [], cs := [] : Cont };
+    let k2 : Cont := { code := 2, is := [], bs := [], cs := [] : Cont };
     let a : Proc := bind (bind m k1) k2;
     let b : Proc := bindM (bindM m k1) k2;
-    let ah : Cont := pnC a.conts 0;
-    let bh : Cont := pnC b.conts 0;
+    let ah : Cont := pnC (qNorm a).contsF 0;
+    let bh : Cont := pnC (qNorm b).contsF 0;
     if ah.code == 1 && bh.code == 2 then 0 else 1
 
 -- ============================================================================
@@ -178,9 +209,18 @@ structure RC where
   cs : List Cont
   off : Int
 
+structure RLLL where
+  ok : Bool
+  qs : List (List (List Int))
+  off : Int
+
 def nLenLL : List (List Int) -> Int -> Int
   | [], n => n
   | _ :: rest, n => nLenLL rest (n + 1)
+
+def nLenLLL : List (List (List Int)) -> Int -> Int
+  | [], n => n
+  | _ :: rest, n => nLenLLL rest (n + 1)
 
 def nLenConts : List Cont -> Int -> Int
   | [], n => n
@@ -189,6 +229,10 @@ def nLenConts : List Cont -> Int -> Int
 def nRevLL : List (List Int) -> List (List Int) -> List (List Int)
   | [], acc => acc
   | x :: rest, acc => nRevLL rest (x :: acc)
+
+def nRevLLL : List (List (List Int)) -> List (List (List Int)) -> List (List (List Int))
+  | [], acc => acc
+  | x :: rest, acc => nRevLLL rest (x :: acc)
 
 def nRevC : List Cont -> List Cont -> List Cont
   | [], acc => acc
@@ -205,6 +249,17 @@ def rdLL (bs : List Int) (off : Int) : RLL :=
   if off < 0 || off >= nLen bs 0 then { ok := false, bs := [], off := 0 : RLL }
   else rdLLGo bs (off + 1) (Int.toNat (nGet bs off)) []
 
+def rdLLLGo : List Int -> Int -> Nat -> List (List (List Int)) -> RLLL
+  | _, off, 0, acc => { ok := true, qs := nRevLLL acc [], off := off : RLLL }
+  | bs, off, n + 1, acc =>
+    let r : RLL := rdLL bs off;
+    if !r.ok then { ok := false, qs := [], off := 0 : RLLL }
+    else rdLLLGo bs r.off n (r.bs :: acc)
+
+def rdLLL (bs : List Int) (off : Int) : RLLL :=
+  if off < 0 || off >= nLen bs 0 then { ok := false, qs := [], off := 0 : RLLL }
+  else rdLLLGo bs (off + 1) (Int.toNat (nGet bs off)) []
+
 def encBsFlat : List (List Int) -> List Int
   | [] => []
   | x :: rest => nAppend (pLP x) (encBsFlat rest)
@@ -212,8 +267,15 @@ def encBsFlat : List (List Int) -> List Int
 def encBs (xss : List (List Int)) : List Int :=
   nLenLL xss 0 :: encBsFlat xss
 
+def encCsFlat : List (List (List Int)) -> List Int
+  | [] => []
+  | x :: rest => nAppend (encBs x) (encCsFlat rest)
+
+def encCs (xsss : List (List (List Int))) : List Int :=
+  nLenLLL xsss 0 :: encCsFlat xsss
+
 def encCont (k : Cont) : List Int :=
-  nAppend (k.code :: pLP k.is) (encBs k.bs)
+  nAppend (nAppend (k.code :: pLP k.is) (encBs k.bs)) (encCs k.cs)
 
 def encContsGo : List Cont -> List Int -> List Int
   | [], acc => acc
@@ -226,7 +288,7 @@ def encP (p : Proc) : List Int :=
   let a : List Int := nAppend (p.tag :: []) (pLP p.res);
   let b : List Int := nAppend a (pLP p.req);
   let c : List Int := nAppend b (pLP p.rep);
-  nAppend c (encConts p.conts)
+  nAppend c (encConts (pConts p))
 
 def decContsGo : List Int -> Int -> Nat -> List Cont -> RC
   | _, off, 0, acc => { ok := true, cs := nRevC acc [], off := off : RC }
@@ -239,7 +301,10 @@ def decContsGo : List Int -> Int -> Nat -> List Cont -> RC
       else
         let bsR : RLL := rdLL bs isR.off;
         if !bsR.ok then { ok := false, cs := [], off := 0 : RC }
-        else decContsGo bs bsR.off n ({ code := code, is := isR.bs, bs := bsR.bs : Cont } :: acc)
+        else
+          let csR : RLLL := rdLLL bs bsR.off;
+          if !csR.ok then { ok := false, cs := [], off := 0 : RC }
+          else decContsGo bs csR.off n ({ code := code, is := isR.bs, bs := bsR.bs, cs := csR.qs : Cont } :: acc)
 
 def decConts (bs : List Int) (off : Int) : RC :=
   if off < 0 || off >= nLen bs 0 then { ok := false, cs := [], off := 0 : RC }
@@ -262,7 +327,7 @@ def decP (bs : List Int) (off : Int) : PD :=
           let cs : RC := decConts bs r3.off;
           if !cs.ok then bad
           else
-            let p : Proc := { tag := tag, res := r1.bs, req := r2.bs, rep := r3.bs, conts := cs.cs : Proc };
+            let p : Proc := { tag := tag, res := r1.bs, req := r2.bs, rep := r3.bs, contsF := cs.cs, contsB := [] : Proc };
             { ok := true, p := p, off := cs.off : PD }
 
 -- Named refusals for the step layer (byte lists, reported as residues).
@@ -294,9 +359,9 @@ def goP : Nat -> Proc -> POut
     else if p.tag == 9 then { st := [], act := 2, out := p.res : POut }
     else if p.tag == 1 then pSend p
     else if p.tag == 2 then
-      let k0 : Cont := pnC p.conts 0;
-      let rest : List Cont := dropC 400 p.conts;
-      goP k (pSeq (apply k0 p.rep) rest)
+      let q : Proc := qNorm p;
+      let k0 : Cont := pnC q.contsF 0;
+      goP k (pSeqQ (apply k0 q.rep) (dropC 400 q.contsF) q.contsB)
     else pRefuse (pResProtocol 0)
 
 def pFrameU32 (b : List Int) : Int :=
@@ -306,9 +371,9 @@ def pFrameU32 (b : List Int) : Int :=
 def pFeed (p : Proc) (frame : List Int) : POut :=
   if p.tag != 1 then pRefuse (pResProtocol 0)
   else
-    let k0 : Cont := pnC p.conts 0;
-    let rest : List Cont := dropC 400 p.conts;
-    goP 600 (pSeq (apply k0 frame) rest)
+    let q : Proc := qNorm p;
+    let k0 : Cont := pnC q.contsF 0;
+    goP 600 (pSeqQ (apply k0 frame) (dropC 400 q.contsF) q.contsB)
 
 -- stB = [1, need] ++ lp(acc) ++ encP(proc); rB = [evt] ++ bytes or [] after send
 def stepResume (stB rB : List Int) : POut :=
@@ -343,13 +408,104 @@ def stepResume (stB rB : List Int) : POut :=
           else if al == need then pFeed d.p acc
           else pRefuse (pResSizeMis 0)
 
--- drive9: the execution-host entry. Cold call passes the script's Proc value
--- (f_main's result ptr) with stB = rB = []; warm calls pass stB from the
--- previous result's lp(st) slot and rB = [] or [evt] ++ bytes.
-def drive9 (p : Proc) (stB rB : List Int) : List Int :=
-  let o : POut := if nLen stB 0 == 0 then goP 600 p else stepResume stB rB;
-  o.act :: nAppend (pLP o.out) (pLP o.st)
-
 -- Effect refusal belongs to the execution runtime, not the shared 9P API.
 def refuseP (res : List Int) : Proc :=
-  { tag := 9, res := res, req := [], rep := [], conts := [] : Proc }
+  { tag := 9, res := res, req := [], rep := [], contsF := [], contsB := [] : Proc }
+
+-- ============================================================================
+-- Structured step entry: driveS is the same state machine as drive9 with the
+-- continuation passed as a live Proc value instead of an lp-encoded stB, so a
+-- host that keeps the guest heap resident across calls copies only the
+-- request/response bytes per step. need = 0 is a cold call (p is the proc);
+-- need = 0-7 is a self-describing probe (act 7, out = "rsdS") a host uses to
+-- find this export among the f-functions.
+-- ============================================================================
+
+structure PStep where
+  act : Int
+  out : List Int
+  need : Int
+  acc : List Int
+  p : Proc
+
+def stepRefuseS (res : List Int) : PStep :=
+  { act := 2, out := res, need := 0, acc := [], p := missP 0 : PStep }
+
+def pAskS (need : Int) (acc : List Int) (p : Proc) : PStep :=
+  { act := 3, out := (need - nLen acc 0) :: [], need := need, acc := acc, p := p : PStep }
+
+def goS : Nat -> Proc -> PStep
+  | 0, _ => stepRefuseS (pResBudget 0)
+  | k + 1, p =>
+    if p.tag == 0 then { act := 1, out := p.res, need := 0, acc := [], p := p : PStep }
+    else if p.tag == 9 then stepRefuseS p.res
+    else if p.tag == 1 then { act := 0, out := p.req, need := 4, acc := [], p := p : PStep }
+    else if p.tag == 2 then
+      let q : Proc := qNorm p;
+      let k0 : Cont := pnC q.contsF 0;
+      goS k (pSeqQ (apply k0 q.rep) (dropC 400 q.contsF) q.contsB)
+    else stepRefuseS (pResProtocol 0)
+
+def feedS (p : Proc) (frame : List Int) : PStep :=
+  if p.tag != 1 then stepRefuseS (pResProtocol 0)
+  else
+    let q : Proc := qNorm p;
+    let k0 : Cont := pnC q.contsF 0;
+    goS 600 (pSeqQ (apply k0 frame) (dropC 400 q.contsF) q.contsB)
+
+-- warm step: p is suspended inside a device read with `need` bytes wanted and
+-- `acc` bytes accumulated; rB = [] asks again, else [evt] ++ bytes.
+def stepS (p : Proc) (need : Int) (acc rB : List Int) : PStep :=
+  if nLen rB 0 == 0 then pAskS need acc p
+  else
+    let evt : Int := nGet rB 0;
+    let nbytes : List Int := nSlice rB 1 (nLen rB 0 - 1);
+    if evt == 1 then
+      if nLen acc 0 > 0 || nLen nbytes 0 > 0 then stepRefuseS (pResTrunc 0) else stepRefuseS (pResEOS 0)
+    else if evt == 2 then stepRefuseS (pResClosed 0)
+    else if evt == 4 then stepRefuseS (pResTimeout 0)
+    else if evt != 0 then stepRefuseS (pResUnkEvt 0)
+    else
+      let acc2 : List Int := nAppend acc nbytes;
+      let al : Int := nLen acc2 0;
+      if need == 4 then
+        if al < 4 then pAskS 4 acc2 p
+        else
+          let sz : Int := pFrameU32 acc2;
+          if sz < 7 then stepRefuseS (pResBadSize 0)
+          else if sz > 8192 then stepRefuseS (pResMsize 0)
+          else if al == sz then feedS p acc2
+          else if al < sz then pAskS sz acc2 p
+          else stepRefuseS (pResSizeMis 0)
+      else
+        if al < need then pAskS need acc2 p
+        else if al == need then feedS p acc2
+        else stepRefuseS (pResSizeMis 0)
+
+def driveS (p : Proc) (need : Int) (acc rB : List Int) : PStep :=
+  if need == 0 - 7 then
+    { act := 7, out := [114, 115, 100, 83], need := 0 - 7, acc := [], p := p : PStep }
+  else if need == 0 then goS 600 p
+  else stepS p need acc rB
+
+-- The drive9 encoding of a structured step: stB' = [1,need] ++ lp(acc) ++
+-- encP(p) while a device exchange is pending, [] on a terminal act.
+def stOfS (s : PStep) : List Int :=
+  if s.act == 0 || s.act == 3 then
+    nAppend ([1, s.need] ++ pLP s.acc) (encP s.p)
+  else []
+
+-- drive9: the execution-host entry, unchanged for every input. Cold call
+-- passes the script's Proc value (f_main's result ptr) with stB = rB = [];
+-- warm calls pass stB from the previous result's lp(st) slot and rB = [] or
+-- [evt] ++ bytes. Re-implemented on driveS so a resident host can call the
+-- structured entry instead.
+def drive9 (p : Proc) (stB rB : List Int) : List Int :=
+  let s : PStep :=
+    if nLen stB 0 == 0 then goS 600 p
+    else
+      let accR : RN := rdL stB 2;
+      let d : PD := decP stB accR.off;
+      if nLen stB 0 < 3 || !accR.ok || !d.ok || nGet stB 0 != 1 then stepRefuseS (pResProtocol 0)
+      else stepS d.p (nGet stB 1) accR.bs rB;
+  s.act :: nAppend (pLP s.out) (pLP (stOfS s))

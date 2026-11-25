@@ -1,0 +1,105 @@
+-- micro program for a match on a value inside the arm for "any other constructor" of a match on the same value
+-- (lib/lrc/FromWire.rsd "A case that the path decides", `dcGo`). The front end writes the inner match once in every
+-- alternative of the outer one, with all its alternatives: under the alternative of one constructor, the inner
+-- alternatives of the others do not run.
+-- `names` is the shape of two functions of the SQL engine (2026-11-22). The last constructor of `E` is matched and never built; its arm hands its first child on as an `E`
+-- and reads the list of its second child, and at those places another constructor of `E` holds an `S`. Kept as
+-- if it could run, that arm makes one class of `S` and `E` with one layout for every tag (lib/lrc/FromWire.rsd
+-- `layMergeTag`): `S.zero` has the place of a child it does not have (`padCell`), filled, and a read of `S.mk`'s
+-- child asks whether its place is filled. The child is a bare integer, and the rows hold the numbers whose boxes
+-- were or could be taken for what fills an empty place: 255 (the constructor 255 without fields stood there) and
+-- 245 (the tag of the cell that stands there now), with their neighbours, a negative number and zero. Not kept,
+-- the classes are apart and no place is filled: instruments/lrc-host/Peaks.tsv has the row's cells.
+-- `sTwice`: the same on a parameter; under the alternative for the rest (the type's last constructor) nothing is
+-- decided and the inner match stays. `tNested`: a type that is a sum and no node; the child of `T.t1` goes to its
+-- reader in an inner alternative and nowhere else.
+-- The rows' values are stock Lean's.
+inductive S where
+  | zero : S
+  | mk : Int → S
+  | wrap : S → S
+
+inductive E where
+  | e0 : E
+  | e1 : S → E
+  | e2 : List Int → E
+  | e6 : S → S → E
+  | e3 : E → List Int → E
+
+inductive EL where
+  | nil : EL
+  | cons : E → EL → EL
+
+inductive U where
+  | u0 : U
+  | u1 : Int → U
+
+inductive T where
+  | t0 : T
+  | t1 : U → T
+  | t2 : Int → T
+
+def sOf : Int → S
+  | n => if n == 0 then S.zero else S.mk n
+
+def sVal : S → Int
+  | S.zero => 0
+  | S.mk e => e
+  | S.wrap s => sVal s
+
+def val : E → Int
+  | E.e1 s => sVal s
+  | E.e6 a b => sVal a * 1000 + sVal b
+  | _ => 7
+
+def names : EL → List (List Int) → List (List Int)
+  | EL.nil, acc => acc
+  | EL.cons x xs, acc =>
+    match x with
+    | E.e2 qn => names xs (qn :: acc)
+    | _ =>
+      let inm : List Int :=
+        match x with
+        | E.e3 e nm => val e :: nm
+        | E.e2 _ => [42]
+        | _ => []
+      names xs (inm :: acc)
+
+def sumE : EL → Int
+  | EL.nil => 0
+  | EL.cons x xs => val x + sumE xs
+
+def lens : List (List Int) → Int
+  | [] => 0
+  | xs :: rest => xs.length + 10 * lens rest
+
+def znat (i : Int) : Nat := (i + 5000000).toNat
+
+def mkEL (n : Int) : EL :=
+  EL.cons (E.e1 (sOf n)) (EL.cons (E.e6 (sOf n) (sOf 100)) (EL.cons (E.e6 (sOf 2) (sOf n)) (EL.cons E.e0 (EL.cons (E.e2 [9]) (EL.cons (E.e1 (S.wrap (sOf n))) EL.nil)))))
+
+def sTwice (x : S) : Int :=
+  match x with
+  | S.mk e => e
+  | _ =>
+    match x with
+    | S.zero => 1
+    | _ => 2
+
+def uVal : U → Int
+  | U.u0 => 3
+  | U.u1 n => n
+
+def tNested (x : T) : Int :=
+  match x with
+  | T.t2 n => n
+  | _ =>
+    match x with
+    | T.t1 u => uVal u
+    | _ => 5
+
+def padAt : List Nat :=
+  [znat (sumE (mkEL 254)), znat (sumE (mkEL 255)), znat (sumE (mkEL 256)), znat (sumE (mkEL 245)), znat (sumE (mkEL (-255))),
+   znat (sumE (mkEL 0)), znat (lens (names (mkEL 255) [])),
+   znat (sTwice S.zero + 10 * sTwice (S.mk 255) + 10000 * sTwice (S.wrap (sOf 245))),
+   znat (tNested T.t0 + 10 * tNested (T.t1 (U.u1 255)) + 10000 * tNested (T.t1 U.u0) + 100000 * tNested (T.t2 9))]

@@ -1,0 +1,196 @@
+-- provenance: ours (searched: lib/Tarjan.rsd, glue/std/)
+-- glue/std/Graph.rsd — directed graph traversal for glue tools.
+-- Nodes are Bs ids, edges are GE pairs a→b (pred/succ maps, cone depth BFS,
+-- outDepth second pass, hole cones, open-node impact) plus lib/Tarjan.rsd
+-- shape for components. The rsdc subset is monomorphic and has
+-- no tuples, so pairs live in named structures (GE/GQ/GCO/GIB/GSB).
+
+import Glue.Std.Str
+import Glue.Std.Map
+
+structure GE where
+  a : Bs
+  b : Bs
+
+structure GQ where
+  v : Bs
+  dep : Int
+
+structure G where
+  ids : List Bs
+  pred : List KVL
+  succ : List KVL
+  roots : List Bs
+
+def gEmpty : G := { ids := [], pred := [], succ := [], roots := [] }
+
+def gAdjAdd (adj : List KVL) (k v : Bs) : List KVL :=
+  match mLookupL k adj with
+  | vs :: _ => mInsertL k (v :: vs.v) adj
+  | [] => mInsertL k [v] adj
+
+-- build pred/succ from an edge list over a node-id universe
+def gBuildGo (ids : List Bs) : List GE → List KVL → List KVL → G
+  | [], p, s => { ids := ids, pred := p, succ := s, roots := [] }
+  | e :: es, p, s =>
+    if sSetMem e.a ids && sSetMem e.b ids && !(sEq e.a e.b) then
+      gBuildGo ids es (gAdjAdd p e.b e.a) (gAdjAdd s e.a e.b)
+    else gBuildGo ids es p s
+
+def gBuild (ids : List Bs) (roots : List Bs) (edges : List GE) : G :=
+  let g := gBuildGo (sSetOf ids) edges [] []
+  { g with roots := sSetInter roots g.ids }
+
+def gAdj (adj : List KVL) (k : Bs) : List Bs :=
+  match mLookupL k adj with | x :: _ => x.v | [] => []
+
+def gQueue (dep : Int) : List Bs → List GQ
+  | [] => []
+  | u :: us => { v := u, dep := dep } :: gQueue dep us
+
+-- BFS from `roots` along `adj` (cone direction). Returns depth map.
+partial def gBfsGo (adj : List KVL) : List GQ → List KVI → List KVI
+  | [], d => d
+  | q0 :: q, d =>
+    match mLookupI q0.v d with
+    | _ :: _ => gBfsGo adj q d
+    | [] =>
+      let d2 := mInsertI q0.v q0.dep d
+      gBfsGo adj (q ++ gQueue (q0.dep + 1) (gAdj adj q0.v)) d2
+
+def gRootQ : List Bs → List GQ
+  | [] => []
+  | r :: rs => { v := r, dep := 0 } :: gRootQ rs
+
+def gDepth (g : G) : List KVI := gBfsGo g.pred (gRootQ g.roots) []
+
+def gDepthOf (d : List KVI) (id : Bs) : Int :=
+  match mLookupI id d with | x :: _ => x.v | [] => 0
+
+-- the cone: ids the roots reach along pred
+def gInCone (d : List KVI) : List Bs := mKeysI d
+
+-- outside-cone layer pass (JS lines 134-135): outside nodes whose succ's
+-- are all inside the cone start at layer 0; BFS along pred, staying outside.
+partial def gOutBfsGo (g : G) (inCone : List Bs) : List GQ → List KVI → List KVI
+  | [], d => d
+  | q0 :: q, d =>
+    match mLookupI q0.v d with
+    | _ :: _ => gOutBfsGo g inCone q d
+    | [] =>
+      if sSetMem q0.v inCone then gOutBfsGo g inCone q d
+      else
+        let d2 := mInsertI q0.v q0.dep d
+        let ns := sFilterNotIn (gAdj g.pred q0.v) inCone
+        gOutBfsGo g inCone (q ++ gQueue (q0.dep + 1) ns) d2
+
+def gOutStartGo (g : G) (inCone : List Bs) : List Bs → List Bs
+  | [] => []
+  | id :: rest =>
+    if !(sSetMem id inCone) && !(sAnyNotIn (gAdj g.succ id) inCone)
+    then id :: gOutStartGo g inCone rest else gOutStartGo g inCone rest
+
+def gOutStart (g : G) (inCone : List Bs) : List Bs := gOutStartGo g inCone g.ids
+
+def gOutDepth (g : G) (inCone : List Bs) : List KVI :=
+  gOutBfsGo g inCone (gRootQ (gOutStart g inCone)) []
+
+-- count of nodes the cone does not reach
+def gOutside (g : G) (inCone : List Bs) : Int :=
+  sLenL (sFilterNotIn g.ids inCone)
+
+-- tops: outside nodes nothing points INTO from... JS: !succ.get(n).length
+def gTopsGo (g : G) (inCone : List Bs) : List Bs → List Bs
+  | [] => []
+  | id :: rest =>
+    if !(sSetMem id inCone) && gAdj g.succ id == []
+    then id :: gTopsGo g inCone rest else gTopsGo g inCone rest
+
+def gTops (g : G) (inCone : List Bs) : Int :=
+  sLenL (gTopsGo g inCone g.ids)
+
+-- hole cone under each node: the set of open nodes reachable along pred.
+-- open ids is a set; memoized DFS with path-seen exactly as the JS.
+structure GCone where
+  memo : List KVL
+  seen : List Bs
+
+structure GCO where
+  s : List Bs
+  c : GCone
+
+structure GCAcc where
+  s : List Bs
+  c : GCone
+
+mutual
+
+partial def gConeGo (g : G) (openIds : List Bs) (id : Bs) (c : GCone) : GCO :=
+  match mLookupL id c.memo with
+  | s :: _ => { s := s.v, c := c }
+  | [] =>
+    if sSetMem id c.seen then { s := [], c := c }
+    else
+      let c1 := { c with seen := sSetInsert id c.seen }
+      let base := if sSetMem id openIds then [id] else []
+      let r := gConeFold g openIds (gAdj g.pred id) { s := base, c := c1 }
+      let c3 := { r.c with seen := c.seen, memo := mInsertL id r.s r.c.memo }
+      { s := r.s, c := c3 }
+
+partial def gConeFold (g : G) (openIds : List Bs) (ps : List Bs) (acc : GCAcc) : GCAcc :=
+  match ps with
+  | [] => acc
+  | p0 :: rest =>
+    let r := gConeGo g openIds p0 acc.c
+    gConeFold g openIds rest { s := sSetUnion acc.s r.s, c := r.c }
+
+end
+
+partial def gHoleFold (g : G) (openIds : List Bs) (ids : List Bs) (c : GCone) : GCone :=
+  match ids with
+  | [] => c
+  | id :: rest => gHoleFold g openIds rest (gConeGo g openIds id c).c
+
+def gHoleCones (g : G) (openIds : List Bs) : List KVL :=
+  (gHoleFold g openIds g.ids { memo := [], seen := [] }).memo
+
+-- impact of one open node: DFS along succ, count of reached minus self,
+-- plus whether a root was hit (JS impact block).
+structure GSB where
+  acc : List Bs
+  rh : Bool
+
+partial def gImpactGo (g : G) (seen : List Bs) (roots : List Bs) (stk : List Bs) (o : GSB) : GSB :=
+  match stk with
+  | [] => o
+  | v :: rest =>
+    let news := sFilterNotIn (gAdj g.succ v) seen
+    let acc2 := sSetUnion o.acc news
+    let rh2 := o.rh || sAnyIn news roots
+    gImpactGo g acc2 roots (news ++ rest) { acc := acc2, rh := rh2 }
+
+structure GIB where
+  n : Int
+  rh : Bool
+
+def gImpact (g : G) (id : Bs) : GIB :=
+  let init := sSetInsert id []
+  let o := gImpactGo g init g.roots [id] { acc := init, rh := false }
+  { n := sLenL o.acc - 1, rh := o.rh }
+
+-- weakly connected components via union along succ+pred (Tarjan shape:
+-- reachability flood per seed).
+partial def gCompGo (g : G) : List Bs → List Bs → List Bs
+  | [], seen => seen
+  | v :: rest, seen =>
+    if sSetMem v seen then gCompGo g rest seen
+    else
+      gCompGo g (gAdj g.succ v ++ gAdj g.pred v ++ rest) (sSetInsert v seen)
+
+partial def gCompsGo (g : G) : List Bs → List Bs → Int
+  | [], _ => 0
+  | id :: rest, done =>
+    if sSetMem id done then gCompsGo g rest done
+    else gCompsGo g rest (sSetUnion done (gCompGo g [id] [])) + 1
+
+def gComponents (g : G) : Int := gCompsGo g g.ids []

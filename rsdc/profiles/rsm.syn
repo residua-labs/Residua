@@ -650,6 +650,7 @@ grammar
   CExpr := '( '#:syntax409 C1 ') @tree=(409,$2,0,0) @template=(#:syntax409\s$2)
   CExpr := '( '#:syntax410 C1 ') @tree=(410,$2,0,0) @template=(#:syntax410\s$2)
   CExpr := '( '#:syntax411 C2 ') @tree=(411,$2,0,0) @template=(#:syntax411\s$2)
+  CExpr := '( '#:syntax411-proof C3 ') @tree=(411,$2,0,0) @template=(#:syntax411-proof\s$2)
   CExpr := '( '#:syntax412 C2 ') @tree=(412,$2,0,0) @template=(#:syntax412\s$2)
   CExpr := '( '#:syntax413 C1 ') @tree=(413,$2,0,0) @template=(#:syntax413\s$2)
   CExpr := '( '#:syntax414 C2 ') @tree=(414,$2,0,0) @template=(#:syntax414\s$2)

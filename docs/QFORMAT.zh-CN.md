@@ -43,7 +43,7 @@ digest 绝不是身份，也绝不出现在需要 `q` 的位置。
                 空 canonical 为 "0"
     NUL      := 0x00
 
-头部正是 git 对象头约定 `<type> <len>\0` [1]，只是类型取自注册表而
+头部正是 git 对象头约定 `<type> <len>\0` [^1]，只是类型取自注册表而
 非固定集合。`len` 使头部自我终止；`kind` 中的任何字节都不可能是
 `SP` 或 `NUL`。
 
@@ -58,7 +58,7 @@ digest 绝不是身份，也绝不出现在需要 `q` 的位置。
 |---|---|
 | 打印文本字段（清单值、[回执](GLOSSARY.zh-CN.md)绑定、表、日志） | `sha256:` + 64 位小写十六进制，digest 与 q 同式 |
 | 路径段与文件名 | `sha256-` + 64 位十六进制 |
-| 自描述二进制（无外围模式存储的 q） | multihash `0x12 0x20` + 32 字节（共 34 字节）[2] |
+| 自描述二进制（无外围模式存储的 q） | multihash `0x12 0x20` + 32 字节（共 34 字节）[^2] |
 | 模式定型的记录内部 | 32 个原始字节；算法与类别由模式承载 |
 
 打印出的 `sha256:<hex>` 本身并不区分 `digest` 或 `q:<kind>`——由它
@@ -152,19 +152,19 @@ q。`scc` 已在注册表中保留；成员顺序随规范 SCC 编码的落地�
 
 ## 参考文献
 
-1. Git 对象格式（`<type> <len>\0`）：S. Chacon, B. Straub,
+[^1]: Git 对象格式（`<type> <len>\0`）：S. Chacon, B. Straub,
    *Pro Git* 第 2 版第 10.2 章；`gitrepository-layout(5)`。
-2. Multihash（算法与长度前缀；sha2-256 = `0x12`，长度 `0x20`）：
+[^2]: Multihash（算法与长度前缀；sha2-256 = `0x12`，长度 `0x20`）：
    multiformats/multihash 规范。
-3. E. Dolstra. *The Purely Functional Software Deployment Model*.
+[^3]: E. Dolstra. *The Purely Functional Software Deployment Model*.
    乌得勒支大学博士论文，2006——Nix 存储路径哈希带类型指纹；
    `narHash` 携带算法前缀。
-4. P. Chiusano, R. Bjarnason 等. Unison：以内容为地址的定义，
+[^4]: P. Chiusano, R. Bjarnason 等. Unison：以内容为地址的定义，
    强连通分量整体哈希——unisonweb/unison。
-5. Vercel Labs，zerolang（v0.3.4）：带类别前缀的打印哈希与公开的
+[^5]: Vercel Labs，zerolang（v0.3.4）：带类别前缀的打印哈希与公开的
    哈希输入排除表——对等设计研究。
-6. J.-C. Filliâtre, S. Conchon. Type-safe modular hash-consing.
+[^6]: J.-C. Filliâtre, S. Conchon. Type-safe modular hash-consing.
    *ACM SIGPLAN Workshop on ML*, 2006——哈希是查找键；命中在使用前
    以结构相等确认。
-7. H. Barendregt, F. Wiedijk. The challenge of computer mathematics.
+[^7]: H. Barendregt, F. Wiedijk. The challenge of computer mathematics.
    *Phil. Trans. R. Soc. A* 363, 2005（de Bruijn 判据）。

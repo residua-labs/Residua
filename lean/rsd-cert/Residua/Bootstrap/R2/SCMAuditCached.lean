@@ -34,7 +34,10 @@ def auditExprCached (sigAudit : Except SCMIdentifierError Unit)
       (auditBothCached (auditBootTy t) (match e with
         | .litI _ | .litB _ | .litS _ | .var _ | .emptyList | .recNil |
             .noneE | .residueE _ | .litW _ => .ok ()
-        | .wNot a => auditExprCached sigAudit a
+        | .wNot a | .fNeg a | .fAbs a | .fSqrt a | .fFloor a | .fCeil a |
+            .fRound a | .fOfW a | .fOfI a | .fToW a | .fBits a |
+            .aUSize a | .wToN a | .aEmpty a | .aOfList a | .aToList a |
+            .aSize a | .aPop a => auditExprCached sigAudit a
         | .neg a | .notE a | .strLen a | .strToInt a | .listSingleton a |
             .listLen a | .listFirst a | .fstE a | .sndE a | .someE a |
             .isSomeE a | .unwrapSome a | .okE a | .isResidueE a |
@@ -45,10 +48,12 @@ def auditExprCached (sigAudit : Except SCMIdentifierError Unit)
             .orE a b | .strSplit a b | .listAppend a b | .listDrop a b |
             .pairE a b | .bytesConcat a b | .wAdd a b | .wSub a b | .wMul a b |
             .wDiv a b | .wMod a b | .wLt a b | .wLe a b | .wAnd a b | .wOr a b |
-            .wXor a b | .wShl a b | .wShr a b =>
+            .wXor a b | .wShl a b | .wShr a b | .fAdd a b | .fSub a b |
+            .fMul a b | .fDiv a b | .fLt a b | .fLe a b | .fEq a b |
+            .aMk a b | .aGet a b | .aPush a b | .aAppend a b =>
             auditBothCached (auditExprCached sigAudit a) (auditExprCached sigAudit b)
         | .ifE a b c | .strSubstring a b c | .bytesSlice a b c |
-            .boundedFold a b c =>
+            .boundedFold a b c | .aSet a b c | .aSlice a b c =>
             auditBothCached (auditExprCached sigAudit a)
               (auditBothCached (auditExprCached sigAudit b) (auditExprCached sigAudit c))
         | .boundedFix stop step init bound =>
@@ -105,7 +110,7 @@ def auditProgramsCached (programs : SCMPrograms S T) :
     (auditBothCached (auditSigTable T)
       (auditProgramBodiesCached sigAudit programs))
 
-set_option maxHeartbeats 1000000 in
+set_option maxHeartbeats 2500000 in
 theorem auditExprCached_eq (e : SCMExpr S G t) :
     auditExprCached (auditSigTable S) e = auditSCMExpr e := by
   induction e using SCMExpr.rec
@@ -118,7 +123,7 @@ theorem auditExprCached_eq (e : SCMExpr S G t) :
       auditArgsCached, auditSCMArgs, auditBranchesCached, auditSCMBranches]
     <;> rfl
 
-set_option maxHeartbeats 1000000 in
+set_option maxHeartbeats 2500000 in
 theorem auditArgsCached_eq (args : SCMArgs S G ts) :
     auditArgsCached (auditSigTable S) args = auditSCMArgs args := by
   induction args using SCMArgs.rec
@@ -131,7 +136,7 @@ theorem auditArgsCached_eq (args : SCMArgs S G ts) :
       auditArgsCached, auditSCMArgs, auditBranchesCached, auditSCMBranches]
     <;> rfl
 
-set_option maxHeartbeats 1000000 in
+set_option maxHeartbeats 2500000 in
 theorem auditBranchesCached_eq (branches : SCMBranches S G ts r) :
     auditBranchesCached (auditSigTable S) branches = auditSCMBranches branches := by
   induction branches using SCMBranches.rec
