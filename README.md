@@ -216,7 +216,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md). Development happens in the project's pri
 | [0.1.2](https://github.com/residua-labs/Residua/releases/tag/rsd-0.1.2) | 2026-11-19 | `a3185221…` | patch: benchmark and differential test suites shipped |
 | [0.2](https://github.com/residua-labs/Residua/releases/tag/rsd-0.2) | 2026-11-20 | `151bfd4f…` | q format v1, syntax engine, effect semantics |
 | [0.3](https://github.com/residua-labs/Residua/releases/tag/rsd-0.3) | 2026-11-24 | `b07ae731…` | rsd build tool, UInt64, recut seed, restored suites, open-source docs |
-| [0.4](https://github.com/residua-labs/Residua/releases/tag/rsd-0.4) | 2026-11-25 | see the release page | modules, Proc file/CLI I/O, Float (binary64), app04 example, smaller/faster seed, Apache-2.0 map |
+| [0.4](https://github.com/residua-labs/Residua/releases/tag/rsd-0.4) | 2026-11-25 | `d25d1c17…` | modules, Proc file/CLI I/O, Float (binary64), app04 example, smaller/faster seed, Apache-2.0 map |
 
 Full history: [CHANGELOG.md](CHANGELOG.md).
 

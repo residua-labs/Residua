@@ -214,7 +214,7 @@ def main : Proc := do {
 | [0.1.2](https://github.com/residua-labs/Residua/releases/tag/rsd-0.1.2) | 2026-11-19 | `a3185221…` | 补丁：基准与差分测试套件随附 |
 | [0.2](https://github.com/residua-labs/Residua/releases/tag/rsd-0.2) | 2026-11-20 | `151bfd4f…` | q 格式 v1、语法引擎、效应语义 |
 | [0.3](https://github.com/residua-labs/Residua/releases/tag/rsd-0.3) | 2026-11-24 | `b07ae731…` | rsd 构建工具、UInt64、重切 seed、恢复套件、开源文档 |
-| [0.4](https://github.com/residua-labs/Residua/releases/tag/rsd-0.4) | 2026-11-25 | 见发布页 | 模块、Proc 文件/命令行 I/O、Float（binary64）、app04 示例、更小更快的 seed、Apache-2.0 映射表 |
+| [0.4](https://github.com/residua-labs/Residua/releases/tag/rsd-0.4) | 2026-11-25 | `d25d1c17…` | 模块、Proc 文件/命令行 I/O、Float（binary64）、app04 示例、更小更快的 seed、Apache-2.0 映射表 |
 
 完整历史：[CHANGELOG.zh-CN.md](CHANGELOG.zh-CN.md)。
 
